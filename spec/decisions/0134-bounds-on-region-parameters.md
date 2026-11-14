@@ -274,6 +274,15 @@ passes unchanged (§8). Outside the tree the only known programs are the eight r
 (`r1` to `r8`): of those, `r5` (the nonsense bounds) and the enum of `r6` (`region b: a + nosuch`) are now refused,
 as intended; `r2` and the rest of `r6` are now given what they asked for.
 
+Measured again for release 0.44.0, 2026-11-14, on the released line: the same search in the tree of tag `v0.43.0`
+finds no bound on a region parameter (the seven files it lists have the words in prose or a comment), and the
+corpus, `lib/`, `tests/packages`, the guide's and the book's listings and the compiler's own source, all of which
+0.43.0 compiles, are compiled by 0.44.0 with no expectation changed. Of the review's 198 probes, two that 0.43.0
+accepts are refused as intended, both inherent impl blocks with no functions whose bounds are not their type's
+(`impl<region a: nosuch, region b: static> E<a, b> { }` for an enum, `impl<region s: i, region i> P<s, i> { }`
+for a struct), and two that 0.43.0 accepts and that read freed memory are refused because the bound's store is
+now recorded (N0243).
+
 Programs with a *valid* bound that compiled before still compile, with one difference a caller can notice: the
 callee's `a` results now hold the `b` arguments' loans. `r4`'s two calls are still accepted (the results are printed
 at once). A caller that kept such a result past a `b` argument's referent was accepted before, soundly, because
@@ -391,3 +400,21 @@ in `resolveHeldTargets`), and restore the branch's tests `send` (`run-pass/regio
 
 The same holds for the stores of the built-ins (`replace`, `swap`, `fill`, `copyFrom`, `extend`, `resize`: ADR
 0131 §10, items 1 and 2): they record no store in 0.44.0, with a bound in the signature or without.
+
+One consequence is to be read with care. A function may now reach the gap through a bounded function:
+
+```ceesafe
+fn st0<region a, region b: a>(out: borrow mut Vector<StringView<a>>, v: StringView<b>) {
+    out.push(v)!;
+}
+
+fn st1<region p, region q: p>(sink: Sink<p>, v: StringView<q>) {
+    st0(sink.out, v);
+}
+```
+
+0.43.0 refuses this file, in `st0` (N0272: it ignores the bound); 0.44.0 accepts it, and a caller of `st1` that
+keeps the vector reads freed memory. The hole is `st1`'s by-value `sink`, not the bound: the same file with one
+region in `st0` and two unrelated regions in `st1` is accepted by 0.43.0 and reads freed memory there (the
+review's probe `f_two_layers` and its spelling without bounds, measured with both compilers). `st0`'s store is
+recorded for its caller, `st1`, as the bound requires; `st1` then has no target to record it on for its own.

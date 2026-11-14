@@ -779,14 +779,28 @@ Heap (M3b):
     - deadlines (a shield's end counting as one) are a binary min-heap, so due tasks run earliest first;
     - descriptor waiters are a table by descriptor, readers and writers each in the order they parked;
     - the tasks waiting to be woken are a list of their own.
-  - The reactor (A4b): kqueue on macOS and the BSDs, epoll on Linux, created at the first wait. A parking task arms
-    its descriptor and direction one-shot (kqueue `EV_ONESHOT`, queued and sent with the next `kevent` wait; epoll
-    `EPOLLONESHOT` through `EPOLL_CTL_MOD`, or `ADD` for a descriptor it does not have). A readiness event readies every
-    task waiting in that direction; each retries. A task that leaves early (cancelled, or due) disarms what no task
-    waits for any more. One-shot arming is one call per park, and no state outlives the waits, so a descriptor closed
-    and reopened under the same number needs nothing. epoll refuses regular files (`EPERM`): their tasks count as
-    ready. A failed arming readies its tasks, whose retry sees the error. The wake pipe stays registered.
-    `CEESAFE_REACTOR_POLL=1`, or a host with neither, uses `poll()` over the waited descriptors.
+  - The reactor (A4b): kqueue on macOS and the BSDs, epoll on Linux, created at the first wait. A readiness event
+    readies every task waiting in that direction; each retries. epoll refuses regular files (`EPERM`): their tasks
+    count as ready. A failed registration readies its tasks, whose retry sees the error. The wake pipe stays
+    registered. `CEESAFE_REACTOR_POLL=1`, or a host with neither, uses `poll()` over the waited descriptors.
+    - kqueue: a parking task arms its descriptor and direction one-shot (`EV_ONESHOT`, queued and sent with the next
+      `kevent` wait, so arming costs no call of its own). A task that leaves early (cancelled, or due) disarms what no
+      task waits for any more.
+    - epoll, edge-triggered (ADR 0136): a descriptor is registered once, at its first park
+      (`EPOLLIN | EPOLLRDHUP | EPOLLET`, with `EPOLLOUT` added by `MOD` the first time a writer waits), and stays
+      registered until it is closed. Its slot keeps the directions registered and `ready`, the directions not known to
+      block: a park clears its direction (a task parks only after an attempt that would block), an event sets it, so an
+      event with no task waiting is kept for the next attempt. While a direction is registered and not ready, lib/std's
+      read, send and accept (`ceesafe_async_op_read`, `_send`, `_accept`) wait without the system call; on a stream
+      socket (`SO_TYPE`, asked once at registration), a read that returns fewer bytes than asked took everything there
+      was, so it clears `ready` too, unless the peer has shut down (`EPOLLRDHUP`, `EPOLLHUP`, `EPOLLERR` make the slot
+      `eof`, and the end of stream is still to be read). Registration polls the descriptor, so readiness from before it
+      is reported. epoll forgets a descriptor when it is closed, so every close in the runtime goes through
+      `ceesafe_fd_close`, which first bumps the number's close epoch (`ceesafe_fd_epoch`, 4,096 buckets shared by
+      numbers 4,096 apart); a slot whose epoch has moved is registered again. A descriptor closed by foreign code that
+      bypasses the runtime and reopened under the same number is not seen. `CEESAFE_REACTOR_ONESHOT=1` arms one-shot at
+      each park instead (`EPOLLONESHOT` through `EPOLL_CTL_MOD`, or `ADD`), as before ADR 0136, which keeps no state
+      between waits.
   - Windows (A4b): a waiting socket is selected for the executor's event for every network event once, when its task
     parks (`ceesafe_socket_select`; a call only when that changes), since two tasks may wait on one socket in opposite
     directions; the end of `Async.run` deselects them (`ceesafe_socket_unselect`) before closing the event.

@@ -322,7 +322,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
 #ifdef _WIN32
             (void)_close(fd);
 #else
-            (void)close(fd);
+            (void)ceesafe_fd_close(fd);
 #endif
             return ceesafe_io_fail(error);
         }
@@ -330,7 +330,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
         int status = fcntl(fd, F_GETFL);
         if (status < 0 || fcntl(fd, F_SETFL, status & ~O_NONBLOCK) < 0) {
             int error = errno;
-            (void)close(fd);
+            (void)ceesafe_fd_close(fd);
             return ceesafe_io_fail(error);
         }
 #endif
@@ -726,8 +726,8 @@ static void cee_listener_close(const cee_listener *l) {
     (void)CloseHandle(l->shut);
     (void)WSACloseEvent(l->other);
 #else
-    (void)close(l->shut);
-    (void)close(l->other);
+    (void)ceesafe_fd_close(l->shut);
+    (void)ceesafe_fd_close(l->other);
 #endif
 }
 
@@ -746,7 +746,7 @@ void ceesafe_fd_drop(int32_t *fd) {
     if (*fd >= CEE_SOCKET_BASE) cee_socket_close(*fd);
     else if (*fd >= 0) (void)_close(*fd);
 #else
-    if (*fd >= 0) (void)close(*fd);
+    if (*fd >= 0) (void)ceesafe_fd_close(*fd);
 #endif
 }
 
@@ -1443,7 +1443,7 @@ static int64_t cee_listen_endpoint(const ceesafe_endpoint *e, uint32_t backlog, 
     int depth = backlog == 0u || backlog > (uint32_t)SOMAXCONN ? SOMAXCONN : (int)backlog;
     if (failure == 0 && (bind(fd, &a.sa, (socklen_t)length) < 0 || listen(fd, depth) < 0)) failure = errno;
     if (failure != 0) {
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
         return -(int64_t)failure;
     }
     return fd;
@@ -1460,12 +1460,12 @@ static int64_t cee_connect_endpoint(const ceesafe_endpoint *e, bool nonblocking)
     int fd = (int)made;
     if (nonblocking && !cee_nonblocking(fd)) {
         int64_t failed = -(int64_t)errno;
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
         return failed;
     }
     if (connect(fd, &a.sa, (socklen_t)length) < 0 && !(nonblocking && (errno == EINPROGRESS || errno == EINTR))) {
         int64_t failed = -(int64_t)errno;
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
         return failed;
     }
     return fd;
@@ -1485,15 +1485,15 @@ cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
     int wake[2];
     if (pipe(wake) < 0) {
         int failure = errno;
-        (void)close((int)made);
+        (void)ceesafe_fd_close((int)made);
         return ceesafe_io_fail(failure);
     }
     (void)fcntl(wake[0], F_SETFD, FD_CLOEXEC);
     (void)fcntl(wake[1], F_SETFD, FD_CLOEXEC);
     if (!cee_nonblocking(wake[1]) || !cee_listener_add((int32_t)made, wake[0], wake[1])) {
-        (void)close(wake[0]);
-        (void)close(wake[1]);
-        (void)close((int)made);
+        (void)ceesafe_fd_close(wake[0]);
+        (void)ceesafe_fd_close(wake[1]);
+        (void)ceesafe_fd_close((int)made);
         return ceesafe_io_fail(ENOMEM);
     }
     return ceesafe_io_ok(made);
@@ -1706,7 +1706,7 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) {
 #endif
     if (!cee_nonblocking(peer)) {
         int64_t failed = -(int64_t)errno;
-        (void)close(peer);
+        (void)ceesafe_fd_close(peer);
         return failed;
     }
     return peer;
@@ -1754,6 +1754,26 @@ int64_t ceesafe_async_tcp_connected(int32_t fd) {
     return errno == ENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
 #endif
 }
+
+/* Close epochs: every descriptor the runtime closes bumps its bucket first, so an executor that registered the number
+   with epoll edge-triggered (ceesafe_rt_async.c) sees that it was closed, and maybe reused, since: epoll forgets a
+   closed descriptor by itself. Numbers 4096 apart share a bucket; a bump for another number costs one registration
+   again, never a missed one. Here, not in the executor's file, since every program that closes a descriptor links
+   this one. */
+static uint32_t cee_fd_epochs[4096];
+
+void ceesafe_fd_closing(int32_t fd) {
+    if (fd >= 0) {
+        (void)ceesafe_atomic_add_u32(&cee_fd_epochs[(uint32_t)fd & 4095u], 1u);
+    }
+}
+
+int ceesafe_fd_close(int32_t fd) {
+    ceesafe_fd_closing(fd);
+    return close(fd);
+}
+
+uint32_t ceesafe_fd_epoch(int32_t fd) { return ceesafe_atomic_load_u32(&cee_fd_epochs[(uint32_t)fd & 4095u]); }
 
 int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length) {
     ssize_t n;
@@ -1831,7 +1851,7 @@ uint32_t ceesafe_interface_index(const uint8_t *name, uint64_t length) {
 }
 
 void ceesafe_async_close(int32_t fd) {
-    (void)close(fd);
+    (void)ceesafe_fd_close(fd);
 }
 #endif /* _WIN32 */
 
@@ -2474,7 +2494,7 @@ int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length) {
     } while (fd < 0 && errno == EINTR);
     if (fd < 0) return -(int64_t)errno;
     cee_io_result r = ceesafe_fd_sync(fd, 1u);
-    (void)close(fd);
+    (void)ceesafe_fd_close(fd);
     return r.error != 0 ? -(int64_t)r.error : 0;
 #endif
 }
@@ -2774,9 +2794,9 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             pid = spawnvp(argv[0], (const char *const *)argv, handles, 3);
             started = pid < 0 ? errno : 0;
         }
-        if (in >= 0) (void)close(in);
-        if (out >= 0) (void)close(out);
-        if (err >= 0) (void)close(err);
+        if (in >= 0) (void)ceesafe_fd_close(in);
+        if (out >= 0) (void)ceesafe_fd_close(out);
+        if (err >= 0) (void)ceesafe_fd_close(err);
 #else
         posix_spawn_file_actions_t actions;
         started = posix_spawn_file_actions_init(&actions);
@@ -2867,12 +2887,12 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length) {
             if (n <= 0) {
                 if (n < 0 && errno == EINTR) continue;
                 int error = n < 0 ? errno : EIO;
-                (void)close(fd);
+                (void)ceesafe_fd_close(fd);
                 return -(int64_t)error;
             }
             done += (uint64_t)n;
         }
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
     }
     return 0;
 #endif
@@ -3599,7 +3619,7 @@ static void cee_udp_close(SOCKET s) { (void)closesocket(s); }
 typedef int cee_udp_socket;
 #define CEE_UDP_INVALID (-1)
 static int cee_udp_error(void) { return errno; }
-static void cee_udp_close(int s) { (void)close(s); }
+static void cee_udp_close(int s) { (void)ceesafe_fd_close(s); }
 #endif
 
 static int cee_udp_flag(cee_udp_socket s, int level, int name, int value) {

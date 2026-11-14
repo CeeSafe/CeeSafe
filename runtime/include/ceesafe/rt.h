@@ -1827,6 +1827,11 @@ int64_t ceesafe_async_tcp_accept(int32_t fd);
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port);
 int64_t ceesafe_async_tcp_connected(int32_t fd);
 int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length);
+/* POSIX: closes `fd` after bumping its close epoch, which the edge-triggered reactor checks (c-backend.md §6); every
+   close in the runtime goes through it. ceesafe_fd_closing bumps the epoch alone. */
+int ceesafe_fd_close(int32_t fd);
+void ceesafe_fd_closing(int32_t fd);
+uint32_t ceesafe_fd_epoch(int32_t fd);
 int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length);
 int64_t ceesafe_async_shutdown_write(int32_t fd);
 void ceesafe_async_close(int32_t fd);

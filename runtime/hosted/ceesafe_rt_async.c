@@ -151,12 +151,20 @@ typedef struct {
     uint32_t active;   /* 1 + its place in active_fds; 0 if no task waits on it */
     uint8_t armed;     /* the directions the reactor is armed for (bit 0 reading, bit 1 writing) */
     bool added;        /* epoll: the descriptor was added (it may still be, disabled, after a one-shot event) */
+    /* epoll, edge-triggered (the default; c-backend.md §6, the reactor): kept from the first park until the
+       descriptor is closed, so a park costs no system call. */
+    uint8_t registered; /* the directions registered (reading always, writing once a writer has waited) */
+    uint8_t ready;      /* the directions not known to block: set by an event, cleared by a park or a short read */
+    bool stream;        /* a stream socket: a short read took everything there was */
+    bool eof;           /* the peer shut down or the descriptor failed (EPOLLRDHUP, EPOLLHUP, EPOLLERR): never blocks */
+    uint32_t epoch;     /* the descriptor's close epoch when it was registered (cee_fd_epoch) */
 } cee_fd_slot;
 
 /* An executor (L1 A4b): the ready queue; the parked list, which only cancellation and the debugger walk; and what
  * wakes parked tasks, each reached without walking the parked list: a heap of deadlines, a table of descriptor
- * waiters, and the tasks waiting to be woken. Descriptors wait in kqueue or epoll, armed one-shot at each park, or in
- * poll() (CEESAFE_REACTOR_POLL=1, or a host with neither). Its arrays are the runtime's own bookkeeping, from the
+ * waiters, and the tasks waiting to be woken. Descriptors wait in kqueue, armed one-shot at each park; in epoll,
+ * registered edge-triggered once (ADR 0136; one-shot with CEESAFE_REACTOR_ONESHOT=1); or in poll()
+ * (CEESAFE_REACTOR_POLL=1, or a host with neither). Its arrays are the runtime's own bookkeeping, from the
  * platform's heap. */
 typedef struct {
     cee_task *ready_head;
@@ -189,6 +197,9 @@ typedef struct {
     int reactor;         /* the kqueue or epoll descriptor; -1 until first needed */
     bool use_poll;       /* poll() for descriptors */
     bool pipe_watched;   /* the wake pipe is registered with the reactor */
+#if defined(CEE_EPOLL)
+    bool edge;           /* epoll edge-triggered, registered once (the default); one-shot with CEESAFE_REACTOR_ONESHOT=1 */
+#endif
 #if defined(CEE_KQUEUE)
     struct kevent changes[64]; /* kqueue: arming and disarming not yet sent, sent with the next wait */
     int change_count;
@@ -476,6 +487,11 @@ static bool cee_uring_drain(void);
 static HANDLE cee_iocp_port(void);
 #endif
 
+#if defined(CEE_EPOLL)
+/* The close epoch of `fd` (ceesafe_fd_epoch, ceesafe_rt_io.c): it moves whenever the runtime closes the number. */
+static inline uint32_t cee_fd_epoch(int32_t fd) { return ceesafe_fd_epoch(fd); }
+#endif
+
 #if !defined(_WIN32) && !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
 /* ---- Descriptor waiters (POSIX) and the reactor. ---- */
 
@@ -499,6 +515,9 @@ static bool cee_reactor_open(void) {
 #endif
     if (cee_exec.reactor < 0) {
         cee_exec.use_poll = true; /* no kqueue or epoll: poll() */
+#if defined(CEE_EPOLL)
+        cee_exec.edge = false;
+#endif
     }
     return !cee_exec.use_poll;
 }
@@ -540,10 +559,63 @@ static void cee_kqueue_change(int32_t fd, int16_t filter, uint16_t flags) {
 }
 #endif
 
-/* Arms the reactor for the directions `fd`'s tasks wait in, one-shot. A failure readies them: their retry sees it. */
+#if defined(CEE_EPOLL)
+/* Edge-triggered: `fd` stays registered from its first park until it is closed (its epoch moves), so a park needs no
+   system call. A task parks only after an attempt that would block, so the directions it waits in are not ready until
+   an event says so; an event with no task waiting sets `ready`, which the next attempt reads. Registration (ADD, or
+   MOD to add writing) polls the descriptor, so readiness from before it is reported. A failure readies the tasks. */
+static void cee_edge_register(int32_t fd, cee_fd_slot *slot, uint8_t wanted) {
+    uint32_t epoch = cee_fd_epoch(fd);
+    if (slot->registered != 0u && slot->epoch != epoch) {
+        slot->registered = 0u; /* closed since, maybe reopened under the number: epoll has forgotten it */
+    }
+    slot->ready &= (uint8_t)~wanted;
+    uint8_t need = (uint8_t)(slot->registered | wanted | 1u);
+    if (slot->registered == need) {
+        return;
+    }
+    struct epoll_event change;
+    ceesafe_mem_set(&change, 0, sizeof change);
+    change.events = (uint32_t)(EPOLLIN | EPOLLRDHUP | EPOLLET) | ((need & 2u) != 0u ? (uint32_t)EPOLLOUT : 0u);
+    change.data.fd = fd;
+    bool fresh = slot->registered == 0u;
+    int status = epoll_ctl(cee_exec.reactor, fresh ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &change);
+    if (status < 0 && errno == EEXIST) {
+        status = epoll_ctl(cee_exec.reactor, EPOLL_CTL_MOD, fd, &change); /* a duplicate of it is still registered */
+    } else if (status < 0 && errno == ENOENT) {
+        status = epoll_ctl(cee_exec.reactor, EPOLL_CTL_ADD, fd, &change);
+        fresh = true;
+    }
+    if (status < 0) {
+        /* EPERM: a regular file, always ready; anything else, the retry sees it. */
+        slot->registered = 0u;
+        cee_fd_ready(fd, 0u);
+        cee_fd_ready(fd, 1u);
+        return;
+    }
+    if (fresh) {
+        int type = 0;
+        socklen_t size = sizeof type;
+        slot->epoch = epoch;
+        slot->stream = getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &size) == 0 && type == SOCK_STREAM;
+        slot->eof = false;
+        slot->ready = (uint8_t)(3u & ~wanted);
+    }
+    slot->registered = need;
+}
+#endif
+
+/* Arms the reactor for the directions `fd`'s tasks wait in: edge-triggered once with epoll (cee_edge_register),
+   otherwise one-shot at each park. A failure readies them: their retry sees it. */
 static void cee_reactor_arm(int32_t fd) {
     cee_fd_slot *slot = &cee_exec.slots[fd];
     uint8_t wanted = (uint8_t)((slot->head[0] != NULL ? 1u : 0u) | (slot->head[1] != NULL ? 2u : 0u));
+#if defined(CEE_EPOLL)
+    if (cee_exec.edge && wanted != 0u && cee_reactor_open() && cee_exec.edge) {
+        cee_edge_register(fd, slot, wanted);
+        return;
+    }
+#endif
     if (wanted == slot->armed || !cee_reactor_open()) {
         return;
     }
@@ -582,6 +654,11 @@ static void cee_reactor_arm(int32_t fd) {
 
 /* Takes back what the reactor is armed for and no task waits for any more (a task left early: cancelled, or due). */
 static void cee_reactor_disarm(int32_t fd) {
+#if defined(CEE_EPOLL)
+    if (cee_exec.edge) {
+        return; /* stays registered: an event with no task waiting only sets `ready` */
+    }
+#endif
     cee_fd_slot *slot = &cee_exec.slots[fd];
     uint8_t wanted = (uint8_t)((slot->head[0] != NULL ? 1u : 0u) | (slot->head[1] != NULL ? 2u : 0u));
     if ((slot->armed & ~wanted) == 0u || cee_exec.reactor < 0) {
@@ -2113,6 +2190,24 @@ static bool cee_wait_reactor(int timeout) {
             continue;
         }
         uint32_t r = events[k].events;
+        if (cee_exec.edge) {
+            cee_fd_slot *slot = &cee_exec.slots[fd];
+            uint8_t fired = (uint8_t)(((r & (uint32_t)(EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) != 0u ? 1u : 0u) |
+                                      ((r & (uint32_t)(EPOLLOUT | EPOLLHUP | EPOLLERR)) != 0u ? 2u : 0u));
+            if ((r & (uint32_t)(EPOLLRDHUP | EPOLLHUP | EPOLLERR)) != 0u) {
+                slot->eof = true; /* a short read no longer means it would block */
+            }
+            slot->ready |= fired;
+            if ((fired & 1u) != 0u && slot->head[0] != NULL) {
+                cee_fd_ready(fd, 0u);
+                any = true;
+            }
+            if ((fired & 2u) != 0u && cee_exec.slots[fd].head[1] != NULL) {
+                cee_fd_ready(fd, 1u);
+                any = true;
+            }
+            continue;
+        }
         cee_exec.slots[fd].armed = 0u; /* one-shot: the descriptor is disabled until armed again */
         if ((r & (uint32_t)(EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u && cee_exec.slots[fd].head[0] != NULL) {
             cee_fd_ready(fd, 0u);
@@ -2384,6 +2479,9 @@ static void cee_exec_begin(cee_run *run) {
     cee_exec.active_capacity = 0u;
     cee_exec.reactor = -1;
     cee_exec.use_poll = ceesafe_platform_config("CEESAFE_REACTOR_POLL") != 0u;
+#if defined(CEE_EPOLL)
+    cee_exec.edge = !cee_exec.use_poll && ceesafe_platform_config("CEESAFE_REACTOR_ONESHOT") == 0u;
+#endif
 #if defined(_WIN32)
     if (!cee_exec.use_poll) {
         cee_exec.port = cee_iocp_port(); /* IOCP by default on Windows (ADR 0035) */
@@ -2432,14 +2530,14 @@ static void cee_exec_end(void) {
     }
 #else
     if (cee_exec.wake_pipe[0] >= 0) {
-        (void)close(cee_exec.wake_pipe[0]);
-        (void)close(cee_exec.wake_pipe[1]);
+        (void)ceesafe_fd_close(cee_exec.wake_pipe[0]);
+        (void)ceesafe_fd_close(cee_exec.wake_pipe[1]);
     }
 #if defined(CEE_URING)
     cee_uring_close();
 #endif
     if (cee_exec.reactor >= 0) {
-        (void)close(cee_exec.reactor);
+        (void)ceesafe_fd_close(cee_exec.reactor);
     }
 #endif
     ceesafe_platform_free(cee_exec.heap);
@@ -3074,8 +3172,8 @@ int64_t ceesafe_signal_subscribe(void *channel) {
         (void)fcntl(made[1], F_SETFD, FD_CLOEXEC);
         if (fcntl(made[0], F_SETFL, O_NONBLOCK) < 0 || fcntl(made[1], F_SETFL, O_NONBLOCK) < 0) {
             int64_t failed = -(int64_t)errno;
-            (void)close(made[0]);
-            (void)close(made[1]);
+            (void)ceesafe_fd_close(made[0]);
+            (void)ceesafe_fd_close(made[1]);
             cee_signal_leave();
             return failed;
         }
@@ -3268,16 +3366,61 @@ static void cee_op_done(cee_op *o, int64_t result) {
 }
 #endif
 
+#if defined(CEE_EPOLL) && !defined(CEE_NO_REACTOR)
+/* Edge-triggered: whether an attempt in `direction` on `fd` would block for certain. Its task parked after one that
+   would have, and no event has come since, so it waits again without the system call (c-backend.md §6). */
+static bool cee_known_blocked(int32_t fd, unsigned direction) {
+    if (!cee_exec.edge || (uint32_t)fd >= cee_exec.slot_count) {
+        return false;
+    }
+    const cee_fd_slot *slot = &cee_exec.slots[fd];
+    uint8_t bit = (uint8_t)(1u << direction);
+    return (slot->registered & bit) != 0u && (slot->ready & bit) == 0u && slot->epoch == cee_fd_epoch(fd);
+}
+
+/* A read of `r` bytes into `length`: on a stream socket, fewer than asked took everything there was, so the next read
+   would block until an event, unless the peer has shut down (its end of stream is still to be read). */
+static void cee_read_taken(int32_t fd, int64_t r, uint64_t length) {
+    if (r > 0 && (uint64_t)r < length && cee_exec.edge && (uint32_t)fd < cee_exec.slot_count) {
+        cee_fd_slot *slot = &cee_exec.slots[fd];
+        if (slot->stream && !slot->eof && (slot->registered & 1u) != 0u && slot->epoch == cee_fd_epoch(fd)) {
+            slot->ready &= (uint8_t)~1u;
+        }
+    }
+}
+#else
+static inline bool cee_known_blocked(int32_t fd, unsigned direction) {
+    (void)fd;
+    (void)direction;
+    return false;
+}
+
+static inline void cee_read_taken(int32_t fd, int64_t r, uint64_t length) {
+    (void)fd;
+    (void)r;
+    (void)length;
+}
+#endif
+
 static int64_t cee_ready_read(int32_t fd, uint8_t *buffer, uint64_t length) {
+    if (cee_known_blocked(fd, 0u)) {
+        ceesafe_async_wait_readable(fd);
+        return CEE_ASYNC_PENDING;
+    }
     int64_t r = ceesafe_async_read(fd, buffer, length);
     if (r == CEE_ASYNC_WOULD_BLOCK) {
         ceesafe_async_wait_readable(fd);
         return CEE_ASYNC_PENDING;
     }
+    cee_read_taken(fd, r, length);
     return r;
 }
 
 static int64_t cee_ready_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
+    if (cee_known_blocked(fd, 1u)) {
+        ceesafe_async_wait_writable(fd);
+        return CEE_ASYNC_PENDING;
+    }
     int64_t r = ceesafe_async_send(fd, bytes, length);
     if (r == CEE_ASYNC_WOULD_BLOCK) {
         ceesafe_async_wait_writable(fd);
@@ -3287,6 +3430,10 @@ static int64_t cee_ready_send(int32_t fd, const uint8_t *bytes, uint64_t length)
 }
 
 static int64_t cee_ready_accept(int32_t fd) {
+    if (cee_known_blocked(fd, 0u)) {
+        ceesafe_async_wait_readable(fd);
+        return CEE_ASYNC_PENDING;
+    }
     int64_t r = ceesafe_async_tcp_accept(fd);
     if (r == CEE_ASYNC_WOULD_BLOCK) {
         ceesafe_async_wait_readable(fd);
@@ -3503,9 +3650,9 @@ static void cee_uring_close(void) {
         (void)munmap(u->sq_ring, u->sq_size);
     }
     if (u->event >= 0) {
-        (void)close(u->event);
+        (void)ceesafe_fd_close(u->event);
     }
-    (void)close(u->fd);
+    (void)ceesafe_fd_close(u->fd);
     ceesafe_platform_free(u);
     cee_exec.uring = NULL;
 }
@@ -3531,7 +3678,7 @@ static bool cee_uring_open(void) {
     }
     struct cee_uring *u = (struct cee_uring *)ceesafe_platform_alloc(sizeof *u);
     if (u == NULL) {
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
         return false;
     }
     ceesafe_mem_set(u, 0, sizeof *u);
@@ -3642,7 +3789,7 @@ static bool cee_uring_drain(void) {
             if (res == 0) {
                 result = o->fd;
             } else {
-                (void)close(o->fd);
+                (void)ceesafe_fd_close(o->fd);
             }
             o->fd = -1;
         }
@@ -3743,7 +3890,7 @@ static int64_t cee_uring_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
     }
     struct io_uring_sqe *e = cee_uring_entry();
     if (e == NULL) {
-        (void)close(fd);
+        (void)ceesafe_fd_close(fd);
         return CEE_ASYNC_WOULD_BLOCK;
     }
     cee_uring_begin(o, 4u);

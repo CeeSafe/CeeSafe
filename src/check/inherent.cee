@@ -199,7 +199,13 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                             c.error(inherentImplError(), span.start, span.end, message)?;
                             continue;
                         }
-                        if (functions.count > 0 && !sameRegionBounds(c, regionParameters, enumRegions)?) {
+                        // A block with no functions restates the bounds too, as a struct's does. One that does not
+                        // name the enum's regions (a block of constants alone may not) writes no bound.
+                        var restated = !writesRegionBounds(c, regionParameters);
+                        if (functions.count > 0 || regionParameters.count == enumRegions.count) {
+                            restated = sameRegionBounds(c, regionParameters, enumRegions)?;
+                        }
+                        if (!restated) {
                             regionBoundsNotRestated(c, span)?;
                             continue;
                         }

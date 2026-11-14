@@ -80,6 +80,13 @@ impl<region a, region b> Tagged<a, b> { // error[N0267]
     fn isNear(borrow this) -> bool => true;
 }
 
+// A block with no functions restates them too, for an enum as for a struct.
+impl<region a, region b> Tagged<a, b> {} // error[N0267]
+
+impl<region a: b, region b> Tagged<a, b> {} // error[N0267]
+
+impl<region a, region b> Views<a, b> {} // error[N0267]
+
 // An impl of an interface writes none.
 impl<region a, region b: a> Shape for Plain<a, b> { // error[N0216]
     fn area(borrow this) -> u32 => 1;

@@ -283,6 +283,16 @@ fn refuseRegionBounds(c: borrow mut Checker, regions: Range) -> Result<void, All
     return Ok();
 }
 
+/// Does a region parameter list write a bound?
+fn writesRegionBounds(c: borrow Checker, regions: Range) -> bool {
+    for (k in 0..regions.count) {
+        if (c.front.ast.typeParameters[c.front.ast.at(regions, k) as usize].bounds.count > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Does an inherent impl's region list restate its struct's or enum's bounds exactly (§25.8)? The names are already
 /// the same, in order (sameParameters).
 fn sameRegionBounds(c: borrow Checker, implRegions: Range, ownRegions: Range) -> Result<bool, AllocError> {

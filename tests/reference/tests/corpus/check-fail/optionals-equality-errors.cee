@@ -6,12 +6,12 @@ fn main() {
     let x = 5 ?? 3; // error[N0262]
     let o: i32? = null;
     let y = o.unwrapOr(3); // error[N0234]
-    let z = o.isSome(1); // error[N0209]
+    let z = o.isSome(1);   // error[N0209]
     let s = Shape.Square;
     let a = s == Shape.Square; // error[N0207]
     let f = [1.0, 2.0];
-    let b = f[..] == f[..]; // error[N0207]
-    let c = "ab".bytes() == "ab"; // error[N0205]
+    let b = f[..] == f[..];          // error[N0207]
+    let c = "ab".bytes() == "ab";    // error[N0205]
     let d = [1u8, 2] == [1u8, 2, 3]; // error[N0207]
-    let e = o == o; // error[N0207]
+    let e = o == o;                  // two optionals of a Copy type: allowed since ADR 0138 §3 (was N0207)
 }

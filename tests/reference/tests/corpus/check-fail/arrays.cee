@@ -28,7 +28,7 @@ fn f(n: i32, s: Slice<i32>) {
     let k = make()[0..1];
     let l = [0; 0];             // error[N0259]
     let m: SliceMut<i32> = s;   // error[N0205]
-    var o = a[..];              // error[N0246]
+    var o = a[..];              // a shared slice in a `var`: allowed since ADR 0138 §4 (was N0246)
     let p = [Res { id: 1 }];    // error[N0259]
     let q = [f(n, s), f(n, s)]; // error[N0224]
 }

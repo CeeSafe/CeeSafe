@@ -699,16 +699,39 @@ fn optionalReference(c: borrow mut Checker, value: u32, mutable: bool, span: Spa
     return Ok(if (c.isBottom(borrowed)) none() else borrowed);
 }
 
+/// The fallback of a `??` whose left side is an error: checked for its own errors only, a block as the branch it is
+/// (ADR 0139 §3: not as an expression, which a block is not, N0235).
+fn checkFallbackAlone(c: borrow mut Checker, rightSyntax: u32) -> Result<void, AllocError> {
+    let isBlock = match (c.front.ast.exprs[rightSyntax as usize]) {
+        ExprNode.Block(_) => true,
+        _ => false,
+    };
+    if (isBlock) {
+        var branches = branchType(none());
+        checkBranch(c, rightSyntax, mut branches, 0)?;
+        return Ok();
+    }
+    checkExpr(c, rightSyntax, none())?;
+    return Ok();
+}
+
 /// `a ?? b` (SynthCoalesce, ADR 0072 §2.1): `a`'s payload, or `b` when `a` is null; `b` is evaluated only then. It
 /// is lowered to the statement it replaces: `{ let t = a; if (t == null) b else t! }`. With `b` a `T?` of `a`'s type,
 /// the whole is that optional (`if (t == null) b else t`).
 fn synthCoalesce(c: borrow mut Checker, leftSyntax: u32, rightSyntax: u32, span: Span) -> Result<u32, AllocError> {
     let leftSpan = c.front.ast.exprSpans[leftSyntax as usize];
     let rightSpan = c.front.ast.exprSpans[rightSyntax as usize];
-    let left = synth(c, leftSyntax, none())?;
+    var left = synth(c, leftSyntax, none())?;
+    let leftType = c.typeOf(left);
+    if (c.types.is(leftType, TypeKind.Reference) && c.types.optionType(c.types.info(leftType).pointee) != none()) {
+        // `r ?? b` with `r: borrow (T?)` (ADR 0139 §2): the optional is lent, as `r.asBorrow()` lends it, so the value
+        // is a `borrow T` (a `borrow mut T` through a `borrow mut (T?)`), and nothing moves out of the referent.
+        let lendsMutably = c.types.info(leftType).mutableReference; // read first: 0.8.0 of the release's chain
+        left = optionalBorrow(c, left, lendsMutably, leftSpan)?;
+    }
     let option = c.typeOf(left);
     if (c.types.isBottom(option)) {
-        checkExpr(c, rightSyntax, none())?;
+        checkFallbackAlone(c, rightSyntax)?;
         return c.errorResult(span.start, span.end);
     }
     let payload = c.types.optionType(option);
@@ -717,7 +740,7 @@ fn synthCoalesce(c: borrow mut Checker, leftSyntax: u32, rightSyntax: u32, span:
         appendText(mut message, "'??' needs an optional value on its left, found ")?;
         appendQuotedType(mut message, c, option)?;
         c.error(notAResult(), leftSpan.start, leftSpan.end, message)?;
-        checkExpr(c, rightSyntax, none())?;
+        checkFallbackAlone(c, rightSyntax)?;
         return c.errorResult(span.start, span.end);
     }
     let rightIsBlock = match (c.front.ast.exprs[rightSyntax as usize]) {

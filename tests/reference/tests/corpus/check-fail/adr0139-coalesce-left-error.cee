@@ -1,0 +1,8 @@
+// ADR 0139 §3: when the left of `??` is no optional, only that is reported; the block is checked as the branch it is.
+fn main() {
+    let x = 5 ?? { return; }; // error[N0262]
+    let y = 5 ?? {            // error[N0262]
+        let z: u8 = 300;      // error[N0206]
+        return;
+    };
+}

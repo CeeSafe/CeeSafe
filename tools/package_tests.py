@@ -1880,7 +1880,7 @@ def main():
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 34 checks; {len(problems)} problems")
+    print(f"package_tests: 35 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

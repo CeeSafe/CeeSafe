@@ -2168,6 +2168,8 @@ fn main() {
   a call of type *never*, stops with a message. `a` is consumed, as by `match (a)`: a non-Copy payload moves out.
   `b` may be a block (ADR 0138 §2), checked as a branch of an `if` expression is (§15.3, ADR 0073): it ends in its
   value, written without `;`, or cannot complete (`?? { return Err(e); }`, `?? { continue; }`; N0235 otherwise).
+  `a` may also be a borrowed optional, a `borrow (T?)` or `borrow mut (T?)` (ADR 0139 §2): it is lent as `a.asBorrow()`
+  (or `asBorrowMut()`) lends it, so the value is a `borrow T` (`borrow mut T`) and nothing moves out of the referent.
   `??` binds less tightly than every other binary operator, `||` included, and is right-associative
   (grammar.md §2.1); beside an unparenthesised `||` or `&&` it is N0100.
 - **`o!`** is the value, or **panics** with "unwrapped null".

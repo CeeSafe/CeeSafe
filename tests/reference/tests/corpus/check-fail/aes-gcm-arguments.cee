@@ -1,0 +1,17 @@
+// Aes256Gcm's types say what a call needs (ADR 0135 §2.1): a buffer it may write, a nonce of 12 bytes and a tag of
+// 16, so a short nonce or a truncated tag is not a program.
+fn main() {
+    let key = [7u8; 32];
+    let cipher = match (Aes256Gcm.create(key[..])) {
+        Some(c) => c,
+        null => { return; }
+    };
+    var data = [1u8; 32];
+    let text = [1u8; 32];
+    let nonce = [0u8; 12];
+    let short = [0u8; 8];
+    let tag = cipher.seal(nonce, "".bytes(), text[..]);          // error[N0205]
+    let _ = cipher.seal(short, "".bytes(), mut data[..]);        // error[N0205]
+    let _ = cipher.open(nonce, "".bytes(), mut data[..], short); // error[N0205]
+    let _ = cipher.open(nonce, "".bytes(), mut text[..], tag);   // error[N0248]
+}

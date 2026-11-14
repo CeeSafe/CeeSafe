@@ -218,6 +218,8 @@ typedef struct {
     uint32_t chunk_count;
     struct cee_woken *woken;   /* the woken tasks one wait readies, sorted by wake (ADR 0062 §7); grown on need */
     uint32_t woken_capacity;
+    uint64_t wakes;            /* ceesafe_atomic_*: wakes since the last look at the wake list, from any thread; a wait
+                                  with none skips the walk, which costs every task waiting to be woken */
 } cee_executor;
 
 #if defined(CEE_FREESTANDING)
@@ -811,7 +813,9 @@ static void cee_wake_task(cee_executor *exec, cee_task *t) {
     uint64_t sequence = ceesafe_atomic_add_u64(&cee_wake_sequence, 1u) + 1u;
 #endif
     uint64_t none = 0u;
-    (void)ceesafe_atomic_cas_u64(&t->woken, none, sequence);
+    if (ceesafe_atomic_cas_u64(&t->woken, none, sequence) == none) { /* the previous value: marked now */
+        (void)ceesafe_atomic_add_u64(&exec->wakes, 1u); /* after the mark: an executor that sees it sees the mark */
+    }
     cee_poke(exec);
 }
 
@@ -2320,6 +2324,11 @@ static void cee_woken_sort(cee_woken *a, uint32_t count) {
 }
 
 static bool cee_ready_woken(void) {
+    /* No wake since the last look: nothing on the list is woken, so the walk is skipped (cee-proxy's F9: idle tasks
+       waiting on a drain made every wait cost O(waiters)). A wake after the swap counts again for the next look. */
+    if (ceesafe_atomic_swap_u64(&cee_exec.wakes, 0u) == 0u) {
+        return false;
+    }
     uint32_t count = 0u;
     bool room = true;
     for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
@@ -2475,6 +2484,7 @@ static void cee_exec_begin(cee_run *run) {
     cee_exec.active_fds = NULL;
     cee_exec.woken = NULL;
     cee_exec.woken_capacity = 0u;
+    cee_exec.wakes = 0u;
     cee_exec.active_count = 0u;
     cee_exec.active_capacity = 0u;
     cee_exec.reactor = -1;

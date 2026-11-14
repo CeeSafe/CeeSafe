@@ -778,7 +778,8 @@ Heap (M3b):
     `ceesafe_async_tasks` walk; it is doubly linked, so a task leaves it in constant time:
     - deadlines (a shield's end counting as one) are a binary min-heap, so due tasks run earliest first;
     - descriptor waiters are a table by descriptor, readers and writers each in the order they parked;
-    - the tasks waiting to be woken are a list of their own.
+    - the tasks waiting to be woken are a list of their own. A wake counts itself on its executor after marking the
+      task, and a wait walks the list only when the count, taken and reset, is not zero.
   - The reactor (A4b): kqueue on macOS and the BSDs, epoll on Linux, created at the first wait. A readiness event
     readies every task waiting in that direction; each retries. epoll refuses regular files (`EPERM`): their tasks
     count as ready. A failed registration readies its tasks, whose retry sees the error. The wake pipe stays

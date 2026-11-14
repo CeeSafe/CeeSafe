@@ -297,7 +297,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`
     block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up.
   - A package's own function or item of one of these names shadows the built-in (§2).
-- An expression statement must be a call, or a call under `?`, `!` or `await` (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
+- An expression statement must be a call, an `await`, or `?` or `!` on any operand (N0225; ADR 0138 §5): `x!;` checks
+  that `x` holds a value, and `x?;` returns when it does not. `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
   A call statement whose value is a `Result` is warning N0402 (§17.5).
 - `break`/`continue` must be inside `while`, `loop` or `for` (N0214).
 - `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
@@ -491,8 +492,8 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   - `let` locals with an initialiser;
   - return types (with a source list, §13.5).
 
-  They may **not** appear in struct fields (E3), constants, or `var` locals (N0246). Struct
-  fields of reference type need lifetime parameters (OD-3).
+  They may **not** appear in struct fields (E3), constants, or `var` locals (N0246); a shared view, `StringView` or
+  `Slice<T>`, may be a `var` (§19.1, ADR 0138 §4). Struct fields of reference type need lifetime parameters (OD-3).
 - `borrow T` is Copy. A `borrow mut T` value is never copied: every use reborrows it (§13.3).
 
 ### 13.2 Creating references
@@ -1050,7 +1051,8 @@ fn area(s: Shape) -> u32 {
 - `Slice<T>` / `SliceMut<T>` are **borrowed views** `(pointer, length)` of a run of `T`s in an array
   or another slice. They follow every rule for references (§13), with the same scoping:
   - only in parameters, `let` locals with an initialiser, and return types with a source list;
-  - never in fields, payloads, array elements, constants or `var` locals (N0246);
+  - never in fields, payloads, array elements or constants (N0246), and a `SliceMut<T>` never in a `var` local; a
+    `Slice<T>` may be one, which assignment re-binds (§19.1, ADR 0138 §4);
   - `Slice<T>` is Copy, and each use of a `SliceMut<T>` reborrows it; `SliceMut<T>` coerces to
     `Slice<T>`;
   - a slice holds a loan of the whole array (or slice) it was taken from (`lifetimes.md`);
@@ -1167,6 +1169,9 @@ fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {
   In safe code the two cannot overlap, because `s`'s loan would conflict with `d`'s (N0241, N0242);
   if `unsafe` code makes them overlap (§27.3, `Slice.fromRaw`), the result is still defined.
 - `d.fill(v)`, with `v: T`: every element of `d` becomes `v`. Nothing is checked.
+- `d.copyWithin(from, to, count)` (ADR 0138 §6; lib/core's `SliceCopying<T: Copy>`): the `count` elements from index
+  `from` are copied to index `to`, as C's `memmove`: the two ranges may overlap, and end as the source was. Either
+  range past the end **panics** ("slice range out of bounds") and copies nothing.
 - `T` must be Copy (N0259), because both methods copy elements.
 - The receiver is a `SliceMut<T>` (a parameter, a local or a call result; reborrowed, like any use of a
   `SliceMut`), or a slicing expression `a[lo..hi]` in any of its forms, which is then taken as
@@ -1322,8 +1327,8 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
   `Result<T, AllocError>`: `let d: Box<i64> = Box.create(5)!;` holds an i64, and
   `let s: String<A> = String.from("a")!;` allocates from `A`, as under `let r: Result<T, AllocError> = …`. It is a
   hint for the call, not a conversion: the value of `e!` must still have type `T` (N0205).
-- As an expression statement: `f()?;` and `f()!;` are allowed when the operand is a call, like
-  calls themselves (N0225 otherwise).
+- As an expression statement: `f()?;`, `f()!;`, and `x?;` or `x!;` on any operand (ADR 0138 §5; a value the
+  statement does not keep is destroyed, as a call's is).
 - Precedence: postfix, like a call or member access: `parse(a)?.value` and `-x?` work as
   expected (`-` applies to `x?`). `!` directly followed by `=` lexes as `!=`. Write `r! == 1`
   with a space.
@@ -1504,6 +1509,11 @@ References and slices must be `let` locals, because assigning to a reference wri
 *Since M4c,* other scoped values (scoped results and region values) may be `var`: assigning one
 replaces it, like any value. For the borrow checker, the local then holds the loans of every value
 it is assigned (a sound over-approximation).
+
+*Since ADR 0138 §4,* a shared view, `StringView` or `Slice<T>`, may be a `var` too: nothing can be written through
+one, so assigning to the variable re-binds it to another view (`server = server[4..].trim();`), with the same
+over-approximation of its loans. A `borrow T`, a `borrow mut T` and a `SliceMut<T>` stay `let` (N0246), since
+assigning to them writes through them.
 
 A function returning a scoped type needs return sources: the default rule (one reference
 parameter) or a `borrow(...)` list (§13.5). In this rule, "reference parameter" now means
@@ -1802,6 +1812,9 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   - The checker erases units: a unit local is no HIR local, a unit read no operand, and nothing is captured, moved,
     borrowed or destroyed for one. NIR, the C backend and the interpreter never see them.
   - Not included: user generic enums instantiated at `void` (N0226), and `Some(v)` with `void`.
+  - A call of an instance whose signature, with `void` for a type parameter, has `void` where §2 allows none (a
+    parameter, `T?`, a `Result`'s error) is N0226 at the call (ADR 0138 §7): `r.ok()` on a `Result<void, E>` is one,
+    and `isOk()` tests it. The instance is never compiled.
 - **An instantiation that does not check is an error at its use** (M15 S1). §20.3's checking
   covers every type argument; a `void` one's payloads are unit payloads (above). A scoped type argument
   the body cannot take is N0274 (§25.4). Otherwise the copy's errors are usually explained by an
@@ -2134,8 +2147,11 @@ fn main() {
 - **Matching.** Patterns `null`, `Some(x)` and `Some(_)` are written without a type prefix; the
   rules of §15.2 and §18.4 apply.
 - **Comparisons.** `o == null` and `o != null` test for absence, for any `T` (the value is only
-  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s. Other comparisons of optionals are
-  not defined (N0207).
+  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s.
+  - `a == b` and `a != b` on two optionals of one Copy type `T` whose values compare with `==` (ADR 0138 §3): equal
+    when both are `null`, or both hold equal values (`T`'s own `==`, an optional's again for `T??`). The right
+    operand is checked against the left's type, so `o == Some(5)` needs no annotation. Neither is consumed.
+  - Other comparisons of optionals, and `==` on optionals of a type that is not Copy, are not defined (N0207).
 - **Optional borrows** (ADR 0074 §2.5). `o.asBorrow()`, on a place of type `T?` or on a `borrow (T?)`, is a
   `borrow T?`: `Some` borrows the payload, and `null` is `null`. `o.asBorrowMut()`, on a mutable place of type `T?`
   or on a `borrow mut (T?)`, is a `(borrow mut T)?` (N0248 otherwise). Either is a shared or mutable loan of the place
@@ -2150,6 +2166,8 @@ fn main() {
   checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
   chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,
   a call of type *never*, stops with a message. `a` is consumed, as by `match (a)`: a non-Copy payload moves out.
+  `b` may be a block (ADR 0138 §2), checked as a branch of an `if` expression is (§15.3, ADR 0073): it ends in its
+  value, written without `;`, or cannot complete (`?? { return Err(e); }`, `?? { continue; }`; N0235 otherwise).
   `??` binds less tightly than every other binary operator, `||` included, and is right-associative
   (grammar.md §2.1); beside an unparenthesised `||` or `&&` it is N0100.
 - **`o!`** is the value, or **panics** with "unwrapped null".
@@ -2371,6 +2389,10 @@ fn main() -> i32 {
     `Vector<u8>` in lib/core and for `String` in lib/std (hosted), over lib/core's `Formatted`, which allocates nothing
     of its own; `VectorBytes.appendHex(mut v, …)` and the others
     are the same for a byte vector;
+  - `s.appendChar(c)` (`c: u32`) and `s.appendUtf8(bytes)` (`bytes: Slice<u8>`) (ADR 0138 §6), each
+    `Result<bool, AllocError>`: the character in UTF-8, or the bytes when they are UTF-8 (checked once, with no copy
+    first); `false`, appending nothing, for a value that is not a Unicode scalar value or bytes that are not UTF-8.
+    They are lib/core's `AppendText` interface, for `Vector<u8>` in lib/core and `String` in lib/std;
   - `s.clear()`, `s.length` (bytes), `s.capacity`;
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;

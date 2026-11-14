@@ -124,7 +124,7 @@ Semantic checks run only when every file parsed without errors.
 | N0222 | A generic's substituted copy does not check for its type arguments, and no other error explains why (type-system §20.4) | `fn copyOf<M: Metrics + Copy>(m: borrow M) -> M => m;` used with `dyn Metrics`, which no value holds (ADR 0064 §3.1) |
 | N0223 | *(unassigned)* | |
 | N0224 | Value of type `void` used as a value, or a `let` of a `never` expression | `let d = nothing();` |
-| N0225 | Expression statement that is not a call | `1 + 2;` |
+| N0225 | Expression statement that is not a call, an `await`, or `?` or `!` (ADR 0138 §5) | `1 + 2;` |
 | N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6) | `struct Node { next: Node; }` |
 | N0228 | Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107) | `struct D { a: i32; a: i64; }` |

@@ -652,6 +652,15 @@ fn emitFrameStruct(
             }
         }
     }
+    let result = c.hir.functions[source as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        e.t("    ")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t(" cee_result;")?;
+        e.emit()?;
+    }
+    // The union is last, so the initialiser zeroes everything before it and never the union (c-backend.md §3a): a
+    // child's frame is set up by the child's own initialiser, a join and a worker by their suspension point.
     if (members.length > 0) {
         e.line("    union {")?;
         for (member in members.view()) {
@@ -661,13 +670,6 @@ fn emitFrameStruct(
             e.emit()?;
         }
         e.line("    } cee_u;")?;
-    }
-    let result = c.hir.functions[source as usize].returnType;
-    if (!c.types.is(result, TypeKind.Void)) {
-        e.t("    ")?;
-        appendCTypeName(c, mut e.buf, result)?;
-        e.t(" cee_result;")?;
-        e.emit()?;
     }
     e.line("};")?;
     return Ok();
@@ -873,7 +875,7 @@ fn emitAsyncFunction(
     let nameStart = functionNameStart(c, source);
     let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
     let function = borrow n.functions[f as usize];
-    // The initialiser: a zeroed frame (state 0), then the arguments.
+    // The initialiser: the frame zeroed up to its waiting storage (state 0), then the arguments.
     mapTo(e, c, n, sources, nameStart, c.front.ast.idents[syntax.name as usize].end);
     e.fnPrefix()?;
     e.t("void ")?;
@@ -889,9 +891,17 @@ fn emitAsyncFunction(
     }
     e.t(") {")?;
     e.emit()?;
-    e.t("    *cee_frame = (struct ")?;
-    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
-    e.t("){0};")?;
+    if (frameReport(c, n, f)?.unionMembers > 0) {
+        // Everything before the waiting storage, never the union (c-backend.md §3a): it
+        // holds every awaited child's frame, so zeroing it would cost the whole subtree's size at every level.
+        e.t("    ceesafe_mem_set(cee_frame, 0, offsetof(struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+        e.t(", cee_u));")?;
+    } else {
+        e.t("    *cee_frame = (struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+        e.t("){0};")?;
+    }
     e.emit()?;
     for (k in 0..function.parameterCount) {
         e.t("    cee_frame->")?;
@@ -1525,11 +1535,12 @@ fn emitJoin(
     let list = builtinArguments(n, r);
     var join = copyBytes("cee_frame->cee_u.cee_j".bytes())?;
     appendDecimal(mut join, site as u64)?;
-    e.t("    ")?;
+    // The scope, `first`, the results and the task slots; not the children's frames, which their initialisers set up.
+    e.t("    ceesafe_mem_set(&")?;
     e.b(join.view())?;
-    e.t(" = (struct ceeAJ_")?;
+    e.t(", 0, offsetof(struct ceeAJ_")?;
     e.d(site as u64)?;
-    e.t("){0};")?;
+    e.t(", f0));")?;
     e.emit()?;
     e.t("    ")?;
     e.b(join.view())?;
@@ -1684,6 +1695,13 @@ fn emitBlocking(
     let value = operandText(e, c, n, sources, f, n.at(list, 2))?;
     var b = copyBytes("cee_frame->cee_u.cee_b".bytes())?;
     appendDecimal(mut b, site as u64)?;
+    // The union is not zeroed (c-backend.md §3a), and an earlier suspension point may have used it.
+    e.t("    ceesafe_mem_set(&")?;
+    e.b(b.view())?;
+    e.t(".rt, 0, sizeof ")?;
+    e.b(b.view())?;
+    e.t(".rt);")?;
+    e.emit()?;
     e.t("    ")?;
     e.b(b.view())?;
     e.t(".body = ")?;
@@ -2036,15 +2054,15 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
             }
         }
     }
-    if (report.unionMembers > 0) {
+    let result = c.hir.functions[source as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        addLayout(mut l, typeLayout(c, result));
+    }
+    if (report.unionMembers > 0) { // last, as emitFrameStruct writes it
         union.size = unionSize;
         let u = layoutEnd(union);
         addLayout(mut l, u);
         report.unionBytes = truncate<u64>(u.size);
-    }
-    let result = c.hir.functions[source as usize].returnType;
-    if (!c.types.is(result, TypeKind.Void)) {
-        addLayout(mut l, typeLayout(c, result));
     }
     report.layout = layoutEnd(l);
     return Ok(report);

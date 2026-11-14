@@ -491,10 +491,11 @@ An async fn `F` whose C function name would be `<F>` (§2.1) lowers to four C it
 struct ceeAF_<F> {
     uint32_t cee_state;         /* 0 at entry; k after suspension point k (intermediate-representation.md §3) */
     /* the parameters, then every local, as fields named like the locals (v_<name>_<n>, t_<n>) */
-    /* one field per awaited call holding the awaited task's frame: struct ceeAF_<G> cee_a<k>; */
+    /* a scope's struct, one field per scope */
     /* the result, if F's result type is not void: R cee_result; */
+    /* last, the waiting storage: union { struct ceeAF_<G> cee_a<k>; …; } cee_u; one member per suspension point */
 };
-static void ceeAI_<F>(struct ceeAF_<F> *cee_frame, /* the parameters */);  /* zeroes the frame, stores the arguments */
+static void ceeAI_<F>(struct ceeAF_<F> *cee_frame, /* the parameters */);  /* zeroes the frame up to cee_u, stores the arguments */
 static bool ceeAR_<F>(struct ceeAF_<F> *cee_frame);  /* runs F until it returns (true) or suspends (false) */
 static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime calls it */
 ```
@@ -515,6 +516,14 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
 - **Waiting storage.** A task waits at one suspension point at a time, so what each needs only while it waits (an
   awaited child's frame `cee_a<k>`, a join `cee_j<site>`, a worker `cee_b<site>`) shares one union `cee_u`. A scope's
   struct is its own field: it must be zero when its first child is spawned.
+- **What the initialiser zeroes.** `cee_u` is the frame's last field, and `ceeAI_<F>` zeroes only what comes before it,
+  `ceesafe_mem_set(cee_frame, 0, offsetof(struct ceeAF_<F>, cee_u))`; a frame with no suspension point is zeroed
+  whole. The union holds the frames of everything F may await, so zeroing it would cost the size of F's whole
+  subtree on every call, at every level of a chain: a proxied request through cee-proxy zeroed about 400 KB, and 2,048
+  idle connection tasks touched 140 MB they never used (cee-proxy's CEESAFE_FINDINGS.md F11). Nothing reads a member
+  before it is set up: an awaited child's `ceeAI_<G>` sets up its own frame, a stacked or boxed await stores its
+  pointer, a join zeroes its own fields up to its first child's frame (below), and a worker's `ceesafe_blocking` is
+  zeroed at its suspension point, since an earlier one may have used the union.
 - **Layout.** ceesafec computes each frame's size and alignment (`frameReport`, from the fields' C layouts and the
   runtime structs') and asserts them after the struct (`_Static_assert(sizeof(struct ceeAF_<F>) == n, …)`), so the C
   compiler checks the arithmetic; `ceesafec build --explain-frames` prints the same numbers, the locals kept and the
@@ -582,9 +591,9 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   every impl's, and its size and the union's offset are asserted; `--explain-frames` reports it at each await.
 - **Joins.** `race` or `all` at `site` is a field `struct ceeAJ_<site> cee_j<site>` of the awaiting frame: the
   runtime's `ceesafe_scope`, `first` (the child that returned first, 2 for neither), both results, and both children's
-  task slots (`ceesafe_task_slot`) and frames, defined before the frame that holds it. The join zeroes it, initialises
-  both frames, starts both with `ceesafe_async_start` (the caller's storage: nothing is allocated, nothing freed), and
-  waits like a scope's end. `ceeAJ<site>_<k>` resumes child k and, once it returns, keeps its result, notes it if it
+  task slots (`ceesafe_task_slot`) and frames, defined before the frame that holds it. The join zeroes its fields up to
+  the frames (`offsetof(…, f0)`), initialises both frames, starts both with `ceesafe_async_start` (the caller's
+  storage: nothing is allocated, nothing freed), and waits like a scope's end. `ceeAJ<site>_<k>` resumes child k and, once it returns, keeps its result, notes it if it
   was first, and calls `ceesafe_async_cancel` on the join: always for race and for a timeout, on an `Err` for all. A
   timeout's second child (ADR 0046) is a function, not a closure: its initialiser is given the deadline, and its
   result field has its own type.

@@ -26,10 +26,10 @@ struct ceeAF_ceeF_twice {
     int32_t t_3;
     int32_t t_4;
     int32_t t_6;
+    int32_t cee_result;
     union {
         struct ceeAF_ceeF_add cee_a1;
     } cee_u;
-    int32_t cee_result;
 };
 _Static_assert(sizeof(struct ceeAF_ceeF_twice) == 44, "ceesafec frame layout");
 _Static_assert(_Alignof(struct ceeAF_ceeF_twice) == 4, "ceesafec frame layout");
@@ -67,7 +67,7 @@ static const uint32_t ceeAL_ceeF_add[] = {4};
 static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_add = {"add", "emit-c/async-frame.cee", ceeAL_ceeF_add, 1u};
 
 static void ceeAI_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame, int32_t v_x_0) {
-    *cee_frame = (struct ceeAF_ceeF_twice){0};
+    ceesafe_mem_set(cee_frame, 0, offsetof(struct ceeAF_ceeF_twice, cee_u));
     cee_frame->v_x_0 = v_x_0;
 }
 static bool ceeAT_ceeF_twice(void *frame) { return ceeAR_ceeF_twice((struct ceeAF_ceeF_twice *)frame); }

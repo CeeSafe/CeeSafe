@@ -19,7 +19,7 @@ fn call(f: fn(borrow mut Vector<StringView>, StringView), out: borrow mut Vector
 fn main() {
     let named = pick; // error[N0298]
     var words = Vector<StringView>.create();
-    call(keep, mut words, "word"); // error[N0298]
+    call(keep, mut words, "word");                                   // error[N0298]
     let store: fn(borrow mut Vector<StringView>, StringView) = keep; // error[N0298]
-    let single: fn(StringView) -> StringView = one; // error[N0298]
+    let single: fn(StringView) -> StringView = one;                  // error[N0298]
 }

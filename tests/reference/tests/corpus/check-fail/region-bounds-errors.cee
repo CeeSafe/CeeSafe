@@ -5,30 +5,27 @@ interface Shape {
 }
 
 // Not a region in scope: an undeclared name, a type, an interface, a generic type.
-fn unknown<region a: nosuch>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
-fn aType<region a: u32>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
-fn anInterface<region a: Shape>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
-fn aGeneric<region a: Vector<u8>>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn unknown<region a: nosuch>(x: StringView<a>) -> StringView<a> => x;            // error[N0273]
+fn aType<region a: u32>(x: StringView<a>) -> StringView<a> => x;                 // error[N0273]
+fn anInterface<region a: Shape>(x: StringView<a>) -> StringView<a> => x;         // error[N0273]
+fn aGeneric<region a: Vector<u8>>(x: StringView<a>) -> StringView<a> => x;       // error[N0273]
 fn aTypeParameter<region a: T, T>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0273]
-fn several<
-    region a,
-    region b: a + nosuch // error[N0273]
-        + Copy // error[N0273]
->(x: StringView<a>, y: StringView<b>) -> StringView<a> => x;
+// Two bounds that are no regions, each reported.
+fn several<region a, region b: a + nosuch + Copy>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x; // error[N0273] // error[N0273]
 
 // `static` bounds nothing: no call checks that an argument is static data.
 fn isStatic<region a: static>(x: StringView<a>) -> StringView<static> => "s"; // error[N0273]
 
 // Itself, twice, and a cycle.
-fn itself<region a: a>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn itself<region a: a>(x: StringView<a>) -> StringView<a> => x;                                // error[N0273]
 fn twice<region a, region b: a + a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x; // error[N0273]
-fn cycle<region a: b, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x; // error[N0273]
-fn longCycle<region a: c, region b: a, region c: b>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn cycle<region a: b, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x;  // error[N0273]
+fn longCycle<region a: c, region b: a, region c: b>(x: StringView<a>) -> StringView<a> => x;   // error[N0273]
 
 // A type parameter is not bounded by a region, nor a const parameter's type one.
-fn typeByRegion<region a, T: a>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0204]
+fn typeByRegion<region a, T: a>(x: StringView<a>, t: T) -> StringView<a> => x;              // error[N0204]
 fn typeByStatic<region a, T: Shape + static>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0204]
-fn constByRegion<region a, const N: a>(x: StringView<a>) -> StringView<a> => x; // error[N0204]
+fn constByRegion<region a, const N: a>(x: StringView<a>) -> StringView<a> => x;             // error[N0204]
 
 // On a struct, an enum and a method.
 struct Pair<region a, region b: nosuch> { // error[N0273]
@@ -40,10 +37,7 @@ struct Pair<region a, region b: nosuch> { // error[N0273]
     fn label<region l: a + first>(borrow this, name: StringView<l>) -> StringView<a> => this.first; // error[N0273]
 }
 
-enum Either<
-    region a: a, // error[N0273]
-    region b: a + static // error[N0273]
-> {
+enum Either<region a: a, region b: a + static> { // error[N0273] // error[N0273]
     Left(StringView<a>),
     Right(StringView<b>),
 }

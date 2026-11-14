@@ -3255,10 +3255,11 @@ Diagnostics: none new.
   `raiseOpenFiles` once at start.
 - Hosted only: in freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`.
 
-### 26.15 Process signals (ADR 0125)
-- `ProcessSignal` (lib/std) is a request to end the process: `Interrupt` (POSIX `SIGINT`, Ctrl+C in a terminal;
-  Windows' Ctrl+C and Ctrl+Break) or `Terminate` (POSIX `SIGTERM`; Windows' console close, logoff and shutdown). No
-  other signal is touched.
+### 26.15 Process signals (ADRs 0125 and 0140)
+- `ProcessSignal` (lib/std) is a request to the process from outside it: `Interrupt` (POSIX `SIGINT`, Ctrl+C in a
+  terminal; Windows' Ctrl+C and Ctrl+Break), `Terminate` (POSIX `SIGTERM`; Windows' console close, logoff and
+  shutdown) or `Hangup` (POSIX `SIGHUP`, ADR 0140: the terminal went away, or, for a daemon, by convention a request to
+  read its configuration again; never on Windows, which has no such request). No other signal is touched.
 - **The default is unchanged.** The runtime installs no handler by itself: until a program subscribes, and after its
   subscription is destroyed, such a request ends the process at once, as the system's default does.
 - `ProcessSignals.subscribe()`: `Result<ProcessSignals, IoError>`, the process's subscription, a move type that
@@ -3280,7 +3281,7 @@ Diagnostics: none new.
   the close, logoff and shutdown events it then does not return, so the process lives until `main` returns or the
   system's limit (5 s for a close).
 - The interpreter subscribes its own process through the C library's `signal()` and looks at what arrived where the
-  program asks or waits; on Windows it sees Ctrl+C and Ctrl+Break only. It runs one thread at a time (§38): while a
+  program asks or waits; on Windows it sees Ctrl+C and Ctrl+Break only, and `SIGHUP` on POSIX hosts. It runs one thread at a time (§38): while a
   thread waits in `signals.wait()`, no other thread runs.
 - Hosted only: in freestanding code these types are not defined (N0200).
 

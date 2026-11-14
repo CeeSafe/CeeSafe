@@ -127,7 +127,7 @@ no argument 1000
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
-| `ProcessSignals.subscribe()` | `Result<ProcessSignals, IoError>`; then `poll()`, `wait()` and `await waitAsync()` give Ctrl+C (`SIGINT`) and `SIGTERM` as `ProcessSignal.Interrupt` and `Terminate` instead of ending the process, until the value is dropped (ADR 0125) |
+| `ProcessSignals.subscribe()` | `Result<ProcessSignals, IoError>`; then `poll()`, `wait()` and `await waitAsync()` give Ctrl+C (`SIGINT`), `SIGTERM` and `SIGHUP` as `ProcessSignal.Interrupt`, `Terminate` and `Hangup` instead of ending the process, until the value is dropped (ADRs 0125 and 0140) |
 | `TcpStream.connect(address, port)` | `Result<TcpStream, IoError>`; `read`, `write`, `shutdownWrite`, `shutdownRead` |
 | `e.message()` | the `IoError`'s text, a `StringView` |
 

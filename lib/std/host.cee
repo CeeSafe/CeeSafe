@@ -147,13 +147,17 @@ public struct ProcessLimits {
     }
 }
 
-/// A request to end the process (`ProcessSignals`, type-system.md §26.15, ADR 0125).
+/// A request to the process from outside it (`ProcessSignals`, type-system.md §26.15, ADRs 0125 and 0140).
 public enum ProcessSignal {
     /// The user's interrupt: POSIX `SIGINT` (Ctrl+C in a terminal); on Windows, Ctrl+C and Ctrl+Break.
     Interrupt,
     /// A request to terminate: POSIX `SIGTERM` (`kill`, a service manager, a container's stop); on Windows, the
     /// console's close, logoff and shutdown.
     Terminate,
+    /// POSIX `SIGHUP` (ADR 0140): the terminal went away, or, for a daemon, which has none, by convention a request
+    /// to read its configuration again (`kill -HUP`, systemd's `ExecReload`). Windows has no such request, so it never
+    /// comes there.
+    Hangup,
 }
 
 /// The process's subscription to the requests to end it (type-system.md §26.15, ADR 0125). Before a program
@@ -161,8 +165,8 @@ public enum ProcessSignal {
 /// default does. While the subscription lives, each request is kept for the program instead: `poll` asks without
 /// waiting, `wait` blocks a thread, and `waitAsync` parks a task (so `Async.race(server, signals.waitAsync())` is a
 /// server's shutdown). There is one subscription for the process at a time; threads and tasks share it by
-/// reference. Requests that arrive faster than they are taken are merged: up to eight are kept. No other signal is
-/// touched. Hosted only.
+/// reference. Requests that arrive faster than they are taken are merged: up to eight are kept. `SIGHUP` is kept
+/// as `Hangup` (ADR 0140), and no other signal is touched. Hosted only.
 @noncopy
 public struct ProcessSignals {
     private queue: Channel<u32>;
@@ -211,7 +215,9 @@ public struct ProcessSignals {
         }
     }
 
-    fn named(n: u32) -> ProcessSignal => if (n == 1) ProcessSignal.Interrupt else ProcessSignal.Terminate;
+    /// The runtime's value: 1 an interrupt, 2 a request to terminate, 3 a hangup.
+    fn named(n: u32) -> ProcessSignal => if (n == 1) ProcessSignal.Interrupt else if (n == 3) ProcessSignal.Hangup
+        else ProcessSignal.Terminate;
 
     /// Ends the subscription: the next request ends the process, as before it.
     /// Safety: this value is the process's one subscription, so the runtime's is this one.

@@ -154,7 +154,8 @@ In `main`, the request to stop comes from outside the program. Ctrl+C in the ter
 `SIGINT`, and the command `kill` sends `SIGTERM`. By default either one ends the process at once: nothing is
 destroyed, and an answer in flight is cut. `ProcessSignals.subscribe()` changes that for as long as its value
 lives. The request is then kept for the program, and `await signals.waitAsync()` returns it, as
-`ProcessSignal.Interrupt` or `ProcessSignal.Terminate`.
+`ProcessSignal.Interrupt` or `ProcessSignal.Terminate`. A third kind, `ProcessSignal.Hangup`, is the signal `SIGHUP`,
+which daemons take as a request to read their configuration again; our server stops on any of the three.
 
 <span class="listing-caption"><strong>Listing 21-31</strong>, <code>src/main.cee</code>: A task waits for Ctrl+C and closes the channel, beside the server.</span>
 

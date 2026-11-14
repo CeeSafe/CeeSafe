@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""A program is told to end by a signal, and ends in good order (ADR 0125, ADR 0126): checks the corpus cannot make,
-since its runner sends a program no signal.
+"""A program is told to end by a signal, and ends in good order (ADRs 0125, 0126 and 0140): checks the corpus cannot
+make, since its runner sends a program no signal.
 
-Each case starts a program, built and with `ceesafec run --interp`, sends it SIGINT or SIGTERM with os.kill, and
+Each case starts a program, built and with `ceesafec run --interp`, sends it SIGINT, SIGTERM or SIGHUP (ADR 0140,
+taken as `ProcessSignal.Hangup`) with os.kill, and
 checks what it writes and how it ends, with a deadline for every wait:
 
 1. a server of tasks (`Async.race` of the accepting loop and `signals.waitAsync()`, a shield around each
@@ -16,7 +17,7 @@ checks what it writes and how it ends, with a deadline for every wait:
    line: the first signal is named, and the second one ends the process as it would have without a subscription;
 4. a program that never subscribes is ended by the signal, as before ADR 0125.
 
-POSIX only (os.kill with SIGINT and SIGTERM): elsewhere it reports that it was skipped. On Windows the same
+POSIX only (os.kill with SIGINT, SIGTERM and SIGHUP): elsewhere it reports that it was skipped. On Windows the same
 programs are tried by hand: Ctrl+C in a console (tools/signal_check.py --write DIR writes them).
 
 usage: python3 tools/signal_check.py --compiler out/ceesafec
@@ -84,7 +85,7 @@ async fn serverSide(listener: borrow AsyncTcpListener) -> Result<bool, ServeErro
 
 async fn stopAsked(signals: borrow ProcessSignals) -> Result<bool, ServeError> {
     let asked = await signals.waitAsync()?;
-    await AsyncConsole.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else "terminate")?;
+    await AsyncConsole.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else if (asked is ProcessSignal.Hangup) "hangup" else "terminate")?;
     return Ok(true);
 }
 
@@ -167,7 +168,7 @@ fn main() {
     })!;
     // The main thread waits for the request to stop, and then ends the other thread's `accept`.
     let asked = signals.wait();
-    Console.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else "terminate");
+    Console.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else if (asked is ProcessSignal.Hangup) "hangup" else "terminate");
     Console.flush();
     listener.get().shutdown()!;
     let answered = acceptor.join();
@@ -182,7 +183,7 @@ fn main() {
     Console.writeLine("ready");
     Console.flush();
     let asked = signals.wait();
-    Console.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else "terminate");
+    Console.writeLine(if (asked is ProcessSignal.Interrupt) "interrupt" else if (asked is ProcessSignal.Hangup) "hangup" else "terminate");
     Console.writeLine(if (signals.poll() is null) "no other" else "another");
     {
         let ended = signals; // the subscription ends with this block
@@ -369,7 +370,7 @@ def main():
         return 0
     problems = []
     cases = 0
-    signals = ((signal.SIGINT, b"interrupt"), (signal.SIGTERM, b"terminate"))
+    signals = ((signal.SIGINT, b"interrupt"), (signal.SIGTERM, b"terminate"), (signal.SIGHUP, b"hangup"))
     reactors = [("", {}), (", poll", {"CEESAFE_REACTOR_POLL": "1"})]
     if sys.platform.startswith("linux"):
         reactors.append((", io_uring", {"CEESAFE_REACTOR_URING": "1"}))

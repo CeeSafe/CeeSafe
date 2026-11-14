@@ -434,7 +434,8 @@ is `Io(InvalidInput)`. `sendFile` is one step and returns how many bytes went.
 By default Ctrl+C (`SIGINT`) and `SIGTERM` end a process at once: nothing is dropped, and a connection in the
 middle of its answer is cut. `ProcessSignals.subscribe()` changes that for as long as its value lives: a request
 to stop is kept for the program, and `await signals.waitAsync()` returns it as `ProcessSignal.Interrupt` or
-`ProcessSignal.Terminate`. A server races its accepting loop against that wait. When the request comes, the race
+`ProcessSignal.Terminate`. `SIGHUP` comes too, as `ProcessSignal.Hangup`: a daemon takes it as a request to read its
+configuration again, and keeps serving. A server races its accepting loop against that wait. When the request comes, the race
 cancels the loop, whose `accept` returns `Cancelled`, and waits for the connections in flight, which finish
 behind their shields.
 

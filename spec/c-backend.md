@@ -743,8 +743,8 @@ Heap (M3b):
   - Channels (ADR 0032 §5): `ceesafe_chan_*`, element-blind, under a spin lock; a task's wait node lives in its frame,
     and every change wakes the queued tasks through their executors.
   - Process signals (ADR 0125; type-system.md §26.15): `ceesafe_signal_subscribe(channel)` and
-    `ceesafe_signal_unsubscribe()`, beside the channels they send into. POSIX: `sigaction` for `SIGINT` and
-    `SIGTERM`, a handler that only sets a bit and writes a byte to a pipe, and a thread that sends what the bits say
+    `ceesafe_signal_unsubscribe()`, beside the channels they send into. POSIX: `sigaction` for `SIGINT`,
+    `SIGTERM` and `SIGHUP` (ADR 0140), a handler that only sets a bit and writes a byte to a pipe, and a thread that sends what the bits say
     into the channel; Windows: `SetConsoleCtrlHandler`, whose handler thread sends. Nothing is installed until a
     program subscribes.
   - Readiness (A2d): a task waits for a descriptor to be readable or writable (`ceesafe_async_wait_readable`,

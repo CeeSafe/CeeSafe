@@ -1468,10 +1468,11 @@ Safety: the runtime writes the value during the call only.
 public enum ProcessSignal {
     Interrupt,
     Terminate,
+    Hangup,
 }
 ```
 
-A request to end the process (`ProcessSignals`, type-system.md §26.15, ADR 0125).
+A request to the process from outside it (`ProcessSignals`, type-system.md §26.15, ADRs 0125 and 0140).
 
 ## struct ProcessSignals
 
@@ -1487,8 +1488,8 @@ subscribes, and after the subscription is dropped, such a request ends the proce
 default does. While the subscription lives, each request is kept for the program instead: `poll` asks without
 waiting, `wait` blocks a thread, and `waitAsync` parks a task (so `Async.race(server, signals.waitAsync())` is a
 server's shutdown). There is one subscription for the process at a time; threads and tasks share it by
-reference. Requests that arrive faster than they are taken are merged: up to eight are kept. No other signal is
-touched. Hosted only.
+reference. Requests that arrive faster than they are taken are merged: up to eight are kept. `SIGHUP` is kept
+as `Hangup` (ADR 0140), and no other signal is touched. Hosted only.
 
 ### ProcessSignals.subscribe
 

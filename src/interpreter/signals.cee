@@ -1,4 +1,4 @@
-// Process signals for the interpreter (lib/std's ProcessSignals, ADR 0125; type-system.md §26.15): the interpreted
+// Process signals for the interpreter (lib/std's ProcessSignals, ADRs 0125 and 0140; type-system.md §26.15): the interpreted
 // program's subscription is the interpreter's own. The compiled runtime's ceesafe_signal_* are newer than the
 // compiler that builds these sources, so the interpreter asks the C library itself: signal(), which every host has.
 // The handler only sets a bit, and the interpreter looks at the bits where the program asks or waits (deliverSignals).
@@ -9,19 +9,22 @@ extern "C" {
 }
 
 /// The requests that arrived and the interpreter has not yet given to the program: bit 0 an interrupt, bit 1 a
-/// request to terminate (the runtime's CEE_SIGNAL_INTERRUPT and CEE_SIGNAL_TERMINATE).
+/// request to terminate, bit 2 a hangup (the runtime's CEE_SIGNAL_INTERRUPT, CEE_SIGNAL_TERMINATE and
+/// CEE_SIGNAL_HANGUP_BIT; the values sent are 1, 2 and 3).
 static INTERP_SIGNAL_BITS: AtomicU32 = AtomicU32.constant(0);
 
 fn signalInterrupt() -> i32 => 2;  // SIGINT, on every host
 fn signalTerminate() -> i32 => 15; // SIGTERM, on every host
 fn signalBreak() -> i32 => 21;     // SIGBREAK: Windows' Ctrl+Break
+fn signalHangup() -> i32 => 1;     // SIGHUP, on every POSIX host (ADR 0140); Windows has none
 
 /// The handler: an atomic or, and the handler set again (Windows resets it to the default at each signal; POSIX
 /// allows signal() in a handler).
 /// Safety: `number` is the signal the C library calls this for.
 @callback
 fn interpSignalArrived(number: i32) {
-    INTERP_SIGNAL_BITS.fetchOr(if (number == signalTerminate()) 2 else 1);
+    INTERP_SIGNAL_BITS.fetchOr(if (number == signalTerminate()) 2 else if (number == signalHangup() && !hostIsWindows()) 4
+        else 1);
     unsafe { signal(number, interpSignalArrived); }
 }
 
@@ -35,6 +38,8 @@ fn interpSignalsWatch() {
     }
     if (hostIsWindows()) {
         unsafe { signal(signalBreak(), interpSignalArrived); }
+    } else {
+        unsafe { signal(signalHangup(), interpSignalArrived); }
     }
 }
 
@@ -48,6 +53,8 @@ fn interpSignalsRestore() {
     }
     if (hostIsWindows()) {
         unsafe { signal(signalBreak(), byDefault); }
+    } else {
+        unsafe { signal(signalHangup(), byDefault); }
     }
 }
 
@@ -82,11 +89,12 @@ fn deliverSignals(it: borrow mut Interp) -> Result<bool, Stop> {
     }
     let k = (it.runtime.signalChannel - 1) as usize;
     var sent = false;
-    var which: u32 = 1;
-    while (which <= 2) {
+    var which: u32 = 1; // the value sent; its bit is 1, 2, then 4 for 3, a hangup
+    while (which <= 3) {
+        let bit: u32 = if (which == 3) 4 else which;
         let count = it.runtime.channels[k].count;
         let capacity = it.runtime.channels[k].capacity;
-        if ((bits & which) != 0 && count < capacity) {
+        if ((bits & bit) != 0 && count < capacity) {
             let head = it.runtime.channels[k].head;
             let slot = it.runtime.channels[k].data + ((head + count) % capacity) * it.runtime.channels[k].stride;
             it.memory.storeBits(slot, which as u64, 4)?;

@@ -16,10 +16,30 @@ fn call(f: fn(borrow mut Vector<StringView>, StringView), out: borrow mut Vector
     f(out, word);
 }
 
+// A struct's function without a receiver, with the struct's bound in scope: `Parser.orNote` is not a value at all
+// (N0210), so the struct's bound reaches no function value either, with or without a function type to convert to.
+struct Parser<region scratch, region input: scratch> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note;
+
+    fn keepNote(out: borrow mut Vector<StringView<scratch>>, word: StringView<input>) {
+        out.push(word)!;
+    }
+
+    fn asNote(word: StringView<input>) -> StringView<scratch> => word;
+}
+
 fn main() {
     let named = pick; // error[N0298]
     var words = Vector<StringView>.create();
     call(keep, mut words, "word");                                   // error[N0298]
     let store: fn(borrow mut Vector<StringView>, StringView) = keep; // error[N0298]
     let single: fn(StringView) -> StringView = one;                  // error[N0298]
+    let ofStruct = Parser.orNote;                                    // error[N0210]
+    let storing = Parser.keepNote;                                   // error[N0210]
+    call(Parser.keepNote, mut words, "word");                        // error[N0210]
+    let typed: fn(StringView) -> StringView = Parser.asNote;         // error[N0210]
 }

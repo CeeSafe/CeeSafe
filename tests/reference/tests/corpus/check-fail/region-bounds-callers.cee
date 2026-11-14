@@ -100,6 +100,50 @@ fn referenceStore() {
     Console.writeLine(words[0]);
 }
 
+// Plain covers deep at the caller. Where the bound makes a reference a plain source, the body may still return or
+// store what the referent holds (`h.text`, an element), not a view of the referent itself: the caller's record of
+// a plain source has the loans of the argument and those of what it holds, so the borrow held inside is not lost.
+fn heldText<region a, region b: a>(h: borrow(b) Holder<a>) -> StringView<a> => h.text;
+
+fn keepText<region a, region b: a>(out: borrow mut Vector<StringView<a>>, h: borrow(b) Holder<a>) {
+    out.push(h.text)!;
+}
+
+fn firstOf<region a, region b: a>(items: borrow(b) Vector<StringView<a>>) -> StringView<a> => items[0];
+
+fn plainHoldsDeep() {
+    var holder = Holder { text: "", buffer: String.from("buffer")! };
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        holder.text = short.view();
+        kept.push(heldText(holder))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn plainStoresDeep() {
+    var holder = Holder { text: "", buffer: String.from("buffer")! };
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        holder.text = short.view();
+        keepText(mut kept, holder);
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn plainHoldsElements() {
+    var items = Vector<StringView>.create();
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        items.push(short.view())!;
+        kept.push(firstOf(items))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
 fn function(long: borrow String) {
     var kept = Vector<StringView>.create();
     {
@@ -230,4 +274,7 @@ fn main() {
     mutation();
     ownStorage();
     referenceStore();
+    plainHoldsDeep();
+    plainStoresDeep();
+    plainHoldsElements();
 }

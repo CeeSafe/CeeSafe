@@ -3,7 +3,9 @@
 ## Arrays
 
 `[T; N]` is `N` values of `T`, inline: on the stack, or inside the struct that holds it. Arrays are values (copied
-when assigned) and their element type must be Copy.
+when assigned) and their element type must be Copy. `N` is known when the program is compiled: a literal, a `usize`
+constant, or arithmetic on them (`[u32; CHARS * 8]`, `[0u8; 256 * 8]`), which the compiler evaluates as it does a
+constant's value, so an overflow is an error there.
 
 ```ceesafe
 fn main() {

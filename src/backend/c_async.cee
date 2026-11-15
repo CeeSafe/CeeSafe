@@ -763,7 +763,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
         }
     }
     var done = Vector<u32>.create(); // HIR functions whose frames are defined
-    var memo = FrameMemo.create(); // their layouts, for the asserts
+    var memo = FrameMemo.create();   // their layouts, for the asserts
     while (pending.length > 0) {
         var progressed = false;
         var k: usize = 0;

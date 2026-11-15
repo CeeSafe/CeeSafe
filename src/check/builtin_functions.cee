@@ -159,7 +159,12 @@ fn mutablePlaceArgument(c: borrow mut Checker, syntax: u32) -> Result<u32, Alloc
     match (c.hir.exprs[value as usize]) {
         HirExpr.LocalRef(_) => {
             if (c.types.is(t, TypeKind.Reference) && c.types.info(t).mutableReference) {
-                let referent = c.expr(HirExpr.Deref(value), c.types.info(t).pointee, operandSpan.start, operandSpan.end)?;
+                let referent = c.expr(
+                    HirExpr.Deref(value),
+                    c.types.info(t).pointee,
+                    operandSpan.start,
+                    operandSpan.end,
+                )?;
                 return borrowPlace(c, referent, true, operandSpan);
             }
         }

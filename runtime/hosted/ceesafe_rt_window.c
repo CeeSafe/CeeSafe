@@ -5,7 +5,7 @@
  * window (c-backend.md §6).
  *
  * Backends: AppKit on macOS, through the Objective-C runtime loaded with dlopen at the first open, so no program links
- * a framework; Win32 and GDI on Windows; X11 on Linux, libX11.so.6 loaded with dlopen. CEESAFE_WINDOW_SCRIPT=<file>
+ * a framework; Win32 and GDI on Windows; X11 on Linux and FreeBSD, libX11.so.6 loaded with dlopen. CEESAFE_WINDOW_SCRIPT=<file>
  * selects, on every system, a window that exists only in memory and whose events come from the file (for tests);
  * CEESAFE_WINDOW_DUMP=<file> then receives each presented frame.
  *
@@ -484,7 +484,7 @@ static int cee_window_answer_split(struct cee_window *w, const char *text, size_
     return 1;
 }
 
-#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
 /* Calls f(extension, length, context) for each extension of a comma-separated list, trimmed, without a leading dot,
    skipping empty ones; the number of them (the backends' dialogs). */
 static size_t cee_dialog_extensions(const char *list, size_t length,
@@ -591,6 +591,10 @@ static int cee_window_on_main_thread(void) { return pthread_main_np() != 0; }
 #include <sys/syscall.h>
 #include <unistd.h>
 static int cee_window_on_main_thread(void) { return (pid_t)syscall(SYS_gettid) == getpid(); }
+#elif defined(__FreeBSD__)
+#include <pthread.h>
+#include <pthread_np.h>
+static int cee_window_on_main_thread(void) { return pthread_main_np() == 1; }
 #elif defined(_WIN32)
 /* The first thread's id, recorded by a C runtime initializer, which runs on it before main. */
 static DWORD cee_window_main_thread;
@@ -3775,10 +3779,10 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
     return result;
 }
 
-#elif defined(__linux__)
-/* X11 through libX11.so.6, loaded with dlopen: the declarations below are Xlib's (X11/Xlib.h, LP64), so no headers
-   are needed to build. A frame is converted to the visual's pixel layout, scaled to the window's size, and drawn
-   with XPutImage. */
+#elif defined(__linux__) || defined(__FreeBSD__)
+/* X11 through libX11.so.6, loaded with dlopen (Linux, and FreeBSD with Xorg: ADR 0149): the declarations below are
+   Xlib's (X11/Xlib.h, LP64), so no headers are needed to build. A frame is converted to the visual's pixel layout,
+   scaled to the window's size, and drawn with XPutImage. */
 #include <dlfcn.h>
 #include <locale.h>
 #include <sys/select.h>

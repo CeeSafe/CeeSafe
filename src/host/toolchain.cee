@@ -362,6 +362,8 @@ fn compileExecutable(
             pushMinGwSystemLibraries(mut arguments)?;
         }
         pushText(mut arguments, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
+    } else if (!freestanding && hostIsFreeBsd()) {
+        pushFreeBsdSystemLibraries(mut arguments)?;
     }
     pushText(mut arguments, "-o")?;
     pushBytes(mut arguments, output)?;
@@ -626,6 +628,8 @@ fn compileUnitsAndLink(
             pushMinGwSystemLibraries(mut link)?;
         }
         pushText(mut link, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
+    } else if (!freestanding && hostIsFreeBsd()) {
+        pushFreeBsdSystemLibraries(mut link)?;
     }
     pushText(mut link, "-o")?;
     pushBytes(mut link, output)?;
@@ -688,6 +692,28 @@ fn hostIsMac() -> bool {
     }
     let text = outcome.stdout.view();
     return sameText(text[..6], "Darwin");
+}
+
+/// Whether ceesafec runs on FreeBSD: `uname -s` prints `FreeBSD` (ADR 0149).
+fn hostIsFreeBsd() -> bool {
+    if (hostIsWindows()) {
+        return false;
+    }
+    var arguments = Vector<Vector<u8>>.create();
+    pushText(mut arguments, "-s")!;
+    let outcome = runTool("uname".bytes(), arguments)!;
+    if (!outcome.started || outcome.status != 0 || outcome.stdout.length < 7) {
+        return false;
+    }
+    let text = outcome.stdout.view();
+    return sameText(text[..7], "FreeBSD");
+}
+
+/// FreeBSD's threads are libthr, which libc does not hold as glibc 2.34 and macOS's do: a hosted program links it
+/// after its objects (tooling.md §8.3, ADR 0149).
+fn pushFreeBsdSystemLibraries(arguments: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> {
+    pushText(arguments, "-lpthread")?;
+    return Ok();
 }
 
 /// The number of CPUs, `build --jobs`'s default (ADR 0082 §2.5): `NUMBER_OF_PROCESSORS` on Windows, elsewhere what

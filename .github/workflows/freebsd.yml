@@ -1,0 +1,110 @@
+name: freebsd
+
+# CeeSafe on FreeBSD (ADR 0149). GitHub has no FreeBSD runner, so an Ubuntu job runs FreeBSD 14 (x86_64) in a VM
+# (vmactions/freebsd-vm, pinned to v1.6.0's commit). The Ubuntu side builds ceesafec from the tree with the released
+# stage-1 compiler below and writes its C; in the VM that C is compiled with FreeBSD's cc alone (as the seed's README
+# says), the result rebuilds ceesafec with its own `build` and must emit the same C (the fixed point), and then the
+# tests run there with that compiler. Like checks.yml it runs on release tags and by hand (Actions, "Run workflow"),
+# and does not hold a release back: release.yml's freebsd-x64 job is the one that does.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["ceesafe-0.52.0"] # bring-up only: removed before the branch is merged
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freebsd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A released ceesafec that builds the tree (any release does: the tree's sources use only what 0.8.0 accepts).
+  STAGE1_TAG: v0.51.1
+  STAGE1_ASSET: ceesafec-linux-x64.tar.gz
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: ceesafec from the tree, and its C
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$STAGE1_TAG" -R "$GITHUB_REPOSITORY" -p "$STAGE1_ASSET" -p SHA256SUMS -D stage1
+          (cd stage1 && grep -F " $STAGE1_ASSET" SHA256SUMS | sha256sum -c -)
+          tar -xzf "stage1/$STAGE1_ASSET" -C stage1
+          stage1/ceesafec build -o out/ceesafec
+          out/ceesafec build --emit c -o seed
+          out/ceesafec --version
+      - name: In FreeBSD
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          release: "14.4"
+          usesh: true
+          copyback: false
+          prepare: |
+            pkg install -y python3
+          run: |
+            set -e
+            freebsd-version
+            uname -a
+            cc --version
+            sysctl hw.ncpu hw.physmem
+            # Generation 1: the C alone, compiled by FreeBSD's cc (bootstrap/seed/README.md).
+            cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1 -lm -lpthread
+            ./gen1 --version
+            # Generation 2: built by generation 1 with its own driver; both emit the same C.
+            mkdir -p out
+            ./gen1 build -o out/ceesafec
+            ./gen1 build --emit c -o c1
+            diff -r seed c1
+            out/ceesafec build --emit c -o c2
+            diff -r seed c2
+            echo "the fixed point holds on FreeBSD"
+            # The release's smoke test (release.yml): the interpreter, a native build, a scripted window, the MCP server.
+            printf 'fn main() {\n    Console.writeLine(40 + 2);\n}\n' > hello.cee
+            test "$(out/ceesafec run --interp hello.cee)" = 42
+            out/ceesafec build hello.cee -o hello-native
+            test "$(./hello-native)" = 42
+            cat > window.cee <<'CEE'
+            fn main() {
+                var window = Window.open("smoke", 8, 6)!;
+                var events: u32 = 0;
+                let pixels = [0xff0000ffu32; 48];
+                for (frame in 0u32..3) {
+                    loop {
+                        match (window.nextEvent()) {
+                            Some(_) => { events += 1; }
+                            null => { break; }
+                        }
+                    }
+                    window.present(pixels[..], 8, 6)!;
+                }
+                Console.writeLine(events);
+            }
+            CEE
+            out/ceesafec build window.cee -o window-native
+            printf '0:key:a;1:type:b;2:close' > window-script.txt
+            test "$(CEESAFE_WINDOW_SCRIPT=window-script.txt CEESAFE_WINDOW_DUMP=window-frame.bin ./window-native)" = 4
+            head -1 window-frame.bin | grep -Fx "ceesafe-window 8 6"
+            echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | out/ceesafec mcp | grep -F '"result":{}'
+            echo "the smoke test passes on FreeBSD"
+            # CeeSafe's tests (spec/testing.md), each step's result kept, every one run.
+            status=0
+            step() { echo "== $*"; if "$@" > step.log 2>&1; then tail -3 step.log; else tail -40 step.log; status=1; fi; }
+            step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus --jobs 4
+            step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus --family run-pass --family run-fail --check-leaks --jobs 4
+            W=""; for f in src/support/*.cee; do W="$W --with $f"; done
+            step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/support --family run-pass $W --check-leaks --jobs 4
+            step python3 tools/package_tests.py --compiler out/ceesafec
+            step python3 tools/test_command_check.py --compiler out/ceesafec
+            step python3 tools/frame_stack_check.py --compiler out/ceesafec --no-sanitizers
+            step python3 tools/udp_check.py --compiler out/ceesafec --no-sanitizers
+            step python3 tools/clock_check.py --compiler out/ceesafec
+            step python3 tools/random_check.py --compiler out/ceesafec
+            step python3 tools/wake_check.py --compiler out/ceesafec
+            exit $status

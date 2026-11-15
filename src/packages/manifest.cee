@@ -239,7 +239,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 message2(
                     "unknown table '[",
                     t.name[start..],
-                    "]': a manifest has [package], [dependencies], [embed] and [target.linux], [target.macos], [target.windows]",
+                    "]': a manifest has [package], [dependencies], [embed] and [target.linux], [target.macos], [target.windows], [target.freebsd]",
                 )?,
             )?;
         }
@@ -547,12 +547,15 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
     return Ok(manifest);
 }
 
-/// The manifest's name for the system the build is for (ADR 0047 §3.1): the host's.
-fn manifestTarget() -> StringView => if (hostIsWindows()) "windows" else if (isLinuxHost()) "linux" else "macos";
+/// The manifest's name for the system the build is for (ADR 0047 §3.1): the host's. FreeBSD is asked first: with
+/// procfs mounted it has a `/proc/self` too (ADR 0149).
+fn manifestTarget() -> StringView =>
+    if (hostIsWindows()) "windows" else if (hostIsFreeBsd()) "freebsd" else if (isLinuxHost()) "linux" else "macos";
 
-/// `[target.linux]`, `[target.macos]` or `[target.windows]`.
+/// `[target.linux]`, `[target.macos]`, `[target.windows]` or `[target.freebsd]`.
 fn isTargetTable(name: Slice<u8>) -> bool =>
-    sameText(name, "target.linux") || sameText(name, "target.macos") || sameText(name, "target.windows");
+    sameText(name, "target.linux") || sameText(name, "target.macos") || sameText(name, "target.windows") ||
+        sameText(name, "target.freebsd");
 
 fn isNativeField(key: Slice<u8>) -> bool =>
     sameText(key, "links") || sameText(key, "lib-dirs") || sameText(key, "include-dirs");

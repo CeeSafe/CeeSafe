@@ -4502,6 +4502,12 @@ void ceesafe_async_msg_send_to(void *op, uint32_t socket_family, uint32_t family
         }
         (void)cee_control_add(m, &used, IPPROTO_IPV6, IPV6_PKTINFO, &info, (uint32_t)sizeof info);
     } else if (from_family == 4u) {
+#if !defined(IP_PKTINFO) && defined(IP_SENDSRCADDR)
+        /* FreeBSD: no IP_PKTINFO; the source address is an in_addr under IP_SENDSRCADDR (ip(4); ADR 0149). */
+        struct in_addr source;
+        memcpy(&source, from_bytes, 4);
+        (void)cee_control_add(m, &used, IPPROTO_IP, IP_SENDSRCADDR, &source, (uint32_t)sizeof source);
+#else
         struct in_pktinfo info;
         ceesafe_mem_set(&info, 0, sizeof info);
 #if defined(_WIN32)
@@ -4510,6 +4516,7 @@ void ceesafe_async_msg_send_to(void *op, uint32_t socket_family, uint32_t family
         memcpy(&info.ipi_spec_dst, from_bytes, 4); /* the source address to use */
 #endif
         (void)cee_control_add(m, &used, IPPROTO_IP, IP_PKTINFO, &info, (uint32_t)sizeof info);
+#endif
     }
 #if defined(__linux__)
     if (m->datagram.ecn != 0u) {

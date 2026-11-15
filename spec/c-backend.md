@@ -881,7 +881,9 @@ Heap (M3b):
   build that writes headers; in a freestanding build its form has only `size` and `flags` (a `#define
   CEESAFE_EMBED_FREESTANDING 1` at its top), and `ceesafe_init` checks the size and keeps no state, since the
   freestanding core has no mutable global (profiles.md §4.4); its `ceesafe_init` ignores `flags`, none being defined.
-  The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls
+  The generated `main` of a windowed build (ADR 0151) first calls `ceesafe_rt_windowed()` (`rt.h`, internal), which on
+  Windows gives the standard streams without a handle the parent's console or `NUL` (type-system.md §26.3) and
+  elsewhere does nothing. The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls
   `ceesafe_rt_init_main` (`rt.h`'s internal twin of `ceesafe_init`, which starts counting even after a C constructor
   allocated through CeeSafe, as before `ceesafe_init`; a failure other than `AGAIN` is a runtime panic), then the
   entry, then `ceesafe_shutdown()`, which prints the allocation report if asked, and returns the entry's code.

@@ -205,6 +205,7 @@ profile = "hosted"           # or "freestanding"
 float = true                 # false is --no-float (type-system.md §35.9)
 kernel = "cosmoos"           # with profile = "freestanding": include lib/kernel, as --kernel cosmoos (ADR 0025)
 trusted = true               # its types may be declared @threadSafe (ADR 0025 §3.2); listed for reviewers
+windowed = true              # an executable with a window: on Windows no console window (ADR 0151)
 sources = ["src"]
 c = ["src/shim.c"]           # C files compiled and linked with an executable (type-system.md §28.6)
 tests = ["tests"]            # test directories (§10): default "tests"; their files are sources for check and test only
@@ -234,6 +235,18 @@ as its MAJOR.MINOR.PATCH. A compiler older than the field reports it as an unkno
 A dependency's key is its package's `name`: a dependency is known by the name its own manifest gives it. A
 dependency of kind `executable` is N0321: only a library's items are used. Errors in the manifest are N0320 (its
 syntax) and N0321 (a missing, unknown or invalid field), with the line.
+
+**Windowed executables** (ADR 0151). `windowed = true` says that the executable is a program with a window. On
+Windows it is linked for the Windows subsystem, with `main` still its entry (§8.3), so Windows gives it no console
+window when it is started from Explorer, a shortcut or a scheduled task; its standard streams are as type-system.md
+§26.3 says. On macOS, Linux and FreeBSD it changes nothing. `--windowed` is the same for one build.
+- `windowed = true` with `kind = "library"` or `"object"`, or with `profile = "freestanding"`, is N0321 at the value
+  (a library, an object and a freestanding program are linked by their host); a value that is not a boolean is N0321.
+  It is a field of `[package]` only, not of a `[target.OS]` table.
+- It applies to `build`'s executable and to `--emit c` (whose `main` starts as a windowed one; whoever links the C
+  passes §8.3's flags). It does nothing for `--emit obj` and `--emit lib` and for `--profile freestanding` given on
+  the command line, where `--windowed` itself is a usage error (status 2), and nothing for `test`, whose test program
+  is a console program, for `check` and for `run --interp`.
 
 **System libraries** (ADR 0047):
 - `links` names libraries: letters, digits, `_`, `.`, `+` and `-`, not starting with `-`. `lib-dirs` and `include-dirs`
@@ -788,8 +801,8 @@ Visual Studio's "Desktop development with C++" workload (or the Build Tools), or
 
 | Compiler | Flags |
 |---|---|
-| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc, and for gcc (MinGW-w64) the system libraries the hosted runtime calls, `-lws2_32 -lgdi32 -lbcrypt`, which the runtime names with `#pragma comment(lib)` for clang and `cl` and which MinGW's gcc does not follow; on FreeBSD `-lpthread`, since its threads are libthr, not libc (ADR 0149). With `--split`, each C file is compiled alone with the same flags and `-c`, at most `--jobs` at once, and the objects are linked with `-g` (for `-g`), the `--cflag`s, the libraries and the stack (`c-backend.md` §2.4) |
-| `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
+| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc, and for gcc (MinGW-w64) the system libraries the hosted runtime calls, `-lws2_32 -lgdi32 -lbcrypt`, which the runtime names with `#pragma comment(lib)` for clang and `cl` and which MinGW's gcc does not follow; on FreeBSD `-lpthread`, since its threads are libthr, not libc (ADR 0149). A windowed executable (§4.1, ADR 0151) is linked for the Windows subsystem with `main` kept as its entry: `-mwindows` for gcc, `-Wl,/SUBSYSTEM:WINDOWS -Wl,/ENTRY:mainCRTStartup` for clang. With `--split`, each C file is compiled alone with the same flags and `-c`, at most `--jobs` at once, and the objects are linked with `-g` (for `-g`), the `--cflag`s, the libraries, the stack and the subsystem (`c-backend.md` §2.4) |
+| `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), for a windowed executable `/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup` (ADR 0151), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
 
 A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one relocatable object) needs clang or gcc.
 
@@ -1206,6 +1219,7 @@ for it.
 | `--package`, `--record`, `--whole-program` | check | check | |
 | `--program`, `--split` | build, test | build, test | |
 | `-o` | build, test | build | test: nothing, the test program is `out/<name>-tests` |
+| `--windowed` | build, test | build, with `--emit exe` or `--emit c` in the hosted profile (§4.1) | test: nothing, the test program is a console program. With `--emit obj`, `--emit lib` or `--profile freestanding` it is a usage error in both |
 
 `--help` and `-h`, before any `--`, are every command's (§4.4). The other commands read their own options and
 answer any other with a usage error: `fmt` (`--check`, `--stdout`), `doc` (§1), `fetch` (§4.7), `index-check`

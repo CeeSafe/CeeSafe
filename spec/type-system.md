@@ -3014,6 +3014,18 @@ source change of ADR 0104's.
     `Console.read`: a prompt written with `Console.write` is seen before the program waits for its answer.
   - On Windows standard input is in the C runtime's text mode, as it was for `Console.read`: `\r\n` arrives as `\n`.
   - The interpreter does the same over its own input, or over the input it was given (`ceesafe_run`).
+- **A windowed program's standard streams on Windows** (ADR 0151; `windowed = true`, tooling.md §4.1). Windows gives
+  a GUI program no console, so before `main` the runtime gives each standard stream that has no handle one:
+  - A stream whose handle is valid (a redirected file, a parent's pipe, a console handle the parent passed) is kept,
+    and attaching below never replaces it.
+  - When one has none, the program attaches to its parent's console if it has one (`AttachConsole`), and each stream
+    without a handle is opened there (`CONOUT$`, `CONIN$`): from a terminal, the program writes to it and reads it,
+    though the terminal does not wait for a GUI program. Without a console (started from Explorer, a shortcut or a
+    scheduled task) each is opened on `NUL`.
+  - So **writing never fails for want of a console**: on `NUL`, `Console.write`, `writeLine`, `writeBytes`,
+    `writeError` and `AsyncConsole`'s writes succeed and go nowhere, as does `Console.flush`, `Console.read` is 0 and
+    `readLine` `Ok(false)`; a panic's message is lost, and its exit status kept.
+  - On macOS, Linux and FreeBSD, and in a console program, nothing of this happens.
 
 ### 26.4 TCP sockets
 - `TcpListener.bind(address, port)` (`address: StringView`, IPv4 or IPv6 text without a zone such as

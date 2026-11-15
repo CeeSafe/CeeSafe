@@ -1,0 +1,12 @@
+/// An interface whose method names a type of this package, `Drag`, which its implementers need not import.
+public struct Drag {
+    public n: u32;
+}
+
+public struct Point {
+    public x: u32;
+}
+
+public interface Source {
+    fn drag(borrow this) -> Drag? => null;
+}

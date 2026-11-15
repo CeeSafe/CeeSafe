@@ -868,7 +868,15 @@ fn implementFor(
             appendDecimal(mut problem, ownCount as u64)?;
             appendText(mut problem, " type parameter(s) of its own")?;
         } else {
+            // The interface's signature names types in the interface's file, which may be another package's: it is
+            // resolved there, as interfaceView and inheritDefault resolve it, and what it has wrong is reported there.
+            let savedFile = c.file;
+            {
+                let fileToSet = c.interfaces[interfaceEntry as usize].file;
+                c.setFile(fileToSet);
+            }
             let expected = expectedSignature(c, signature, forType, environment, hir)?;
+            c.setFile(savedFile);
             signatureMismatch(c, expected, hir, mut problem)?;
             if (problem.length == 0 && first) {
                 // The types agree; the flows are the interface's (§21.1, ADR 0131). An instance of a generic impl
@@ -1016,19 +1024,14 @@ fn interfaceEnvironment(c: borrow mut Checker, index: u32) -> Result<Range, Allo
 }
 
 /// Every interface default, checked once at the interface (ADR 0086 §2.1): a generic body whose `Self` is opaque,
-/// bounded by the interface; never compiled.
+/// bounded by the interface; never compiled. A method without a default has its signature declared there too, so
+/// what it has wrong (an unknown type) is reported at the interface, implemented or not.
 fn declareInterfaceDefaults(c: borrow mut Checker) -> Result<void, AllocError> {
     let saved = c.file;
     for (index in 0..c.interfaces.length) {
         let entry = truncate<u32>(index);
         let methods = interfaceMethods(c, entry);
-        var any = false;
-        for (k in 0..methods.count) {
-            if (hasDefault(c, c.front.ast.at(methods, k))) {
-                any = true;
-            }
-        }
-        if (!any) {
+        if (methods.count == 0) {
             continue;
         }
         {
@@ -1039,10 +1042,15 @@ fn declareInterfaceDefaults(c: borrow mut Checker) -> Result<void, AllocError> {
         let environment = interfaceEnvironment(c, entry)?;
         for (k in 0..methods.count) {
             let method = c.front.ast.at(methods, k);
-            if (hasDefault(c, method) && c.front.ast.functions[method as usize].typeParameters.count > 0) {
+            let generic = c.front.ast.functions[method as usize].typeParameters.count > 0;
+            if (hasDefault(c, method) && generic) {
                 declareGenericMethod(c, method, selfType, environment, false)?;
             } else if (hasDefault(c, method)) {
                 declareFunctionIn(c, method, selfType, environment)?;
+            } else if (generic) {
+                declareGenericMethod(c, method, selfType, environment, true)?;
+            } else {
+                declareSignature(c, method, selfType, environment)?;
             }
         }
     }
@@ -1130,7 +1138,8 @@ fn signatureMismatch(
     for (i in first..e.parameters.length) {
         let et = c.hir.locals[e.parameters[i] as usize].typ;
         let at = c.hir.locals[a.parameters[i] as usize].typ;
-        if (et != at) {
+        // A type already reported as unknown, on either side, is not reported again as a mismatch.
+        if (et != at && et != c.types.error && at != c.types.error) {
             appendText(out, "parameter ")?;
             appendDecimal(out, i as u64)?;
             appendText(out, " must have type ")?;
@@ -1139,7 +1148,7 @@ fn signatureMismatch(
             return appendQuotedType(out, c, at);
         }
     }
-    if (e.returnType != a.returnType && e.returnType != c.types.error) {
+    if (e.returnType != a.returnType && e.returnType != c.types.error && a.returnType != c.types.error) {
         appendText(out, "it must return ")?;
         appendQuotedType(out, c, e.returnType)?;
         appendText(out, ", not ")?;

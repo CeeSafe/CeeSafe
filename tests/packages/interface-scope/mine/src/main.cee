@@ -1,0 +1,20 @@
+import shapes.Source;
+
+/// Not shapes' Drag: an impl returning it does not implement shapes.Source.
+struct Drag {
+    n: u32;
+}
+
+struct Thing {
+    a: u32;
+}
+
+impl Source for Thing {
+    fn drag(borrow this) -> Drag? => Drag { n: this.a };
+}
+
+fn main() -> i32 {
+    let t = Thing { a: 1 };
+    let d = t.drag();
+    return 0;
+}

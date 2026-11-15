@@ -1,0 +1,20 @@
+import shapes.Source;
+import shapes.Drag;
+
+struct Thing {
+    a: u32;
+}
+
+impl Source for Thing {
+    fn drag(borrow this) -> Drag? => Drag { n: this.a * 2 };
+}
+
+fn count<T: Source>(s: borrow T) -> u32 => match (s.drag()) {
+    Some(d) => d.n,
+    null => 0,
+};
+
+fn main() {
+    let t = Thing { a: 21 };
+    Console.writeLine(count(t) as u64);
+}

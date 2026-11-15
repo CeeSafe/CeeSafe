@@ -66,6 +66,11 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` ย
 - **Imports.** `import geometry;` at the top of a file brings every public item of the dependency `geometry` into
   that file's scope; `import geometry.Point;` brings one (N0311 if it has none of that name, N0312 if it is not
   public). An import applies to its file only. The name before the `.` must be a dependency of the package (N0310).
+- **Where a name is resolved.** A name in a declaration is resolved in the file that declares it. So the types in an
+  interface's method signatures are those of the interface's file wherever it is implemented: an impl in a file that
+  does not import `geometry.Drag` still implements `fn drag(borrow this) -> Drag?` of `geometry`'s interface by
+  naming that type in its own file's terms (an import, or `geometry.Drag`), and a `Drag` of its own is another type
+  (N0267). An unknown type in an interface's signature is N0204 once, at the interface, implemented or not.
 - **Visibility between packages.** Only `public` items are visible to other packages, and of a public struct only its
   `public` fields and methods; `internal`, the default, keeps an item within its package, and `private` within its
   file (ยง12). Naming another package's non-public item is N0312. A public function, constant, field, method or struct whose

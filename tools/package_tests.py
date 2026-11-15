@@ -152,6 +152,12 @@
     a windowed package is still 3. `windowed` on a library, an object, a freestanding package or in [target.windows],
     and a value that is not a boolean, are one N0321 each; `--windowed` with `--emit obj`, `--emit lib` or
     `--profile freestanding`, and in a freestanding package, is a usage error (status 2).
+39. interface-scope (type-system.md §2, ClayWind's finding M3): shapes' `Source.drag` returns shapes' `Drag?`. app
+    imports `Source` and `Point`, not `Drag`, and writes `Drag?` in a field and in its impl of `drag`: `check` gives
+    N0204 at those two places alone (0.53.0 gave a third, at the offset of shapes' `Drag` read in app's file, since
+    the interface's signature was resolved in the impl's file). mine declares a `Drag` of its own and returns it from
+    `drag`: N0267 alone (0.53.0 accepted it, taking the interface's `Drag` for mine's). imported imports `Drag`:
+    `check` is clean and the program prints 42, in the interpreter and compiled.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -463,6 +469,37 @@ def impl_order(compiler, work, problems):
         out = run([exe], app).stdout.split()
         if out != ["42", "12"]:
             problems.append(f"impl-order: the program printed {out!r}")
+
+
+def interface_scope(compiler, work, problems):
+    """An interface's signature names types in the interface's own file, whichever package implements it (ClayWind's
+    finding M3)."""
+    root = os.path.join(work, "interface-scope")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "interface-scope"), root)
+    expected = {
+        "app": [("N0204", "src/main.cee", 11, 12), ("N0204", "src/main.cee", 24, 29)],
+        "mine": [("N0267", "src/main.cee", 13, 8)],
+        "imported": [],
+    }
+    for name, wanted in expected.items():
+        status, document = json_check(compiler, os.path.join(root, name))
+        found = sorted((d["code"], d["file"], d["start"]["line"], d["start"]["column"])
+                       for d in document["diagnostics"]) if document else ["no document"]
+        if found != sorted(wanted) or (status == 0) != (not wanted):
+            problems.append(f"interface-scope/{name}: expected {wanted}: {status} {found}")
+    imported = os.path.join(root, "imported")
+    p = run([compiler, "run", "--interp"], imported)
+    if p.returncode != 0 or p.stdout.split() != ["42"]:
+        problems.append(f"interface-scope: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                        f"{p.stderr[-300:]}")
+    p = run([compiler, "build"], imported)
+    exe = os.path.join(imported, "out", "imported.exe" if WINDOWS else "imported")
+    if p.returncode != 0:
+        problems.append(f"interface-scope: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], imported).stdout.split()
+        if out != ["42"]:
+            problems.append(f"interface-scope: the program printed {out!r}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -2074,6 +2111,7 @@ def main():
         qualified_literals(compiler, work, problems)
         impl_statics(compiler, work, problems)
         impl_order(compiler, work, problems)
+        interface_scope(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         # The interface records' cache (ADR 0082) reads fstat's layout, known for Linux and macOS only: on FreeBSD

@@ -1,0 +1,33 @@
+// An unknown type is reported once, where it is written (ClayWind's finding M3): in a field, a struct literal of the
+// struct and a method returning it repeat nothing; in an interface's method, at the interface, implemented or not;
+// and an impl's method that does not match only because one side's type is unknown is no N0267 as well.
+struct Thing {
+    a: u32;
+    files: Nope?; // error[N0204]
+
+    fn create() -> Thing => Thing { a: 1, files: null };
+}
+
+interface Unused {
+    fn drag(borrow this) -> Missing?; // error[N0204]
+}
+
+interface Source {
+    fn take(borrow this, n: Absent) -> u32; // error[N0204]
+    fn give(borrow this) -> u32;
+}
+
+impl Source for Thing {
+    fn take(borrow this, n: u32) -> u32 => n;
+    fn give(borrow this) -> Gone => this.a; // error[N0204]
+}
+
+fn later(n: u32) -> Thing {
+    return Thing { a: n, files: null };
+}
+
+fn main() -> i32 {
+    let t = Thing.create();
+    let u = later(2);
+    return 0;
+}

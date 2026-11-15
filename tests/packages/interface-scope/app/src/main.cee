@@ -1,0 +1,31 @@
+import shapes.Source;
+import shapes.Point;
+
+struct Box2 {
+    x: u32;
+    y: u32;
+}
+
+struct Thing {
+    a: u32;
+    files: Drag?;
+
+    fn create() -> Thing => Thing { a: 1, files: null };
+}
+
+fn later(p: Point) -> Box2 {
+    return Box2 {
+        x: p.x,
+        y: 2,
+    };
+}
+
+impl Source for Thing {
+    fn drag(borrow this) -> Drag? => this.files;
+}
+
+fn main() -> i32 {
+    let t = Thing.create();
+    let b = later(Point { x: 1 });
+    return 0;
+}

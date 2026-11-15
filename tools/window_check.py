@@ -17,9 +17,15 @@ that opened a window would open one on the developer's screen:
    `clipboard` items (a composition only while text input is on, an event only when it changes, `composition()` the
    latest one when the event is handed out, an end when text input goes off, the clipboard as the script and the
    program last set it); a caret inside a character is a malformed script;
-5. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
-   least 1, takes frames and closes; an External one gives this system's handles, not zero; and a real window's
-   clipboard gives back the text put on it (this replaces the clipboard's contents).
+5. waiting and waking (ADR 0142): a scripted program's waitEvent returns at once while the script holds events or one
+   is queued, waits out its timeout once the script is used up, returns at once after a wake (two wakes are one), and
+   returns when another thread wakes it, or a task run on another thread after it sent its result, during a wait of
+   20 s; waitFrame takes a wake too, and a dropped window's waker wakes no later window; the interpreter answers
+   Unsupported;
+6. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
+   least 1, takes frames and closes; an External one gives this system's handles, not zero; a real window's
+   clipboard gives back the text put on it (this replaces the clipboard's contents); and a task on another thread
+   wakes a real window's waitEvent.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -225,6 +231,129 @@ fn main() -> i32 {
 TEXT_SCRIPT = ("0:compose:1:x;0:clipboard;1:compose:3:か;1:compose:3:かな;2:compose:3:かな;2:compose:0:かな;"
                "3:type:仮名;3:compose:0:;4:compose:1:a;4:clipboard:from script ✓;5:compose:1:b;7:compose:2:é;"
                "8:clipboard:;9:clipboard;10:compose:0:")
+
+
+# Waiting and waking (ADR 0142): each check prints its name and "ok" or "FAILED"; the times are generous bounds, since
+# the point is that a wait returns at once, waits out its timeout, or ends at a wake long before its 20 s.
+WAKE = r"""
+async fn later(ms: u64) -> Result<void, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok();
+}
+
+async fn deliver(out: Channel<u32>, waker: WindowWaker) -> Result<void, AsyncError> {
+    await Timer.sleep(200)?;
+    await out.sendAsync(7)?;
+    waker.wake();
+    return Ok();
+}
+
+fn timed(window: borrow mut Window, ms: u32) -> u64 {
+    let start = Timer.now();
+    window.waitEvent(ms);
+    return Timer.now() - start;
+}
+
+fn drain(window: borrow mut Window, show: bool) {
+    loop {
+        match (window.nextEvent()) {
+            Some(WindowEvent.Key(_, down, _, _)) => {
+                if (show) {
+                    Console.write("key ");
+                    Console.writeLine(if (down) 1u32 else 0);
+                }
+            }
+            Some(_) => { if (show) { Console.writeLine("other"); } }
+            null => { break; }
+        }
+    }
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+fn received(results: borrow Channel<u32>) -> u32 => match (results.tryRecv()) {
+    Some(v) => v,
+    null => 0,
+};
+
+fn closedWaker() -> WindowWaker {
+    let window = Window.open("window_check closed", 10, 10)!;
+    return window.waker();
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check wake", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let waker = window.waker();
+    let real = match (Process.argument(1)) {
+        Some(m) => m == "real",
+        null => false,
+    };
+    let results = Channel<u32>.create(4)!;
+    if (real) {
+        // A real window may get events (focus, size) before the task's wake: wait until its result is there.
+        let sender = results.clone();
+        let start = Timer.now();
+        let tasks = Thread.spawn(move () => Async.run(deliver(sender, waker)))!;
+        var got: u32 = 0;
+        loop {
+            window.waitEvent(20000);
+            drain(mut window, false);
+            got = received(borrow results);
+            if (got != 0 || Timer.now() - start >= 20000) {
+                break;
+            }
+        }
+        let elapsed = Timer.now() - start;
+        let finished = tasks.join();
+        verdict("real wake", got == 7 && elapsed >= 150 && elapsed < 5000);
+        return 0;
+    }
+    let pixels = [0xff000000u32; 4];
+    verdict("pending script", timed(mut window, 20000) < 5000);
+    drain(mut window, true);
+    window.present(pixels[..], 2, 2)!;
+    verdict("queued event", timed(mut window, 20000) < 5000);
+    drain(mut window, true);
+    window.present(pixels[..], 2, 2)!;
+    let waited = timed(mut window, 100);
+    verdict("timeout", waited >= 90 && waited < 5000);
+    verdict("zero", timed(mut window, 0) < 50);
+    waker.wake();
+    waker.wake();
+    verdict("woken before", timed(mut window, 20000) < 5000);
+    let again = timed(mut window, 100);
+    verdict("wakes are one", again >= 90 && again < 5000);
+    let thread = Thread.spawn(move () => {
+        let slept = Async.run(later(200));
+        waker.wake();
+    })!;
+    let woken = timed(mut window, 20000);
+    thread.join();
+    verdict("thread", woken >= 150 && woken < 10000);
+    let sender = results.clone();
+    let tasks = Thread.spawn(move () => Async.run(deliver(sender, waker)))!;
+    let delivered = timed(mut window, 20000);
+    let finished = tasks.join();
+    verdict("task", received(borrow results) == 7 && delivered >= 150 && delivered < 10000);
+    waker.wake();
+    window.waitFrame();
+    verdict("frame takes the wake", timed(mut window, 100) >= 90);
+    let old = closedWaker();
+    old.wake();
+    verdict("closed", timed(mut window, 100) >= 90);
+    return 0;
+}
+"""
+
+WAKE_SCRIPT = "1:key:a"
+WAKE_EXPECTED = ["pending script ok", "queued event ok", "key 1", "key 0", "timeout ok", "zero ok", "woken before ok",
+                 "wakes are one ok", "thread ok", "task ok", "frame takes the wake ok", "closed ok"]
 
 
 def text_expected(script):
@@ -627,6 +756,21 @@ def main():
                 problems.append(f"{what}: expected {answer}, got {r.stdout.strip()!r} (status {r.returncode}) "
                                 f"{r.stderr.strip()}")
 
+        wake_source, wake = build(compiler, WAKE, work, "wake")
+        wake_script = os.path.join(work, "wake.txt")
+        with open(wake_script, "w", encoding="utf-8") as f:
+            f.write(WAKE_SCRIPT)
+        wake_cases = [
+            ("waiting and waking", [wake], WAKE_EXPECTED, 0),
+            ("waking in the interpreter", [compiler, "run", "--interp", wake_source], ["open failed"], 1),
+        ]
+        for what, command, want, status in wake_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": wake_script}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -637,7 +781,7 @@ def main():
             if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
-        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + 8
+        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + 8
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -650,6 +794,11 @@ def main():
             if r.returncode != 0 or r.stdout.strip() != "clipboard [CeeSafe ✓ clipboard]":
                 problems.append(f"a real window's clipboard: expected 'clipboard [CeeSafe ✓ clipboard]', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            r = run([wake, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "real wake ok":
+                problems.append(f"a real window's wake: expected 'real wake ok', got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)
             checks += 1

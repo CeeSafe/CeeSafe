@@ -1,0 +1,62 @@
+// ADR 0142: a WindowWaker is a plain value, Copy and Send, where a Window is neither (check-fail/window-not-send).
+// A thread or an async task takes a copy, and the window keeps its own; `wake` has no effects, so a task calls it.
+
+async fn finish(out: Channel<u32>, waker: WindowWaker) -> Result<void, AsyncError> {
+    await out.sendAsync(42)?;
+    waker.wake();
+    return Ok();
+}
+
+fn needsSend<T: Send>(value: T) -> T => value;
+
+fn idle(window: borrow mut Window, results: borrow Channel<u32>) -> u32 {
+    var total: u32 = 0;
+    for (round in 0u32..3) {
+        window.waitEvent(1000);
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return total; }
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        loop {
+            match (results.tryRecv()) {
+                Some(value) => { total = total + value; }
+                null => { break; }
+            }
+        }
+    }
+    return total;
+}
+
+fn run() -> Result<void, AllocError> {
+    var window = match (Window.open("waker", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { return Ok(); }
+    };
+    let waker = needsSend(window.waker());
+    let again = waker; // Copy: both stay usable
+    let thread = match (Thread.spawn(move () => { waker.wake(); })) {
+        Ok(t) => t,
+        Err(_) => { return Ok(); }
+    };
+    let results = Channel<u32>.create(4)?;
+    let sender = results.clone();
+    let tasks = match (Thread.spawn(move () => Async.run(finish(sender, again)))) {
+        Ok(t) => t,
+        Err(_) => { return Ok(); }
+    };
+    waker.wake(); // still usable after the thread took a copy
+    let total = idle(mut window, borrow results);
+    thread.join();
+    let finished = tasks.join();
+    return Ok();
+}
+
+fn main() {
+    match (run()) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("out of memory"); }
+    }
+}

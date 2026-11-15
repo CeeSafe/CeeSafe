@@ -236,6 +236,17 @@ fn pushGnuLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow Nat
     return Ok();
 }
 
+/// The Windows libraries the hosted runtime calls beyond MinGW's defaults (which have kernel32 and user32): Winsock
+/// (`ceesafe_rt_io.c`, `ceesafe_rt_async.c`), GDI (`ceesafe_rt_window.c`) and BCrypt (`Random`). The runtime names them
+/// with `#pragma comment(lib)`, which clang and cl follow and MinGW's gcc ignores (tooling.md §8.3). After the objects,
+/// so ld takes from them what the objects use; a program that uses none of them links none.
+fn pushMinGwSystemLibraries(arguments: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> {
+    pushText(arguments, "-lws2_32")?;
+    pushText(arguments, "-lgdi32")?;
+    pushText(arguments, "-lbcrypt")?;
+    return Ok();
+}
+
 /// The same after cl's `/link`: `/LIBPATH:dir`, then `name.lib`.
 fn pushMsvcLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow NativeBuild) -> Result<void, AllocError> {
     for (d in native.libDirs.view()) {
@@ -347,6 +358,9 @@ fn compileExecutable(
     if (!freestanding && hostIsWindows()) {
         // MinGW's ld, or the MSVC linker clang drives.
         let gcc = isGccName(compiler.path.view());
+        if (gcc) {
+            pushMinGwSystemLibraries(mut arguments)?;
+        }
         pushText(mut arguments, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
     }
     pushText(mut arguments, "-o")?;
@@ -608,6 +622,9 @@ fn compileUnitsAndLink(
     pushGnuLinkFlags(mut link, native)?;
     if (!freestanding && hostIsWindows()) {
         let gcc = isGccName(compiler.path.view());
+        if (gcc) {
+            pushMinGwSystemLibraries(mut link)?;
+        }
         pushText(mut link, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
     }
     pushText(mut link, "-o")?;

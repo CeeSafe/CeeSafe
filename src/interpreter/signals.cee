@@ -23,8 +23,10 @@ fn signalHangup() -> i32 => 1;     // SIGHUP, on every POSIX host (ADR 0140); Wi
 /// Safety: `number` is the signal the C library calls this for.
 @callback
 fn interpSignalArrived(number: i32) {
-    INTERP_SIGNAL_BITS.fetchOr(if (number == signalTerminate()) 2 else if (number == signalHangup() && !hostIsWindows()) 4
-        else 1);
+    INTERP_SIGNAL_BITS.fetchOr(
+        if (number == signalTerminate()) 2 else if (number == signalHangup() && !hostIsWindows()) 4
+            else 1,
+    );
     unsafe { signal(number, interpSignalArrived); }
 }
 

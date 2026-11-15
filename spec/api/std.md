@@ -68,6 +68,8 @@
 - [enum WindowKey](#enum-windowkey)
 - [enum WindowCursor](#enum-windowcursor)
 - [enum WindowEvent](#enum-windowevent)
+- [struct WindowDrop](#struct-windowdrop)
+- [struct WindowDragOver](#struct-windowdragover)
 - [struct WindowWaker](#struct-windowwaker)
 - [struct Window](#struct-window)
 - [struct MenuShortcut](#struct-menushortcut)
@@ -2771,6 +2773,32 @@ public enum WindowEvent {
 
 What happened to a window (§26.13). Positions are points from the content's top left.
 
+## struct WindowDrop
+
+```ceesafe
+public struct WindowDrop {
+    public x: f32;
+    public y: f32;
+    public paths: Vector<String>;
+}
+```
+
+Files dropped on a window (§26.13, ADR 0150): where, in points from the content's top left as pointer events are,
+and the files' paths, absolute and UTF-8, at least one.
+
+## struct WindowDragOver
+
+```ceesafe
+public struct WindowDragOver {
+    public x: f32;
+    public y: f32;
+    public count: u32;
+}
+```
+
+A drag of files over a window (§26.13, ADR 0150): where the pointer is, in points from the content's top left, and
+how many files the drag holds.
+
 ## struct WindowWaker
 
 ```ceesafe
@@ -3029,6 +3057,31 @@ public fn nextMenuChoice(borrow mut this) -> u32?
 The id of the next menu item the user chose in this window's menus, or null; it never blocks (ADR 0146). A
 queued choice ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event does.
 Safety: the runtime only returns a number: an id, or -1 for none.
+
+### Window.nextDrop
+
+```ceesafe
+public fn nextDrop(borrow mut this) -> WindowDrop?
+```
+
+The next drop of files on this window, or null; it never blocks (ADR 0150). Drops are queued beside the events,
+in order, and a queued drop ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event does. A path that is
+not valid UTF-8, or that memory ran out for, is left out, and a drop with no path left is skipped. Only files
+are dropped: the window refuses a drag of text or other data, so the system shows no drop for it.
+Safety: the runtime writes the drop's position, and gives its copy of the paths, each followed by a zero byte,
+which it keeps until the next call; they are copied before this returns.
+
+### Window.dragOver
+
+```ceesafe
+public fn dragOver(borrow this) -> WindowDragOver?
+```
+
+While a drag of files is over this window, where it is and how many files it holds; else null (ADR 0150). It
+is the window's state as of the last event the window took from the system: a change (the drag entering,
+moving or leaving) ends `waitEvent`, `waitFrame` and `Window.waitAny` as a wake does, so a program redraws its
+drop highlight after each wait. A drop ends the drag: the window then has none.
+Safety: the runtime only writes the position and returns the count, 0 for no drag.
 
 ### Window.clipboardText
 

@@ -71,6 +71,13 @@
 #define CEE_SCRIPT_MENU 102
 /* A scripted dialog answer (`dialog[:PATHS]`, ADR 0146): never queued as an event, it is the next dialog's answer. */
 #define CEE_SCRIPT_DIALOG 103
+/* A scripted drag of files (`dragover:X,Y:N`, or `dragleave` with N 0) and drop (`drop:X,Y:PATHS`) (ADR 0150): never
+   queued as events, they change the window's drag and queue the drop. */
+#define CEE_SCRIPT_DRAG 104
+#define CEE_SCRIPT_DROP 105
+
+/* Drops (ADR 0150): the drops a window keeps that the program has not taken. */
+#define CEE_DROP_QUEUE 64u
 
 /* Menus (ADR 0146): lib/std's encoding is, per entry, a header of CEE_MENU_HEADER bytes (the kind, the flags, the
    shortcut's modifier bits, 0, then the id, the shortcut's key number and the title's length as little-endian u32s)
@@ -152,6 +159,19 @@ struct cee_window_answer {
     int cancel;
 };
 
+/* Paths being collected, each followed by a zero byte (a drop's, ADR 0150). */
+struct cee_window_paths {
+    char *text;
+    size_t length, capacity;
+};
+
+/* A drop the program has not taken (ADR 0150): where, and its paths, which the queue owns. */
+struct cee_window_drop {
+    float x, y;
+    char *paths;
+    size_t length;
+};
+
 struct cee_window {
     int scripted;
     int external; /* WindowSurface.External: the program draws the content, the runtime never does (ADR 0137) */
@@ -215,6 +235,15 @@ struct cee_window {
     size_t answer_length, answer_capacity;
     struct cee_window_answer answers[CEE_DIALOG_ANSWERS];
     unsigned answer_head, answer_count;
+    /* Drops (ADR 0150): the drops not yet taken (a ring), and the paths of the one last handed out, for lib/std to
+       copy; the drag of files over the window (`drag_count` 0 for none) and whether it changed since a wait last
+       returned, which ends a wait as a wake does. Only the program's first thread touches them. */
+    struct cee_window_drop drops[CEE_DROP_QUEUE];
+    unsigned drop_head, drop_count;
+    char *dropped;
+    uint32_t drag_count;
+    float drag_x, drag_y;
+    int drag_changed;
     /* The system's window. */
     void *native;
 };
@@ -246,6 +275,8 @@ int64_t ceesafe_window_menu_choice(void *window);
 int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, uint64_t title_length,
                               const uint8_t *name, uint64_t name_length, const uint8_t *extensions,
                               uint64_t extensions_length, const uint8_t **answer);
+int64_t ceesafe_window_drop(void *window, float *position, const uint8_t **paths);
+uint32_t ceesafe_window_drag_over(void *window, float *position);
 
 /* Queues an event; the queued copy, which a backend may take back (CEE_EVENT_DROPPED) before the next poll, or NULL. */
 static struct cee_window_event *cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c,
@@ -511,6 +542,59 @@ static size_t cee_dialog_extensions(const char *list, size_t length,
     return count;
 }
 #endif
+
+/* ---- Drops: what every backend shares (ADR 0150) ---------------------------------------------------------------- */
+
+/* Adds one path, and its zero byte, to `p`; 0 when memory ran out. An empty path, or one holding a zero byte, which no
+   file system path does, is left out. */
+static int cee_paths_add(struct cee_window_paths *p, const char *path, size_t length) {
+    if (length == 0 || memchr(path, '\0', length) != NULL) {
+        return 1;
+    }
+    if (!cee_window_reserve(&p->text, &p->capacity, p->length + length + 1u)) {
+        return 0;
+    }
+    memcpy(p->text + p->length, path, length);
+    p->text[p->length + length] = '\0';
+    p->length += length + 1u;
+    return 1;
+}
+
+/* The drag of files over the window is now `count` files at (x, y), or none for 0; a change ends a wait. Whether it
+   changed. */
+static int cee_window_drag(struct cee_window *w, uint32_t count, float x, float y) {
+    if (count == 0) {
+        x = 0.0f;
+        y = 0.0f;
+    }
+    if (count == w->drag_count && x == w->drag_x && y == w->drag_y) {
+        return 0;
+    }
+    w->drag_count = count;
+    w->drag_x = x;
+    w->drag_y = y;
+    w->drag_changed = 1;
+    return 1;
+}
+
+/* Files dropped at (x, y): the drag ends, and the drop is queued with the paths, which it takes from `p`. With no path,
+   nothing is queued; with CEE_DROP_QUEUE drops not taken, the newest is lost, as with events. */
+static void cee_window_dropped(struct cee_window *w, float x, float y, struct cee_window_paths *p) {
+    cee_window_drag(w, 0, 0.0f, 0.0f);
+    if (p->length == 0 || w->drop_count == CEE_DROP_QUEUE) {
+        ceesafe_platform_free(p->text);
+    } else {
+        struct cee_window_drop *d = &w->drops[(w->drop_head + w->drop_count) % CEE_DROP_QUEUE];
+        d->x = x;
+        d->y = y;
+        d->paths = p->text;
+        d->length = p->length;
+        w->drop_count++;
+    }
+    p->text = NULL;
+    p->length = 0;
+    p->capacity = 0;
+}
 
 /* A letter as lowercase, other printable ASCII as it is: WindowKey.Character. */
 static int32_t cee_window_character(uint32_t c) {
@@ -788,8 +872,10 @@ static void cee_wake_any_clear(void) {
 #endif
 }
 
-/* Takes the wake when a wait returns. The process's signal stays set: waitAny clears it when no window is woken. */
+/* Takes the wake when a wait returns, and a change of the drag of files over the window, which ends a wait as a wake
+   does (ADR 0150). The process's signal stays set: waitAny clears it when no window is woken. */
 static void cee_wake_take(struct cee_window *w) {
+    w->drag_changed = 0;
     cee_wake_acquire();
     cee_wake_clear(w);
     cee_wake_release();
@@ -821,11 +907,12 @@ static int cee_wake_any_arm(void) {
     return !woken;
 }
 
-/* Takes every open window's wake, and clears the process's signal, when waitAny returns. */
+/* Takes every open window's wake and drag change, and clears the process's signal, when waitAny returns. */
 static void cee_wake_take_all(void) {
     cee_wake_acquire();
     for (struct cee_window *w = cee_wake_windows; w != NULL; w = w->wake_link) {
         cee_wake_clear(w);
+        w->drag_changed = 0;
     }
     cee_wake_any_clear();
     cee_wake_release();
@@ -1125,6 +1212,34 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DIALOG, offset,
                                                     (int32_t)args_length, 0, has, 0.0, 0.0);
     }
+    if (CEE_IS("dragover") || CEE_IS("drop")) { /* dragover:X,Y:N and drop:X,Y:PATH[|PATH…] (ADR 0150) */
+        size_t at = 0;
+        while (at < args_length && args[at] != ':') {
+            at++;
+        }
+        if (at == args_length || at + 1 == args_length || cee_window_numbers(args, at, v, 3) != 2) {
+            return 0;
+        }
+        const char *tail = args + at + 1;
+        size_t tail_length = args_length - at - 1;
+        if (CEE_IS("dragover")) {
+            uint64_t count = 0;
+            for (size_t k = 0; k < tail_length; k++) {
+                if (tail[k] < '0' || tail[k] > '9' || count > 100000000u) {
+                    return 0;
+                }
+                count = count * 10u + (uint64_t)(tail[k] - '0');
+            }
+            return count > 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DRAG, (int32_t)count, 0, 0, 0,
+                                                      v[0], v[1]);
+        }
+        int32_t offset = cee_window_script_text(w, tail, tail_length);
+        return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DROP, offset,
+                                                    (int32_t)tail_length, 0, 0, v[0], v[1]);
+    }
+    if (CEE_IS("dragleave")) {
+        return name_length == rest && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DRAG, 0, 0, 0, 0, 0.0, 0.0);
+    }
 #undef CEE_IS
     return 0;
 }
@@ -1225,6 +1340,20 @@ static void cee_window_script_pump(struct cee_window *w) {
                 a->cancel = !e.fields[3];
                 w->answer_count++;
             }
+        } else if (e.kind == CEE_SCRIPT_DRAG) {
+            cee_window_drag(w, (uint32_t)e.fields[0], e.x, e.y);
+        } else if (e.kind == CEE_SCRIPT_DROP) {
+            struct cee_window_paths p = {NULL, 0, 0};
+            const char *text = w->script_text + e.fields[0];
+            size_t length = (size_t)e.fields[1], start = 0;
+            int ok = 1;
+            for (size_t k = 0; k <= length && ok; k++) {
+                if (k == length || text[k] == '|') {
+                    ok = cee_paths_add(&p, text + start, k - start);
+                    start = k + 1;
+                }
+            }
+            cee_window_dropped(w, e.x, e.y, &p); /* out of memory: the paths kept so far */
         } else {
             cee_window_push(w, e.kind, e.fields[0], e.fields[1], e.fields[2], e.fields[3], e.x, e.y);
         }
@@ -1329,6 +1458,8 @@ static struct {
     cee_id delegate_class;
     cee_id view_class; /* CeeSafeContentView, an NSTextInputClient (ADR 0141) */
     cee_id *pasteboard_string; /* NSPasteboardTypeString */
+    cee_id *pasteboard_file_url; /* NSPasteboardTypeFileURL (ADR 0150) */
+    cee_id *file_urls_only; /* NSPasteboardURLReadingFileURLsOnlyKey */
     void *rgb;
     /* Waking (ADR 0142): a run loop source on the main run loop, which another thread signals; NULL without
        CoreFoundation's run loop calls, and then a wake ends AppKit's wait only at its timeout. */
@@ -1392,6 +1523,8 @@ struct cee_mac {
     cee_range marked_selection;
     int in_key, key_composed;
     unsigned char ime_keys[16];
+    /* A drag over the view (ADR 0150): how many files its pasteboard holds, read when it entered. */
+    uint32_t drag_files;
 };
 
 static cee_fn cee_mac_symbol(void *handle, const char *name) {
@@ -1713,6 +1846,135 @@ static void cee_mac_wake_perform(void *info) {
     cee_objc.pool_pop(pool);
 }
 
+/* The content view as an NSDraggingDestination (ADR 0150). It takes file URLs only, which it reads from the drag's
+   pasteboard as NSURLs with NSPasteboardURLReadingFileURLsOnlyKey; a drag with none is refused (NSDragOperationNone),
+   so the system shows no drop. Each method runs on the main thread inside AppKit's run loop, that of a pump or of a
+   wait, and posts the wake event (ADR 0142) after a change, so that a wait it ran in returns. */
+
+/* The drag's file URLs, an autoreleased NSArray, or NULL. */
+static cee_id cee_mac_drag_urls(cee_id info) {
+    cee_id board = cee_send(info, "draggingPasteboard");
+    if (board == NULL) {
+        return NULL;
+    }
+    cee_id classes = cee_send_id_id(cee_mac_cls("NSArray"), "arrayWithObject:", cee_mac_cls("NSURL"));
+    cee_id yes = ((cee_id(*)(cee_id, cee_sel, signed char))cee_objc.send)(cee_mac_cls("NSNumber"),
+                                                                         cee_mac_sel("numberWithBool:"), 1);
+    cee_id key = cee_objc.file_urls_only != NULL ? *cee_objc.file_urls_only
+                                                 : cee_nsstring("NSPasteboardURLReadingFileURLsOnlyKey");
+    cee_id options = ((cee_id(*)(cee_id, cee_sel, cee_id, cee_id))cee_objc.send)(
+        cee_mac_cls("NSDictionary"), cee_mac_sel("dictionaryWithObject:forKey:"), yes, key);
+    return ((cee_id(*)(cee_id, cee_sel, cee_id, cee_id))cee_objc.send)(
+        board, cee_mac_sel("readObjectsForClasses:options:"), classes, options);
+}
+
+/* The drag's position in points from the content's top left (the content view fills the window's content). */
+static void cee_mac_drag_at(struct cee_window *w, cee_id info, float *x, float *y) {
+    cee_point p = cee_send_point(info, "draggingLocation");
+    *x = (float)p.x;
+    *y = (float)((double)w->height - p.y);
+}
+
+/* The window's answer: copy where the source allows it, else generic or link (the program only reads the files);
+   none without files, or for a source that allows only a move. */
+static unsigned long cee_mac_drag_operation(cee_id info, uint32_t files) {
+    unsigned long mask = cee_send_ulong(info, "draggingSourceOperationMask");
+    if (files == 0) {
+        return 0ul;
+    }
+    return (mask & 1ul) ? 1ul : (mask & 4ul) ? 4ul : (mask & 2ul) ? 2ul : 0ul; /* Copy, Generic, Link */
+}
+
+/* draggingEntered: (which counts the files) and draggingUpdated:. */
+static unsigned long cee_mac_dragging(cee_id self, cee_id info, int entered) {
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return 0ul;
+    }
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    void *pool = cee_objc.pool_push();
+    if (entered) {
+        cee_id urls = cee_mac_drag_urls(info);
+        unsigned long count = urls != NULL ? cee_send_ulong(urls, "count") : 0ul;
+        m->drag_files = count > 0xfffffffful ? 0xffffffffu : (uint32_t)count;
+    }
+    unsigned long operation = cee_mac_drag_operation(info, m->drag_files);
+    float x = 0.0f, y = 0.0f;
+    cee_mac_drag_at(w, info, &x, &y);
+    if (cee_window_drag(w, operation != 0ul ? m->drag_files : 0u, x, y)) {
+        cee_mac_wake_perform(NULL);
+    }
+    cee_objc.pool_pop(pool);
+    return operation;
+}
+
+static unsigned long cee_mac_dragging_entered(cee_id self, cee_sel cmd, cee_id info) {
+    (void)cmd;
+    return cee_mac_dragging(self, info, 1);
+}
+
+static unsigned long cee_mac_dragging_updated(cee_id self, cee_sel cmd, cee_id info) {
+    (void)cmd;
+    return cee_mac_dragging(self, info, 0);
+}
+
+/* draggingExited: and draggingEnded:: the drag left, or ended without a drop here. */
+static void cee_mac_dragging_exited(cee_id self, cee_sel cmd, cee_id info) {
+    (void)cmd;
+    (void)info;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return;
+    }
+    ((struct cee_mac *)w->native)->drag_files = 0;
+    if (cee_window_drag(w, 0, 0.0f, 0.0f)) {
+        cee_mac_wake_perform(NULL);
+    }
+}
+
+static signed char cee_mac_prepare_drag(cee_id self, cee_sel cmd, cee_id info) {
+    (void)cmd;
+    (void)info;
+    struct cee_window *w = cee_mac_view_owner(self);
+    return w != NULL && ((struct cee_mac *)w->native)->drag_files > 0;
+}
+
+/* The drop: the files' paths (UTF-8 from NSURL's path, of the file path URL a file reference URL stands for). */
+static signed char cee_mac_perform_drag(cee_id self, cee_sel cmd, cee_id info) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return 0;
+    }
+    void *pool = cee_objc.pool_push();
+    cee_id urls = cee_mac_drag_urls(info);
+    unsigned long count = urls != NULL ? cee_send_ulong(urls, "count") : 0ul;
+    struct cee_window_paths p = {NULL, 0, 0};
+    for (unsigned long k = 0; k < count; k++) {
+        cee_id url = cee_send(cee_send_id_ulong(urls, "objectAtIndex:", k), "filePathURL");
+        cee_id path = url != NULL ? cee_send(url, "path") : NULL;
+        const char *utf8 = path != NULL ? cee_send_get_cstr(path, "UTF8String") : NULL;
+        if (utf8 != NULL && !cee_paths_add(&p, utf8, strlen(utf8))) {
+            break; /* out of memory: the paths kept so far */
+        }
+    }
+    float x = 0.0f, y = 0.0f;
+    cee_mac_drag_at(w, info, &x, &y);
+    signed char taken = p.length > 0;
+    cee_window_dropped(w, x, y, &p);
+    ((struct cee_mac *)w->native)->drag_files = 0;
+    cee_mac_wake_perform(NULL);
+    cee_objc.pool_pop(pool);
+    return taken;
+}
+
+/* draggingUpdated: only when the pointer moves. */
+static signed char cee_mac_periodic_drags(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return 0;
+}
+
 static int cee_mac_load(void) {
     if (cee_objc.state != 0) {
         return cee_objc.state == 1;
@@ -1737,6 +1999,8 @@ static int cee_mac_load(void) {
     cee_objc.get_protocol = (void *(*)(const char *))cee_mac_symbol(objc, "objc_getProtocol");
     cee_objc.add_protocol = (signed char (*)(cee_id, void *))cee_mac_symbol(objc, "class_addProtocol");
     cee_objc.pasteboard_string = (cee_id *)cee_mac_data_symbol(appkit, "NSPasteboardTypeString");
+    cee_objc.pasteboard_file_url = (cee_id *)cee_mac_data_symbol(appkit, "NSPasteboardTypeFileURL");
+    cee_objc.file_urls_only = (cee_id *)cee_mac_data_symbol(appkit, "NSPasteboardURLReadingFileURLsOnlyKey");
     cee_objc.pool_push = (void *(*)(void))cee_mac_symbol(objc, "objc_autoreleasePoolPush");
     cee_objc.pool_pop = (void (*)(void *))cee_mac_symbol(objc, "objc_autoreleasePoolPop");
     cee_objc.color_space = (void *(*)(void))cee_mac_symbol(graphics, "CGColorSpaceCreateDeviceRGB");
@@ -1836,6 +2100,15 @@ static int cee_mac_load(void) {
         cee_objc.add_method(view, cee_mac_sel("doCommandBySelector:"), (cee_fn)cee_mac_do_command, "v@::");
         cee_objc.add_method(view, cee_mac_sel("acceptsFirstResponder"), (cee_fn)cee_mac_accepts_first_responder,
                             "c@:");
+        /* An NSDraggingDestination for file URLs (ADR 0150). */
+        cee_objc.add_method(view, cee_mac_sel("draggingEntered:"), (cee_fn)cee_mac_dragging_entered, "Q@:@");
+        cee_objc.add_method(view, cee_mac_sel("draggingUpdated:"), (cee_fn)cee_mac_dragging_updated, "Q@:@");
+        cee_objc.add_method(view, cee_mac_sel("draggingExited:"), (cee_fn)cee_mac_dragging_exited, "v@:@");
+        cee_objc.add_method(view, cee_mac_sel("draggingEnded:"), (cee_fn)cee_mac_dragging_exited, "v@:@");
+        cee_objc.add_method(view, cee_mac_sel("prepareForDragOperation:"), (cee_fn)cee_mac_prepare_drag, "c@:@");
+        cee_objc.add_method(view, cee_mac_sel("performDragOperation:"), (cee_fn)cee_mac_perform_drag, "c@:@");
+        cee_objc.add_method(view, cee_mac_sel("wantsPeriodicDraggingUpdates"), (cee_fn)cee_mac_periodic_drags,
+                            "c@:");
         void *protocol = cee_objc.get_protocol != NULL ? cee_objc.get_protocol("NSTextInputClient") : NULL;
         if (protocol != NULL && cee_objc.add_protocol != NULL) {
             cee_objc.add_protocol(view, protocol); /* NSView's inputContext asks for it */
@@ -1916,6 +2189,11 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     if (view != NULL) {
         cee_send_v_id(window, "setContentView:", view);
         cee_send_v(view, "release");
+        /* A destination for dragged files (ADR 0150). */
+        cee_id type =
+            cee_objc.pasteboard_file_url != NULL ? *cee_objc.pasteboard_file_url : cee_nsstring("public.file-url");
+        cee_send_v_id(view, "registerForDraggedTypes:",
+                      cee_send_id_id(cee_mac_cls("NSArray"), "arrayWithObject:", type));
     }
     m->view = cee_send(window, "contentView");
     m->delegate = cee_send(cee_send(cee_objc.delegate_class, "alloc"), "init");
@@ -1959,6 +2237,7 @@ static void cee_native_close(struct cee_window *w) {
         cee_mac_build_menu(NULL, 0);
     }
     cee_send_v_id(m->window, "setDelegate:", NULL);
+    cee_send_v(m->view, "unregisterDraggedTypes");
     cee_send_v_id(cee_send(m->view, "layer"), "setContents:", NULL);
     cee_send_v(m->window, "close");
     cee_send_v(m->window, "release");
@@ -2758,6 +3037,13 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
 #define COBJMACROS    /* the COM interfaces' C calls, IFileDialog_Show and the like (ADR 0146) */
 #include <shobjidl.h> /* the file dialogs' interfaces; their functions come from ole32.dll, loaded at first use */
 
+/* The window's IDropTarget (ADR 0150), which the window owns: OLE calls through its vtable, first. */
+struct cee_win32_drop_target {
+    IDropTarget target;
+    struct cee_window *window;
+    uint32_t files; /* the files of the drag over the window, counted at DragEnter */
+};
+
 struct cee_win32 {
     HWND hwnd;
     uint32_t *frame; /* BGRA, the last presented frame */
@@ -2765,7 +3051,14 @@ struct cee_win32 {
     int captured;
     unsigned char ime_keys[32]; /* virtual keys whose down the input method took (ADR 0141) */
     int menu_sizing;            /* while setMenu keeps the content's size, WM_SIZE is not the user's (ADR 0146) */
+    /* Drops (ADR 0150): whether OLE was initialized for the window, and whether its drop target is registered. */
+    int ole, drop_registered;
+    struct cee_win32_drop_target drop;
 };
+
+static void cee_win32_drop_open(struct cee_window *w);
+static void cee_win32_drop_close(struct cee_window *w);
+static void cee_win32_ole_done(void);
 
 /* imm32.dll (ADR 0141), loaded with LoadLibraryW like GetDpiForWindow's user32, so no program needs a link flag
    (MinGW ignores #pragma comment(lib)). */
@@ -3224,6 +3517,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     ShowWindow(hwnd, SW_SHOW);
     SetForegroundWindow(hwnd);
     UpdateWindow(hwnd);
+    cee_win32_drop_open(w);
     return 0;
 }
 
@@ -3232,8 +3526,12 @@ static void cee_native_close(struct cee_window *w) {
     if (n == NULL) {
         return;
     }
+    cee_win32_drop_close(w);
     SetWindowLongPtrW(n->hwnd, GWLP_USERDATA, 0);
     DestroyWindow(n->hwnd);
+    if (n->ole) {
+        cee_win32_ole_done();
+    }
     ceesafe_platform_free(n->frame);
     ceesafe_platform_free(n);
     w->native = NULL;
@@ -3779,6 +4077,247 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
     return result;
 }
 
+/* Drops (ADR 0150): an IDropTarget for each window, registered with OLE, whose methods OLE calls on the window's thread
+   while it dispatches messages (in a pump, so they queue as the window procedure does). OLE is ole32.dll's, loaded
+   with LoadLibraryW like the dialogs' COM, and initialized from each window's open to its close (OleInitialize counts);
+   on a thread whose COM is multithreaded it cannot be, and that window takes no drops. The drag's files are CF_HDROP;
+   a drag without them is refused (DROPEFFECT_NONE), so the system shows no drop. */
+static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID cee_iid_drop_target = {0x00000122, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    HRESULT(WINAPI *initialize)(LPVOID);
+    void(WINAPI *uninitialize)(void);
+    HRESULT(WINAPI *register_target)(HWND, LPDROPTARGET);
+    HRESULT(WINAPI *revoke_target)(HWND);
+    void(WINAPI *release_medium)(LPSTGMEDIUM);
+} cee_oledrop;
+
+static int cee_oledrop_load(void) {
+    if (cee_oledrop.state != 0) {
+        return cee_oledrop.state == 1;
+    }
+    cee_oledrop.state = -1;
+    HMODULE ole = LoadLibraryW(L"ole32.dll");
+    if (ole == NULL) {
+        return 0;
+    }
+    FARPROC p[5] = {GetProcAddress(ole, "OleInitialize"), GetProcAddress(ole, "OleUninitialize"),
+                    GetProcAddress(ole, "RegisterDragDrop"), GetProcAddress(ole, "RevokeDragDrop"),
+                    GetProcAddress(ole, "ReleaseStgMedium")};
+    for (int k = 0; k < 5; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    memcpy(&cee_oledrop.initialize, &p[0], sizeof p[0]);
+    memcpy(&cee_oledrop.uninitialize, &p[1], sizeof p[1]);
+    memcpy(&cee_oledrop.register_target, &p[2], sizeof p[2]);
+    memcpy(&cee_oledrop.revoke_target, &p[3], sizeof p[3]);
+    memcpy(&cee_oledrop.release_medium, &p[4], sizeof p[4]);
+    cee_oledrop.state = 1;
+    return 1;
+}
+
+static void cee_win32_ole_done(void) { cee_oledrop.uninitialize(); }
+
+/* DROPFILES (shlobj.h): where the paths start, the drop point, and whether they are UTF-16. */
+struct cee_win32_dropfiles {
+    DWORD files;
+    POINT point;
+    BOOL nonclient;
+    BOOL wide;
+};
+
+/* UTF-16 `units` as UTF-8 into `p`; 0 when memory ran out. A path that is not valid UTF-16 is left out. */
+static int cee_win32_drop_path(struct cee_window_paths *p, const wchar_t *path, size_t units) {
+    int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, (int)units, NULL, 0, NULL, NULL);
+    if (count <= 0) {
+        return 1;
+    }
+    char *utf8 = (char *)ceesafe_platform_alloc((size_t)count);
+    if (utf8 == NULL) {
+        return 0;
+    }
+    int ok = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, (int)units, utf8, count, NULL, NULL) != count ||
+             cee_paths_add(p, utf8, (size_t)count);
+    ceesafe_platform_free(utf8);
+    return ok;
+}
+
+/* The drag's files: how many CF_HDROP holds, and with `p`, their paths. */
+static uint32_t cee_win32_drop_files(IDataObject *data, struct cee_window_paths *p) {
+    FORMATETC format = {CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium;
+    memset(&medium, 0, sizeof medium);
+    if (data == NULL || FAILED(IDataObject_GetData(data, &format, &medium))) {
+        return 0;
+    }
+    uint32_t count = 0;
+    const unsigned char *block =
+        medium.tymed == TYMED_HGLOBAL ? (const unsigned char *)GlobalLock(medium.hGlobal) : NULL;
+    SIZE_T size = block != NULL ? GlobalSize(medium.hGlobal) : 0;
+    struct cee_win32_dropfiles header;
+    if (block != NULL && size >= sizeof header) {
+        memcpy(&header, block, sizeof header);
+        if (header.files >= sizeof header && header.files < size) {
+            /* The list, NUL-separated and ending with an empty one, as UTF-16 (copied, so it is aligned). */
+            size_t bytes = (size_t)(size - header.files), units = 0;
+            wchar_t *list = NULL;
+            if (header.wide) {
+                units = bytes / sizeof(wchar_t);
+                list = (wchar_t *)ceesafe_platform_alloc((units + 1u) * sizeof(wchar_t));
+                if (list != NULL) {
+                    memcpy(list, block + header.files, units * sizeof(wchar_t));
+                }
+            } else {
+                int wide = MultiByteToWideChar(CP_ACP, 0, (const char *)block + header.files, (int)bytes, NULL, 0);
+                units = wide > 0 ? (size_t)wide : 0;
+                list = (wchar_t *)ceesafe_platform_alloc((units + 1u) * sizeof(wchar_t));
+                if (list != NULL && units > 0) {
+                    MultiByteToWideChar(CP_ACP, 0, (const char *)block + header.files, (int)bytes, list, wide);
+                }
+            }
+            if (list != NULL) {
+                list[units] = L'\0';
+                size_t start = 0;
+                int ok = 1;
+                for (size_t k = 0; k <= units && list[start] != L'\0'; k++) {
+                    if (list[k] == L'\0') {
+                        count++;
+                        if (p != NULL && ok) {
+                            ok = cee_win32_drop_path(p, list + start, k - start);
+                        }
+                        start = k + 1;
+                    }
+                }
+                ceesafe_platform_free(list);
+            }
+        }
+        GlobalUnlock(medium.hGlobal);
+    }
+    cee_oledrop.release_medium(&medium);
+    return count;
+}
+
+/* The drag's position (screen pixels) in points from the content's top left; whether it is in the content. OLE's
+   target is the whole window, its frame included, which macOS's view and X11's window are not: over the title bar or
+   the border the window takes no drop. */
+static int cee_win32_drop_at(struct cee_window *w, POINTL at, float *x, float *y) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    POINT p = {at.x, at.y};
+    RECT client;
+    ScreenToClient(n->hwnd, &p);
+    GetClientRect(n->hwnd, &client);
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    *x = (float)p.x / scale;
+    *y = (float)p.y / scale;
+    return p.x >= client.left && p.y >= client.top && p.x < client.right && p.y < client.bottom;
+}
+
+/* The window's answer: copy where the source allows it, else link (the program only reads the files); none without
+   files, or for a source that allows only a move. */
+static DWORD cee_win32_drop_effect(DWORD allowed, uint32_t files) {
+    if (files == 0) {
+        return DROPEFFECT_NONE;
+    }
+    return (allowed & DROPEFFECT_COPY)   ? DROPEFFECT_COPY
+           : (allowed & DROPEFFECT_LINK) ? DROPEFFECT_LINK
+                                         : DROPEFFECT_NONE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_drop_query(IDropTarget *self, REFIID iid, void **out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    if (memcmp(iid, &cee_iid_unknown, sizeof(IID)) == 0 || memcmp(iid, &cee_iid_drop_target, sizeof(IID)) == 0) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+/* The window owns its target, so the references are not counted. */
+static ULONG STDMETHODCALLTYPE cee_drop_add_ref(IDropTarget *self) {
+    (void)self;
+    return 1;
+}
+
+static ULONG STDMETHODCALLTYPE cee_drop_release(IDropTarget *self) {
+    (void)self;
+    return 1;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_drop_over(IDropTarget *self, DWORD keys, POINTL at, DWORD *effect) {
+    (void)keys;
+    struct cee_win32_drop_target *t = (struct cee_win32_drop_target *)self;
+    float x = 0.0f, y = 0.0f;
+    int inside = cee_win32_drop_at(t->window, at, &x, &y);
+    DWORD answer = inside ? cee_win32_drop_effect(*effect, t->files) : DROPEFFECT_NONE;
+    cee_window_drag(t->window, answer != DROPEFFECT_NONE ? t->files : 0u, x, y);
+    *effect = answer;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_drop_enter(IDropTarget *self, IDataObject *data, DWORD keys, POINTL at,
+                                                DWORD *effect) {
+    struct cee_win32_drop_target *t = (struct cee_win32_drop_target *)self;
+    t->files = cee_win32_drop_files(data, NULL);
+    return cee_drop_over(self, keys, at, effect);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_drop_leave(IDropTarget *self) {
+    struct cee_win32_drop_target *t = (struct cee_win32_drop_target *)self;
+    t->files = 0;
+    cee_window_drag(t->window, 0, 0.0f, 0.0f);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_drop_drop(IDropTarget *self, IDataObject *data, DWORD keys, POINTL at,
+                                               DWORD *effect) {
+    (void)keys;
+    struct cee_win32_drop_target *t = (struct cee_win32_drop_target *)self;
+    struct cee_window_paths p = {NULL, 0, 0};
+    uint32_t files = cee_win32_drop_files(data, &p);
+    float x = 0.0f, y = 0.0f;
+    int inside = cee_win32_drop_at(t->window, at, &x, &y);
+    *effect = inside && p.length > 0 ? cee_win32_drop_effect(*effect, files) : DROPEFFECT_NONE;
+    if (*effect == DROPEFFECT_NONE) {
+        ceesafe_platform_free(p.text);
+        p.text = NULL;
+        p.length = 0;
+    }
+    cee_window_dropped(t->window, x, y, &p);
+    t->files = 0;
+    return S_OK;
+}
+
+static IDropTargetVtbl cee_drop_vtable = {cee_drop_query, cee_drop_add_ref, cee_drop_release, cee_drop_enter,
+                                          cee_drop_over,  cee_drop_leave,   cee_drop_drop};
+
+/* At the window's open: OLE, then the window's drop target. */
+static void cee_win32_drop_open(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (!cee_oledrop_load() || FAILED(cee_oledrop.initialize(NULL))) {
+        return; /* no drops for this window */
+    }
+    n->ole = 1;
+    n->drop.target.lpVtbl = &cee_drop_vtable;
+    n->drop.window = w;
+    n->drop_registered = SUCCEEDED(cee_oledrop.register_target(n->hwnd, &n->drop.target));
+}
+
+/* Before the window is destroyed: OLE lets go of its drop target. */
+static void cee_win32_drop_close(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (n->drop_registered) {
+        cee_oledrop.revoke_target(n->hwnd);
+        n->drop_registered = 0;
+    }
+}
+
 #elif defined(__linux__) || defined(__FreeBSD__)
 /* X11 through libX11.so.6, loaded with dlopen (Linux, and FreeBSD with Xorg: ADR 0149): the declarations below are
    Xlib's (X11/Xlib.h, LP64), so no headers are needed to build. A frame is converted to the visual's pixel layout,
@@ -3945,6 +4484,7 @@ static struct {
     int (*check_typed_window_event)(cee_x_display *, cee_xid, int, cee_x_event *);
     long (*max_request_size)(cee_x_display *);
     long (*extended_max_request_size)(cee_x_display *);
+    int (*translate_coordinates)(cee_x_display *, cee_xid, cee_xid, int, int, int *, int *, cee_xid *); /* ADR 0150 */
 } cee_x;
 
 struct cee_x11 {
@@ -3967,6 +4507,15 @@ struct cee_x11 {
     char *owned;
     size_t owned_length;
     unsigned long clipboard_atom, utf8_atom, targets_atom, property_atom, incr_atom;
+    /* Drops (ADR 0150): XDND's atoms, and the drag in progress: its source window and protocol version, whether it
+       offers text/uri-list, the conversion asked for (0 none, 1 to count the files while it hovers, 2 the drop's),
+       whether the count is known and what it is, and where the pointer is in the content. */
+    unsigned long xdnd_aware, xdnd_enter, xdnd_position, xdnd_status, xdnd_leave, xdnd_drop, xdnd_finished;
+    unsigned long xdnd_selection, xdnd_copy, xdnd_type_list, uri_list_atom, xdnd_property;
+    cee_xid xdnd_source;
+    int xdnd_version, xdnd_offered, xdnd_converting, xdnd_known;
+    uint32_t xdnd_files;
+    float xdnd_x, xdnd_y;
 };
 
 typedef void (*cee_x_fn)(void);
@@ -4057,6 +4606,8 @@ static int cee_x_load(void) {
     CEE_X(check_typed_window_event, int (*)(cee_x_display *, cee_xid, int, cee_x_event *), "XCheckTypedWindowEvent")
     CEE_X(max_request_size, long (*)(cee_x_display *), "XMaxRequestSize")
     CEE_X(extended_max_request_size, long (*)(cee_x_display *), "XExtendedMaxRequestSize")
+    CEE_X(translate_coordinates, int (*)(cee_x_display *, cee_xid, cee_xid, int, int, int *, int *, cee_xid *),
+          "XTranslateCoordinates")
 #undef CEE_X
     cee_x.state = 1;
     return 1;
@@ -4104,6 +4655,22 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     n->targets_atom = cee_x.intern_atom(display, "TARGETS", 0);
     n->property_atom = cee_x.intern_atom(display, "CEESAFE_CLIPBOARD", 0);
     n->incr_atom = cee_x.intern_atom(display, "INCR", 0);
+    /* A drop target, XDND version 5 (ADR 0150). */
+    n->xdnd_aware = cee_x.intern_atom(display, "XdndAware", 0);
+    n->xdnd_enter = cee_x.intern_atom(display, "XdndEnter", 0);
+    n->xdnd_position = cee_x.intern_atom(display, "XdndPosition", 0);
+    n->xdnd_status = cee_x.intern_atom(display, "XdndStatus", 0);
+    n->xdnd_leave = cee_x.intern_atom(display, "XdndLeave", 0);
+    n->xdnd_drop = cee_x.intern_atom(display, "XdndDrop", 0);
+    n->xdnd_finished = cee_x.intern_atom(display, "XdndFinished", 0);
+    n->xdnd_selection = cee_x.intern_atom(display, "XdndSelection", 0);
+    n->xdnd_copy = cee_x.intern_atom(display, "XdndActionCopy", 0);
+    n->xdnd_type_list = cee_x.intern_atom(display, "XdndTypeList", 0);
+    n->uri_list_atom = cee_x.intern_atom(display, "text/uri-list", 0);
+    n->xdnd_property = cee_x.intern_atom(display, "CEESAFE_XDND", 0);
+    unsigned long version = 5; /* format 32 is longs */
+    cee_x.change_property(display, n->window, n->xdnd_aware, 4 /* XA_ATOM */, 32, 0 /* PropModeReplace */,
+                          (const unsigned char *)&version, 1);
     cee_x.store_name(display, n->window, title);
     cee_x.map_window(display, n->window);
     cee_x.flush(display);
@@ -4249,6 +4816,252 @@ static void cee_x_answer(struct cee_x11 *n, const cee_x_selection_request *r) {
     cee_x.flush(n->display);
 }
 
+/* Drops (ADR 0150): the XDND protocol, version 5, as a target. The window's XdndAware says so. A drag's source sends
+   XdndEnter (its types), XdndPosition (root coordinates; answered with XdndStatus), XdndLeave or XdndDrop; the target
+   converts XdndSelection to text/uri-list and answers a drop with XdndFinished. The files are counted while the drag
+   hovers, by a conversion at its first position, so a drag shows (dragOver) only once its count is known; the drop
+   converts again, at the drop's time. A drag without text/uri-list, or whose list holds no local file, is refused
+   (XdndStatus without accept), so the system shows no drop. There are no INCR transfers: a list longer than one
+   property is no files. */
+
+/* Sends an XDND client message to the drag's source, from this window. */
+static void cee_x_xdnd_send(struct cee_x11 *n, unsigned long type, long a, long b, long c, long d) {
+    cee_x_event e;
+    memset(&e, 0, sizeof e);
+    e.client.type = 33; /* ClientMessage */
+    e.client.display = n->display;
+    e.client.window = n->xdnd_source;
+    e.client.message_type = type;
+    e.client.format = 32;
+    e.client.data[0] = (long)n->window;
+    e.client.data[1] = a;
+    e.client.data[2] = b;
+    e.client.data[3] = c;
+    e.client.data[4] = d;
+    cee_x.send_event(n->display, n->xdnd_source, 0, 0 /* NoEventMask */, &e);
+    cee_x.flush(n->display);
+}
+
+/* No drag: the protocol's state is forgotten and the window's drag ends. */
+static void cee_x_xdnd_reset(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    n->xdnd_source = 0;
+    n->xdnd_version = 0;
+    n->xdnd_offered = 0;
+    n->xdnd_converting = 0;
+    n->xdnd_known = 0;
+    n->xdnd_files = 0;
+    cee_window_drag(w, 0, 0.0f, 0.0f);
+}
+
+static int cee_x_hex(char c) {
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+}
+
+/* Whether a URI of the list is a local file (`file:///path`, `file://localhost/path`, `file://HOST/path` with this
+   host's name, or `file:/path`); with `p`, its path, percent-decoded, is added (0 in *ok when memory ran out). */
+static int cee_x_uri_file(const char *uri, size_t length, struct cee_window_paths *p, int *ok) {
+    static const char scheme[] = "file:";
+    if (length < 6) {
+        return 0;
+    }
+    for (size_t k = 0; k < 5; k++) {
+        char c = uri[k] >= 'A' && uri[k] <= 'Z' ? (char)(uri[k] - 'A' + 'a') : uri[k];
+        if (c != scheme[k]) {
+            return 0;
+        }
+    }
+    const char *path = uri + 5;
+    size_t rest = length - 5;
+    if (rest >= 2 && path[0] == '/' && path[1] == '/') {
+        size_t slash = 2;
+        while (slash < rest && path[slash] != '/') {
+            slash++;
+        }
+        size_t host = slash - 2;
+        char name[256];
+        if (slash == rest) {
+            return 0;
+        }
+        if (host != 0 && !(host == 9 && memcmp(path + 2, "localhost", 9) == 0)) {
+            if (gethostname(name, sizeof name) != 0) {
+                return 0;
+            }
+            name[sizeof name - 1] = '\0';
+            if (strlen(name) != host || memcmp(name, path + 2, host) != 0) {
+                return 0; /* another machine's file */
+            }
+        }
+        path += slash;
+        rest -= slash;
+    } else if (rest == 0 || path[0] != '/') {
+        return 0;
+    }
+    size_t end = 0;
+    while (end < rest && path[end] != '?' && path[end] != '#') {
+        if (path[end] == '%' && (end + 2 >= rest || cee_x_hex(path[end + 1]) < 0 || cee_x_hex(path[end + 2]) < 0)) {
+            return 0; /* a malformed escape */
+        }
+        end += path[end] == '%' ? 3u : 1u;
+    }
+    if (p == NULL || !*ok) {
+        return 1;
+    }
+    char *decoded = (char *)ceesafe_platform_alloc(end + 1u);
+    if (decoded == NULL) {
+        *ok = 0;
+        return 1;
+    }
+    size_t n = 0;
+    for (size_t k = 0; k < end; k++) {
+        if (path[k] == '%') {
+            decoded[n++] = (char)(cee_x_hex(path[k + 1]) * 16 + cee_x_hex(path[k + 2]));
+            k += 2;
+        } else {
+            decoded[n++] = path[k];
+        }
+    }
+    *ok = cee_paths_add(p, decoded, n); /* one with a zero byte (%00) is left out */
+    ceesafe_platform_free(decoded);
+    return 1;
+}
+
+/* The local files of a text/uri-list (CRLF-separated, `#` comments): how many, and with `p`, their paths. */
+static uint32_t cee_x_uri_list(const char *text, size_t length, struct cee_window_paths *p) {
+    uint32_t count = 0;
+    size_t start = 0;
+    int ok = 1;
+    for (size_t k = 0; k <= length; k++) {
+        if (k == length || text[k] == '\n') {
+            size_t end = k;
+            if (end > start && text[end - 1] == '\r') {
+                end--;
+            }
+            if (end > start && text[start] != '#' && count < 0xffffffffu) {
+                count += (uint32_t)cee_x_uri_file(text + start, end - start, p, &ok);
+            }
+            start = k + 1;
+        }
+    }
+    return count;
+}
+
+/* The SelectionNotify of an XDND conversion: the hover's count, or the drop, which is then finished. */
+static void cee_x_xdnd_data(struct cee_window *w, const cee_x_selection *s) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    int stage = n->xdnd_converting;
+    n->xdnd_converting = 0;
+    struct cee_window_paths p = {NULL, 0, 0};
+    uint32_t files = 0;
+    if (s->property != 0) {
+        unsigned long type = 0, items = 0, after = 0;
+        int format = 0;
+        unsigned char *data = NULL;
+        if (cee_x.get_window_property(n->display, n->window, n->xdnd_property, 0, 0x1fffffffL, 1 /* delete */,
+                                      0 /* AnyPropertyType */, &type, &format, &items, &after, &data) == 0) {
+            if (stage != 0 && type != n->incr_atom && format == 8 && data != NULL) {
+                files = cee_x_uri_list((const char *)data, (size_t)items, stage == 2 ? &p : NULL);
+            }
+            if (data != NULL) {
+                cee_x.release(data);
+            }
+        }
+    }
+    if (stage == 0 || n->xdnd_source == 0) {
+        ceesafe_platform_free(p.text);
+        return; /* a conversion no drag waits for */
+    }
+    if (stage == 1) {
+        n->xdnd_known = 1;
+        n->xdnd_files = files;
+        cee_window_drag(w, files, n->xdnd_x, n->xdnd_y);
+        return;
+    }
+    int taken = p.length > 0;
+    cee_window_dropped(w, n->xdnd_x, n->xdnd_y, &p);
+    if (n->xdnd_version >= 2) {
+        cee_x_xdnd_send(n, n->xdnd_finished, taken, taken ? (long)n->xdnd_copy : 0, 0, 0);
+    }
+    cee_x_xdnd_reset(w);
+}
+
+/* An XDND client message from a drag's source. */
+static void cee_x_xdnd_message(struct cee_window *w, const cee_x_client *c) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_xid source = (cee_xid)c->data[0];
+    if (c->message_type == n->xdnd_enter) {
+        cee_x_xdnd_reset(w);
+        int version = (int)(((unsigned long)c->data[1] >> 24) & 0xffu);
+        if (version > 5 || source == 0) {
+            return; /* a version newer than the window's XdndAware: the source should not have sent it */
+        }
+        n->xdnd_source = source;
+        n->xdnd_version = version;
+        if ((unsigned long)c->data[1] & 1ul) { /* more than three types: XdndTypeList on the source */
+            unsigned long type = 0, items = 0, after = 0;
+            int format = 0;
+            unsigned char *data = NULL;
+            if (cee_x.get_window_property(n->display, source, n->xdnd_type_list, 0, 4096, 0, 4 /* XA_ATOM */, &type,
+                                          &format, &items, &after, &data) == 0 &&
+                data != NULL) {
+                for (unsigned long k = 0; format == 32 && k < items; k++) {
+                    unsigned long atom;
+                    memcpy(&atom, data + k * sizeof atom, sizeof atom); /* format 32 is longs */
+                    n->xdnd_offered |= atom == n->uri_list_atom;
+                }
+            }
+            if (data != NULL) {
+                cee_x.release(data);
+            }
+        } else {
+            for (int k = 2; k < 5; k++) {
+                n->xdnd_offered |= (unsigned long)c->data[k] == n->uri_list_atom;
+            }
+        }
+        return;
+    }
+    if (source == 0 || source != n->xdnd_source) {
+        return; /* another drag's, or one that ended */
+    }
+    if (c->message_type == n->xdnd_position) {
+        int rx = (int)(((unsigned long)c->data[2] >> 16) & 0xffffu), ry = (int)((unsigned long)c->data[2] & 0xffffu);
+        int x = 0, y = 0;
+        cee_xid child = 0;
+        cee_x.translate_coordinates(n->display, cee_x.root_window(n->display, n->screen), n->window, rx, ry, &x, &y,
+                                    &child);
+        n->xdnd_x = (float)x;
+        n->xdnd_y = (float)y;
+        if (n->xdnd_offered && !n->xdnd_known && n->xdnd_converting == 0) {
+            cee_x.convert_selection(n->display, n->xdnd_selection, n->uri_list_atom, n->xdnd_property, n->window,
+                                    n->xdnd_version >= 1 ? (unsigned long)c->data[3] : 0ul);
+            n->xdnd_converting = 1;
+        }
+        if (n->xdnd_known) {
+            cee_window_drag(w, n->xdnd_files, n->xdnd_x, n->xdnd_y);
+        }
+        int accept = n->xdnd_offered && (!n->xdnd_known || n->xdnd_files > 0);
+        cee_x_xdnd_send(n, n->xdnd_status, accept | 2, 0, 0, accept ? (long)n->xdnd_copy : 0);
+    } else if (c->message_type == n->xdnd_leave) {
+        cee_x_xdnd_reset(w);
+    } else if (c->message_type == n->xdnd_drop) {
+        cee_window_drag(w, 0, 0.0f, 0.0f);
+        if (n->xdnd_offered && (!n->xdnd_known || n->xdnd_files > 0)) {
+            cee_x.convert_selection(n->display, n->xdnd_selection, n->uri_list_atom, n->xdnd_property, n->window,
+                                    n->xdnd_version >= 1 ? (unsigned long)c->data[2] : 0ul);
+            cee_x.flush(n->display);
+            n->xdnd_converting = 2;
+        } else {
+            if (n->xdnd_version >= 2) {
+                cee_x_xdnd_send(n, n->xdnd_finished, 0, 0, 0, 0);
+            }
+            cee_x_xdnd_reset(w);
+        }
+    }
+}
+
 static void cee_native_pump(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     for (int k = 0; k < 256 && cee_x.pending(n->display) > 0; k++) {
@@ -4345,6 +5158,13 @@ static void cee_native_pump(struct cee_window *w) {
         case 33: /* ClientMessage */
             if ((unsigned long)e.client.data[0] == n->delete_atom) {
                 cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
+            } else {
+                cee_x_xdnd_message(w, &e.client); /* ADR 0150 */
+            }
+            break;
+        case 31: /* SelectionNotify: an XDND conversion's (the clipboard's is waited for where it is asked) */
+            if (e.selection.selection == n->xdnd_selection) {
+                cee_x_xdnd_data(w, &e.selection);
             }
             break;
         default: break;
@@ -4627,6 +5447,10 @@ static int cee_native_clipboard_get(struct cee_window *w) {
     cee_x_event e;
     for (;;) {
         if (cee_x.check_typed_window_event(n->display, n->window, 31 /* SelectionNotify */, &e)) {
+            if (e.selection.selection == n->xdnd_selection) {
+                cee_x_xdnd_data(w, &e.selection); /* a drop's (ADR 0150), not the clipboard's */
+                continue;
+            }
             break;
         }
         double left = deadline - cee_window_now();
@@ -4901,7 +5725,9 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
             }
         }
         argv[n] = NULL;
-        result = ok ? cee_x_run_dialog(w, (char *const *)argv, kind != CEE_DIALOG_FILES) : -CEE_WINDOW_RESOURCES;
+        /* posix_spawnp takes `char *const *`: through uintptr_t, which casts no `const` away (-Wcast-qual). */
+        result = ok ? cee_x_run_dialog(w, (char *const *)(uintptr_t)argv, kind != CEE_DIALOG_FILES)
+                    : -CEE_WINDOW_RESOURCES;
         for (int k = 0; k < 3; k++) {
             ceesafe_platform_free(owned[k]);
         }
@@ -5023,6 +5849,10 @@ void ceesafe_window_close(void *window) {
     ceesafe_platform_free(w->menu);
     ceesafe_platform_free(w->menu_ids);
     ceesafe_platform_free(w->answer);
+    for (unsigned k = 0; k < w->drop_count; k++) {
+        ceesafe_platform_free(w->drops[(w->drop_head + k) % CEE_DROP_QUEUE].paths);
+    }
+    ceesafe_platform_free(w->dropped);
     ceesafe_platform_free(w);
 }
 
@@ -5195,7 +6025,8 @@ void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t lengt
 void ceesafe_window_wait(void *window) {
     struct cee_window *w = (struct cee_window *)window;
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
-    if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || cee_wake_pending(w)) {
+    if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || w->drop_count > 0 || w->drag_changed ||
+        cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
         cee_wake_take(w);
         return;
@@ -5210,9 +6041,13 @@ void ceesafe_window_wait(void *window) {
 
 /* ---- Waiting for events and waking (ADR 0142) ------------------------------------------------------------------- */
 
-/* Whether nextEvent would return an event (one is queued that was not taken back), or nextMenuChoice an id (ADR 0146:
-   a scripted window's choice only of an enabled item of its menu). */
+/* Whether nextEvent would return an event (one is queued that was not taken back), nextMenuChoice an id (ADR 0146:
+   a scripted window's choice only of an enabled item of its menu), or nextDrop a drop, or whether the drag of files
+   over the window changed (ADR 0150). */
 static int cee_window_has_event(struct cee_window *w) {
+    if (w->drop_count > 0 || w->drag_changed) {
+        return 1;
+    }
     for (unsigned k = 0; k < w->count; k++) {
         if (w->queue[(w->head + k) % CEE_WINDOW_QUEUE].kind != CEE_EVENT_DROPPED) {
             return 1;
@@ -5578,4 +6413,47 @@ int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, 
     }
     *answer = (const uint8_t *)w->answer;
     return (int64_t)w->answer_length;
+}
+
+/* ---- Drops (ADR 0150) -------------------------------------------------------------------------------------------- */
+
+/* The next drop: the length of its paths (each followed by a zero byte, at *paths until the next call) with its
+   position, or -1. With none queued, the window takes the system's (or its script's) events first, as
+   ceesafe_window_poll does. */
+int64_t ceesafe_window_drop(void *window, float *position, const uint8_t **paths) {
+    struct cee_window *w = (struct cee_window *)window;
+    *paths = NULL;
+    position[0] = 0.0f;
+    position[1] = 0.0f;
+    ceesafe_platform_free(w->dropped); /* the copy lib/std took at the last call */
+    w->dropped = NULL;
+    if (w->drop_count == 0) {
+        if (w->scripted) {
+            cee_window_script_pump(w);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+        }
+#endif
+    }
+    if (w->drop_count == 0) {
+        return -1;
+    }
+    struct cee_window_drop d = w->drops[w->drop_head];
+    w->drop_head = (w->drop_head + 1u) % CEE_DROP_QUEUE;
+    w->drop_count--;
+    w->dropped = d.paths;
+    position[0] = d.x;
+    position[1] = d.y;
+    *paths = (const uint8_t *)d.paths;
+    return (int64_t)d.length;
+}
+
+/* The drag of files over the window: how many files (0 for none), with its position. */
+uint32_t ceesafe_window_drag_over(void *window, float *position) {
+    struct cee_window *w = (struct cee_window *)window;
+    position[0] = w->drag_x;
+    position[1] = w->drag_y;
+    return w->drag_count;
 }

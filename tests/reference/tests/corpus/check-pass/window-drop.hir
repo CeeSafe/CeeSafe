@@ -1,0 +1,110 @@
+(program
+  (const WIDTH: u32 = 320:u32)
+  (const HEIGHT: u32 = 200:u32)
+  (fn paint ((pixels#0: borrow mut [u32; 64000]) (drag#1: WindowDragOver?)) -> void
+    (block
+      (let background#2: u32 = (value (if (is-some (borrow drag#1)):bool (block (yield 4290805824:u32)) (else (block (yield 4286611584:u32))))):u32)
+      (for k#3 in 0:usize .. 64000:usize
+        (block
+          (= (*pixels#0)[k#3] background#2)
+        )
+      )
+      (match drag#1
+        (arm Some (d#4: WindowDragOver = payload 0)
+          (block
+            (let cx#5: u32 = (saturating-truncate u32 (. d#4 x):f32))
+            (let cy#6: u32 = (saturating-truncate u32 (. d#4 y):f32))
+            (for y#7 in 0:i32 .. 16:i32
+              (block
+                (for x#8 in 0:i32 .. 16:i32
+                  (block
+                    (let px#9: u32 = (+ cx#5 (truncate u32 x#8)):u32)
+                    (let py#10: u32 = (+ cy#6 (truncate u32 y#7)):u32)
+                    (if (&& (< px#9 320:u32):bool (< py#10 200:u32):bool):bool
+                      (block
+                        (= (*pixels#0)[(as (+ (* py#10 320:u32):u32 px#9):u32 usize)] 4294959296:u32)
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+        (arm null
+          (block)
+        )
+      )
+    )
+  )
+  (fn opened ((dropped#0: WindowDrop)) -> usize
+    (block
+      (var count#1: usize = 0:usize)
+      (for k#2 in 0:usize .. (length (. dropped#0 paths):Vector<String>):usize
+        (block
+          (expr (Console.write (borrow (*(*dropped#0.paths)[k#2]))))
+          (expr (Console.write " at "))
+          (expr (Console.write (. dropped#0 x):f32))
+          (expr (Console.write ", "))
+          (expr (Console.writeLine (. dropped#0 y):f32))
+          (+= count#1 1:usize)
+        )
+      )
+      (return count#1)
+    )
+  )
+  (fn host ((window#0: borrow mut Window)) -> Result<usize, WindowError>
+    (block
+      (var pixels#1: [u32; 64000] = (array-repeat 0:u32):[u32; 64000])
+      (var files#2: usize = 0:usize)
+      (loop
+        (block
+          (expr (call Window.waitEvent (reborrow-mut window#0) 1000:u32):void)
+          (loop
+            (block
+              (match (call Window.nextEvent (reborrow-mut window#0)):WindowEvent?
+                (arm Some(Closed)
+                  (block
+                    (return (Result<usize, WindowError>.Ok files#2))
+                  )
+                )
+                (arm Some(_)
+                  (block)
+                )
+                (arm null
+                  (block
+                    (break)
+                  )
+                )
+              )
+            )
+          )
+          (loop
+            (block
+              (match-consume (call Window.nextDrop (reborrow-mut window#0)):WindowDrop?
+                (arm Some (dropped#3: WindowDrop = payload 0)
+                  (block
+                    (+= files#2 (call opened dropped#3):usize)
+                  )
+                )
+                (arm null
+                  (block
+                    (break)
+                  )
+                )
+              )
+            )
+          )
+          (expr (call paint (borrow-mut pixels#1) (call Window.dragOver (reborrow window#0)):WindowDragOver?):void)
+          (expr (try (call Window.present (reborrow-mut window#0) (slice pixels#1 _ _):Slice<u32> 320:u32 200:u32):Result<void, WindowError>):void)
+        )
+      )
+    )
+  )
+  (fn main () -> i32
+    (block
+      (var window#1: Window = (value (match-consume (call Window.open "Drop files here" 320:u32 200:u32):Result<Window, WindowError> (arm Ok (w#0: Window = payload 0) (block (yield w#0))) (arm Err (block (return 1:i32))))):Window)
+      (return (value (match (call host (borrow-mut window#1)):Result<usize, WindowError> (arm Ok (files#2: usize = payload 0) (block (yield (value (if (> files#2 0:usize):bool (block (yield 0:i32)) (else (block (yield 3:i32))))):i32))) (arm Err (block (yield 2:i32))))):i32)
+    )
+  )
+)

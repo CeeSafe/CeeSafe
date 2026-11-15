@@ -3151,7 +3151,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3300,13 +3300,42 @@ Diagnostics: none new.
     macOS 11. Windows: `IFileOpenDialog` and `IFileSaveDialog` through COM, from `ole32.dll` loaded at the first
     dialog. Linux: `zenity --file-selection`, or `kdialog` (first under KDE), found on `PATH`; with neither, every
     dialog is `Unsupported`. That program's exit status 1 is a cancel, and any status but 0 or 1 is `Resources`.
+- **File drops** (ADR 0150). A person may drag files from another program (Finder, Explorer, a file manager) onto a
+  window and drop them there:
+  - **`w.nextDrop()`** is `WindowDrop?`: the next drop on the window, in order, or null. It never blocks. `WindowDrop`
+    is `{ x: f32, y: f32, paths: Vector<String> }`: where the files were dropped, in points from the content's top
+    left as pointer events are, and their paths, absolute and UTF-8, in the order the system gives them. A path that
+    is not valid UTF-8 (possible on Linux), or that memory ran out for, is left out, and a drop with no path left is
+    skipped. Drops are queued beside the events, so no `WindowEvent` variant is added. A queued drop ends `waitFrame`,
+    `waitEvent` and `Window.waitAny` as an event does. A window keeps at most 64 drops that the program has not taken:
+    past that, the newest are lost.
+  - **`w.dragOver()`** is `WindowDragOver?`: while a drag of files is over the window, `{ x: f32, y: f32, count: u32 }`,
+    where the pointer is and how many files the drag holds (paths that are not UTF-8 included), and null otherwise.
+    It gives no paths before the drop. It is the window's state as of the last system event the window took. A change
+    of it (the drag entering, moving or leaving) ends `waitFrame`, `waitEvent` and `Window.waitAny` as a wake does:
+    the current wait, or the next one at once. A drop ends the drag, so after it `dragOver` is null.
+  - **Only files.** A drag that holds no file, such as text or an image's data, is refused: the window gives the
+    system no drop operation, so it shows no drop, and the window gives neither a drag nor a drop. The window takes
+    the files as a copy: it answers with the system's copy operation, or, where the source allows no copy, a link
+    (macOS: generic, then link); a source that allows only a move is refused, since the program does not move them.
+  - **Backends.** macOS: the content view registers for `NSPasteboardTypeFileURL` and is an `NSDraggingDestination`;
+    the files are the pasteboard's file URLs (`NSPasteboardURLReadingFileURLsOnlyKey`), counted when the drag enters,
+    read again at the drop. File promises (a mail's attachment, a photo library's picture) are not files and are
+    refused. Windows: an `IDropTarget` registered with OLE, from `ole32.dll` loaded at the first open, which initializes
+    OLE on the program's first thread from each window's open to its close; the files are `CF_HDROP`. OLE's target is
+    the whole window, but over its frame (the title bar, the border) the window takes no drop, so that on every system
+    only the content does. On a thread
+    whose COM is multithreaded, OLE cannot be initialized, and the window takes no drops. X11: the XDND protocol,
+    version 5 (`XdndAware`). The files are the source's `text/uri-list`, whose `file:` URIs of this host are
+    percent-decoded; the window converts it while the drag hovers, so a drag shows in `dragOver` only once the source
+    answered, and again at the drop. A list larger than one X11 request (an `INCR` transfer) gives no files.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
   - `w.setTitle(title)` sets the title.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
-    arrives or the window is woken, so an idle loop does not spin. A queued menu choice counts as an event in it and
-    in the two waits below (ADR 0146).
+    arrives or the window is woken, so an idle loop does not spin. A queued menu choice (ADR 0146) or drop (ADR 0150)
+    counts as an event in it and in the two waits below, and a change of the drag over the window as a wake.
   - `w.waitEvent(timeoutMs: u32)` (ADR 0142) returns when an event is queued (`nextEvent` would return one), when the
     window was woken since a `waitEvent` or `waitFrame` last returned, or after `timeoutMs` milliseconds, whichever is
     first; 0 returns at once. It does not tick, so an idle window that waits uses no CPU. While it waits the window
@@ -3341,9 +3370,9 @@ Diagnostics: none new.
     windows are open.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
-  functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator` allocate. `nextEvent`,
-  `nextMenuChoice`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`,
-  `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
+  functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
@@ -3374,7 +3403,11 @@ Diagnostics: none new.
       a choice of a missing or disabled item. `setMenu` is accepted on a scripted window;
     - `dialog:PATH|PATH…` (ADR 0146) is, from FRAME, an answer for the window's file dialogs: the paths, of which a
       dialog for one path takes the first. `dialog`, without a colon, is a cancel. Each dialog takes the earliest
-      answer that is due, and is cancelled when none is.
+      answer that is due, and is cancelled when none is;
+    - `dragover:X,Y:N` (ADR 0150), N a decimal count of at least 1: a drag of N files is over the window at X,Y;
+      `dragleave` (no colon): it left;
+    - `drop:X,Y:PATH|PATH…` (ADR 0150): files are dropped at X,Y, which ends the drag. The paths are the script's
+      bytes, so one that is not UTF-8 tests that it is left out.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
     `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
@@ -3386,8 +3419,8 @@ Diagnostics: none new.
     (ADR 0145). Every window opened while the variable is set reads the same file.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
-  to `open` and `openWith`, so no window is open there and no call on a `Window` is reached, the file dialogs
-  included. A `Menu` is built there as natively. `Window.waitAny`, which
+  to `open` and `openWith`, so no window is open there and no call on a `Window` is reached, the file dialogs, drops
+  and drags included. A `Menu`, a `WindowDrop` and a `WindowDragOver` are built there as natively. `Window.waitAny`, which
   needs no window, sleeps there for its timeout on the virtual clock (ADR 0075 §2.6).
 
 ### 26.14 Process limits (ADR 0104)

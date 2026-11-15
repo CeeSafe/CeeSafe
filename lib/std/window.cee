@@ -5,7 +5,8 @@
 // script drives when CEESAFE_WINDOW_SCRIPT is set. A window the program draws itself, through the system's handles,
 // is `WindowSurface.External` (ADR 0137). Text input through the system's input method, and the clipboard's text,
 // are ADR 0141. Waiting for events without a tick, and waking a window from another thread, are ADR 0142; waiting for
-// any of the program's windows is ADR 0145. Menus and the system's file dialogs are ADR 0146.
+// any of the program's windows is ADR 0145. Menus and the system's file dialogs are ADR 0146. Files dropped on a window
+// are ADR 0150.
 
 extern "C" {
     @effects(sleep, alloc)
@@ -78,6 +79,10 @@ extern "C" {
         extensionsLength: u64,
         answer: *mut (*u8),
     ) -> i64;
+    @effects()
+    fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
+    @effects()
+    fn ceesafe_window_drag_over(window: *mut void, position: *mut f32) -> u32;
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -201,6 +206,22 @@ public enum WindowEvent {
     /// The input method's composition (`Window.composition`) or its caret changed, or the composition ended
     /// (ADR 0141).
     Composition,
+}
+
+/// Files dropped on a window (§26.13, ADR 0150): where, in points from the content's top left as pointer events are,
+/// and the files' paths, absolute and UTF-8, at least one.
+public struct WindowDrop {
+    public x: f32;
+    public y: f32;
+    public paths: Vector<String>;
+}
+
+/// A drag of files over a window (§26.13, ADR 0150): where the pointer is, in points from the content's top left, and
+/// how many files the drag holds.
+public struct WindowDragOver {
+    public x: f32;
+    public y: f32;
+    public count: u32;
 }
 
 /// Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker()`. It is a plain value, Copy and
@@ -498,6 +519,63 @@ public struct Window {
             return null;
         }
         return truncate<u32>(choice);
+    }
+
+    /// The next drop of files on this window, or null; it never blocks (ADR 0150). Drops are queued beside the events,
+    /// in order, and a queued drop ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event does. A path that is
+    /// not valid UTF-8, or that memory ran out for, is left out, and a drop with no path left is skipped. Only files
+    /// are dropped: the window refuses a drag of text or other data, so the system shows no drop for it.
+    /// Safety: the runtime writes the drop's position, and gives its copy of the paths, each followed by a zero byte,
+    /// which it keeps until the next call; they are copied before this returns.
+    public fn nextDrop(borrow mut this) -> WindowDrop? {
+        loop {
+            var position = [0.0f32; 2];
+            var text = 0 as *u8;
+            let length = unsafe { ceesafe_window_drop(
+                this.raw,
+                borrow mut position[0] as *mut f32,
+                borrow mut text as *mut (*u8),
+            ) };
+            if (length < 0) {
+                return null;
+            }
+            var paths = Vector<String>.create();
+            if (length > 0) {
+                let bytes = unsafe { Slice.fromRaw(text, truncate<usize>(length)) };
+                var start: usize = 0;
+                for (k in 0..bytes.length) {
+                    if (bytes[k] == 0) {
+                        match (StringView.fromUtf8(bytes[start..k])) {
+                            Some(path) => {
+                                match (String.from(path)) {
+                                    Ok(copy) => { let _ = paths.push(copy); }
+                                    Err(_) => {}
+                                }
+                            }
+                            null => {}
+                        }
+                        start = k + 1;
+                    }
+                }
+            }
+            if (paths.length > 0) {
+                return WindowDrop { x: position[0], y: position[1], paths: paths };
+            }
+        }
+    }
+
+    /// While a drag of files is over this window, where it is and how many files it holds; else null (ADR 0150). It
+    /// is the window's state as of the last event the window took from the system: a change (the drag entering,
+    /// moving or leaving) ends `waitEvent`, `waitFrame` and `Window.waitAny` as a wake does, so a program redraws its
+    /// drop highlight after each wait. A drop ends the drag: the window then has none.
+    /// Safety: the runtime only writes the position and returns the count, 0 for no drag.
+    public fn dragOver(borrow this) -> WindowDragOver? {
+        var position = [0.0f32; 2];
+        let count = unsafe { ceesafe_window_drag_over(this.raw, borrow mut position[0] as *mut f32) };
+        if (count == 0) {
+            return null;
+        }
+        return WindowDragOver { x: position[0], y: position[1], count: count };
     }
 
     /// Appends the clipboard's text to `out`; false when the clipboard holds no text, its text is not valid UTF-8, or

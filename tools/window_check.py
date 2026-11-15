@@ -40,7 +40,16 @@ that opened a window would open one on the developer's screen:
    item, types an enabled item's shortcut (a choice and no Key) and a disabled one's (a Key), and cancels one open panel
    and answers another by typing a path; on Windows, a WM_COMMAND posted for an item arrives as its id; on Linux,
    setMenu is Unsupported and the dialogs run a stand-in zenity put first on PATH (its arguments checked), and with no
-   zenity or kdialog on PATH they are Unsupported.
+   zenity or kdialog on PATH they are Unsupported;
+9. file drops (ADR 0150): a scripted window's drag (`dragover`, `dragleave`) shows in dragOver, its drops arrive with
+   their position and paths (one that is not UTF-8 left out, a drop of only such paths skipped) and end the drag, and a
+   drag change alone and a drop alone each end a waitEvent and a waitAny of 20 s; a dragover of no files or without a
+   count, a drop without paths and a dragleave with arguments are malformed scripts, and the interpreter answers
+   Unsupported. With --display, a person's drags made by a helper built with the C compiler (`cc`, `gcc` on Windows,
+   or $CC): on macOS the system's mouse events from a small Objective-C program whose window starts a dragging
+   session, on Windows the same from a C program whose window starts an OLE drag (DoDragDrop), moved by SendInput, on
+   X11 an XDND source in C: a drag of text is refused, a drag of two files that enters and leaves shows in dragOver
+   and then not, and a dropped one arrives with both paths at the point of release.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1132,6 +1141,921 @@ int32_t window_check_post_click(uint32_t kind, uint64_t first, uint64_t second) 
 }
 """
 
+# File drops (ADR 0150): the trace of the script's drags and drops, frame by frame; with "wait", a drag change and a
+# drop each ending a wait alone; with "real", a real window (--display) that prints its drag's changes and its first
+# drop, after "ready" (with the window's XID on X11).
+DROP = r"""
+fn say(text: StringView) {
+    Console.writeLine(text);
+    Console.flush();
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+fn over(window: borrow Window) {
+    match (window.dragOver()) {
+        Some(d) => {
+            Console.write("over ");
+            Console.write(d.x);
+            Console.write(" ");
+            Console.write(d.y);
+            Console.write(" ");
+            Console.writeLine(d.count);
+        }
+        null => { Console.writeLine("over none"); }
+    }
+    Console.flush();
+}
+
+fn drops(window: borrow mut Window) -> u32 {
+    var count: u32 = 0;
+    loop {
+        match (window.nextDrop()) {
+            Some(d) => {
+                count += 1;
+                Console.write("drop ");
+                Console.write(d.x);
+                Console.write(" ");
+                Console.writeLine(d.y);
+                for (k in 0..d.paths.length) {
+                    Console.write("  ");
+                    Console.writeLine(d.paths[k].view());
+                }
+            }
+            null => { break; }
+        }
+    }
+    if (count == 0) {
+        Console.writeLine("no drop");
+    }
+    Console.flush();
+    return count;
+}
+
+fn drain(window: borrow mut Window) {
+    loop {
+        match (window.nextEvent()) {
+            Some(_) => {}
+            null => { break; }
+        }
+    }
+}
+
+fn timed(window: borrow mut Window, ms: u32) -> u64 {
+    let start = Timer.now();
+    window.waitEvent(ms);
+    return Timer.now() - start;
+}
+
+fn timedAny(ms: u32) -> u64 {
+    let start = Timer.now();
+    Window.waitAny(ms);
+    return Timer.now() - start;
+}
+
+/// The script's frames 0 to 5: after each present, the events, then the drag, the drops, and the drag again.
+fn trace(window: borrow mut Window) -> i32 {
+    over(window);
+    let _ = drops(window);
+    let pixels = [0u32; 1200];
+    for (frame in 0..5) {
+        window.present(pixels[..], 40, 30)!;
+        drain(window);
+        over(window);
+        let _ = drops(window);
+        over(window);
+    }
+    return 0;
+}
+
+/// The script's one item, at frame 1, ends a waitEvent of 20 s, and in a second window a waitAny of 20 s.
+fn waits(a: borrow mut Window) -> i32 {
+    let pixels = [0u32; 1200];
+    a.present(pixels[..], 40, 30)!;
+    verdict("ends waitEvent", timed(a, 20000) < 5000);
+    over(a);
+    let _ = drops(a);
+    verdict("then waitEvent waits", timed(a, 100) >= 90);
+    var b = Window.open("window_check drop b", 40, 30)!;
+    drain(mut b);
+    b.present(pixels[..], 40, 30)!;
+    verdict("ends waitAny", timedAny(20000) < 5000);
+    over(borrow b);
+    let _ = drops(mut b);
+    verdict("then waitAny waits", timedAny(100) >= 90);
+    return 0;
+}
+
+/// A real window: each change of its drag, and its first drop, for at most 60 s.
+fn real(w: borrow mut Window) -> i32 {
+    let pixels = [0xFF808080u32; 60000];
+    w.present(pixels[..], 300, 200)!;
+    match (w.nativeHandle()) {
+        WindowHandle.Xlib(_, xid) => {
+            Console.write("ready ");
+            Console.writeLine(xid);
+            Console.flush();
+        }
+        _ => { say("ready"); }
+    }
+    let start = Timer.now();
+    var last: u32 = 0;
+    var lastX: f32 = -1.0;
+    var lastY: f32 = -1.0;
+    while (Timer.now() - start < 60000) {
+        w.waitEvent(500);
+        drain(w);
+        match (w.dragOver()) {
+            Some(d) => {
+                if (d.count != last || d.x != lastX || d.y != lastY) {
+                    over(w);
+                }
+                last = d.count;
+                lastX = d.x;
+                lastY = d.y;
+            }
+            null => {
+                if (last != 0) {
+                    say("over none");
+                }
+                last = 0;
+            }
+        }
+        match (w.nextDrop()) {
+            Some(d) => {
+                Console.write("drop ");
+                Console.write(d.x);
+                Console.write(" ");
+                Console.writeLine(d.y);
+                for (k in 0..d.paths.length) {
+                    Console.write("  ");
+                    Console.writeLine(d.paths[k].view());
+                }
+                Console.flush();
+                return 0;
+            }
+            null => {}
+        }
+    }
+    say("timeout");
+    return 1;
+}
+
+fn main() -> i32 {
+    let mode = match (Process.argument(1)) {
+        Some(m) => m,
+        null => "trace",
+    };
+    let isReal = mode == "real";
+    var a = match (Window.open("window_check drop", if (isReal) 300 else 40, if (isReal) 200 else 30)) {
+        Ok(w) => w,
+        Err(_) => { say("open failed"); return 1; }
+    };
+    if (isReal) {
+        return real(mut a);
+    }
+    if (mode == "wait") {
+        return waits(mut a);
+    }
+    return trace(mut a);
+}
+"""
+
+# The trace's script (bytes: two paths are not UTF-8), and what DROP prints for it: a drag at frame 0; a drag that
+# moves and leaves in frame 1; one that is dropped in frame 2 (the drop ends it); a drop with a path that is not UTF-8
+# (left out) and one with only such a path (skipped); a drag at frame 5, which stays.
+DROP_SCRIPT = (b"0:dragover:10,20:2;1:dragover:12.5,21:2;1:dragleave;2:dragover:5,6:1;"
+               b"2:drop:5,7:/tmp/a b.txt|/tmp/\xc3\xbc.txt|;3:drop:1.5,2:/bad\xff|/ok;4:drop:3,4:/only\xfe;"
+               b"5:dragover:7,8:3")
+DROP_EXPECTED = ["over 10 20 2", "no drop",
+                 "over none", "no drop", "over none",
+                 "over none", "drop 5 7", "  /tmp/a b.txt", "  /tmp/ü.txt", "over none",
+                 "over none", "drop 1.5 2", "  /ok", "over none",
+                 "over none", "no drop", "over none",
+                 "over 7 8 3", "no drop", "over 7 8 3"]
+DROP_WAIT_DRAG = ["ends waitEvent ok", "over 7 8 3", "no drop", "then waitEvent waits ok", "ends waitAny ok",
+                  "over 7 8 3", "no drop", "then waitAny waits ok"]
+DROP_WAIT_DROP = ["ends waitEvent ok", "over none", "drop 2 3", "  /w", "then waitEvent waits ok", "ends waitAny ok",
+                  "over none", "drop 2 3", "  /w", "then waitAny waits ok"]
+
+# A person's drag on macOS (ADR 0150, --display): a small window of this helper, a press on it that starts a dragging
+# session of files (or text), the pointer moved to the target point in steps by the system's mouse events, and a
+# release there, or with `leave` back over the helper. It prints the operation the session ended with.
+MAC_DRAG_SOURCE = r"""/* window_check's drag source on macOS (ADR 0150).
+   usage: dragsource drop|leave|text PID WIDTH HEIGHT X Y [PATH...]
+   PID's window's content is WIDTH x HEIGHT points; X, Y is the target point in that content. */
+#import <AppKit/AppKit.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static NSString *mode;
+static NSArray<NSString *> *paths;
+static CGPoint start, target;
+
+@interface Source : NSView <NSDraggingSource>
+@end
+
+@implementation Source
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    (void)event;
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    [[NSColor systemOrangeColor] setFill];
+    NSRectFill(self.bounds);
+}
+
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    (void)session;
+    (void)context;
+    return NSDragOperationCopy;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    NSImage *image = [NSImage imageNamed:NSImageNameMultipleDocuments];
+    NSMutableArray *writers = [NSMutableArray array];
+    if ([mode isEqualToString:@"text"]) {
+        [writers addObject:@"window_check text"];
+    } else {
+        for (NSString *p in paths) {
+            [writers addObject:[NSURL fileURLWithPath:p]];
+        }
+    }
+    NSMutableArray *items = [NSMutableArray array];
+    for (id writer in writers) {
+        NSDraggingItem *item = [[NSDraggingItem alloc] initWithPasteboardWriter:writer];
+        [item setDraggingFrame:NSMakeRect(0, 0, 32, 32) contents:image];
+        [items addObject:item];
+    }
+    [self beginDraggingSessionWithItems:items event:event source:self];
+}
+
+- (void)draggingSession:(NSDraggingSession *)session
+           endedAtPoint:(NSPoint)point
+              operation:(NSDragOperation)operation {
+    (void)session;
+    (void)point;
+    printf("operation %lu\n", (unsigned long)operation);
+    fflush(stdout);
+    exit(0);
+}
+@end
+
+static void post(CGEventType type, CGPoint at) {
+    CGEventRef e = CGEventCreateMouseEvent(NULL, type, at, kCGMouseButtonLeft);
+    CGEventPost(kCGHIDEventTap, e);
+    CFRelease(e);
+}
+
+static void glide(CGPoint a, CGPoint b) {
+    for (int k = 1; k <= 40; k++) {
+        post(kCGEventLeftMouseDragged, CGPointMake(a.x + (b.x - a.x) * k / 40.0, a.y + (b.y - a.y) * k / 40.0));
+        usleep(15000);
+    }
+}
+
+static void drive(void) {
+    post(kCGEventMouseMoved, start);
+    usleep(400000);
+    post(kCGEventLeftMouseDown, start);
+    usleep(300000);
+    glide(start, target);
+    for (int k = 0; k < 10; k++) {
+        post(kCGEventLeftMouseDragged, CGPointMake(target.x + (k % 2), target.y));
+        usleep(50000);
+    }
+    post(kCGEventLeftMouseDragged, target);
+    usleep(300000);
+    if ([mode isEqualToString:@"leave"]) {
+        glide(target, start);
+        usleep(300000);
+        post(kCGEventLeftMouseUp, start);
+    } else {
+        post(kCGEventLeftMouseUp, target);
+    }
+    sleep(10);
+    printf("timeout\n");
+    fflush(stdout);
+    exit(2);
+}
+
+int main(int argc, char **argv) {
+    @autoreleasepool {
+        if (argc < 7) {
+            fprintf(stderr, "usage: dragsource drop|leave|text PID WIDTH HEIGHT X Y [PATH...]\n");
+            return 2;
+        }
+        mode = [NSString stringWithUTF8String:argv[1]];
+        pid_t pid = (pid_t)atoi(argv[2]);
+        double height = atof(argv[4]), x = atof(argv[5]), y = atof(argv[6]);
+        NSMutableArray *list = [NSMutableArray array];
+        for (int k = 7; k < argc; k++) {
+            [list addObject:[NSString stringWithUTF8String:argv[k]]];
+        }
+        paths = list;
+        CFArrayRef windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+        CGRect bounds = CGRectNull;
+        for (CFIndex k = 0; windows != NULL && k < CFArrayGetCount(windows); k++) {
+            NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(windows, k);
+            if ([info[(id)kCGWindowOwnerPID] intValue] == pid && [info[(id)kCGWindowLayer] intValue] == 0) {
+                CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds);
+                break;
+            }
+        }
+        if (windows != NULL) {
+            CFRelease(windows);
+        }
+        if (CGRectIsNull(bounds)) {
+            printf("no window\n");
+            return 2;
+        }
+        target = CGPointMake(bounds.origin.x + x, bounds.origin.y + bounds.size.height - height + y);
+        [NSApplication sharedApplication];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        NSRect screen = [[NSScreen screens][0] frame];
+        NSRect frame = NSMakeRect(screen.origin.x + 60, screen.origin.y + screen.size.height - 260, 120, 120);
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:frame
+                                                       styleMask:NSWindowStyleMaskBorderless
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+        [window setLevel:NSFloatingWindowLevel];
+        [window setContentView:[[Source alloc] initWithFrame:NSMakeRect(0, 0, 120, 120)]];
+        [window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        NSRect content = [window convertRectToScreen:[[window contentView] frame]];
+        start = CGPointMake(NSMidX(content), screen.size.height - NSMidY(content));
+        [NSThread detachNewThreadWithBlock:^{
+          drive();
+        }];
+        [NSApp run];
+    }
+    return 0;
+}
+"""
+
+# A file manager's drag on X11 (ADR 0150, --display): an XDND version 5 source that owns XdndSelection, sends
+# XdndEnter (`drop`: four types through XdndTypeList; `leave`: three; `text`: no text/uri-list), three XdndPositions
+# ending at the target point, answers the conversion to text/uri-list (the paths, a comment, and three URIs that are
+# not local files: http, a malformed escape, another host's), and sends XdndLeave or XdndDrop. It prints the target's
+# XdndAware version, each XdndStatus's accept bit, and the drop's XdndFinished.
+XDND_SOURCE = r"""/* window_check's XDND source on X11 (ADR 0150).
+   usage: xdndsource drop|leave|text WINDOW X Y [PATH...] */
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+
+static Display *display;
+static Window source, target;
+static Atom aware, enter, position, status, leave, drop, finished, selection, copy, type_list, uri_list, text_plain,
+    utf8, other;
+static char list[65536];
+static size_t list_length;
+
+static void send(Atom type, long a, long b, long c, long d) {
+    XEvent e;
+    memset(&e, 0, sizeof e);
+    e.xclient.type = ClientMessage;
+    e.xclient.window = target;
+    e.xclient.message_type = type;
+    e.xclient.format = 32;
+    e.xclient.data.l[0] = (long)source;
+    e.xclient.data.l[1] = a;
+    e.xclient.data.l[2] = b;
+    e.xclient.data.l[3] = c;
+    e.xclient.data.l[4] = d;
+    XSendEvent(display, target, False, NoEventMask, &e);
+    XFlush(display);
+}
+
+static void answer(XSelectionRequestEvent *r) {
+    XEvent reply;
+    memset(&reply, 0, sizeof reply);
+    reply.xselection.type = SelectionNotify;
+    reply.xselection.requestor = r->requestor;
+    reply.xselection.selection = r->selection;
+    reply.xselection.target = r->target;
+    reply.xselection.time = r->time;
+    reply.xselection.property = None;
+    if (r->selection == selection && r->target == uri_list && r->property != None) {
+        XChangeProperty(display, r->requestor, r->property, uri_list, 8, PropModeReplace, (unsigned char *)list,
+                        (int)list_length);
+        reply.xselection.property = r->property;
+        printf("converted\n");
+    }
+    XSendEvent(display, r->requestor, False, NoEventMask, &reply);
+    XFlush(display);
+}
+
+/* Takes the events for `ms` milliseconds, answering conversions; with `type`, until a client message of it. */
+static int take(Atom type, int ms, XEvent *out) {
+    for (int k = 0; k < ms / 10; k++) {
+        while (XPending(display) > 0) {
+            XEvent e;
+            XNextEvent(display, &e);
+            if (e.type == SelectionRequest) {
+                answer(&e.xselectionrequest);
+            } else if (type != None && e.type == ClientMessage && e.xclient.message_type == type) {
+                *out = e;
+                return 1;
+            }
+        }
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(ConnectionNumber(display), &set);
+        struct timeval t = {0, 10000};
+        select(ConnectionNumber(display) + 1, &set, NULL, NULL, &t);
+    }
+    return 0;
+}
+
+static void move_to(int x, int y) {
+    int rx = 0, ry = 0;
+    Window child;
+    XTranslateCoordinates(display, target, DefaultRootWindow(display), x, y, &rx, &ry, &child);
+    send(position, 0, ((long)rx << 16) | (long)(ry & 0xffff), CurrentTime, (long)copy);
+    XEvent e;
+    if (take(status, 5000, &e)) {
+        printf("status %ld\n", e.xclient.data.l[1] & 1);
+    } else {
+        printf("no status\n");
+    }
+    take(None, 300, &e);
+}
+
+static void add(const char *text) {
+    size_t n = strlen(text);
+    if (list_length + n < sizeof list) {
+        memcpy(list + list_length, text, n);
+        list_length += n;
+    }
+}
+
+static void add_file(const char *path) {
+    static const char hex[] = "0123456789ABCDEF";
+    char uri[4096 * 3 + 16];
+    size_t n = 0;
+    memcpy(uri, "file://", 7);
+    n = 7;
+    for (const unsigned char *p = (const unsigned char *)path; *p != 0 && n + 6 < sizeof uri; p++) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || strchr("/-_.~", *p)) {
+            uri[n++] = (char)*p;
+        } else {
+            uri[n++] = '%';
+            uri[n++] = hex[*p >> 4];
+            uri[n++] = hex[*p & 15];
+        }
+    }
+    memcpy(uri + n, "\r\n", 3);
+    add(uri);
+}
+
+int main(int argc, char **argv) {
+    if (argc < 5) {
+        fprintf(stderr, "usage: xdndsource drop|leave|text WINDOW X Y [PATH...]\n");
+        return 2;
+    }
+    const char *mode = argv[1];
+    target = (Window)strtoul(argv[2], NULL, 0);
+    int x = atoi(argv[3]), y = atoi(argv[4]);
+    display = XOpenDisplay(NULL);
+    if (display == NULL) {
+        printf("no display\n");
+        return 2;
+    }
+    source = XCreateSimpleWindow(display, DefaultRootWindow(display), 0, 0, 1, 1, 0, 0, 0);
+    aware = XInternAtom(display, "XdndAware", False);
+    enter = XInternAtom(display, "XdndEnter", False);
+    position = XInternAtom(display, "XdndPosition", False);
+    status = XInternAtom(display, "XdndStatus", False);
+    leave = XInternAtom(display, "XdndLeave", False);
+    drop = XInternAtom(display, "XdndDrop", False);
+    finished = XInternAtom(display, "XdndFinished", False);
+    selection = XInternAtom(display, "XdndSelection", False);
+    copy = XInternAtom(display, "XdndActionCopy", False);
+    type_list = XInternAtom(display, "XdndTypeList", False);
+    uri_list = XInternAtom(display, "text/uri-list", False);
+    text_plain = XInternAtom(display, "text/plain", False);
+    utf8 = XInternAtom(display, "UTF8_STRING", False);
+    other = XInternAtom(display, "application/x-window-check", False);
+    add("# window_check\r\n");
+    for (int k = 5; k < argc; k++) {
+        add_file(argv[k]);
+    }
+    add("http://example.com/not-a-file\r\n");
+    add("file:///window_check%zz\r\n");
+    add("file://elsewhere.invalid/window_check\r\n");
+    Atom type = None;
+    int format = 0;
+    unsigned long items = 0, after = 0;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(display, target, aware, 0, 1, False, XA_ATOM, &type, &format, &items, &after, &data) ==
+            Success &&
+        data != NULL && items == 1) {
+        printf("aware %lu\n", *(unsigned long *)data);
+    } else {
+        printf("not aware\n");
+    }
+    if (data != NULL) {
+        XFree(data);
+    }
+    XSetSelectionOwner(display, selection, source, CurrentTime);
+    if (strcmp(mode, "drop") == 0) {
+        Atom types[4] = {other, text_plain, uri_list, utf8};
+        XChangeProperty(display, source, type_list, XA_ATOM, 32, PropModeReplace, (unsigned char *)types, 4);
+        send(enter, (5L << 24) | 1, (long)types[0], (long)types[1], (long)types[2]);
+    } else if (strcmp(mode, "leave") == 0) {
+        send(enter, 5L << 24, (long)text_plain, (long)uri_list, 0);
+    } else {
+        send(enter, 5L << 24, (long)text_plain, (long)utf8, 0);
+    }
+    move_to(x - 30, y - 20);
+    move_to(x - 10, y - 5);
+    move_to(x, y);
+    if (strcmp(mode, "drop") == 0) {
+        send(drop, 0, CurrentTime, 0, 0);
+        XEvent e;
+        if (take(finished, 5000, &e)) {
+            printf("finished %ld %s\n", e.xclient.data.l[1] & 1, (Atom)e.xclient.data.l[2] == copy ? "copy" : "none");
+        } else {
+            printf("no finished\n");
+        }
+    } else {
+        send(leave, 0, 0, 0, 0);
+        printf("left\n");
+    }
+    fflush(stdout);
+    XCloseDisplay(display);
+    return 0;
+}
+"""
+
+# A person's drag on Windows (ADR 0150, --display): a press on this helper's small window starts an OLE drag
+# (DoDragDrop) of files (CF_HDROP) or text (CF_UNICODETEXT), and the system's mouse input (SendInput) moves the pointer
+# to the target point in steps and releases it there, or with `leave` back over the helper. It prints the effect.
+WIN_DROP_SOURCE = r"""/* window_check's drag source on Windows (ADR 0150): a person's drag, made with the system's mouse input (SendInput)
+   and an OLE drag (DoDragDrop) of files (CF_HDROP) or of text (CF_UNICODETEXT). A press on this helper's small window
+   starts the drag, the pointer moves to the target point in steps and is released there, or with `leave` back over
+   the helper. It prints the effect the drag ended with (0 none, 1 copy).
+
+   usage: dropsource drop|leave|text TITLE X Y [PATH...]
+   The target is the top-level window titled TITLE; X, Y is the target point in its content, in points. */
+#define COBJMACROS
+#include <windows.h>
+#include <ole2.h>
+#include <shlobj.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static UINT format;
+static HGLOBAL global;
+static POINT start, target;
+static int leave;
+
+static HRESULT STDMETHODCALLTYPE data_query(IDataObject *self, REFIID iid, void **out) {
+    if (IsEqualIID(iid, &IID_IUnknown) || IsEqualIID(iid, &IID_IDataObject)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE data_ref(IDataObject *self) {
+    (void)self;
+    return 1;
+}
+static int matches(const FORMATETC *f) {
+    return f->cfFormat == format && (f->tymed & TYMED_HGLOBAL) && f->dwAspect == DVASPECT_CONTENT;
+}
+static HRESULT STDMETHODCALLTYPE data_get(IDataObject *self, FORMATETC *f, STGMEDIUM *medium) {
+    (void)self;
+    if (!matches(f)) {
+        return DV_E_FORMATETC;
+    }
+    SIZE_T size = GlobalSize(global);
+    HGLOBAL copy = GlobalAlloc(GMEM_MOVEABLE, size);
+    memcpy(GlobalLock(copy), GlobalLock(global), size);
+    GlobalUnlock(global);
+    GlobalUnlock(copy);
+    medium->tymed = TYMED_HGLOBAL;
+    medium->hGlobal = copy;
+    medium->pUnkForRelease = NULL;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE data_get_here(IDataObject *self, FORMATETC *f, STGMEDIUM *medium) {
+    (void)self, (void)f, (void)medium;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE data_query_get(IDataObject *self, FORMATETC *f) {
+    (void)self;
+    return matches(f) ? S_OK : DV_E_FORMATETC;
+}
+static HRESULT STDMETHODCALLTYPE data_canonical(IDataObject *self, FORMATETC *in, FORMATETC *out) {
+    (void)self, (void)in;
+    out->ptd = NULL;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE data_set(IDataObject *self, FORMATETC *f, STGMEDIUM *medium, BOOL release) {
+    (void)self, (void)f, (void)medium, (void)release;
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE data_enum(IDataObject *self, DWORD direction, IEnumFORMATETC **out) {
+    (void)self;
+    FORMATETC f = {(CLIPFORMAT)format, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    if (direction != DATADIR_GET) {
+        return E_NOTIMPL;
+    }
+    return SHCreateStdEnumFmtEtc(1, &f, out);
+}
+static HRESULT STDMETHODCALLTYPE data_advise(IDataObject *self, FORMATETC *f, DWORD flags, IAdviseSink *sink,
+                                             DWORD *connection) {
+    (void)self, (void)f, (void)flags, (void)sink, (void)connection;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static HRESULT STDMETHODCALLTYPE data_unadvise(IDataObject *self, DWORD connection) {
+    (void)self, (void)connection;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static HRESULT STDMETHODCALLTYPE data_enum_advise(IDataObject *self, IEnumSTATDATA **out) {
+    (void)self, (void)out;
+    return OLE_E_ADVISENOTSUPPORTED;
+}
+static IDataObjectVtbl data_vtable = {data_query,     data_ref,  data_ref,  data_get,    data_get_here,
+                                      data_query_get, data_canonical, data_set, data_enum, data_advise,
+                                      data_unadvise,  data_enum_advise};
+static IDataObject data = {&data_vtable};
+
+static HRESULT STDMETHODCALLTYPE source_query(IDropSource *self, REFIID iid, void **out) {
+    if (IsEqualIID(iid, &IID_IUnknown) || IsEqualIID(iid, &IID_IDropSource)) {
+        *out = self;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE source_ref(IDropSource *self) {
+    (void)self;
+    return 1;
+}
+static HRESULT STDMETHODCALLTYPE source_continue(IDropSource *self, BOOL escape, DWORD keys) {
+    (void)self;
+    return escape ? DRAGDROP_S_CANCEL : !(keys & MK_LBUTTON) ? DRAGDROP_S_DROP : S_OK;
+}
+static HRESULT STDMETHODCALLTYPE source_feedback(IDropSource *self, DWORD effect) {
+    (void)self, (void)effect;
+    return DRAGDROP_S_USEDEFAULTCURSORS;
+}
+static IDropSourceVtbl source_vtable = {source_query, source_ref, source_ref, source_continue, source_feedback};
+static IDropSource source = {&source_vtable};
+
+static void mouse(DWORD flags, POINT p) {
+    INPUT input;
+    memset(&input, 0, sizeof input);
+    input.type = INPUT_MOUSE;
+    input.mi.dx = (LONG)((double)p.x * 65535.0 / (GetSystemMetrics(SM_CXSCREEN) - 1));
+    input.mi.dy = (LONG)((double)p.y * 65535.0 / (GetSystemMetrics(SM_CYSCREEN) - 1));
+    input.mi.dwFlags = flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
+    SendInput(1, &input, sizeof input);
+}
+
+static void glide(POINT a, POINT b) {
+    for (int k = 1; k <= 40; k++) {
+        POINT p = {a.x + (b.x - a.x) * k / 40, a.y + (b.y - a.y) * k / 40};
+        mouse(0, p);
+        Sleep(15);
+    }
+}
+
+static DWORD WINAPI drive(LPVOID unused) {
+    (void)unused;
+    Sleep(500);
+    mouse(0, start);
+    Sleep(300);
+    mouse(MOUSEEVENTF_LEFTDOWN, start);
+    Sleep(300);
+    glide(start, target);
+    for (int k = 0; k < 10; k++) {
+        POINT p = {target.x + (k % 2), target.y};
+        mouse(0, p);
+        Sleep(50);
+    }
+    mouse(0, target);
+    Sleep(300);
+    if (leave) {
+        glide(target, start);
+        Sleep(300);
+        mouse(MOUSEEVENTF_LEFTUP, start);
+    } else {
+        mouse(MOUSEEVENTF_LEFTUP, target);
+    }
+    Sleep(10000);
+    printf("timeout\n");
+    fflush(stdout);
+    ExitProcess(2);
+    return 0;
+}
+
+static LRESULT CALLBACK procedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_LBUTTONDOWN) {
+        DWORD effect = DROPEFFECT_NONE;
+        DoDragDrop(&data, &source, DROPEFFECT_COPY, &effect);
+        printf("effect %lu\n", (unsigned long)effect);
+        fflush(stdout);
+        ExitProcess(0);
+    }
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint;
+        HDC dc = BeginPaint(hwnd, &paint);
+        HBRUSH orange = CreateSolidBrush(RGB(255, 140, 0));
+        FillRect(dc, &paint.rcPaint, orange);
+        DeleteObject(orange);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+int wmain(int argc, wchar_t **wargv) {
+    if (argc < 5) {
+        fprintf(stderr, "usage: dropsource drop|leave|text TITLE X Y [PATH...]\n");
+        return 2;
+    }
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    FARPROC aware = GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+    if (aware != NULL) {
+        BOOL(WINAPI * set)(HANDLE);
+        memcpy(&set, &aware, sizeof set);
+        set((HANDLE)-4);
+    }
+    OleInitialize(NULL);
+    leave = wcscmp(wargv[1], L"leave") == 0;
+    HWND window = FindWindowW(L"CeeSafeWindow", wargv[2]);
+    if (window == NULL) {
+        printf("no window\n");
+        return 2;
+    }
+    /* The target on top, away from this helper and the consoles, so the drag crosses only the desktop to it. */
+    SetWindowPos(window, HWND_TOPMOST, 400, 220, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+    Sleep(300);
+    FARPROC dpi = GetProcAddress(user32, "GetDpiForWindow");
+    double scale = 1.0;
+    if (dpi != NULL) {
+        UINT(WINAPI * get)(HWND);
+        memcpy(&get, &dpi, sizeof get);
+        scale = get(window) / 96.0;
+    }
+    target.x = (LONG)(_wtof(wargv[3]) * scale + 0.5);
+    target.y = (LONG)(_wtof(wargv[4]) * scale + 0.5);
+    ClientToScreen(window, &target);
+    if (wcscmp(wargv[1], L"text") == 0) {
+        const wchar_t text[] = L"window_check text";
+        format = CF_UNICODETEXT;
+        global = GlobalAlloc(GMEM_MOVEABLE, sizeof text);
+        memcpy(GlobalLock(global), text, sizeof text);
+        GlobalUnlock(global);
+    } else {
+        size_t units = 1;
+        for (int k = 5; k < argc; k++) {
+            units += wcslen(wargv[k]) + 1;
+        }
+        format = CF_HDROP;
+        global = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPFILES) + units * sizeof(wchar_t));
+        DROPFILES *files = (DROPFILES *)GlobalLock(global);
+        files->pFiles = sizeof(DROPFILES);
+        files->fWide = TRUE;
+        wchar_t *list = (wchar_t *)(files + 1);
+        for (int k = 5; k < argc; k++) {
+            size_t n = wcslen(wargv[k]);
+            memcpy(list, wargv[k], n * sizeof(wchar_t));
+            list += n + 1;
+        }
+        GlobalUnlock(global);
+    }
+    WNDCLASSW c;
+    memset(&c, 0, sizeof c);
+    c.lpfnWndProc = procedure;
+    c.hInstance = GetModuleHandleW(NULL);
+    c.lpszClassName = L"WindowCheckDropSource";
+    c.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
+    RegisterClassW(&c);
+    HWND own = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, c.lpszClassName, L"", WS_POPUP | WS_VISIBLE, 60, 60,
+                               120, 120, NULL, NULL, c.hInstance, NULL);
+    SetForegroundWindow(own);
+    start.x = 120;
+    start.y = 120;
+    CreateThread(NULL, 0, drive, NULL, 0, NULL);
+    MSG message;
+    while (GetMessageW(&message, NULL, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    return 0;
+}
+"""
+
+
+def real_drop(exe, work, helper):
+    """ADR 0150 with a real window (--display) and a person's drags made by `helper` (macOS: the system's mouse events
+    and a dragging session; Windows: SendInput and an OLE DoDragDrop; X11: an XDND source): a drag of text is refused (no drag, no drop, and the source told so);
+    a drag of two files that enters, moves and leaves shows in dragOver with its count, then not; one that is dropped
+    arrives with both paths, at the point where it was released, and ends the drag. A list of problems."""
+    import queue
+    import threading
+    import time
+    import unicodedata
+    mac = sys.platform == "darwin"
+    windows = os.name == "nt"
+    files = [os.path.join(work, "ünï drop.txt"), os.path.join(work, "two.txt")]
+    for path in files:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("window_check\n")
+    env = dict(os.environ)
+    env.pop("CEESAFE_WINDOW_SCRIPT", None)
+    env.pop("CEESAFE_WINDOW_DUMP", None)
+    p = subprocess.Popen([exe, "real"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         encoding="utf-8", errors="replace", env=env, cwd=work)
+    lines = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line.rstrip("\n")) for line in p.stdout], daemon=True).start()
+
+    def take(until=None, seconds=10.0):
+        """The program's lines until one that `until` accepts (or for `seconds`, without `until`)."""
+        got, end = [], time.time() + seconds
+        while time.time() < end:
+            try:
+                line = lines.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            got.append(line)
+            if until is not None and until(line):
+                return got
+        if until is not None:
+            raise RuntimeError(f"the program printed {got!r}")
+        return got
+
+    def drag(mode, target):
+        command = ([helper, mode, str(p.pid), "300", "200", "150", "100"] if mac else
+                   [helper, mode, "window_check drop", "150", "100"] if windows else
+                   [helper, mode, target, "150", "100"]) + files
+        r = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        return r.stdout.splitlines()
+
+    def near(line, x, y):
+        parts = line.split()
+        return len(parts) >= 3 and abs(float(parts[1]) - x) <= 1.5 and abs(float(parts[2]) - y) <= 1.5
+
+    problems = []
+    try:
+        ready = take(lambda line: line.startswith("ready"), 20)[-1]
+        target = ready.split()[1] if len(ready.split()) > 1 else ""
+        time.sleep(0.5)
+        said = drag("text", target)
+        refused = (["operation 0"] if mac else ["effect 0"] if windows else
+                   ["aware 5", "status 0", "status 0", "status 0", "left"])
+        got = take(seconds=1.5)
+        if said != refused or got:
+            problems.append(f"a drag of text: expected the source to see {refused!r} and the program nothing, got "
+                            f"{said!r} and {got!r}")
+        said = drag("leave", target)
+        got = take(lambda line: line == "over none")
+        if not any(line.startswith("over ") and line.endswith(" 2") and near(line, 150, 100) for line in got):
+            problems.append(f"a drag that leaves: expected 'over 150 100 2' (±1.5) before 'over none', got {got!r}")
+        if (mac or windows) and said != (["operation 0"] if mac else ["effect 0"]):
+            problems.append(f"a drag that leaves: the source saw {said!r}")
+        if not mac and not windows and (said[:2] != ["aware 5", "converted"] or "status 1" not in said or said[-1] != "left"):
+            problems.append(f"a drag that leaves: the XDND source saw {said!r}")
+        said = drag("drop", target)
+        got = take(lambda line: line.startswith("drop "))
+        got += take(seconds=1.0)
+        at = got.index(next(line for line in got if line.startswith("drop ")))
+        paths = [unicodedata.normalize("NFC", os.path.realpath(line.strip())) for line in got[at + 1:]]
+        want = [unicodedata.normalize("NFC", os.path.realpath(path)) for path in files]
+        if not near(got[at], 150, 100) or paths != want or got[at - 1:at] != ["over none"]:
+            problems.append(f"a drop: expected 'over none', then 'drop 150 100' (±1.5) and {want!r}, got {got!r}")
+        if not any(line.endswith(" 2") and near(line, 150, 100) for line in got[:at] if line.startswith("over ")):
+            problems.append(f"a drop: expected the drag over the window before it, got {got!r}")
+        finished = ["operation 1"] if mac else ["effect 1"] if windows else ["finished 1 copy"]
+        if said[-1:] != finished:
+            problems.append(f"a drop: expected the source to end with {finished!r}, got {said!r}")
+        if p.wait(timeout=20) != 0:
+            problems.append(f"a real drop: the program ended with status {p.returncode}")
+    except (RuntimeError, StopIteration, ValueError, subprocess.TimeoutExpired) as e:
+        problems.append(f"a real window's drops: {e!r}")
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+    return problems
+
 
 def text_expected(script):
     """The trace of TEXT run with `script`, by §26.13's grammar and ADR 0141's rules."""
@@ -1456,13 +2380,24 @@ def build_package(compiler, source, c_source, work, name):
     return exe
 
 
+LAST_RUN = ["nothing yet"]  # the last command run, named if the checker itself fails
+
+
 def run(command, env, cwd):
+    """The command's result; one that takes over 120 s is killed, and its result is status -1 with what it printed,
+    so that the case that ran it reports the problem by name."""
     full = dict(os.environ)
     full.pop("CEESAFE_WINDOW_SCRIPT", None)
     full.pop("CEESAFE_WINDOW_DUMP", None)
     full.update(env)
-    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", env=full,
-                          cwd=cwd, timeout=120)
+    LAST_RUN[0] = " ".join(os.path.basename(c) if k == 0 else c for k, c in enumerate(command))
+    try:
+        return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", env=full,
+                              cwd=cwd, timeout=120)
+    except subprocess.TimeoutExpired as e:
+        def text(b):
+            return b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")
+        return subprocess.CompletedProcess(command, -1, text(e.stdout), text(e.stderr) + "\n(killed after 120 s)")
 
 
 def main():
@@ -1599,6 +2534,31 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        drop_source, drop = build(compiler, DROP, work, "window_check_drop")
+        drop_scripts = {}
+        for name, content in (("drops", DROP_SCRIPT), ("dragwait", b"1:dragover:7,8:3"), ("dropwait", b"1:drop:2,3:/w"),
+                              ("nocount", b"0:dragover:1,2:0"), ("noat", b"0:dragover:1,2"),
+                              ("nopaths", b"0:drop:1,2"), ("leaveargs", b"0:dragleave:1,2")):
+            drop_scripts[name] = os.path.join(work, name + ".txt")
+            with open(drop_scripts[name], "wb") as f:
+                f.write(content)
+        drop_cases = [
+            ("file drops", [drop], "drops", DROP_EXPECTED, 0),
+            ("a drag change ends a wait", [drop, "wait"], "dragwait", DROP_WAIT_DRAG, 0),
+            ("a drop ends a wait", [drop, "wait"], "dropwait", DROP_WAIT_DROP, 0),
+            ("drops in the interpreter", [compiler, "run", "--interp", drop_source], "drops", ["open failed"], 1),
+            ("a dragover of no files", [errors], "nocount", ["4"], 0),
+            ("a dragover without a count", [errors], "noat", ["4"], 0),
+            ("a drop without paths", [errors], "nopaths", ["4"], 0),
+            ("a dragleave with arguments", [errors], "leaveargs", ["4"], 0),
+        ]
+        for what, command, name, want, status in drop_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": drop_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -1610,7 +2570,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + 8)
+                  len(menu_cases) + len(drop_cases) + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -1672,6 +2632,20 @@ def main():
                 if r.returncode != 0 or r.stdout.splitlines()[1:2] != ["error 1"]:
                     problems.append(f"X11's dialogs with no zenity or kdialog: expected 'error 1', got "
                                     f"{r.stdout.splitlines()!r} (status {r.returncode}) {r.stderr.strip()}")
+            checks += 1
+            mac, windows = sys.platform == "darwin", os.name == "nt"
+            helper = os.path.join(work, "dragsource" if mac else "dropsource" if windows else "xdndsource")
+            with open(helper + (".m" if mac else ".c"), "w", encoding="utf-8") as f:
+                f.write(MAC_DRAG_SOURCE if mac else WIN_DROP_SOURCE if windows else XDND_SOURCE)
+            cc = os.environ.get("CC", "gcc" if windows else "cc")
+            command = ([cc, "-fobjc-arc", "-o", helper, helper + ".m", "-framework", "AppKit"] if mac else
+                       [cc, "-municode", "-o", helper + ".exe", helper + ".c", "-lole32", "-lshell32", "-luuid",
+                        "-lgdi32"] if windows else [cc, "-o", helper, helper + ".c", "-lX11"])
+            r = subprocess.run(command, capture_output=True, text=True)
+            if r.returncode != 0:
+                problems.append(f"a real window's drops: building the drag source failed:\n{r.stderr}")
+            else:
+                problems.extend(real_drop(drop, work, helper + (".exe" if windows else "")))
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)
             checks += 1
@@ -1685,4 +2659,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:  # a fault of the checker's own: say where it was, then the traceback
+        print(f"window_check: the checker failed after running {LAST_RUN[0]!r}", file=sys.stderr)
+        raise

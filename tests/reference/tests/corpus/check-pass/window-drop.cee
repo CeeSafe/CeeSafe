@@ -1,0 +1,79 @@
+// ADR 0150: a host that takes files dropped on its window. While a drag of files is over the window, `dragOver` says
+// where and how many, and the host redraws a highlight; each wait ends when the drag changes. After each wait it takes
+// the drops, each with its position and the files' paths. (It needs a display to run: run-pass/window-drop builds the
+// values without a window.)
+
+const WIDTH: u32 = 320;
+const HEIGHT: u32 = 200;
+
+/// The frame: grey, or blue under a drag, with a lighter square where the pointer is.
+fn paint(pixels: borrow mut [u32; 64000], drag: WindowDragOver?) {
+    let background: u32 = if (drag.isSome()) 0xFFC08040 else 0xFF808080;
+    for (k in 0..pixels.length) {
+        pixels[k] = background;
+    }
+    match (drag) {
+        Some(d) => {
+            let cx = saturatingTruncate<u32>(d.x);
+            let cy = saturatingTruncate<u32>(d.y);
+            for (y in 0..16) {
+                for (x in 0..16) {
+                    let px = cx + truncate<u32>(x);
+                    let py = cy + truncate<u32>(y);
+                    if (px < WIDTH && py < HEIGHT) {
+                        pixels[(py * WIDTH + px) as usize] = 0xFFFFE0C0;
+                    }
+                }
+            }
+        }
+        null => {}
+    }
+}
+
+/// The files of one drop, opened where they were dropped.
+fn opened(dropped: WindowDrop) -> usize {
+    var count: usize = 0;
+    for (k in 0..dropped.paths.length) {
+        Console.write(dropped.paths[k].view());
+        Console.write(" at ");
+        Console.write(dropped.x);
+        Console.write(", ");
+        Console.writeLine(dropped.y);
+        count += 1;
+    }
+    return count;
+}
+
+fn host(window: borrow mut Window) -> Result<usize, WindowError> {
+    var pixels = [0u32; 64000];
+    var files: usize = 0;
+    loop {
+        window.waitEvent(1000);
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return Ok(files); }
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        loop {
+            match (window.nextDrop()) {
+                Some(dropped) => { files += opened(dropped); }
+                null => { break; }
+            }
+        }
+        paint(mut pixels, window.dragOver());
+        window.present(pixels[..], WIDTH, HEIGHT)?;
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("Drop files here", WIDTH, HEIGHT)) {
+        Ok(w) => w,
+        Err(_) => { return 1; }
+    };
+    return match (host(mut window)) {
+        Ok(files) => if (files > 0) 0 else 3,
+        Err(_) => 2,
+    };
+}

@@ -580,8 +580,9 @@ fn notConstantArgument(
 
 // ---- array lengths (§2.3, §2.7) ----
 
-/// An array length: an integer literal, a `usize` constant (top-level or associated), or a `usize` const parameter
-/// in scope (ADR 0083 §2.7). `length` is 0 when it is none of these and nothing was reported (N0259 follows).
+/// An array length: an integer literal, a `usize` constant (top-level or associated), a `usize` const parameter in
+/// scope (ADR 0083 §2.7), or a constant expression of type `usize` over literals and constants (ADR 0143). `length`
+/// is 0 when it is none of these and nothing was reported (N0259 follows).
 struct ArrayLengthValue {
     length: u64;
     parameter: u32; // a const parameter of the generic version, else none
@@ -608,12 +609,7 @@ fn arrayLengthValue(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, A
             let symbol = c.front.ast.idents[ident as usize].symbol;
             let local = c.findLocal(symbol);
             if (local != none()) {
-                var message = Vector<u8>.create();
-                appendText(mut message, "an array length must be a constant: ")?;
-                appendQuotedName(mut message, c, symbol)?;
-                appendText(mut message, " is a run-time value; use a 'Vector' for a length known only at run time")?;
-                c.error(constArgumentError(), span.start, span.end, message)?;
-                return Ok(reportedLength());
+                return runTimeLength(c, symbol, span);
             }
             let bound = environmentType(c, symbol);
             if (bound != none() && isConstKind(c, bound)) {
@@ -653,8 +649,90 @@ fn arrayLengthValue(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, A
         c.error(constArgumentError(), span.start, span.end, message)?;
         return Ok(reportedLength());
     }
+    let local = mentionedLocal(c, e);
+    if (local != none()) {
+        return runTimeLength(c, local, span);
+    }
+    if (isOperatorExpression(c, e)) {
+        return constantLength(c, e); // ADR 0143
+    }
     return Ok(knownLength(0));
 }
+
+/// N0353 for an array length that names `symbol`, a local: a run-time value.
+fn runTimeLength(c: borrow mut Checker, symbol: u32, span: Span) -> Result<ArrayLengthValue, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "an array length must be a constant: ")?;
+    appendQuotedName(mut message, c, symbol)?;
+    appendText(mut message, " is a run-time value; use a 'Vector' for a length known only at run time")?;
+    c.error(constArgumentError(), span.start, span.end, message)?;
+    return Ok(reportedLength());
+}
+
+/// Whether `e` is an operator applied to operands (a unary or binary operator or a cast), the expressions ADR 0143
+/// evaluates as an array length.
+fn isOperatorExpression(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Unary(_, _) => true,
+    ExprNode.Binary(_, _, _) => true,
+    ExprNode.Cast(_, _) => true,
+    _ => false,
+};
+
+/// A local that an expression of operators names, as its symbol, or none.
+fn mentionedLocal(c: borrow Checker, e: u32) -> u32 => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Name(ident, _) => namedLocal(c, c.front.ast.idents[ident as usize].symbol),
+    ExprNode.Paren(inner) => mentionedLocal(c, inner),
+    ExprNode.Unary(_, operand) => mentionedLocal(c, operand),
+    ExprNode.Cast(operand, _) => mentionedLocal(c, operand),
+    ExprNode.Binary(left, _, right) => if (mentionedLocal(c, left) != none()) mentionedLocal(c, left)
+        else mentionedLocal(c, right),
+    _ => none(),
+};
+
+fn namedLocal(c: borrow Checker, symbol: u32) -> u32 => if (c.findLocal(symbol) != none()) symbol else none();
+
+/// A constant expression of type `usize` as an array length (ADR 0143): checked against `usize` as a constant's
+/// value is (§10), then folded with the constant evaluator, whose diagnostics (overflow, division by zero, a call)
+/// are N0217. A value outside 1 to 2^48 − 1 gives 0 (N0259 follows).
+fn constantLength(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, AllocError> {
+    let usize = c.types.usize;
+    let saved = c.inConstantInitializer;
+    c.inConstantInitializer = true;
+    let checked = checkExpr(c, e, usize)?;
+    c.inConstantInitializer = saved;
+    if (c.isBottom(checked)) {
+        return Ok(reportedLength());
+    }
+    if (boundAccessorIn(c, checked)) {
+        let span = c.front.ast.exprSpans[e as usize];
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "an array length must be a constant: an interface constant read through a type parameter is a value of each instance (ADR 0086 §2.4)",
+        )?;
+        c.error(constArgumentError(), span.start, span.end, message)?;
+        return Ok(reportedLength());
+    }
+    let folded = fold(c, checked)?;
+    match (c.hir.exprs[folded as usize]) {
+        HirExpr.IntConst(i) => {
+            return Ok(knownLength(if (i.negative || i.magnitude > maxArrayLength()) 0 else i.magnitude));
+        }
+        HirExpr.Error => { return Ok(reportedLength()); }
+        _ => {}
+    }
+    return Ok(knownLength(0));
+}
+
+/// Whether a checked expression of operators reads an interface constant through a type parameter (`H.SIZE * 2`).
+fn boundAccessorIn(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Call(function, _) => isBoundConstantAccessor(c, function),
+    HirExpr.Unary(_, operand) => boundAccessorIn(c, operand),
+    HirExpr.Binary(_, left, right) => boundAccessorIn(c, left) || boundAccessorIn(c, right),
+    HirExpr.Cast(operand) => boundAccessorIn(c, operand),
+    HirExpr.Truncate(operand) => boundAccessorIn(c, operand),
+    _ => false,
+};
 
 /// A named `usize` constant as an array length (§2.7): checked as an expression and folded.
 fn namedLength(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, AllocError> {

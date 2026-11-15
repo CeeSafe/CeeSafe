@@ -27,7 +27,7 @@ fn resolveArrayType(
     // An array of C state is C-laid-out (C9, §33.1) and allowed where its element is.
     c.allowImported = allowImported;
     let element = c.resolveType(elementSyntax, false)?;
-    let lengthValue = arrayLengthValue(c, lengthSyntax)?; // a literal, a constant or a const parameter (ADR 0083)
+    let lengthValue = arrayLengthValue(c, lengthSyntax)?; // a constant expression or a const parameter (ADR 0083, 0143)
     if (lengthValue.reported) {
         return Ok(c.types.error);
     }
@@ -61,7 +61,7 @@ fn arrayLengthError(c: borrow mut Checker, span: Span) -> Result<void, AllocErro
     var message = Vector<u8>.create();
     appendText(
         mut message,
-        "an array length must be an integer literal, a 'usize' constant or a const parameter, from 1 to ",
+        "an array length must be a constant expression of type 'usize' (literals, 'usize' constants and operators) or a const parameter, from 1 to ",
     )?;
     appendDecimal(mut message, maxArrayLength())?;
     return c.error(invalidArray(), span.start, span.end, message);

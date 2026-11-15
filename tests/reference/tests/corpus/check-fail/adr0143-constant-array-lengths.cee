@@ -1,0 +1,22 @@
+// ADR 0143: an array length's constant expression is checked against `usize` and evaluated as a constant's value is.
+const BIG: usize = 18446744073709551615;
+const SMALL: u32 = 4;
+
+fn three() -> usize => 3;
+
+struct Grouped<const N: usize> {
+    starts: [u32; N * 2]; // error[N0353]
+}
+
+fn main() {
+    let overflow = [0u8; BIG + 1];        // error[N0217]
+    let negative: [u8; 2 - 3] = [0u8; 1]; // error[N0217]
+    let byZero = [0u8; 4 / 0];            // error[N0217]
+    let shifted = [0u8; 1 << 64];         // error[N0217]
+    let narrow = [0u8; SMALL * 2];        // error[N0205]
+    let called = [0u8; three() * 2];      // error[N0217]
+    let n: usize = 4;
+    let local = [0u8; n * 2];  // error[N0353]
+    let empty = [0u8; 4 - 4];  // error[N0259]
+    let huge = [0u8; 1 << 50]; // error[N0259]
+}

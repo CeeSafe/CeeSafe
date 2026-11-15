@@ -1,0 +1,68 @@
+// ADR 0143: an array length may be a constant expression of type `usize` over literals and constants.
+const CHARS: usize = 1024;
+const PER_CHAR: usize = 8;
+const SMALL: u32 = 4;
+
+struct Oid {
+    bytes: [u8; Oid.LENGTH * 2];
+}
+
+impl Oid {
+    const LENGTH: usize = 6;
+}
+
+struct Shaping {
+    glyphs: [u32; CHARS * PER_CHAR];
+    levels: [u8; (CHARS + 1) / 2];
+}
+
+struct Pair<T: Copy> {
+    items: [T; SMALL as usize * 2];
+}
+
+fn first<T: Copy>(p: borrow Pair<T>) -> T => p.items[0];
+
+fn total(a: borrow [u32; 4 * 2]) -> u32 {
+    var sum: u32 = 0;
+    for (x in a) {
+        sum += x;
+    }
+    return sum;
+}
+
+fn sized<const N: usize>() -> usize {
+    let a = [1u8; N];
+    let b = [2u8; 3 * 4];
+    return a.length + b.length;
+}
+
+fn main() {
+    let table = [0u32; 256 * 8];
+    Console.writeLine(table.length);
+    let flags: [u8; 1 << 4] = [7u8; 16]; // the type is `[u8; 16]`
+    Console.writeLine(flags.length);
+    let ones: [u32; 8] = [1u32; 4 * 2];
+    Console.writeLine(total(borrow ones));
+    let mixed = [2u8; (3 + 5) % 6 + (10 - 9)];
+    Console.writeLine(mixed.length);
+    let odd: [u8; CHARS / 4 | 1] = [0u8; 257];
+    Console.writeLine(odd.length);
+    let oid = Oid { bytes: [9u8; 12] };
+    Console.writeLine(oid.bytes.length);
+    let pair = Pair<i64> { items: [5i64; 8] };
+    Console.writeLine(first(borrow pair));
+    Console.writeLine(pair.items.length);
+    Console.writeLine(sized<5>());
+    let shaping = Shaping { glyphs: [0u32; 8192], levels: [0u8; 512] };
+    Console.writeLine(shaping.glyphs.length + shaping.levels.length);
+}
+// expect-stdout: 2048
+// expect-stdout: 16
+// expect-stdout: 8
+// expect-stdout: 3
+// expect-stdout: 257
+// expect-stdout: 12
+// expect-stdout: 5
+// expect-stdout: 8
+// expect-stdout: 17
+// expect-stdout: 8704

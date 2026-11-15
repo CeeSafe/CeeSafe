@@ -64,7 +64,7 @@ static CEE_UNUSED ceeR_vE10AllocError ceeVA_VZS10SystemHeap(ceeV_ZS10SystemHeap 
 static CEE_UNUSED void ceeVC_VZS10SystemHeap(ceeV_ZS10SystemHeap *);
 static CEE_UNUSED ceeR_vE10AllocError ceeVP_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, int32_t);
 static CEE_UNUSED ceeR_vE10AllocError ceeVR_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, uint64_t);
-static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, const int32_t *, uint64_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, int32_t const *, uint64_t);
 static CEE_UNUSED ceeR_vE10AllocError ceeVZ_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, uint64_t, int32_t);
 static CEE_UNUSED ceeO_i32 ceeVO_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
 static CEE_UNUSED void ceeVC_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
@@ -175,7 +175,7 @@ static ceeR_vE10AllocError ceeVR_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, u
     return ((ceeR_vE10AllocError){ .tag = 0 });
 }
 
-static ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, const int32_t *src, uint64_t n) {
+static ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, int32_t const *src, uint64_t n) {
     ceeR_vE10AllocError room = ceeVR_VUi32S10SystemHeap(v, n);
     if (room.tag != 0) return room;
     if (n <= 16u) {

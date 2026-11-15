@@ -334,12 +334,55 @@ fn appendDynMember(c: borrow Checker, out: borrow mut Vector<u8>, m: u32) -> Res
     return appendCFunctionName(c, out, m);
 }
 
+/// Frame layouts already worked out, by NIR function, so that frameReport's walk into the frames a frame embeds visits
+/// each once rather than once per path to it (cee-proxy's F21: an admin API whose handlers await shared helpers
+/// dozens of times took minutes in emitFrameAsserts, every await re-deriving its callee's whole tree). The frames a
+/// frame embeds form no cycle (a recursive await is stacked, ADR 0056), so a layout never changes once known.
+struct FrameMemo {
+    layouts: Vector<SizeAlign>;
+    known: Vector<bool>;
+
+    fn create() -> FrameMemo => FrameMemo { layouts: Vector<SizeAlign>.create(), known: Vector<bool>.create() };
+}
+
+/// The layout of async NIR function `f`'s frame, from `memo` when it is known.
+fn memoFrameLayout(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    memo: borrow mut FrameMemo,
+) -> Result<SizeAlign, AllocError> {
+    let at = f as usize;
+    if (at < memo.known.length && memo.known[at]) {
+        let known = memo.layouts[at];
+        return Ok(SizeAlign { size: known.size, align: known.align });
+    }
+    let layout = frameReportWith(c, n, f, memo)?.layout;
+    while (memo.known.length <= at) {
+        memo.known.push(false)?;
+        memo.layouts.push(SizeAlign { size: 0, align: 1 })?;
+    }
+    memo.known[at] = true;
+    memo.layouts[at] = SizeAlign { size: layout.size, align: layout.align };
+    return Ok(layout);
+}
+
 /// The frame of an awaited call: a dyn method's (ADR 0036), or the callee's own.
 fn calleeFrameLayout(c: borrow Checker, n: borrow NirProgram, callee: u32) -> Result<SizeAlign, AllocError> {
+    var memo = FrameMemo.create();
+    return calleeFrameLayoutWith(c, n, callee, mut memo);
+}
+
+fn calleeFrameLayoutWith(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    callee: u32,
+    memo: borrow mut FrameMemo,
+) -> Result<SizeAlign, AllocError> {
     if (isDynAsync(c, callee)) {
-        return Ok(dynFrameParts(c, n, callee)?.layout);
+        return Ok(dynFramePartsWith(c, n, callee, memo)?.layout);
     }
-    return Ok(frameReport(c, n, asyncNirFunction(n, callee))?.layout);
+    return memoFrameLayout(c, n, asyncNirFunction(n, callee), memo);
 }
 
 /// A dyn frame's layout, and where its union of impl frames starts.
@@ -351,6 +394,16 @@ struct DynFrameParts {
 /// struct ceeAF_<D>, as emitDynFrame writes it: the state (always 0, for the debugger), the impl's resume adapter, the
 /// size of the frame from the impl's start (for Async.boxed), the result, then the union of every impl's frame.
 fn dynFrameParts(c: borrow Checker, n: borrow NirProgram, callee: u32) -> Result<DynFrameParts, AllocError> {
+    var memo = FrameMemo.create();
+    return dynFramePartsWith(c, n, callee, mut memo);
+}
+
+fn dynFramePartsWith(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    callee: u32,
+    memo: borrow mut FrameMemo,
+) -> Result<DynFrameParts, AllocError> {
     var l = LayoutBuilder { size: 0, align: 1 };
     layoutAdd(mut l, 4, 4); // cee_state
     layoutAdd(mut l, 8, 8); // cee_resume
@@ -363,7 +416,7 @@ fn dynFrameParts(c: borrow Checker, n: borrow NirProgram, callee: u32) -> Result
     var unionSize: u64 = 1;
     let impls = dynAsyncImpls(c, callee)?;
     for (m in impls.view()) {
-        let part = frameReport(c, n, asyncNirFunction(n, m))?.layout;
+        let part = memoFrameLayout(c, n, asyncNirFunction(n, m), memo)?;
         if (truncate<u64>(part.size) > unionSize) {
             unionSize = truncate<u64>(part.size);
         }
@@ -710,6 +763,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
         }
     }
     var done = Vector<u32>.create(); // HIR functions whose frames are defined
+    var memo = FrameMemo.create(); // their layouts, for the asserts
     while (pending.length > 0) {
         var progressed = false;
         var k: usize = 0;
@@ -740,7 +794,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             }
             if (ready) {
                 emitFrameStruct(e, c, n, f)?;
-                emitFrameAsserts(e, c, n, f)?;
+                emitFrameAsserts(e, c, n, f, mut memo)?;
                 done.push(nirFunctionSource(n, f))?;
                 let last = pending.length - 1;
                 pending.swap(k, last); // the order among ready frames does not matter
@@ -754,7 +808,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             // A cycle cannot reach the backend (N0343); emit the rest in order rather than loop.
             for (f in pending.view()) {
                 emitFrameStruct(e, c, n, f)?;
-                emitFrameAsserts(e, c, n, f)?;
+                emitFrameAsserts(e, c, n, f, mut memo)?;
             }
             pending.clear();
         }
@@ -1958,6 +2012,17 @@ fn addLayout(l: borrow mut LayoutBuilder, part: SizeAlign) {
 
 /// The layout of async fn `f`'s frame, struct ceeAF_<f>, field by field as emitFrameStruct writes it.
 fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameReport, AllocError> {
+    var memo = FrameMemo.create();
+    return frameReportWith(c, n, f, mut memo);
+}
+
+/// frameReport, the frames `f` embeds taken from `memo` when known.
+fn frameReportWith(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    memo: borrow mut FrameMemo,
+) -> Result<FrameReport, AllocError> {
     let function = borrow n.functions[f as usize];
     let source = nirFunctionSource(n, f);
     let inFrame = frameLocals(n, f)?;
@@ -2021,8 +2086,8 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
                 addLayout(mut j, typeLayout(c, c.hir.functions[second as usize].returnType));
                 addLayout(mut j, taskSlotLayout());
                 addLayout(mut j, taskSlotLayout());
-                addLayout(mut j, frameReport(c, n, asyncNirFunction(n, first))?.layout);
-                addLayout(mut j, frameReport(c, n, asyncNirFunction(n, second))?.layout);
+                addLayout(mut j, memoFrameLayout(c, n, asyncNirFunction(n, first), memo)?);
+                addLayout(mut j, memoFrameLayout(c, n, asyncNirFunction(n, second), memo)?);
                 member = layoutEnd(j);
             }
             if (builtinOf(n, r) == bfAsyncScopeWait()) {
@@ -2041,7 +2106,7 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
                 member = if (isStackedStatement(n, s)) SizeAlign {
                     size: 8,
                     align: 8,
-                } else calleeFrameLayout(c, n, callee)?;
+                } else calleeFrameLayoutWith(c, n, callee, memo)?;
             }
             if (member.size >= 0) {
                 report.unionMembers += 1;
@@ -2074,9 +2139,10 @@ fn emitFrameAsserts(
     c: borrow Checker,
     n: borrow NirProgram,
     f: u32,
+    memo: borrow mut FrameMemo,
 ) -> Result<void, AllocError> {
     let source = nirFunctionSource(n, f);
-    let layout = frameReport(c, n, f)?.layout;
+    let layout = memoFrameLayout(c, n, f, memo)?;
     e.t("_Static_assert(sizeof(struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
     e.t(") == ")?;

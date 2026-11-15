@@ -1,0 +1,25 @@
+// Frames that embed one callee through many paths (cee-proxy's F21): each `fN` awaits `f(N-1)` three times, so
+// the 15 frames are reached by 3^14 paths. ceesafec 0.50.2 worked a frame's layout out again on every path (in
+// emitFrameAsserts, and in every frame embedding it) and took minutes; each layout is now worked out once.
+
+async fn f0(x: u32) -> u32 => x + 1;
+async fn f1(x: u32) -> u32 => ((await f0(x)) + (await f0(x)) + (await f0(x))) % 1000003;
+async fn f2(x: u32) -> u32 => ((await f1(x)) + (await f1(x)) + (await f1(x))) % 1000003;
+async fn f3(x: u32) -> u32 => ((await f2(x)) + (await f2(x)) + (await f2(x))) % 1000003;
+async fn f4(x: u32) -> u32 => ((await f3(x)) + (await f3(x)) + (await f3(x))) % 1000003;
+async fn f5(x: u32) -> u32 => ((await f4(x)) + (await f4(x)) + (await f4(x))) % 1000003;
+async fn f6(x: u32) -> u32 => ((await f5(x)) + (await f5(x)) + (await f5(x))) % 1000003;
+async fn f7(x: u32) -> u32 => ((await f6(x)) + (await f6(x)) + (await f6(x))) % 1000003;
+async fn f8(x: u32) -> u32 => ((await f7(x)) + (await f7(x)) + (await f7(x))) % 1000003;
+async fn f9(x: u32) -> u32 => ((await f8(x)) + (await f8(x)) + (await f8(x))) % 1000003;
+async fn f10(x: u32) -> u32 => ((await f9(x)) + (await f9(x)) + (await f9(x))) % 1000003;
+async fn f11(x: u32) -> u32 => ((await f10(x)) + (await f10(x)) + (await f10(x))) % 1000003;
+async fn f12(x: u32) -> u32 => ((await f11(x)) + (await f11(x)) + (await f11(x))) % 1000003;
+async fn f13(x: u32) -> u32 => ((await f12(x)) + (await f12(x)) + (await f12(x))) % 1000003;
+async fn f14(x: u32) -> u32 => ((await f13(x)) + (await f13(x)) + (await f13(x))) % 1000003;
+
+fn main() {
+    Console.writeLine(Async.run(f14(1)));
+}
+
+// expect-stdout: 565911

@@ -1,0 +1,49 @@
+// ADR 0144: byte slices trim ASCII whitespace with `trim`, `trimStart` and `trimEnd` (ADR 0071 §2.4), as
+// `StringView` does. The result is a part of the receiver, in the receiver's region.
+fn field(line: Slice<u8>) -> Slice<u8> => line.trim();
+
+fn show(label: StringView, s: Slice<u8>) {
+    Console.write(label);
+    Console.write(" [");
+    for (b in s) {
+        Console.write(b);
+        Console.write(" ");
+    }
+    Console.writeLine("]");
+}
+
+fn main() {
+    var a = [32u8, 9, 65, 32, 66, 10, 13];
+    let s: Slice<u8> = a[..];
+    show("trim", s.trim());
+    show("start", s.trimStart());
+    show("end", s.trimEnd());
+    show("array", a.trim());
+    show("field", field(a[1..5]));
+    let m: SliceMut<u8> = borrow mut a[..];
+    show("mut", m.trim());
+    let every = [32u8, 9, 10, 11, 12, 13];
+    Console.writeLine(every[..].trim().length + every[..].trimStart().length + every[..].trimEnd().length);
+    let none: Slice<u8> = [];
+    Console.writeLine(none.trim().length);
+    let kept = [0xA0u8, 65, 0x85]; // not ASCII whitespace
+    Console.writeLine(kept[..].trim().length);
+    var v = Vector<u8>.create();
+    v.push(32)!;
+    v.push(67)!;
+    v.push(32)!;
+    show("vector", v.trim());
+    let text = " 2 ".bytes();
+    Console.writeLine(text.trim().parseInt<u32>() ?? 0);
+}
+// expect-stdout: trim [65 32 66 ]
+// expect-stdout: start [65 32 66 10 13 ]
+// expect-stdout: end [32 9 65 32 66 ]
+// expect-stdout: array [65 32 66 ]
+// expect-stdout: field [65 32 66 ]
+// expect-stdout: mut [65 32 66 ]
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 3
+// expect-stdout: vector [67 ]
+// expect-stdout: 2

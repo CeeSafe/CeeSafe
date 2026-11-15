@@ -1,0 +1,15 @@
+// ADR 0144: N0200 for a method a slice, a vector, a `String` or a `StringView` does not have lists the methods it
+// has, the byte and text ones included, or names close ones: `trimmed` finds `trim`.
+fn main() {
+    let a = [32u8, 65, 32];
+    let s: Slice<u8> = a[..];
+    let t = s.trimmed(); // error[N0200]
+    var v = Vector<u8>.create();
+    let u = v.trimmed(); // error[N0200]
+    var text = String.create();
+    let w = text.trimmed(); // error[N0200]
+    let view: StringView = " x ";
+    let x = view.trimmed(); // error[N0200]
+    let words = [1u32, 2];
+    let y = words[..].trim(); // error[N0200]
+}

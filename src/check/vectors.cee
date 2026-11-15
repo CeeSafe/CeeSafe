@@ -514,8 +514,9 @@ fn checkVectorMethod(
             c,
             mut message,
             typ,
-            if (isString) "append appendNumber clear view bytes clone"
-                else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone",
+            if (isString) stringMethodNames() else vectorMethodNames(
+                c.types.info(c.types.info(typ).pointee).element == c.types.u8,
+            ),
             ident.symbol,
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
@@ -682,7 +683,8 @@ fn checkViewMethod(
         var message = Vector<u8>.create();
         appendText(mut message, "'StringView' has no method ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
-        appendText(mut message, "; it has 'bytes()', 'length', and the searches and parsers of ADR 0071")?;
+        let viewType = c.typeOf(view);
+        appendEveryMethodChoice(c, mut message, viewType, viewMethodNames(), ident.symbol)?; // ADR 0071, 0144
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -733,9 +735,13 @@ fn checkSliceMethod(
         appendQuotedType(mut message, c, sliceType)?;
         appendText(mut message, " has no method ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
-        appendText(
+        // The slice methods, and on bytes lib/core's (ADR 0071); a close one as "did you mean" (ADR 0144).
+        appendEveryMethodChoice(
+            c,
             mut message,
-            "; slices have 'copyFrom', 'fill', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt' and 'splitAtMut'",
+            sliceType,
+            sliceMethodNames(c.types.info(c.types.info(sliceType).pointee).element == c.types.u8),
+            ident.symbol,
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

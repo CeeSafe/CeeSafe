@@ -1233,6 +1233,9 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
 - **UTF-8.** A match of valid UTF-8 inside valid UTF-8 starts and ends on character boundaries, and ASCII whitespace
   is never part of a longer character, so every `StringView` these return is valid UTF-8 without a further check.
 - On other element types they are N0200. None of them panics.
+- A method that a slice, a vector, a `String` or a `StringView` does not have is N0200, whose message lists the
+  methods it has, these included on bytes and text, or names up to three close ones (`trimmed` finds `trim`; ADR
+  0144).
 
 **Numbers from text** (§2.5), on `StringView`, `String` and byte slices:
 - `s.parseInt<T>()` and `s.parseIntRadix<T>(radix)` (`radix: u32`, 2 to 36): `T?` for any integer type `T`. The text

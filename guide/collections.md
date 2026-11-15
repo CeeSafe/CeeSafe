@@ -70,6 +70,27 @@ the whole array it came from, so the array cannot change while the slice is used
 Slices also copy and fill in one checked operation (`d.copyFrom(s)`, `d.fill(v)`), swap elements, and sort and
 search with closures (see [Functions and closures](closures.md)).
 
+A byte slice (`Slice<u8>`, `SliceMut<u8>`, an array of `u8` or a `Vector<u8>`'s elements) has the searches, trims,
+splits and number parsers of a `StringView`, with `Slice<u8>` arguments and results: `b.trim()`, `b.trimStart()` and
+`b.trimEnd()` drop ASCII whitespace and return a part of `b`, borrowed from what `b` borrows; `b.indexOf(n)`,
+`b.splitOnce(sep)`, `b.split(sep)` and `b.parseInt<u32>()` work as on text ([Built-in functions](builtins.md)). It
+also reads and writes integers in either byte order: `b.readBE<u32>(at)`, `d.writeLE(at, x)`.
+
+```ceesafe
+fn field(line: Slice<u8>) -> u32? => line.trim().parseInt<u32>();
+
+fn main() {
+    let line = " 2 ;  17 ".bytes();
+    if (line.splitOnce(";".bytes()) is Some(halves)) {
+        Console.writeLine((field(halves.left) ?? 0) + (field(halves.right) ?? 0));
+    }
+}
+```
+
+```text
+19
+```
+
 ## Vectors
 
 `Vector<T>` owns a growable list on the heap. Pushing can fail, so `push` returns a `Result`.

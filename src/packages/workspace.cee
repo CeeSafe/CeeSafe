@@ -342,9 +342,10 @@ struct GitCache {
         var all = Vector<Vector<u8>>.create();
         // A checkout's files as the repository holds them: Git for Windows converts them to CRLF by default
         // (core.autocrlf), and then they never match the lock's hash, made where they were LF (ClayWind's N3).
-        for (setting in ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]) {
-            all.push(copyBytes(setting.bytes())?)?;
-        }
+        all.push(copyBytes("-c".bytes())?)?;
+        all.push(copyBytes("core.autocrlf=false".bytes())?)?;
+        all.push(copyBytes("-c".bytes())?)?;
+        all.push(copyBytes("core.eol=lf".bytes())?)?;
         if (directory.length > 0) {
             all.push(copyBytes("-C".bytes())?)?;
             all.push(copyBytes(directory)?)?;

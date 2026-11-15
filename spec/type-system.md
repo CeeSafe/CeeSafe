@@ -3151,13 +3151,15 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
-  - **The window.** It is titled, resizable and visible, and on top of the program's other windows.
+  - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
+    most 16 of a program's windows open at once: a 17th `open` is `Resources`.
   - **`WindowError`:**
-    - `Unsupported`: no backend for this system, the interpreter, `width`/`height` 0 or over 16384, or a `present`
-      or `presentChanged` to an external window;
+    - `Unsupported`: no backend for this system, the interpreter, `width`/`height` 0 or over 16384, a `present`
+      or `presentChanged` to an external window, or a menu or file dialog that this system or the call cannot have
+      (below);
     - `NoDisplay`: no window server, such as no `DISPLAY` or no X11 library;
     - `NotMainThread`: called on any thread but the program's first, on every system, so that programs stay
       portable to macOS, which allows windows only there;
@@ -3245,12 +3247,66 @@ Diagnostics: none new.
   - **Backends.** macOS: the general pasteboard's `NSPasteboardTypeString`. Windows: `CF_UNICODETEXT`. X11: the
     `CLIPBOARD` selection as `UTF8_STRING`. The window owns it after a set and answers other programs while the program
     polls. A read waits up to one second for the owner.
+- **Menus** (ADR 0146). A `Menu` is a plain owned value: top-level menus in order, each a list of items and
+  separators. There are no submenus.
+  - **Building.** `Menu.create()` is empty. `m.addMenu(title)` starts a top-level menu, `m.addItem(id: u32, title,
+    shortcut: MenuShortcut?)` adds an enabled, unchecked item to the last one, and `m.addSeparator()` a line; each is
+    `Result<void, AllocError>`, copies its title, and on an error leaves `m` as it was. `m.setEnabled(id, bool)` and
+    `m.setChecked(id, bool)` change every item with that id, and allocate nothing. Ids are the program's choice.
+  - **`MenuShortcut { key: WindowKey, modifiers: WindowModifiers }`.** An `Other` key, a `Function` outside 1 to 12,
+    and a `Character` that is not a printable scalar show no shortcut.
+  - **`w.setMenu(menu: borrow Menu)`** is `Result<void, WindowError>`. It shows the menus as the window's, replacing
+    those it showed, and an empty `Menu` removes them. The window keeps a copy, so a change to `menu` shows when it is
+    set again. It is `Unsupported` on X11, and for a menu with an item or separator before its first `addMenu` or with
+    more than 4096 entries; `Resources` when the system refuses. On an error the window's menus stay as they were.
+  - **`w.nextMenuChoice()`** is `u32?`: the id of the next item the user chose in the window's menus, in order, or
+    null. It never blocks. A queued choice ends `waitFrame`, `waitEvent` and `Window.waitAny` as an event does. A
+    window keeps at most 64 choices that the program has not taken: past that, the newest are lost.
+  - **macOS:** the application's main menu. Its first menu is the application's: About, Hide (⌘H), Hide Others
+    (⌥⌘H), Show All and Quit (⌘Q), with the process's name. The program's menus follow it.
+    - **One menu bar.** The last `setMenu`, of any window, wins, and that window receives the choices. When it is
+      dropped, its menus leave the bar, and the application's menu stays.
+    - **Quit** queues `Closed` in every window of the program.
+    - **Shortcuts.** A key down that is the shortcut of an enabled item is that item's choice, and gives no `Key`
+      event, nor does its release. A disabled item's shortcut is a `Key`. The menu sees a key before the input method,
+      except while it composes. Without an item that takes them, ⌘Q and ⌘W queue `Closed` in their window.
+  - **Windows:** the window's own menu bar, destroyed with it.
+    - **Shortcuts** are shown only, as text after the title such as "Ctrl+Shift+S" (`command` is "Win"). The key is
+      a `Key` event, which the program acts on.
+    - A title's `&` is shown as itself. Alt alone, or F10, opens the menu bar.
+    - The content keeps its size: the window grows by the menu bar, unless it is maximized.
+  - **X11** has no menu bar: the program draws its menus.
+- **File dialogs** (ADR 0146). `FileDialog`'s static functions run the system's dialog, modal, and return when the
+  user answers:
+  - `FileDialog.openFile(window: borrow mut Window, title: StringView, extensions: StringView)` is
+    `Result<String?, WindowError>`: an existing file, or null when the user cancelled;
+  - `FileDialog.openFiles(window, title, extensions)` is `Result<Vector<String>, WindowError>`: one or more files,
+    or none when the user cancelled;
+  - `FileDialog.saveFile(window, title, suggestedName: StringView, extensions)` is `Result<String?, WindowError>`:
+    where to save, the name field starting as `suggestedName`. The system asks before an existing file is chosen, and
+    the program writes the file;
+  - `FileDialog.chooseFolder(window, title)` is `Result<String?, WindowError>`: an existing folder.
+
+  The rules:
+  - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.
+  - **`extensions`** is a comma-separated list of file name extensions, such as `"png,jpg"`. Spaces and a leading
+    dot are ignored. The dialog offers only those files, and empty offers every file.
+  - **`window`** owns the dialog. A `Window` is on the program's first thread only, so the dialogs are too.
+  - **While a dialog runs** the program does not run, so it repaints none of its windows: the system shows their
+    last frames, and on X11 the runtime repaints them from the last frame presented. macOS's panel takes all of the
+    program's input meanwhile. On Windows, the owner gets none, and other windows queue theirs. On Linux every window
+    queues its input, since the dialog is another program.
+  - **Backends.** macOS: NSOpenPanel and NSSavePanel, run application-modal, the extensions as UTTypes from
+    macOS 11. Windows: `IFileOpenDialog` and `IFileSaveDialog` through COM, from `ole32.dll` loaded at the first
+    dialog. Linux: `zenity --file-selection`, or `kdialog` (first under KDE), found on `PATH`; with neither, every
+    dialog is `Unsupported`. That program's exit status 1 is a cancel, and any status but 0 or 1 is `Resources`.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
   - `w.setTitle(title)` sets the title.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
-    arrives or the window is woken, so an idle loop does not spin.
+    arrives or the window is woken, so an idle loop does not spin. A queued menu choice counts as an event in it and
+    in the two waits below (ADR 0146).
   - `w.waitEvent(timeoutMs: u32)` (ADR 0142) returns when an event is queued (`nextEvent` would return one), when the
     window was woken since a `waitEvent` or `waitFrame` last returned, or after `timeoutMs` milliseconds, whichever is
     first; 0 returns at once. It does not tick, so an idle window that waits uses no CPU. While it waits the window
@@ -3284,9 +3340,10 @@ Diagnostics: none new.
     its wait is the system's (on X11, `poll` on every window's connection) with that one signal, however many
     windows are open.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
-  sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText` and `clipboardText` may sleep and allocate.
-  `nextEvent`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`, `compositionCaret`,
-  `waker`, `WindowWaker.wake` and the drop have no effect.
+  sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
+  functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator` allocate. `nextEvent`,
+  `nextMenuChoice`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`,
+  `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
@@ -3311,7 +3368,13 @@ Diagnostics: none new.
     - `compose:C:TEXT` (ADR 0141): the composition becomes TEXT, with the caret at byte C. It is delivered only while
       text input is on. C must be at most TEXT's length and at a character's start;
     - `clipboard:TEXT` puts TEXT on the window's scripted clipboard, which `setClipboardText` and `clipboardText` also
-      use. `clipboard`, without a colon, leaves it with no text. The clipboard starts with no text.
+      use. `clipboard`, without a colon, leaves it with no text. The clipboard starts with no text;
+    - `menu:ID` (ADR 0146), ID a decimal `u32`: the user chooses the item ID. `nextMenuChoice` hands the choice out
+      only if the window's menu then has an enabled item ID, and drops it otherwise, since the system never delivers
+      a choice of a missing or disabled item. `setMenu` is accepted on a scripted window;
+    - `dialog:PATH|PATH…` (ADR 0146) is, from FRAME, an answer for the window's file dialogs: the paths, of which a
+      dialog for one path takes the first. `dialog`, without a colon, is a cancel. Each dialog takes the earliest
+      answer that is due, and is cancelled when none is.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
     `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
@@ -3323,7 +3386,8 @@ Diagnostics: none new.
     (ADR 0145). Every window opened while the variable is set reads the same file.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
-  to `open` and `openWith`, so no window is open there and no call on a `Window` is reached. `Window.waitAny`, which
+  to `open` and `openWith`, so no window is open there and no call on a `Window` is reached, the file dialogs
+  included. A `Menu` is built there as natively. `Window.waitAny`, which
   needs no window, sleeps there for its timeout on the virtual clock (ADR 0075 §2.6).
 
 ### 26.14 Process limits (ADR 0104)

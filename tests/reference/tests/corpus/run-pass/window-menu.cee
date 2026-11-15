@@ -1,0 +1,33 @@
+// ADR 0146: a `Menu` is a plain value, built without a window: menus, items with ids, titles and shortcuts, separators,
+// and flags that change in place. Building it runs anywhere (natively and in the interpreter), with no display; only
+// `Window.setMenu` shows it.
+
+fn main() {
+    var menu = Menu.create();
+    menu.addMenu("File")!;
+    menu.addItem(1, "Open…", MenuShortcut {
+        key: WindowKey.Character(0x6F),
+        modifiers: WindowModifiers { shift: false, control: false, alt: false, command: true },
+    })!;
+    menu.addItem(2, "Ünïcödé ✓", MenuShortcut {
+        key: WindowKey.Function(5),
+        modifiers: WindowModifiers { shift: true, control: true, alt: true, command: false },
+    })!;
+    menu.addSeparator()!;
+    menu.addItem(3, "", null)!;
+    menu.addMenu("Edit")!;
+    menu.addItem(3, "Same id", MenuShortcut {
+        key: WindowKey.Other(77),
+        modifiers: WindowModifiers { shift: false, control: false, alt: false, command: false },
+    })!;
+    menu.setEnabled(3, false);
+    menu.setChecked(2, true);
+    menu.setChecked(2, false);
+    menu.setEnabled(99, true);
+    var empty = Menu.create();
+    empty.setChecked(1, true);
+    empty.addSeparator()!;
+    Console.writeLine("built");
+}
+
+// expect-stdout: built

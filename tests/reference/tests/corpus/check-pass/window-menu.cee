@@ -1,0 +1,93 @@
+// ADR 0146: a host builds its menus (top-level menus of items with ids, shortcuts, enabled and checked flags, and
+// separators), shows them with `setMenu`, takes the user's choices with `nextMenuChoice` after each wait, and runs the
+// system's file dialogs, which return a path, several, or null for a cancel. (It needs a display to run:
+// run-pass/window-menu builds a menu without a window.)
+
+const OPEN: u32 = 1;
+const SAVE: u32 = 2;
+const WRAP: u32 = 3;
+const QUIT: u32 = 4;
+
+fn command(c: u32) -> MenuShortcut => MenuShortcut {
+    key: WindowKey.Character(c),
+    modifiers: WindowModifiers { shift: false, control: false, alt: false, command: true },
+};
+
+fn menus(wrap: bool) -> Result<Menu, AllocError> {
+    var menu = Menu.create();
+    menu.addMenu("File")?;
+    menu.addItem(OPEN, "Open…", command(0x6F))?;
+    menu.addItem(SAVE, "Save As…", command(0x73))?;
+    menu.addSeparator()?;
+    menu.addItem(QUIT, "Quit", null)?;
+    menu.addMenu("View")?;
+    menu.addItem(WRAP, "Wrap Lines", null)?;
+    menu.setChecked(WRAP, wrap);
+    return Ok(menu);
+}
+
+/// What the user chose, acted on; false when they asked to quit.
+fn choose(window: borrow mut Window, id: u32, wrap: borrow mut bool) -> Result<bool, WindowError> {
+    if (id == OPEN) {
+        match (FileDialog.openFile(window, "Open a picture", "png,jpg")?) {
+            Some(path) => { Console.writeLine(path.view()); }
+            null => {}
+        }
+    } else if (id == SAVE) {
+        let path = FileDialog.saveFile(window, "Save the picture", "untitled.png", "png")?;
+        Console.writeLine(path.isSome());
+    } else if (id == WRAP) {
+        *wrap = !*wrap;
+        let menu = match (menus(*wrap)) {
+            Ok(m) => m,
+            Err(_) => { return Err(WindowError.Resources); }
+        };
+        window.setMenu(borrow menu)?;
+    } else if (id == QUIT) {
+        return Ok(false);
+    }
+    return Ok(true);
+}
+
+fn host(window: borrow mut Window) -> Result<void, WindowError> {
+    var wrap = false;
+    let menu = match (menus(wrap)) {
+        Ok(m) => m,
+        Err(_) => { return Err(WindowError.Resources); }
+    };
+    window.setMenu(borrow menu)?;
+    loop {
+        window.waitEvent(1000);
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Closed) => { return Ok(); }
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        loop {
+            match (window.nextMenuChoice()) {
+                Some(id) => {
+                    if (!choose(window, id, mut wrap)?) {
+                        return Ok();
+                    }
+                }
+                null => { break; }
+            }
+        }
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("Pictures", 640, 480)) {
+        Ok(w) => w,
+        Err(_) => { return 1; }
+    };
+    let pictures = FileDialog.openFiles(mut window, "Add pictures", "png, jpg")!;
+    Console.writeLine(pictures.length);
+    let folder = FileDialog.chooseFolder(mut window, "Export to");
+    return match (host(mut window)) {
+        Ok() => 0,
+        Err(_) => 2,
+    };
+}

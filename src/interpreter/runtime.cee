@@ -500,7 +500,48 @@ fn droppableFields(c: borrow Checker, fields: borrow Vector<u32>) -> Vector<u32>
     return out;
 }
 
+/// One piece of a destruction left to do (destroy's work list): destroy a value, or free what held it once its
+/// contents are gone.
+enum DropWork {
+    /// The value of type `t` at `addr`.
+    Value(u32, u64),
+    /// `freeMemory(pointer)`.
+    Memory(u64),
+    /// `freeBox(pointer, box, contents)`.
+    Box(u64, u32, u32),
+    /// `poolRelease(pool, slot)`.
+    PoolSlot(u64, u64),
+}
+
+/// Destroys the value of type `t` at `addr` (c-backend.md §2's drop glue), on a work list rather than by recursion, so
+/// a value nested 100,000 levels deep (a tree through vectors) is dropped as the compiled program drops it, where the
+/// interpreter's own stack would overflow (cee-proxy's F17). The order is the glue's: a struct's `drop`, then its
+/// fields in order, each wholly; a container's elements in order, then its memory. Work is pushed in reverse, and a
+/// container's memory before its elements, so it is taken in that order.
 fn destroy(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, t: u32, addr: u64) -> Result<void, Stop> {
+    var work = Vector<DropWork>.create();
+    work.push(DropWork.Value(t, addr))!;
+    while (work.length > 0) {
+        let next = work.pop()!; // one pattern per match: the compiler's sources build with 0.8.0 (docs/release.md)
+        match (next) {
+            DropWork.Value(typ, at) => { destroyStep(it, c, n, typ, at, mut work)?; }
+            DropWork.Memory(pointer) => { freeMemory(it, pointer)?; }
+            DropWork.Box(pointer, box, contents) => { freeBox(it, c, n, pointer, box, contents)?; }
+            DropWork.PoolSlot(pool, slot) => { poolRelease(it, pool, slot)?; }
+        }
+    }
+    return Ok();
+}
+
+/// One level of `destroy`: what this value does itself, and its parts pushed onto `work`.
+fn destroyStep(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    t: u32,
+    addr: u64,
+    work: borrow mut Vector<DropWork>,
+) -> Result<void, Stop> {
     let info = c.types.info(t);
     if (c.types.is(t, TypeKind.Resource)) {
         let loaded3 = it.memory.loadBits(addr, 4)?;
@@ -521,13 +562,13 @@ fn destroy(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, t: u3
         return Ok();
     }
     if (c.types.isPoolBox(t)) {
-        if (c.types.needsDrop(info.pointee)) {
-            let loaded4 = pointerAt(it, addr)?;
-            destroy(it, c, n, info.pointee, loaded4)?;
-        }
         let loaded5 = pointerAt(it, addr + 8)?;
         let loaded6 = pointerAt(it, addr)?;
-        return poolRelease(it, loaded5, loaded6);
+        work.push(DropWork.PoolSlot(loaded5, loaded6))!;
+        if (c.types.needsDrop(info.pointee)) {
+            work.push(DropWork.Value(info.pointee, loaded6))!;
+        }
+        return Ok();
     }
     if (c.types.is(t, TypeKind.Box) && !c.types.isDynBox(t) && leadsTo(c, info.pointee, t)) {
         // Tail iteration (type-system.md §18.5).
@@ -541,52 +582,61 @@ fn destroy(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, t: u3
     }
     if (c.types.is(t, TypeKind.StableVector)) {
         let element = elementOf(c, info.pointee);
+        // the chunks after every element, in order: pushed first, and in reverse
+        var k = stableVectorChunks();
+        while (k > 0) {
+            k -= 1;
+            let chunk = pointerAt(it, addr + 8 * k)?;
+            if (chunk != 0) {
+                work.push(DropWork.Memory(chunk))!;
+            }
+        }
         if (c.types.needsDrop(element)) {
             let length = it.memory.loadBits(addr + 256, 8)?;
             let size = typeSize(c, element)? as u64;
-            for (i in 0..length) {
+            var i = length;
+            while (i > 0) {
+                i -= 1;
                 let at = stableVectorAt(it, addr, i, size)?;
-                destroy(it, c, n, element, at)?;
-            }
-        }
-        for (k in 0..stableVectorChunks()) {
-            let chunk = pointerAt(it, addr + 8 * k)?;
-            if (chunk != 0) {
-                freeMemory(it, chunk)?;
+                work.push(DropWork.Value(element, at))!;
             }
         }
         return Ok();
     }
     if (c.types.is(t, TypeKind.SlotMap)) {
         let layout = slotLayout(c, info.element)?;
-        if (c.types.needsDrop(info.element)) {
-            let length = it.memory.loadBits(addr + 8, 8)?;
-            for (i in 0..length) {
-                let slot = pointerAt(it, addr)? + i * layout.size;
-                if ((it.memory.loadBits(slot, 4)? & 1) != 0) {
-                    destroy(it, c, n, info.element, slot + layout.valueOffset)?;
-                }
-            }
-        }
         if (it.memory.loadBits(addr + 16, 8)? != 0) {
             let loaded7 = pointerAt(it, addr)?;
-            freeMemory(it, loaded7)?;
+            work.push(DropWork.Memory(loaded7))!;
+        }
+        if (c.types.needsDrop(info.element)) {
+            let length = it.memory.loadBits(addr + 8, 8)?;
+            var i = length;
+            while (i > 0) {
+                i -= 1;
+                let slot = pointerAt(it, addr)? + i * layout.size;
+                if ((it.memory.loadBits(slot, 4)? & 1) != 0) {
+                    work.push(DropWork.Value(info.element, slot + layout.valueOffset))!;
+                }
+            }
         }
         return Ok();
     }
     if (c.types.is(t, TypeKind.Vector)) {
         let element = elementOf(c, info.pointee);
+        if (it.memory.loadBits(addr + 16, 8)? != 0) {
+            let loaded8 = pointerAt(it, addr)?;
+            work.push(DropWork.Memory(loaded8))!;
+        }
         if (c.types.needsDrop(element)) {
             let length = it.memory.loadBits(addr + 8, 8)?;
             let size = typeSize(c, element)? as u64;
-            for (i in 0..length) {
+            var i = length;
+            while (i > 0) {
+                i -= 1;
                 let at = pointerAt(it, addr)? + i * size;
-                destroy(it, c, n, element, at)?;
+                work.push(DropWork.Value(element, at))!;
             }
-        }
-        if (it.memory.loadBits(addr + 16, 8)? != 0) {
-            let loaded8 = pointerAt(it, addr)?;
-            freeMemory(it, loaded8)?;
         }
         return Ok();
     }
@@ -603,29 +653,31 @@ fn destroy(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, t: u3
         // Through the table (§37.3): the implementation's drop, then the box's memory.
         let table = dynTableAt(c, it.memory.loadBits(addr + 8, 8)?)?;
         let implementation = c.dynTables[table].implementation;
-        if (c.types.needsDrop(implementation)) {
-            let loaded10 = pointerAt(it, addr)?;
-            destroy(it, c, n, implementation, loaded10)?;
-        }
         let loaded11 = pointerAt(it, addr)?;
-        return freeBox(it, c, n, loaded11, t, implementation);
+        work.push(DropWork.Box(loaded11, t, implementation))!;
+        if (c.types.needsDrop(implementation)) {
+            work.push(DropWork.Value(implementation, loaded11))!;
+        }
+        return Ok();
     }
     if (c.types.is(t, TypeKind.Box)) {
-        if (c.types.needsDrop(info.pointee)) {
-            let loaded12 = pointerAt(it, addr)?;
-            destroy(it, c, n, info.pointee, loaded12)?;
-        }
         let loaded13 = pointerAt(it, addr)?;
-        return freeBox(it, c, n, loaded13, t, none());
+        work.push(DropWork.Box(loaded13, t, none()))!;
+        if (c.types.needsDrop(info.pointee)) {
+            work.push(DropWork.Value(info.pointee, loaded13))!;
+        }
+        return Ok();
     }
     if (c.types.is(t, TypeKind.Enum)) {
         let unionOffset = enumUnionOffset(c, t);
         let index = variantIndex(it, c, t, addr)?;
         let variant = enumVariantAt(c, t, index as usize);
         let fields = droppableFields(c, c.types.variants[variant as usize].payload);
-        for (f in fields.view()) {
-            let field = borrow c.types.fields[f as usize];
-            destroy(it, c, n, field.typ, addr + unionOffset + (field.offset as u64))?;
+        var k = fields.length;
+        while (k > 0) {
+            k -= 1;
+            let field = borrow c.types.fields[fields[k] as usize];
+            work.push(DropWork.Value(field.typ, addr + unionOffset + (field.offset as u64)))!;
         }
         return Ok();
     }
@@ -638,9 +690,11 @@ fn destroy(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, t: u3
             callFunction(it, c, n, f, arguments)?;
         }
         let fields = droppableFields(c, s.fields);
-        for (f in fields.view()) {
-            let field = borrow c.types.fields[f as usize];
-            destroy(it, c, n, field.typ, addr + (field.offset as u64))?;
+        var k = fields.length;
+        while (k > 0) {
+            k -= 1;
+            let field = borrow c.types.fields[fields[k] as usize];
+            work.push(DropWork.Value(field.typ, addr + (field.offset as u64)))!;
         }
         return Ok();
     }

@@ -1,0 +1,40 @@
+// A tree 100,000 levels deep, an enum nested through vectors, is dropped by the interpreter as by the compiled
+// program (cee-proxy's F17; CeeSafeLibs' json met it). The interpreter's drop glue recursed on the host's stack and
+// crashed with a segmentation fault; it now runs on a work list, in the glue's order.
+enum Tree {
+    Leaf,
+    Node(Vector<Tree>),
+}
+
+struct Noisy {
+    name: u32;
+
+    drop {
+        Console.writeLine(this.name);
+    }
+}
+
+fn main() {
+    var t = Tree.Leaf;
+    for (i in 0..100000) {
+        var children = Vector<Tree>.create();
+        children.push(t)!;
+        t = Tree.Node(children);
+    }
+    Console.writeLine("built");
+    {
+        let gone = t;
+    }
+    Console.writeLine("dropped");
+    // The order the glue keeps: a vector's elements first to last.
+    var v = Vector<Noisy>.create();
+    v.push(Noisy { name: 1 })!;
+    v.push(Noisy { name: 2 })!;
+    v.push(Noisy { name: 3 })!;
+}
+
+// expect-stdout: built
+// expect-stdout: dropped
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3

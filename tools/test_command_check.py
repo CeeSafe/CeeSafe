@@ -206,7 +206,40 @@ def main():
         if p.returncode != 0:
             problems.append(f"sweep-unwraps: build failed: {p.stderr[-300:]}")
 
-    print(f"test_command_check: {len(expected)} tests, 6 checks; {len(problems)} problems")
+        # 7. a sweep's stacked awaits out of memory are set apart (ADR 0147; ADR 0056 §3.3, spec/tooling.md §10.2):
+        #    a recursion through await whose frame-stack chunk cannot be had stops the program with ADR 0056's panic,
+        #    which is no sweep failure; --sweep-strict counts it as one. Every allocation of the test is a chunk.
+        stacked = os.path.join(work, "sweep-frame-stack")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "sweep-frame-stack"), stacked,
+                        ignore=shutil.ignore_patterns("out"))
+        for flags, strict in (([], False), (["--sweep-strict"], True)):
+            label = "sweep-frame-stack " + " ".join(flags)
+            p = run(["test", "--sweep", "alloc"] + flags + ["--format", "json"], stacked)
+            try:
+                document = json.loads(p.stdout)
+            except ValueError:
+                problems.append(f"{label}: no JSON document: {p.stdout[:300]}{p.stderr[-300:]}")
+                continue
+            runs = document["sweepRuns"]
+            apart = document["sweepFrameStackOutOfMemory"]
+            failures = document["sweepFailures"]
+            if runs < 2:
+                problems.append(f"{label}: {runs} sweep runs; the recursion should need more than one chunk")
+            if strict:
+                if apart != 0 or len(failures) != runs or \
+                        any("async frame stack: out of memory" not in f for f in failures):
+                    problems.append(f"{label}: {apart} set apart, failures {failures[:3]} in {runs} runs; wanted "
+                                    f"every run a failure, the frame stack's panic")
+            elif apart != runs or failures:
+                problems.append(f"{label}: {apart} set apart and failures {failures[:3]} in {runs} runs; wanted "
+                                f"every run set apart")
+            if p.returncode != (1 if strict else 0):
+                problems.append(f"{label}: exit status {p.returncode}")
+        p = run(["test", "--sweep", "alloc"], stacked)
+        if "stopped by a stacked await out of memory)" not in p.stdout:
+            problems.append(f"sweep-frame-stack: the summary's words: {p.stdout[-200:]!r}")
+
+    print(f"test_command_check: {len(expected)} tests, 7 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

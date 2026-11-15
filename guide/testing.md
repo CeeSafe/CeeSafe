@@ -66,5 +66,7 @@ natively only. `ceesafec test --help` lists the options.
 Under `--sweep alloc` a run may return an error; it may not panic, crash or leak. One kind of panic is set apart: a
 `!` or `?` that unwraps the failed allocation in a file that has `@test` functions is counted as "unwrapped by the
 test itself", not as a sweep failure, since tests and their helpers may unwrap. That goes by file: a `!` in the code
-under test counts the same when its file holds tests too. `--sweep-strict` makes every such panic a failure; use it
-for code that must return the error.
+under test counts the same when its file holds tests too. A second kind is set apart as well: "async frame stack: out
+of memory", the defined end of a recursion through `await` that finds no memory for its frames (as a stack overflow
+ends a sync program), counted as "stopped by a stacked await out of memory". `--sweep-strict` makes every such panic a
+failure; use it for code that must return the error.

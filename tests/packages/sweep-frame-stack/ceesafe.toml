@@ -1,0 +1,5 @@
+# The fixture for a sweep's stacked awaits out of memory (ADR 0147, ADR 0056 §3.3, spec/tooling.md §10.2;
+# tools/test_command_check.py).
+[package]
+name = "sfs"
+version = "0.1.0"

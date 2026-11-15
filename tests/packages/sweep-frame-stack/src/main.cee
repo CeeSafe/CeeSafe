@@ -1,0 +1,22 @@
+// A recursion through `await` is stacked (ADR 0056): its frames come from the task's frame stack, in chunks. When a
+// chunk cannot be allocated, the program stops with "async frame stack: out of memory" (§3.3), as a sync program
+// whose call stack overflows does. `--sweep alloc` counts such a run apart, not as a sweep failure (ADR 0147);
+// `--sweep-strict` counts it as one. tools/test_command_check.py runs it.
+
+/// A recursion `n` deep through `await`: its depth.
+async fn depth(n: u32) -> u64 {
+    if (n == 0) {
+        return 0;
+    }
+    return await depth(n - 1) + 1;
+}
+
+/// Deep enough for more than one chunk, so the sweep fails several chunk allocations.
+@test
+async fn recursesThroughAwait() {
+    assert(await depth(5000) == 5000);
+}
+
+fn main() {
+    Console.writeLine(Async.run(depth(10)));
+}

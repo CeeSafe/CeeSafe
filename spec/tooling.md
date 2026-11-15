@@ -1010,6 +1010,13 @@ Each test's outcome:
   any other function of such a file, the code under test included when a source file holds its own `@test`s. An
   unwrap in a file without tests is a sweep failure. **`--sweep-strict`** makes every such panic a sweep failure:
   the sweep for code that must return the error.
+- **A sweep's stacked awaits** (ADR 0147). Under `--sweep alloc`, a run that panics with "async frame stack: out of
+  memory" (a stacked await whose chunk could not be allocated: ADR 0056 §3.3, the outcome type-system.md defines for
+  it, as a stack overflow is a sync program's) is not a sweep failure either: it is counted apart, and the summary's
+  parenthesis says `N stopped by a stacked await out of memory` (after the unwraps, when there are both;
+  `sweepFrameStackOutOfMemory` in the JSON). It is the rule `tools/fault_injection.py` has followed since ADR 0056.
+  `--sweep-strict` makes such a panic a sweep failure too: the sweep for code that must not stop where memory runs
+  out, which then keeps such recursion behind `Async.boxed`.
 
 ### 10.3 The harness protocol (version 1)
 

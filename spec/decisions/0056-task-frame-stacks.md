@@ -85,6 +85,8 @@ A stacked await's value is the callee's, `T`, as for any await. If no chunk can 
 **a is proposed**, and stated where recursion is: memory for recursion through `await` is the call stack's kind, not a
 value. Code that wants the failure as a value keeps `Async.boxed`. The fault-injection sweep reaches the chunk
 allocation (it is the runtime's `ceesafe_alloc`), so a test sees the panic where memory runs out.
+- *Since ADR 0147 (2026-11-15):* `ceesafec test --sweep alloc` counts that panic apart, not as a sweep failure, as
+  `tools/fault_injection.py` always has; `--sweep-strict` counts it as one.
 
 ### 3.4 Profiles and threads
 

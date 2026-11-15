@@ -507,8 +507,8 @@ fn testHelp() {
     Console.writeLine("  --timeout <seconds>   a test running longer has timed out (default 60)");
     Console.writeLine("  --sweep alloc|cancel  run each passing test again under every failed allocation or every");
     Console.writeLine("                        cancellation point (native only)");
-    Console.writeLine("  --sweep-strict        with --sweep alloc: a panic from an unwrap in a test's own file fails");
-    Console.writeLine("                        the sweep too");
+    Console.writeLine("  --sweep-strict        with --sweep alloc: a panic from an unwrap in a test's own file, or a");
+    Console.writeLine("                        stacked await out of memory, fails the sweep too");
     Console.writeLine("  --format text|json    the report's form");
     Console.writeLine("  --deny-warnings       treat the check's warnings as errors: no test runs");
     Console.writeLine(
@@ -615,6 +615,7 @@ fn testCommand() -> i32 {
     var sweepFailures = Vector<Vector<u8>>.create();
     var sweepRuns: u64 = 0;
     var sweepUnwrapped: u64 = 0;
+    var sweepFrameStack: u64 = 0;
     let spansPath = joinPath(directory.view(), "test-spans.txt".bytes())!;
     let testSpans = match (readFile(StringView.fromUtf8(spansPath.view())!)) {
         Ok(t) => t,
@@ -640,6 +641,11 @@ fn testCommand() -> i32 {
                 if (swept.outcome == 2 && options.testSweep == 1 && !options.testSweepStrict &&
                     unwrapInTest(swept.message.view(), testSpans.view())) {
                     sweepUnwrapped += 1; // the test's own `!` or `?` met the failure (ADR 0075 §2.16)
+                    continue;
+                }
+                if (swept.outcome == 2 && options.testSweep == 1 && !options.testSweepStrict &&
+                    containsText(swept.message.view(), "async frame stack: out of memory")) {
+                    sweepFrameStack += 1; // a stacked await had no chunk: ADR 0056 §3.3's outcome (ADR 0147)
                     continue;
                 }
                 if (swept.outcome != 0 && swept.outcome != 1) {
@@ -712,6 +718,8 @@ fn testCommand() -> i32 {
         json.number(truncate<i64>(sweepRuns))!;
         json.name("sweepUnwrappedByTest")!;
         json.number(truncate<i64>(sweepUnwrapped))!;
+        json.name("sweepFrameStackOutOfMemory")!;
+        json.number(truncate<i64>(sweepFrameStack))!;
         json.name("passed")!;
         json.number(truncate<i64>(passed))!;
         json.name("failed")!;
@@ -761,10 +769,20 @@ fn testCommand() -> i32 {
             appendText(mut summary, " sweep failure(s) in ")!;
             appendDecimal(mut summary, sweepRuns)!;
             appendText(mut summary, " sweep run(s)")!;
-            if (sweepUnwrapped > 0) {
+            if (sweepUnwrapped > 0 || sweepFrameStack > 0) {
                 appendText(mut summary, " (")!;
-                appendDecimal(mut summary, sweepUnwrapped)!;
-                appendText(mut summary, " unwrapped by the test itself)")!;
+                if (sweepUnwrapped > 0) {
+                    appendDecimal(mut summary, sweepUnwrapped)!;
+                    appendText(mut summary, " unwrapped by the test itself")!;
+                }
+                if (sweepUnwrapped > 0 && sweepFrameStack > 0) {
+                    appendText(mut summary, ", ")!;
+                }
+                if (sweepFrameStack > 0) {
+                    appendDecimal(mut summary, sweepFrameStack)!;
+                    appendText(mut summary, " stopped by a stacked await out of memory")!;
+                }
+                appendText(mut summary, ")")!;
             }
         }
         Console.writeLine(StringView.fromUtf8(summary.view())!);

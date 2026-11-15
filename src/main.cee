@@ -157,7 +157,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
-        "  --sweep-strict    (test --sweep alloc) a panic from an unwrap in a test's own file fails the sweep too\n",
+        "  --sweep-strict    (test --sweep alloc) a panic from an unwrap in a test's own file, or a stacked await out\n                    of memory, fails the sweep too\n",
     )?;
     appendText(out, "                    (tooling.md §10.2)\n")?;
     appendText(

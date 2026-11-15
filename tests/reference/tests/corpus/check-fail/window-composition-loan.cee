@@ -1,0 +1,26 @@
+// ADR 0141: `Window.composition()` is a view of the window's copy of the composition, which `nextEvent` replaces.
+// The view borrows the window (§25.6's elision), so a `nextEvent` while it is used is a mutable borrow of a borrowed
+// window, and so are the other `borrow mut` calls.
+fn heldAcrossNextEvent() {
+    var window = Window.open("x", 10, 10)!;
+    let text = window.composition();
+    let next = window.nextEvent(); // error[N0241]
+    Console.writeLine(text);
+}
+
+fn heldAcrossSetTextInput() {
+    var window = Window.open("x", 10, 10)!;
+    let text = window.composition();
+    window.setTextInput(false); // error[N0241]
+    Console.writeLine(text);
+}
+
+fn copiedFirst() -> Result<void, AllocError> {
+    var window = Window.open("x", 10, 10)!;
+    let text = String.from(window.composition())?;
+    let next = window.nextEvent();
+    Console.writeLine(text.view());
+    return Ok();
+}
+
+fn main() {}

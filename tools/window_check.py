@@ -12,8 +12,14 @@ that opened a window would open one on the developer's screen:
 3. the surfaces (ADR 0137): a scripted window's nativeHandle is Scripted, a Frames window presents, an External
    one answers Unsupported to present and presentChanged and dumps no frame, and the interpreter answers Unsupported
    to openWith; the script's `scale` item gives Resized only when it changes the scale (in the trace of 1);
-4. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
-   least 1, takes frames and closes; and an External one gives this system's handles, not zero.
+4. text input and the clipboard (ADR 0141): a program that turns text input on and off and reads and writes the
+   clipboard, frame by frame, must print the trace this script computes from the script's `compose`, `type` and
+   `clipboard` items (a composition only while text input is on, an event only when it changes, `composition()` the
+   latest one when the event is handed out, an end when text input goes off, the clipboard as the script and the
+   program last set it); a caret inside a character is a malformed script;
+5. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
+   least 1, takes frames and closes; an External one gives this system's handles, not zero; and a real window's
+   clipboard gives back the text put on it (this replaces the clipboard's contents).
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -78,6 +84,7 @@ fn show(e: WindowEvent) -> bool {
             Console.writeLine(bit(m.shift) + 2 * bit(m.control) + 4 * bit(m.alt) + 8 * bit(m.command));
         }
         WindowEvent.Text(c) => { Console.write("text "); Console.writeLine(c); }
+        WindowEvent.Composition => { Console.writeLine("composition"); }
     }
     return false;
 }
@@ -143,6 +150,121 @@ fn main() {
     }
 }
 """
+
+# Text input and the clipboard (ADR 0141): actions at the start of some frames, then the frame's events, then the
+# clipboard. A real window ("real") puts a text on the clipboard and reads it back.
+TEXT = r"""
+fn clipboard(window: borrow mut Window) {
+    var text = String.create();
+    if (window.clipboardText(mut text)) {
+        Console.write("clipboard [");
+        Console.write(text.view());
+        Console.writeLine("]");
+    } else {
+        Console.writeLine("clipboard none");
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check text", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let real = match (Process.argument(1)) {
+        Some(m) => m == "real",
+        null => false,
+    };
+    if (real) {
+        window.setTextInput(true);
+        window.setTextInputArea(WindowBox { x: 10, y: 10, width: 2, height: 16 });
+        match (window.setClipboardText("CeeSafe ✓ clipboard")) {
+            Ok() => {}
+            Err(_) => { Console.writeLine("set failed"); return 1; }
+        }
+        clipboard(mut window);
+        window.setTextInput(false);
+        return 0;
+    }
+    let pixels = [0xff000000u32; 4];
+    for (frame in 0u32..12) {
+        Console.write("frame ");
+        Console.writeLine(frame);
+        if (frame == 1 || frame == 7) {
+            window.setTextInput(true);
+            window.setTextInputArea(WindowBox { x: 3, y: 4, width: 1, height: 12 });
+        }
+        if (frame == 5) {
+            window.setTextInput(false);
+        }
+        if (frame == 6) {
+            match (window.setClipboardText("copied ✓")) {
+                Ok() => {}
+                Err(_) => { Console.writeLine("set failed"); }
+            }
+        }
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Composition) => {
+                    Console.write("composition [");
+                    Console.write(window.composition());
+                    Console.write("] ");
+                    Console.writeLine(window.compositionCaret());
+                }
+                Some(WindowEvent.Text(c)) => { Console.write("text "); Console.writeLine(c); }
+                Some(_) => { Console.writeLine("other"); }
+                null => { break; }
+            }
+        }
+        clipboard(mut window);
+        window.present(pixels[..], 2, 2)!;
+    }
+    return 0;
+}
+"""
+
+TEXT_SCRIPT = ("0:compose:1:x;0:clipboard;1:compose:3:か;1:compose:3:かな;2:compose:3:かな;2:compose:0:かな;"
+               "3:type:仮名;3:compose:0:;4:compose:1:a;4:clipboard:from script ✓;5:compose:1:b;7:compose:2:é;"
+               "8:clipboard:;9:clipboard;10:compose:0:")
+
+
+def text_expected(script):
+    """The trace of TEXT run with `script`, by §26.13's grammar and ADR 0141's rules."""
+    items = {}
+    for item in (i for i in script.split(";") if i):
+        frame, what, *rest = item.split(":", 2)
+        items.setdefault(int(frame), []).append((what, rest[0] if rest else None))
+    lines, on, live, shown, clip = [], None, ("", 0), ("", 0), None
+    for frame in range(12):
+        lines.append(f"frame {frame}")
+        queue = []
+        if frame in (1, 7):
+            on = True
+        if frame == 5:
+            if live != ("", 0):
+                live = ("", 0)
+                queue.append("composition")
+            on = False
+        if frame == 6:
+            clip = "copied ✓"
+        for what, args in items.get(frame, []):
+            if what == "compose":
+                caret, text = args.split(":", 1)
+                if on and (text, int(caret)) != live:
+                    live = (text, int(caret))
+                    queue.append("composition")
+            elif what == "type":
+                queue += [f"text {ord(c)}" for c in args]
+            elif what == "clipboard":
+                clip = args
+        for e in queue:
+            if e == "composition":
+                shown = live
+                lines.append(f"composition [{shown[0]}] {shown[1]}")
+            else:
+                lines.append(e)
+        lines.append("clipboard none" if clip is None else f"clipboard [{clip}]")
+    return lines
+
 
 # Surfaces and handles (ADR 0137): prints the handle's kind, then what present and presentChanged answer.
 SURFACE = r"""
@@ -477,6 +599,33 @@ def main():
             elif os.path.exists(out) != dumps:
                 problems.append(f"{what}: a frame was {'not ' if dumps else ''}dumped")
 
+        text_source, text = build(compiler, TEXT, work, "text")
+        text_script = os.path.join(work, "text.txt")
+        with open(text_script, "w", encoding="utf-8") as f:
+            f.write(TEXT_SCRIPT)
+        r = run([text], {"CEESAFE_WINDOW_SCRIPT": text_script}, work)
+        want, got = text_expected(TEXT_SCRIPT), r.stdout.splitlines()
+        if r.returncode != 0 or got != want:
+            problems.append("text input and the clipboard: expected\n  " + "\n  ".join(want) + "\ngot (status "
+                            f"{r.returncode})\n  " + "\n  ".join(got) + "\n" + r.stderr)
+        malformed = {}
+        for name, item in (("inside", "0:compose:1:é"), ("nocaret", "0:compose:かな")):
+            malformed[name] = os.path.join(work, name + ".txt")
+            with open(malformed[name], "w", encoding="utf-8") as f:
+                f.write(item)
+        text_cases = [
+            ("a caret inside a character", [errors], {"CEESAFE_WINDOW_SCRIPT": malformed["inside"]}, "4"),
+            ("a compose without a caret", [errors], {"CEESAFE_WINDOW_SCRIPT": malformed["nocaret"]}, "4"),
+            ("text input in the interpreter", [compiler, "run", "--interp", text_source],
+             {"CEESAFE_WINDOW_SCRIPT": text_script}, "open failed"),
+        ]
+        for what, command, env, answer in text_cases:
+            r = run(command, env, work)
+            status = 1 if answer == "open failed" else 0
+            if r.returncode != status or r.stdout.strip() != answer:
+                problems.append(f"{what}: expected {answer}, got {r.stdout.strip()!r} (status {r.returncode}) "
+                                f"{r.stderr.strip()}")
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -487,7 +636,7 @@ def main():
             if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
-        checks = 1 + len(cases) + len(surface_cases) + 8
+        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + 8
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -495,6 +644,11 @@ def main():
             if r.returncode != 0 or r.stdout.strip() != f"{kind} 1 1":
                 problems.append(f"a real External window: expected '{kind} 1 1', got {r.stdout.strip()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
+            r = run([text, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "clipboard [CeeSafe ✓ clipboard]":
+                problems.append(f"a real window's clipboard: expected 'clipboard [CeeSafe ✓ clipboard]', got "
+                                f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)
             checks += 1

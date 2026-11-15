@@ -9,8 +9,8 @@ struct Buffer {
 
 fn viewsOf(buffer: borrow mut Buffer) -> usize {
     var views = Vector<StringView>.create();
-    let pushed = views.push(buffer.text.view());
-    let again = views.push(buffer.text.view());
+    views.push(buffer.text.view())!;
+    views.push(buffer.text.view())!;
     return views.length;
 }
 
@@ -19,7 +19,7 @@ fn main() -> i32 {
     let text = String.from("hello")!;
     let t = Thread.spawn(move () => {
         var views = Vector<StringView>.create();
-        let pushed = views.push(text.view());
+        views.push(text.view())!;
         Console.writeLine(views.length);
         Console.writeLine(views[0]);
     })!;
@@ -29,9 +29,9 @@ fn main() -> i32 {
     let other = String.from("world")!;
     var f: Box<dyn mut fn() -> usize> = Box.create(move () => {
         var views = Vector<StringView>.create();
-        let pushed = views.push(other.view());
+        views.push(other.view())!;
         let local = String.from("local")!;
-        let more = views.push(local.view());
+        views.push(local.view())!;
         return views.length + views[0].length;
     })!;
     Console.writeLine(f());

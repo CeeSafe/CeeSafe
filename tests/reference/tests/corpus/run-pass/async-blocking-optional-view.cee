@@ -1,0 +1,28 @@
+// An optional of a view is captured by `Async.blocking` (and `Thread.both`) as the view is (cee-proxy's F22,
+// type-system.md §38.6): ceesafec 0.51.1 refused `Slice<u8>?` with N0334 while it took `Slice<u8>`.
+
+fn size(a: Slice<u8>?) -> usize => match (a) {
+    Some(s) => s.length,
+    null => 0,
+};
+
+async fn both(v: Slice<u8>) -> usize {
+    let plain = await Async.blocking(() => v.length);
+    let held: Slice<u8>? = Some(v);
+    let none: Slice<u8>? = null;
+    let named: StringView? = Some("four");
+    let q = await Async.blocking(() => size(held) + size(none) + (named ?? "").bytes().length);
+    return plain + q;
+}
+
+fn main() {
+    Console.writeLine(Async.run(both("abc".bytes())));
+    var low: usize = 0;
+    var high: usize = 0;
+    let halves: Slice<u8>? = Some("abcdef".bytes());
+    Thread.both(() => { low = size(halves); }, () => { high = size(halves) * 2; });
+    Console.writeLine(low + high);
+}
+
+// expect-stdout: 10
+// expect-stdout: 18

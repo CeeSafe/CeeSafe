@@ -5218,9 +5218,9 @@ fn main() {
 - **Captures.** `a` runs on another thread while `b` runs on this one, so each capture of either closure must be safe
   to use from another thread at the same time:
   - a capture used **shared** needs a **`Share`** type, where, for this rule only, `borrow T`, `Slice<T>` and
-    `StringView` are `Share` when `T` is;
+    `StringView` are `Share` when `T` is, and an optional of one of these when it is (cee-proxy's F22);
   - a capture used **mutably** needs a **`Send`** type, where, for this rule only, `borrow mut T` and `SliceMut<T>`
-    are `Send` when `T` is;
+    are `Send` when `T` is, and an optional of one of these;
   - a captured closure is refused;
   - otherwise **N0334**, naming the capture and its type.
   These extended rules apply here only: outside `Thread.both` references are neither `Send` nor `Share` (§38.1).

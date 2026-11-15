@@ -2041,6 +2041,11 @@ struct TypeTable {
     /// For `Thread.both` (§38.6): may a capture of this type be used `mutably`, or shared, while the other runs?
     fn isForkSafe(borrow this, id: u32, mutably: bool) -> Result<bool, AllocError> {
         let t = this.types[id as usize];
+        // an optional is as safe as what it may hold: `Slice<u8>?` as `Slice<u8>` (cee-proxy's F22)
+        let held = this.optionType(id);
+        if (held != none()) {
+            return this.isForkSafe(held, mutably);
+        }
         if (!isKind(t.kind, TypeKind.Reference)) {
             return if (mutably) this.isSendType(id) else this.isShare(id);
         }

@@ -2049,8 +2049,10 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
 #elif defined(_WIN32)
 /* Win32 and GDI. The window procedure queues events while PeekMessageW dispatches; a frame is kept as BGRA for
    WM_PAINT and drawn with StretchDIBits. */
-#pragma comment(lib, "user32.lib")
+#if defined(_MSC_VER)
+#pragma comment(lib, "user32.lib") /* clang and cl; MinGW's gcc gets -lgdi32 from ceesafec (tooling.md §8.3) */
 #pragma comment(lib, "gdi32.lib")
+#endif
 #include <imm.h> /* the input method's types and constants; its functions come from imm32.dll, loaded at first use */
 
 struct cee_win32 {

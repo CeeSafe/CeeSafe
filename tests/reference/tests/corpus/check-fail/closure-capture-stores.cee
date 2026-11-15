@@ -52,7 +52,9 @@ fn notCalled(into: borrow mut Holder) {
 fn inner(into: borrow mut Holder) {
     let t = String.from("local")!;
     let v = t.view();
-    let g = () => { // error[N0272] // error[N0272]
+    // One N0272 fewer after 0.52.0: the one dropped said 'a value borrowed from 'into' into what 'into' refers to',
+    // a capture by shared reference taken for one written through (ClayWind's M1, type-system.md §25.7 rule 2).
+    let g = () => { // error[N0272]
         let h = () => into.keep(v); // error[N0272]
         h();
     };

@@ -1,0 +1,49 @@
+// A view of a captured value kept in a local of the closure's body (ClayWind's M1): the local is the body's own and
+// dies before the body returns, so nothing flows into the environment. Up to 0.52.0 each form was N0272 ("stores a
+// value borrowed from 'env.text' into what 'env' refers to"): the view of `env.text`, made through a shared borrow,
+// carried the mutable placeholder of `env`, a `borrow mut` parameter, and the vector it was pushed into was taken
+// for memory `env` refers to. So was the same in a function of a `borrow mut` parameter (type-system.md §25.7 rule 2).
+struct Buffer {
+    text: String;
+}
+
+fn viewsOf(buffer: borrow mut Buffer) -> usize {
+    var views = Vector<StringView>.create();
+    let pushed = views.push(buffer.text.view());
+    let again = views.push(buffer.text.view());
+    return views.length;
+}
+
+fn main() -> i32 {
+    // A thread's body.
+    let text = String.from("hello")!;
+    let t = Thread.spawn(move () => {
+        var views = Vector<StringView>.create();
+        let pushed = views.push(text.view());
+        Console.writeLine(views.length);
+        Console.writeLine(views[0]);
+    })!;
+    t.join();
+
+    // A boxed closure, called twice.
+    let other = String.from("world")!;
+    var f: Box<dyn mut fn() -> usize> = Box.create(move () => {
+        var views = Vector<StringView>.create();
+        let pushed = views.push(other.view());
+        let local = String.from("local")!;
+        let more = views.push(local.view());
+        return views.length + views[0].length;
+    })!;
+    Console.writeLine(f());
+    Console.writeLine(f());
+
+    // A function of a `borrow mut` parameter.
+    var buffer = Buffer { text: String.from("buffer")! };
+    Console.writeLine(viewsOf(mut buffer));
+    return 0;
+}
+// expect-stdout: 1
+// expect-stdout: hello
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 2

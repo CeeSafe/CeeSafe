@@ -148,6 +148,11 @@ struct Borrows {
     blockOf: Vector<u32>;          // block id to position
     reached: Vector<Vector<bool>>; // by loan: the blocks reachable from where it is made, once asked
     holders: Vector<u64>;          // (scope site << 32) | local: a spawned child's environment (ADR 0033 §3.2)
+    /// By local: is it a shared reference, view or slice? Nothing is written through one, so a `borrow mut`
+    /// parameter's placeholder reaches it as its shared twin (§25.7 rule 2).
+    readOnly: Vector<bool>;
+    /// By loan: a mutable placeholder's shared twin, or none (readOnly).
+    sharedTwins: Vector<u32>;
 }
 
 /// A scope's children hold what their environments captured until the scope returns (type-system.md §40.5, ADR 0033
@@ -665,7 +670,10 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
         }
         for (id in b.pointsTo[write.holder as usize].view()) {
             let loan = borrow b.loans[id as usize];
-            if (!loan.hasPlace || loan.place.local != 0 || loan.place.projections.count < 2) {
+            // Only a mutable loan is written through (a shared one under a shared write, §25.7 rule 2): the holder
+            // also holds what was stored into it, such as a view of another capture.
+            if (!loan.hasPlace || loan.place.local != 0 || loan.place.projections.count < 2 ||
+                !(loan.isMutable || write.shared)) {
                 continue;
             }
             let second = n.projections[(loan.place.projections.start + 1) as usize];
@@ -731,10 +739,13 @@ fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<vo
             }
             let count = b.pointsTo[edge.from as usize].length;
             for (k in 0..count) {
-                let loan = b.pointsTo[edge.from as usize][k];
+                var loan = b.pointsTo[edge.from as usize][k];
                 if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
                     (edge.dropOuter == everyOuter() || b.loans[loan as usize].parameterIndex == edge.dropOuter)) {
                     continue;
+                }
+                if (b.readOnly[edge.to as usize]) {
+                    loan = sharedLoan(b, loan);
                 }
                 if (addPointsTo(b, edge.to, loan)?) {
                     changed = true;
@@ -754,41 +765,47 @@ fn hasEdge(edges: borrow Vector<LoanEdge>, from: u32, to: u32) -> bool {
     return false;
 }
 
+fn placeholderLoan(parameter: u32, isMutable: bool, outer: bool) -> Loan => Loan {
+    isMutable: isMutable,
+    hasPlace: false,
+    outer: outer,
+    place: barePlace(parameter),
+    block: none(),
+    index: none(),
+    span: Span { start: 0, end: 0 },
+    parameterIndex: parameter,
+};
+
+/// A placeholder loan of reference parameter `parameter`, in its points-to set; a mutable one gets a shared twin, the
+/// loan a value reached through a shared reference carries in its place (Borrows.readOnly, §25.7 rule 2).
+fn addPlaceholder(b: borrow mut Borrows, parameter: u32, isMutable: bool, outer: bool) -> Result<void, AllocError> {
+    let loan = addLoan(b, placeholderLoan(parameter, isMutable, outer))?;
+    addPointsTo(b, parameter, loan)?;
+    if (isMutable) {
+        let twin = addLoan(b, placeholderLoan(parameter, false, outer))?;
+        while (b.sharedTwins.length <= loan as usize) {
+            b.sharedTwins.push(none())?;
+        }
+        b.sharedTwins[loan as usize] = twin;
+    }
+    return Ok();
+}
+
+/// The loan a value reached through a shared reference carries for `loan`: a mutable placeholder's shared twin, else
+/// the loan itself. Through a shared reference, a view or a slice nothing is written (§25.7 rule 2).
+fn sharedLoan(b: borrow Borrows, loan: u32) -> u32 =>
+    if ((loan as usize) < b.sharedTwins.length && b.sharedTwins[loan as usize] != none()) b.sharedTwins[loan as usize]
+        else loan;
+
 fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) -> Result<void, AllocError> {
     // Placeholder loans for reference parameters.
     for (i in 0..b.parameterCount) {
         if (holdsLoans(c, n, b, i)) {
             let isMutable = isMutableReferenceType(c, localType(n, b, i));
             let outer = hasOuterPlaceholder(c, n, b, i);
-            let loan = addLoan(
-                b,
-                Loan {
-                    isMutable: isMutable,
-                    hasPlace: false,
-                    outer: outer,
-                    place: barePlace(i),
-                    block: none(),
-                    index: none(),
-                    span: Span { start: 0, end: 0 },
-                    parameterIndex: i,
-                },
-            )?;
-            addPointsTo(b, i, loan)?;
+            addPlaceholder(b, i, isMutable, outer)?;
             if (outer) {
-                let deep = addLoan(
-                    b,
-                    Loan {
-                        isMutable: isMutable,
-                        hasPlace: false,
-                        outer: false,
-                        place: barePlace(i),
-                        block: none(),
-                        index: none(),
-                        span: Span { start: 0, end: 0 },
-                        parameterIndex: i,
-                    },
-                )?;
-                addPointsTo(b, i, deep)?;
+                addPlaceholder(b, i, isMutable, false)?;
             }
         }
     }
@@ -2160,10 +2177,14 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         blockOf: Vector<u32>.create(),
         reached: Vector<Vector<bool>>.create(),
         holders: Vector<u64>.create(),
+        readOnly: Vector<bool>.create(),
+        sharedTwins: Vector<u32>.create(),
     };
     for (k in 0..localCount) {
         b.pointsTo.push(Vector<u32>.create())?;
         b.pointsToBits.push(Vector<u64>.create())?;
+        let typ = n.functions[function as usize].locals[k].typ;
+        b.readOnly.push(isReferenceType(c, typ) && !isMutableReferenceType(c, typ))?;
     }
     var maxId: u32 = 0;
     for (position in 0..blockCount) {

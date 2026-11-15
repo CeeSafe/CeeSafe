@@ -59,13 +59,17 @@ fn x5(into: borrow mut Holder) {
 // x6: view computed inside the closure from a captured String
 fn x6(into: borrow mut Holder) {
     let t = String.from("local local local local local local local local")!;
-    let g = () => into.keep(t.view()); // error[N0272] // error[N0272] // error[N0272]
+    // One N0272 fewer after 0.52.0: the one dropped said 'a value borrowed from 'into' into what 'into' refers to',
+    // a capture by shared reference taken for one written through (ClayWind's M1, type-system.md §25.7 rule 2).
+    let g = () => into.keep(t.view()); // error[N0272] // error[N0272]
     g();
 }
 // x7: block body, method call as a statement
 fn x7(into: borrow mut Holder) {
     let t = String.from("local local local local local local local local")!;
-    let g = () => { // error[N0272] // error[N0272]
+    // One N0272 fewer after 0.52.0: the one dropped said 'a value borrowed from 'into' into what 'into' refers to',
+    // a capture by shared reference taken for one written through (ClayWind's M1, type-system.md §25.7 rule 2).
+    let g = () => { // error[N0272]
         into.keep(t.view()); // error[N0272]
     };
     g();

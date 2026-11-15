@@ -349,7 +349,8 @@ fn runCompilerWith(
     appendBytes(mut at, path.view())?;
     var responses = Vector<Vector<u8>>.create();
     responses.push(at)?;
-    return runThroughBatch(compiler.path.view(), responses, compiler.vcvars.view());
+    let none = Vector<Vector<u8>>.create();
+    return runThroughBatch(compiler.path.view(), responses, compiler.vcvars.view(), none);
 }
 
 /// `argument` quoted as GNU's response files are read (clang's and gcc's): `\` and `"` escaped by a backslash.

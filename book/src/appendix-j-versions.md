@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.48.3
+## Releases 0.25.0 to 0.49.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.49.0 | 2026-11-15 | Text input through the platform's input method, and the clipboard's text (ADR 0141). `window.setTextInput(true)` lets the input method compose for the window: `WindowEvent.Composition` says its text changed, `window.composition()` and `window.compositionCaret()` read it, committed text still arrives as `Text` events, and `window.setTextInputArea(box)` puts the candidate window by the caret. `window.setClipboardText(text)` and `window.clipboardText(out)` write and read the system clipboard. A window that never calls `setTextInput` behaves as before. A `match` on `WindowEvent` that names every variant needs the new arm. | [Appendix C](./appendix-c-built-in-types) |
 | 0.48.3 | 2026-11-15 | Fixes and no new feature. An impl's static function, written without `public`, can be called through an interface bound from another package, as its methods could: it is as visible as the interface. And `ceesafec run --interp` drops a value nested very deeply, a tree 100,000 levels deep, as the compiled program does, where it used to crash. | [11.1](./ch11-01-writing-tests) |
 | 0.48.2 | 2026-11-15 | A fix and no new feature: `replace(mut out, value)` and `swap(mut a, mut b)` accept a parameter or a `let` of type `borrow mut T` and change what it refers to, as an assignment to it does, and the reference stays usable after the call. | [Appendix C](./appendix-c-built-in-types) |
 | 0.48.1 | 2026-11-15 | A fix and no new feature: two `@test` functions with one name are reported once, as a name defined twice (N0201), without a second, misleading error that the test is generic. | [11.1](./ch11-01-writing-tests) |

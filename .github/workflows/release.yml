@@ -328,6 +328,75 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  freebsd:
+    # FreeBSD x86_64 (ADR 0149): GitHub has no FreeBSD runner, so the build job's steps run in a FreeBSD 14.4 VM inside
+    # an Ubuntu job (vmactions/freebsd-vm, pinned to v1.6.0's commit). No secret reaches this job. Generation 1 is the
+    # seed compiled by FreeBSD's cc; generation 2 is built by generation 1; both emit the seed byte for byte; then the
+    # smoke test and the archive, which the copy back brings out of the VM.
+    needs: [version, seed]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed
+          path: seed
+      - name: Build, check and package in FreeBSD
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        with:
+          release: "14.4"
+          usesh: true
+          envs: "VERSION"
+          run: |
+            set -e
+            freebsd-version
+            cc --version
+            cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1 -lm -lpthread
+            mkdir -p stage
+            ./gen1 build -o stage/ceesafec
+            ./gen1 build --emit c -o c1
+            diff -r seed c1
+            stage/ceesafec build --emit c -o c2
+            diff -r seed c2
+            stage/ceesafec --version | grep -Fx "ceesafec $VERSION"
+            printf 'fn main() {\n    Console.writeLine(40 + 2);\n}\n' > hello.cee
+            test "$(stage/ceesafec run --interp hello.cee)" = 42
+            stage/ceesafec build hello.cee -o hello-native
+            test "$(./hello-native)" = 42
+            cat > window.cee <<'CEE'
+            fn main() {
+                var window = Window.open("smoke", 8, 6)!;
+                var events: u32 = 0;
+                let pixels = [0xff0000ffu32; 48];
+                for (frame in 0u32..3) {
+                    loop {
+                        match (window.nextEvent()) {
+                            Some(_) => { events += 1; }
+                            null => { break; }
+                        }
+                    }
+                    window.present(pixels[..], 8, 6)!;
+                }
+                Console.writeLine(events);
+            }
+            CEE
+            stage/ceesafec build window.cee -o window-native
+            printf '0:key:a;1:type:b;2:close' > window-script.txt
+            test "$(CEESAFE_WINDOW_SCRIPT=window-script.txt CEESAFE_WINDOW_DUMP=window-frame.bin ./window-native)" = 4
+            head -1 window-frame.bin | grep -Fx "ceesafe-window 8 6"
+            echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | stage/ceesafec mcp | grep -F '"result":{}'
+            cp COPYING COPYING.RUNTIME stage/
+            mkdir -p dist
+            tar -czf dist/ceesafec-freebsd-x64.tar.gz -C stage ceesafec COPYING COPYING.RUNTIME
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ceesafec-freebsd-x64
+          path: dist/*
+          if-no-files-found: error
+
   extension:
     # The VS Code extension (editors/vscode, guide/editors.md): its tests, the language server's among them run against
     # this release's linux-x64 ceesafec, then the .vsix, whose version must be the release's.
@@ -366,7 +435,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, build, extension, seed-check]
+    needs: [version, build, freebsd, extension, seed-check]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

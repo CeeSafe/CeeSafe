@@ -47,7 +47,7 @@ jobs:
           usesh: true
           copyback: false
           prepare: |
-            pkg install -y python3
+            pkg install -y python3 git
           run: |
             set -e
             freebsd-version
@@ -95,7 +95,10 @@ jobs:
             echo "the smoke test passes on FreeBSD"
             # CeeSafe's tests (spec/testing.md), each step's result kept, every one run.
             status=0
-            step() { echo "== $*"; if "$@" > step.log 2>&1; then tail -3 step.log; else tail -40 step.log; status=1; fi; }
+            step() {
+                echo "== $*"
+                if "$@" > step.log 2>&1; then tail -3 step.log; else grep -E '^ *FAIL' step.log | head -40; tail -25 step.log; status=1; fi
+            }
             step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus --jobs 4
             step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus --family run-pass --family run-fail --check-leaks --jobs 4
             W=""; for f in src/support/*.cee; do W="$W --with $f"; done

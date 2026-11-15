@@ -21,6 +21,7 @@ fail() {
 case "$(uname -s)" in
     Darwin) os=osx ;;
     Linux) os=linux ;;
+    FreeBSD) os=freebsd ;;
     *) fail "no prebuilt ceesafec for $(uname -s); on Windows use install.ps1, elsewhere build from source (guide/installation.md)" ;;
 esac
 case "$(uname -m)" in
@@ -28,6 +29,8 @@ case "$(uname -m)" in
     arm64 | aarch64) arch=arm64 ;;
     *) fail "no prebuilt ceesafec for $(uname -m)" ;;
 esac
+# FreeBSD: x86_64 only (ADR 0149).
+[ "$os-$arch" != freebsd-arm64 ] || fail "no prebuilt ceesafec for FreeBSD on $(uname -m); build it from the seed (guide/installation.md)"
 asset="ceesafec-$os-$arch.tar.gz"
 
 # CEESAFE_DOWNLOAD_BASE (a URL of a directory holding the assets) is for tests.
@@ -44,16 +47,20 @@ fetch() {
         curl -fsSL "$1" -o "$2" || fail "cannot download $1"
     elif command -v wget > /dev/null 2>&1; then
         wget -q "$1" -O "$2" || fail "cannot download $1"
+    elif command -v fetch > /dev/null 2>&1; then
+        fetch -q -o "$2" "$1" || fail "cannot download $1" # FreeBSD's base system has fetch, not curl
     else
-        fail "needs curl or wget"
+        fail "needs curl, wget or fetch"
     fi
 }
 
 sha256() {
     if command -v sha256sum > /dev/null 2>&1; then
         sha256sum "$1" | cut -d ' ' -f 1
-    else
+    elif command -v shasum > /dev/null 2>&1; then
         shasum -a 256 "$1" | cut -d ' ' -f 1
+    else
+        sha256 -q "$1" # FreeBSD's base system
     fi
 }
 

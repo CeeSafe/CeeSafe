@@ -51,6 +51,8 @@ lib-dirs = ["C:/vcpkg/installed/x64-windows/lib"]
 include-dirs = ["C:/vcpkg/installed/x64-windows/include"]
 ```
 
+*Since ADR 0149 (2026-11-15):* also `[target.freebsd]`, applied on FreeBSD.
+
 - **Values.**
   - Each field is an array of strings.
   - A name in `links` is letters, digits, `_`, `.`, `+` and `-`, and does not start with `-`. So no entry can become a

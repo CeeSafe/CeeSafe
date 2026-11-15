@@ -1,6 +1,6 @@
 # Releasing ceesafec
 
-A tag `v<version>` pushed to GitHub runs `.github/workflows/release.yml`, which publishes `ceesafec` for six platforms
+A tag `v<version>` pushed to GitHub runs `.github/workflows/release.yml`, which publishes `ceesafec` for seven platforms
 as a GitHub release, with `SHA256SUMS`. `site/public/install.sh` and `install.ps1` (served at
 `https://ceesafe.github.io/CeeSafe/install.sh` and `install.ps1`) install the latest release from it.
 
@@ -22,6 +22,9 @@ One C seed for every platform, so every binary is built from the same C and chec
    the Developer ID and notarized. A smoke test runs `--version`, the interpreter, a native build and the MCP server.
    `osx-x64` is built on an arm64 runner by ceesafec's own driver (`--cflag -arch --cflag x86_64`) and run under
    Rosetta when the runner has it.
+   **freebsd** does the same in a FreeBSD 14.4 x86_64 VM inside an Ubuntu job (`vmactions/freebsd-vm`, pinned to a
+   commit; ADR 0149), since GitHub has no FreeBSD runner: generation 1 by FreeBSD's `cc`, generation 2, the seed byte for
+   byte, the smoke test, `ceesafec-freebsd-x64.tar.gz`. No secret reaches that job.
 4. **extension**: the VS Code extension's tests (the language server's run against the linux-x64 `ceesafec` just
    built) and its `.vsix`, `ceesafe-language-<version>.vsix`.
 5. **publish**: `SHA256SUMS` (the archives, the seed and the `.vsix`) and the GitHub release.
@@ -34,6 +37,7 @@ One C seed for every platform, so every binary is built from the same C and chec
 | `ceesafec-linux-x64.tar.gz`, `ceesafec-linux-arm64.tar.gz` | Ubuntu 22.04 (glibc 2.35) | `ceesafec`, `COPYING`, `COPYING.RUNTIME` |
 | `ceesafec-osx-arm64.tar.gz`, `ceesafec-osx-x64.tar.gz` | macOS (arm64), signed and notarized | the same |
 | `ceesafec-win-x64.zip`, `ceesafec-win-arm64.zip` | Windows | `ceesafec.exe`, `COPYING`, `COPYING.RUNTIME` |
+| `ceesafec-freebsd-x64.tar.gz` | FreeBSD 14.4 (x86_64), in a VM | `ceesafec`, `COPYING`, `COPYING.RUNTIME` |
 | `ceesafe-language-<version>.vsix` | Ubuntu | the VS Code extension (`guide/editors.md`) |
 | `ceesafec-<version>-seed.tar.gz` | Ubuntu, checked on all three systems | ceesafec's C and runtime, `README.md` (how to build it with `cc` or `cl` alone), `COPYING`, `COPYING.RUNTIME` |
 

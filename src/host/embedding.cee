@@ -36,7 +36,7 @@ extern "C" {
 }
 
 /// The system ceesafec runs on, by the name uname(3) gives it: 1 macOS, 2 Linux, 3 Windows (rt.h's ceesafe_win_uname
-/// names it so), 0 another, on which nothing is embedded.
+/// names it so), 4 FreeBSD (ADR 0149), 0 another, on which nothing is embedded.
 /// Safety: uname writes a struct utsname, whose first member is the system's name, ending in NUL; no system's is
 /// larger than the 2,048 bytes given (1,280 on macOS, 390 on Linux, 8 written on Windows), and it writes during the
 /// call only.
@@ -60,7 +60,29 @@ fn hostSystem() -> u32 {
     if (sameBytes(system, "Windows".bytes())) {
         return 3;
     }
+    if (sameBytes(system, "FreeBSD".bytes())) {
+        return 4; // ADR 0149
+    }
     return 0;
+}
+
+/// FreeBSD's description of the open descriptor `fd`, a `struct kinfo_file` (sys/user.h; KINFO_FILE_SIZE, 1,392 bytes
+/// on amd64, the one FreeBSD target ceesafec is released for), from fcntl(F_KINFO) (FreeBSD 13.1 on): null if the
+/// call fails. Its first int is the size the caller gives; `kf_type` is at offset 4, the vnode's type
+/// (`kf_file_type`) at 32, and `kf_path`, the last member, NUL-terminated, at 1,392 - PATH_MAX (1,024) = 368.
+/// Safety: fcntl(F_KINFO) writes at most kf_structsize (1,392) bytes into `info`, which has them, during the call only.
+fn freeBsdKinfo(fd: i32) -> Result<Vector<u8>?, AllocError> {
+    var info = Vector<u8>.create();
+    for (i in 0..1392) {
+        info.push(0)?;
+    }
+    info[0] = 0x70; // kf_structsize = 1392 (0x570), little-endian
+    info[1] = 0x05;
+    let got = unsafe { fcntl(fd, 22, borrow mut info[0] as *mut u8) }; // F_KINFO
+    if (got == -1) {
+        return Ok(null);
+    }
+    return Ok(Some(info));
 }
 
 /// Why `written`, an embed path, is refused before any file is looked at; empty when it is not.
@@ -213,6 +235,22 @@ fn sourceDirectory(source: Slice<u8>) -> Result<Vector<u8>, AllocError> {
 /// Safety: F_GETPATH writes at most MAXPATHLEN (1,024) bytes on macOS, and the Windows runtime's at most 4,096, into
 /// `buffer`, which has 4,096; readlink at most the 4,095 given, and `link` ends in NUL; all during the call only.
 fn descriptorPath(system: u32, fd: i32) -> Result<Vector<u8>?, AllocError> {
+    if (system == 4) {
+        // FreeBSD: kinfo_file's kf_path, the path the descriptor was opened by, kept in step with renames.
+        let info = match (freeBsdKinfo(fd)?) {
+            Some(i) => i,
+            null => { return Ok(null); },
+        };
+        var end: usize = 368;
+        while (end < 1392 && info[end] != 0) {
+            end += 1;
+        }
+        if (end == 368 || end == 1392) {
+            return Ok(null);
+        }
+        let path = copyBytes(info[368..end])?;
+        return Ok(Some(path));
+    }
     var buffer = [0u8; 4096];
     if (system == 1 || system == 3) {
         let got = unsafe { fcntl(fd, 50, borrow mut buffer[0] as *mut u8 as *mut CChar) }; // F_GETPATH
@@ -248,6 +286,20 @@ fn descriptorPath(system: u32, fd: i32) -> Result<Vector<u8>?, AllocError> {
 fn descriptorKind(system: u32, fd: i32) -> Result<u32, AllocError> {
     if (system == 3) {
         return Ok(1);
+    }
+    if (system == 4) {
+        // FreeBSD: kinfo_file's kf_type (1, KF_TYPE_VNODE) and the vnode's type (1 KF_VTYPE_VREG, 2 KF_VTYPE_VDIR).
+        let info = match (freeBsdKinfo(fd)?) {
+            Some(i) => i,
+            null => { return Ok(0); },
+        };
+        if (info[4] != 1 || info[5] != 0 || info[6] != 0 || info[7] != 0) {
+            return Ok(3);
+        }
+        if (info[33] != 0 || info[34] != 0 || info[35] != 0) {
+            return Ok(3);
+        }
+        return Ok(if (info[32] == 1) 1 else if (info[32] == 2) 2 else 3);
     }
     var path = copyBytes((if (system == 1) "/dev/fd/" else "/proc/self/fd/").bytes())?;
     appendDecimal(mut path, truncate<u64>(fd))?;
@@ -356,7 +408,7 @@ fn readEmbedded(
     }
     let system = hostSystem();
     if (system == 0) {
-        return embedFailure("ceesafec embeds files only on Linux, macOS and Windows".bytes());
+        return embedFailure("ceesafec embeds files only on Linux, macOS, Windows and FreeBSD".bytes());
     }
     let path = match (cPath(candidate.view())?) {
         Some(p) => p,
@@ -364,7 +416,8 @@ fn readEmbedded(
     };
     // O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC, and AT_FDCWD (the path is absolute, so it is not used): macOS's
     // values, then Linux's (the same on every architecture ceesafec is released for); Windows's openat takes none.
-    let flags: i32 = if (system == 1) 0x1020004 else if (system == 2) 0x80900 else 0;
+    // FreeBSD's (sys/fcntl.h): O_NONBLOCK 0x4, O_NOCTTY 0x8000, O_CLOEXEC 0x100000, and AT_FDCWD -100.
+    let flags: i32 = if (system == 1) 0x1020004 else if (system == 2) 0x80900 else if (system == 4) 0x108004 else 0;
     let here: i32 = if (system == 1) -2 else -100;
     let fd = unsafe { openat(here, borrow path[0] as *u8 as *CChar, flags) };
     if (fd < 0) {

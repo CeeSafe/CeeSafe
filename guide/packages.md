@@ -39,7 +39,7 @@ links = ["ssl", "crypto"]                # -lssl -lcrypto (ssl.lib crypto.lib wi
 lib-dirs = ["$OPENSSL_DIR/lib"]          # an environment variable, or a literal path
 include-dirs = ["$OPENSSL_DIR/include"]  # for this package's own C files and its @header files
 
-[target.windows]                         # added on Windows; also [target.macos], [target.linux]
+[target.windows]                         # added on Windows; also [target.macos], [target.linux], [target.freebsd]
 links = ["libssl", "libcrypto"]
 ```
 

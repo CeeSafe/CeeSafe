@@ -9,7 +9,8 @@
 ## 1. Context
 
 CeeSafe has one clock, the monotonic one: `Timer.now()` (lib/core, `ceesafe_async_now`: `CLOCK_MONOTONIC`,
-`GetTickCount64`, or the freestanding environment's `ceesafe_env_now_ms`), in milliseconds from an arbitrary start. It
+`GetTickCount64` (`QueryPerformanceCounter` since ADR 0148), or the freestanding environment's
+`ceesafe_env_now_ms`), in milliseconds from an arbitrary start. It
 orders events and measures time, and it never jumps, but it says nothing of the date. Nothing in `runtime/` or `lib/`
 reads the system's real time.
 

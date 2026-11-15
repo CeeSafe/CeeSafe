@@ -213,7 +213,7 @@ links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcryp
 lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
 include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files and its @headers (ADR 0120)
 
-[target.windows]             # also [target.macos] and [target.linux]: added after [package]'s on that system
+[target.windows]             # also [target.macos], [target.linux] and [target.freebsd] (ADR 0149): added after [package]'s on that system
 links = ["libssl", "libcrypto"]
 
 [embed]                      # where `embed` may read besides the package's directory (ADR 0087 §2.8)
@@ -788,7 +788,7 @@ Visual Studio's "Desktop development with C++" workload (or the Build Tools), or
 
 | Compiler | Flags |
 |---|---|
-| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc, and for gcc (MinGW-w64) the system libraries the hosted runtime calls, `-lws2_32 -lgdi32 -lbcrypt`, which the runtime names with `#pragma comment(lib)` for clang and `cl` and which MinGW's gcc does not follow. With `--split`, each C file is compiled alone with the same flags and `-c`, at most `--jobs` at once, and the objects are linked with `-g` (for `-g`), the `--cflag`s, the libraries and the stack (`c-backend.md` §2.4) |
+| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc, and for gcc (MinGW-w64) the system libraries the hosted runtime calls, `-lws2_32 -lgdi32 -lbcrypt`, which the runtime names with `#pragma comment(lib)` for clang and `cl` and which MinGW's gcc does not follow; on FreeBSD `-lpthread`, since its threads are libthr, not libc (ADR 0149). With `--split`, each C file is compiled alone with the same flags and `-c`, at most `--jobs` at once, and the objects are linked with `-g` (for `-g`), the `--cflag`s, the libraries and the stack (`c-backend.md` §2.4) |
 | `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
 
 A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one relocatable object) needs clang or gcc.

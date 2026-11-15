@@ -1967,10 +1967,15 @@ def main():
         impl_order(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
-        interface_records(compiler, work, problems)
+        # The interface records' cache (ADR 0082) reads fstat's layout, known for Linux and macOS only: on FreeBSD
+        # no record is made and every check is the full one (ADR 0149 §2.3), so there is nothing to check.
+        freebsd = sys.platform.startswith("freebsd")
+        if not freebsd:
+            interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 36 checks; {len(problems)} problems")
+    skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
+    print(f"package_tests: 36 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

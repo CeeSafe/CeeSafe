@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// The release workflow builds this with MinGW's gcc on Windows (x64): the hosted runtime calls Winsock (a socket),
+// GDI (a window) and BCrypt (Random), which ceesafec must name for gcc, as `#pragma comment(lib)` names them for clang
+// and cl (tooling.md §8.3). It links and runs; the window is opened only with an argument, as a CI runner may have no
+// desktop, but its code is linked either way.
+fn main() -> i32 {
+    let listener = TcpListener.bind("127.0.0.1", 0u16);
+    let n = Random.below(10)!;
+    if (Process.argumentCount() > 1) {
+        match (Window.open("mingw link check", 64, 64)) {
+            Ok(_) => { Console.writeLine("window: open"); }
+            Err(_) => { Console.writeLine("window: none"); }
+        }
+    }
+    if (n >= 10 || listener.isErr()) {
+        return 1;
+    }
+    Console.writeLine("linked: Winsock, GDI and BCrypt");
+    return 0;
+}

@@ -1,0 +1,45 @@
+// ADR 0150: a drop and a drag over a window are plain values, built without a window: a `WindowDrop` owns its paths,
+// a `WindowDragOver` is three numbers. They run anywhere (natively and in the interpreter), with no display; only
+// `Window.nextDrop` and `Window.dragOver` make them from the system's drags.
+
+fn describe(dropped: borrow WindowDrop) {
+    Console.write("drop at ");
+    Console.write(dropped.x);
+    Console.write(", ");
+    Console.write(dropped.y);
+    Console.write(": ");
+    Console.writeLine(dropped.paths.length);
+    for (k in 0..dropped.paths.length) {
+        Console.writeLine(dropped.paths[k].view());
+    }
+}
+
+fn highlight(over: WindowDragOver?) -> StringView => match (over) {
+    Some(d) => if (d.count > 1) "files" else "a file",
+    null => "none",
+};
+
+fn main() {
+    var paths = Vector<String>.create();
+    paths.push(String.from("/tmp/a.txt")!)!;
+    paths.push(String.from("/tmp/ünï drop.png")!)!;
+    var dropped = WindowDrop { x: 12.5, y: 30.0, paths: paths };
+    describe(borrow dropped);
+    let first = dropped.paths.remove(0);
+    Console.writeLine(first.view());
+    let moved = dropped;
+    describe(borrow moved);
+    Console.writeLine(highlight(WindowDragOver { x: 1.0, y: 2.0, count: 2 }));
+    Console.writeLine(highlight(WindowDragOver { x: 0.0, y: 0.0, count: 1 }));
+    Console.writeLine(highlight(null));
+}
+
+// expect-stdout: drop at 12.5, 30: 2
+// expect-stdout: /tmp/a.txt
+// expect-stdout: /tmp/ünï drop.png
+// expect-stdout: /tmp/a.txt
+// expect-stdout: drop at 12.5, 30: 1
+// expect-stdout: /tmp/ünï drop.png
+// expect-stdout: files
+// expect-stdout: a file
+// expect-stdout: none

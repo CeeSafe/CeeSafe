@@ -538,7 +538,8 @@ def run(command, env, cwd):
     full.pop("CEESAFE_WINDOW_SCRIPT", None)
     full.pop("CEESAFE_WINDOW_DUMP", None)
     full.update(env)
-    return subprocess.run(command, capture_output=True, text=True, env=full, cwd=cwd, timeout=120)
+    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", env=full,
+                          cwd=cwd, timeout=120)
 
 
 def main():

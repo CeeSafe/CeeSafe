@@ -4,8 +4,9 @@
   (`~/dev/CeeSafe.Web/docs/ceesafe-upstream-work.md`, found 2026-11-11 under its Web ADR 0015 §5: "wanted before v1.0,
   otherwise FreeBSD is best effort"). Asked whether CI and the release should build FreeBSD in a VM inside an Ubuntu
   job with `vmactions/freebsd-vm` pinned to a commit, the owner chose "Yes, vmactions (Recommended)", and "One release,
-  0.52.0 (Recommended)": FreeBSD brought up in CI first, then released with ADRs 0147 and 0148. Implemented on branch
-  `ceesafe-0.52.0`.
+  0.52.0 (Recommended)": FreeBSD brought up in CI first, then released with ADRs 0147 and 0148. Meanwhile 0.51.2 and
+  0.52.0 were released from main for other work, so the three are released as 0.53.0. Implemented on branch
+  `ceesafe-0.52.0` (the name it had before).
 - Scope: the compiler's host checks (`src/host/toolchain.cee`, `src/host/embedding.cee`,
   `src/packages/manifest.cee`), the hosted runtime (`ceesafe_rt_async.c`, `ceesafe_rt_window.c`),
   `.github/workflows/freebsd.yml` (new) and `release.yml`, `site/public/install.sh`, tooling.md §4.1 and §8.3,

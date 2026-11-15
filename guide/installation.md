@@ -28,7 +28,7 @@ update.
 
 Releases are built for macOS (arm64 and x64, signed and notarized by Apple), Linux (x64 and arm64; glibc 2.35 or newer:
 Ubuntu 22.04, Debian 12, Fedora 36 and later), Windows (x64 and arm64) and FreeBSD (x64; FreeBSD 14.4 or later, since
-0.52.0). You can also download an archive from the
+0.53.0). You can also download an archive from the
 [releases page](https://github.com/CeeSafe/CeeSafe/releases) yourself: each holds `ceesafec` (`ceesafec.exe`), and
 `SHA256SUMS` lists their checksums. `ceesafec` is one native executable: its runtime, its libraries and this
 specification are inside it, and it needs nothing else to run.

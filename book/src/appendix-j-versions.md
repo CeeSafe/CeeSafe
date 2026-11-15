@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.52.0
+## Releases 0.25.0 to 0.53.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.53.0 | 2026-11-15 | FreeBSD. A release now includes `ceesafec` for FreeBSD on x86_64 (14.4 or later), and `install.sh` installs it; a manifest's `[target.freebsd]` names libraries for FreeBSD alone, and `embed` works there (ADR 0149). On Windows, a short `Timer.sleep`, `Async.timeout` or `Async.deadline` ends about when it says, not at the next 15.6 ms tick (ADR 0148). `ceesafec test --sweep alloc` counts a run stopped by "async frame stack: out of memory" apart, not as a sweep failure; `--sweep-strict` still fails it (ADR 0147). | — |
 | 0.52.0 | 2026-11-15 | Menus and file dialogs. A `Menu` of menus, items and separators, each item with an id, a shortcut and enabled and checked marks, is shown by `window.setMenu(menu)`: the menu bar on macOS, the window's menu on Windows (`Unsupported` on X11); a chosen item's id comes back from `window.nextMenuChoice()`. `FileDialog.openFile`, `openFiles`, `saveFile` and `chooseFolder` show the system's dialogs (zenity or kdialog on Linux) and give the paths chosen (ADR 0146). | [Appendix C](./appendix-c-built-in-types) |
 | 0.51.2 | 2026-11-15 | Fixes and no new feature. `Async.blocking` and `Thread.both` take a capture of an optional view, such as `Slice<u8>?` or `StringView?`, as they take the view itself: it was N0334. | — |
 | 0.51.1 | 2026-11-15 | Fixes and no new feature. Building a program whose async functions await the same functions from many places took time exponential in the depth of those awaits: each frame's layout, for the C compiler's `_Static_assert`s and for every frame embedding it, was worked out again along every path to it, and an admin API of a few dozen handlers spent minutes there. Each layout is now worked out once; the C written is the same. | — |

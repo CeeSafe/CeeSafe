@@ -10,6 +10,9 @@
   "Generic arguments in expressions"; c-backend.md's "Generic code" row (C names); diagnostics.md (N0352–N0354); the
   parser, the checker (name resolution, generics, instantiation), the C backend's names (`src/backend/c_names.cee`),
   the interpreter; guide/generics.md, guide/coming-from/rust.md and zig.md.
+- Amended by ADR 0143 (2026-11-15): an array length may be any constant expression of type `usize` that names no
+  const parameter (`[u8; CHARS * 8]`), so §7's "any other expression that names no const parameter stays N0259" no
+  longer holds for operator expressions; an expression over a const parameter stays N0353.
 
 ## 1. Context
 

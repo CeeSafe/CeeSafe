@@ -8,7 +8,7 @@ the interpreter and the two answer different times:
    inside, the epoch plus the virtual clock: after a sleep of 1500 ms, 946684801 seconds and 500 000 000 nanoseconds;
 3. `Clock.localOffset` (ADR 0153), natively, for times in winter, summer, 1970 and before it: on POSIX systems under
    several `TZ` zones (UTC, UTC+3, UTC+5:30, New York's daylight saving, Lord Howe's half hour, Kathmandu's 5:45),
-   equal to Python's `zoneinfo`; on Windows, under the system's own zone, equal to Python's `datetime.astimezone()`;
+   equal to Python's `zoneinfo`; on Windows, under the system's own zone, equal to .NET's `TimeZoneInfo.Local`;
    and in the interpreter, 0.
 
 usage: python3 tools/clock_check.py --compiler out/ceesafec
@@ -53,7 +53,12 @@ def expected_offsets(zone):
     for t in OFFSET_TIMES:
         moment = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=t)
         if zone is None:
-            local = moment.astimezone()
+            # Windows' own zone, by .NET: Python's astimezone() cannot convert times before 1970 there.
+            command = ("[TimeZoneInfo]::Local.GetUtcOffset([DateTimeOffset]::FromUnixTimeSeconds(" + str(t) +
+                       ")).TotalSeconds")
+            p = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True)
+            out.append(int(float(p.stdout.strip())))
+            continue
         else:
             import zoneinfo
             local = moment.astimezone(zoneinfo.ZoneInfo(zone))

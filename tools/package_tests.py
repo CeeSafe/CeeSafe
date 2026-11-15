@@ -521,7 +521,7 @@ def check_all_rounds(compiler, work, problems):
             problems.append(f"check --deny-warnings ({attempt}): a dependency's warning failed it: {p.stderr[:300]}")
     records = os.path.join(home, "cache", "records")
     mids = [n for n in os.listdir(records) if n.startswith("mid-")] if os.path.isdir(records) else []
-    if os.name != "nt":
+    if os.name != "nt" and not sys.platform.startswith("freebsd"):  # no records on Windows or FreeBSD (ADR 0149)
         counts = [int(record_fields(open(os.path.join(records, n), "rb").read())[7]) for n in mids]
         if not counts or any(c != 2 for c in counts):
             problems.append(f"records: mid's record does not count its two warnings: {counts}")

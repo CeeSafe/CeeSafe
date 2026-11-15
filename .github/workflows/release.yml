@@ -200,6 +200,21 @@ jobs:
           echo "runnable=true" >> "$GITHUB_OUTPUT"
           run build --emit c -o c2
           diff -r seed c2
+      - name: MinGW's gcc links the hosted runtime
+        # tooling.md §8.3: ceesafec names Winsock, GDI and BCrypt for gcc, which ignores the runtime's #pragma comment.
+        if: matrix.rid == 'win-x64'
+        shell: bash
+        run: |
+          gcc=""
+          for c in /c/mingw64/bin/gcc.exe /c/msys64/mingw64/bin/gcc.exe /c/msys64/ucrt64/bin/gcc.exe; do
+            if [ -x "$c" ]; then gcc=$(cygpath -w "$c"); break; fi
+          done
+          if [ -z "$gcc" ]; then
+            echo "::warning::no MinGW gcc on this runner: the MinGW link is not checked"
+            exit 0
+          fi
+          "stage/${{ matrix.exe }}" build --cc "$gcc" tools/mingw_link_check.cee -o mingw-link-check.exe
+          ./mingw-link-check.exe
 
       - name: Import the signing certificate
         if: runner.os == 'macOS'

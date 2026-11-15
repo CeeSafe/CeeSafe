@@ -3566,6 +3566,41 @@ void ceesafe_clock_realtime(int64_t *seconds, uint32_t *nanoseconds) {
 #endif
 }
 
+/* The local time zone's offset at `seconds` (ADR 0153), seconds east of UTC. */
+int32_t ceesafe_clock_local_offset(int64_t seconds) {
+#if defined(_WIN32)
+    /* FILETIME counts 100-nanosecond steps since 1601-01-01, 11644473600 seconds before 1970. */
+    const int64_t before = INT64_C(11644473600);
+    if (seconds < -before || seconds > INT64_C(900000000000)) {
+        return 0;
+    }
+    uint64_t steps = (uint64_t)(seconds + before) * UINT64_C(10000000);
+    FILETIME utc = {(DWORD)(steps & 0xffffffffu), (DWORD)(steps >> 32)};
+    SYSTEMTIME universal, local;
+    DYNAMIC_TIME_ZONE_INFORMATION zone;
+    FILETIME converted;
+    if (GetDynamicTimeZoneInformation(&zone) == TIME_ZONE_ID_INVALID || !FileTimeToSystemTime(&utc, &universal) ||
+        !SystemTimeToTzSpecificLocalTimeEx(&zone, &universal, &local) || !SystemTimeToFileTime(&local, &converted)) {
+        return 0;
+    }
+    uint64_t back = ((uint64_t)converted.dwHighDateTime << 32) | (uint64_t)converted.dwLowDateTime;
+    return (int32_t)(((int64_t)back - (int64_t)steps) / INT64_C(10000000));
+#elif defined(CEE_COSMOOS)
+    (void)seconds;
+    return 0; /* no time zone in this userland (ADR 0153) */
+#else
+    time_t t = (time_t)seconds;
+    if ((int64_t)t != seconds) {
+        return 0;
+    }
+    struct tm parts;
+    if (localtime_r(&t, &parts) == NULL) {
+        return 0;
+    }
+    return (int32_t)parts.tm_gmtoff;
+#endif
+}
+
 /* ---- UDP (ADR 0050): binding with the options, and one nonblocking send or receive for code that runs its own wait
  * loop (the interpreter). The operations of tasks are ceesafe_rt_async.c's. ---- */
 

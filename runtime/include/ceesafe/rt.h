@@ -1710,6 +1710,9 @@ int64_t ceesafe_file_read_at(const void *file, uint8_t *buffer, uint64_t length,
 /* Wall-clock time (ADR 0055): the system's real time, seconds since 1970-01-01T00:00:00Z (POSIX time) and the
  * nanoseconds (0 to 999999999) after them; 1970 itself if the system has no real-time clock. */
 void ceesafe_clock_realtime(int64_t *seconds, uint32_t *nanoseconds);
+/* The local time zone's offset at `seconds` (ADR 0153): the seconds east of UTC, daylight saving included; 0 where the
+ * system has no zone or cannot convert the time. */
+int32_t ceesafe_clock_local_offset(int64_t seconds);
 /* Message operations (ADR 0045): vectored sends now, datagram messages later (U6). Their record is larger than an
  * operation's and starts with the same header, so ceesafe_async_op_cancel takes either; it is lib/std's AsyncMsgOp's
  * first field. Before the first step, ceesafe_async_msg_part puts part `index` (< CEE_MSG_PARTS) in the record; the

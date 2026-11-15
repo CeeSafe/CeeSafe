@@ -10,6 +10,8 @@ extern "C" {
     @effects()
     fn ceesafe_clock_monotonic() -> u64;
     @effects()
+    fn ceesafe_clock_local_offset(seconds: i64) -> i32;
+    @effects()
     fn ceesafe_random_fill(out: *mut u8, length: u64) -> i64;
     @effects()
     fn ceesafe_host_env(name: *u8, length: u64, value: *mut (*u8), valueLength: *mut u64) -> i64;
@@ -715,6 +717,12 @@ public struct Clock {
 
     /// Now, in milliseconds since 1970.
     public fn unixMillis() -> i64 => Clock.now().millis();
+
+    /// The seconds to add to UTC to get the local time at `at`, as the system's time zone gives it, daylight saving
+    /// included (ADR 0153): 10800 for UTC+3, -18000 for New York in winter and -14400 in summer. 0 in the interpreter,
+    /// so its runs stay reproducible, and where the system has no time zone.
+    /// Safety: the runtime only reads the system's time zone.
+    public fn localOffset(at: UnixTime) -> i32 => unsafe { ceesafe_clock_local_offset(at.seconds) };
 
     /// Nanoseconds on the monotonic clock, from an arbitrary start (ADR 0075 §2.6): for measuring durations and
     /// latencies, never for the date. It never decreases within a process (`CLOCK_MONOTONIC`; `CLOCK_UPTIME_RAW` on

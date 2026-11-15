@@ -1492,6 +1492,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_clock_monotonic")) {
         return ":s";
     }
+    if (sameText(name, "ceesafe_clock_local_offset")) {
+        return "l:i";
+    }
     if (sameText(name, "ceesafe_window_open")) {
         return "PsuuuP:P";
     }
@@ -1895,6 +1898,10 @@ fn callC(
     if (sameText(n0, "ceesafe_clock_monotonic")) {
         // ADR 0075 §2.6: the virtual clock, in nanoseconds, so a run stays reproducible.
         return Ok(valueOf(it.asyncClock * 1000000, 8));
+    }
+    if (sameText(n0, "ceesafe_clock_local_offset")) {
+        // The local time zone's offset (ADR 0153): UTC, so a run stays reproducible, as its clock does.
+        return Ok(valueOf(0, 4));
     }
     if (sameText(n0, "ceesafe_clock_realtime")) {
         // Wall-clock time (ADR 0055): 2000-01-01T00:00:00Z plus the virtual clock, so a run stays reproducible.

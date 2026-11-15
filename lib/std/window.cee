@@ -3,7 +3,8 @@
 // pointer, keys, typed text, the wheel, resizes and close requests. Hosted only, over
 // runtime/hosted/ceesafe_rt_window.c: AppKit on macOS, Win32 on Windows, X11 on Linux, or an in-memory window that a
 // script drives when CEESAFE_WINDOW_SCRIPT is set. A window the program draws itself, through the system's handles,
-// is `WindowSurface.External` (ADR 0137).
+// is `WindowSurface.External` (ADR 0137). Text input through the system's input method, and the clipboard's text,
+// are ADR 0141.
 
 extern "C" {
     @effects(sleep, alloc)
@@ -42,6 +43,16 @@ extern "C" {
     fn ceesafe_window_set_title(window: *mut void, title: *u8, length: u64);
     @effects(sleep)
     fn ceesafe_window_wait(window: *mut void);
+    @effects(sleep, alloc)
+    fn ceesafe_window_set_text_input(window: *mut void, on: i32);
+    @effects()
+    fn ceesafe_window_set_text_area(window: *mut void, x: u32, y: u32, width: u32, height: u32);
+    @effects()
+    fn ceesafe_window_composition(window: *mut void, text: *mut (*u8), caret: *mut u64) -> u64;
+    @effects(sleep, alloc)
+    fn ceesafe_window_set_clipboard(window: *mut void, text: *u8, length: u64) -> i32;
+    @effects(sleep, alloc)
+    fn ceesafe_window_clipboard(window: *mut void, text: *mut (*u8)) -> i64;
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -85,7 +96,8 @@ public struct WindowSize {
     public height: u32;
 }
 
-/// A part of an image that changed (`Window.presentChanged`), in the image's pixels.
+/// A part of an image that changed (`Window.presentChanged`), in the image's pixels; or the text input area
+/// (`Window.setTextInputArea`), in points from the content's top left.
 public struct WindowBox {
     public x: u32;
     public y: u32;
@@ -158,8 +170,11 @@ public enum WindowEvent {
     Wheel(f32, f32),
     /// The key, whether it went down, whether it is the system's repeat, the modifiers.
     Key(WindowKey, bool, bool, WindowModifiers),
-    /// A Unicode scalar the user typed.
+    /// A Unicode scalar the user typed, or that the input method committed.
     Text(u32),
+    /// The input method's composition (`Window.composition`) or its caret changed, or the composition ended
+    /// (ADR 0141).
+    Composition,
 }
 
 /// A native window (§26.13): a move type that closes the window when dropped. It is used on the program's first
@@ -248,6 +263,7 @@ public struct Window {
                 Window.modifiersOf(fields[3]),
             ),
             8 => WindowEvent.Text(truncate<u32>(fields[0])),
+            9 => WindowEvent.Composition,
             _ => null,
         };
     }
@@ -341,6 +357,77 @@ public struct Window {
     /// Safety: the runtime only waits on the window it was given.
     public fn waitFrame(borrow mut this) {
         unsafe { ceesafe_window_wait(this.raw); }
+    }
+
+    /// Turns the system's input method on for this window, when a text field has focus, or off (ADR 0141). While it is
+    /// on, the input method may take keys: it composes text (`Composition` events, `composition()`) and commits it as
+    /// `Text` events, and a key it takes gives no `Key` event. Turning it off ends a composition. Until the first call,
+    /// the window takes text as it always did.
+    /// Safety: the runtime only reads the flag.
+    public fn setTextInput(borrow mut this, on: bool) {
+        unsafe { ceesafe_window_set_text_input(this.raw, if (on) 1 else 0); }
+    }
+
+    /// Where the text being composed, or the caret, is: a box in points from the content's top left. The input method
+    /// shows its candidates beside it (ADR 0141).
+    /// Safety: the runtime only reads the four numbers.
+    public fn setTextInputArea(borrow mut this, area: WindowBox) {
+        unsafe { ceesafe_window_set_text_area(this.raw, area.x, area.y, area.width, area.height); }
+    }
+
+    /// The text the input method is composing, as of the last `Composition` event; empty when there is none
+    /// (ADR 0141). The window owns it, and it changes only when `nextEvent` returns `Composition`.
+    /// Safety: the runtime gives its copy of the composition, valid UTF-8 of the length it returns, which it replaces
+    /// only in `nextEvent`, a `borrow mut` call that the returned view's loan of `this` rules out while the view lives.
+    public fn composition(borrow this) -> StringView {
+        var text = 0 as *u8;
+        var caret: u64 = 0;
+        let length = unsafe { ceesafe_window_composition(
+            this.raw,
+            borrow mut text as *mut (*u8),
+            borrow mut caret as *mut u64,
+        ) };
+        if (length == 0) {
+            return "";
+        }
+        let bytes = unsafe { Slice.fromRaw(text, truncate<usize>(length)) };
+        return StringView.fromUtf8(bytes) ?? "";
+    }
+
+    /// The caret's byte offset in `composition()`, at a character's start (ADR 0141).
+    /// Safety: the runtime writes the caret, and the text's address, which is not used.
+    public fn compositionCaret(borrow this) -> usize {
+        var text = 0 as *u8;
+        var caret: u64 = 0;
+        unsafe { ceesafe_window_composition(this.raw, borrow mut text as *mut (*u8), borrow mut caret as *mut u64); }
+        return truncate<usize>(caret);
+    }
+
+    /// Puts `text` on the system's clipboard, replacing what it held (ADR 0141).
+    /// Safety: the runtime copies the text's bytes during the call.
+    public fn setClipboardText(borrow mut this, text: StringView) -> Result<void, WindowError> {
+        let result = unsafe { ceesafe_window_set_clipboard(this.raw, text.ptr, text.length as u64) };
+        return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
+    }
+
+    /// Appends the clipboard's text to `out`; false when the clipboard holds no text, its text is not valid UTF-8, or
+    /// memory ran out (ADR 0141).
+    /// Safety: the runtime gives its copy of the clipboard's text and its length, which it keeps until the next call;
+    /// it is copied into `out` before this returns.
+    public fn clipboardText(borrow mut this, out: borrow mut String) -> bool {
+        var text = 0 as *u8;
+        let length = unsafe { ceesafe_window_clipboard(this.raw, borrow mut text as *mut (*u8)) };
+        if (length < 0) {
+            return false;
+        }
+        if (length == 0) {
+            return true;
+        }
+        let bytes = unsafe { Slice.fromRaw(text, truncate<usize>(length)) };
+        return match (out.appendUtf8(bytes)) {
+            Ok(valid) => valid,
+            Err(_) => false,
+        };
     }
 
     fn errorOf(code: i32) -> WindowError => match (code) {

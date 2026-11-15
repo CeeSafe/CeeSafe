@@ -14,6 +14,13 @@
  *
  * A window opened with the external surface (ADR 0137) is drawn by the program, through the handles that
  * ceesafe_window_native gives it; the runtime never paints its content, and present is Unsupported.
+ *
+ * Text input and the clipboard (ADR 0141): with text input on, the system's input method composes in the window, and
+ * the composition (UTF-8 and a caret's byte offset) is kept in the window: the backend's copy (`composing`) changes
+ * when the input method says so and queues COMPOSITION; the program's copy (`composition`) is replaced only when
+ * ceesafe_window_poll hands that event out, so a view of it stays valid until the next poll. Committed text is TEXT
+ * events, as typed text always was. The clipboard holds UTF-8 text; a read lands in the window (`pasted`) for
+ * lib/std to copy at once.
  */
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE /* dlopen, syscall(SYS_gettid), select, clock_gettime under glibc's strict C11 headers */
@@ -42,8 +49,13 @@
 #define CEE_EVENT_WHEEL 6
 #define CEE_EVENT_KEY 7
 #define CEE_EVENT_TEXT 8
+#define CEE_EVENT_COMPOSITION 9 /* ADR 0141 */
+/* A queued event taken back (a key the input method consumed, ADR 0141): ceesafe_window_poll skips it. */
+#define CEE_EVENT_DROPPED 0
 /* A scripted scale change (`scale:S`, ADR 0137): never queued, it updates the window and queues RESIZED. */
 #define CEE_SCRIPT_SCALE 100
+/* A scripted clipboard (`clipboard[:TEXT]`, ADR 0141): never queued, it replaces the scripted clipboard. */
+#define CEE_SCRIPT_CLIPBOARD 101
 
 /* WindowSurface's numbers (ADR 0137): who draws the content. */
 #define CEE_SURFACE_FRAMES 0
@@ -120,6 +132,25 @@ struct cee_window {
     int shown;
     uint32_t shown_width, shown_height;
     uint32_t *kept;
+    /* Text input (ADR 0141): -1 until the program first sets it (each backend then behaves as before ADR 0141), 0 off,
+       1 on; the area in points from the content's top left. */
+    int text_input;
+    struct cee_window_box text_area;
+    /* The composition: the backend's copy and the program's (the file's comment); each caret is a byte offset. */
+    char *composing;
+    size_t composing_length, composing_capacity, composing_caret;
+    char *composition;
+    size_t composition_length, composition_capacity, composition_caret;
+    /* The clipboard text last read, for lib/std to copy. */
+    char *pasted;
+    size_t pasted_length;
+    /* The scripted window's text: the script's compose and clipboard texts, and its clipboard (`scripted_clipboard`
+       is 0 when it holds no text). */
+    char *script_text;
+    size_t script_text_length, script_text_capacity;
+    char *clipboard;
+    size_t clipboard_length;
+    int scripted_clipboard;
     /* The system's window. */
     void *native;
 };
@@ -137,11 +168,17 @@ void ceesafe_window_scale(void *window, float *scale);
 void ceesafe_window_set_cursor(void *window, int32_t cursor);
 void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t length);
 void ceesafe_window_wait(void *window);
+void ceesafe_window_set_text_input(void *window, int32_t on);
+void ceesafe_window_set_text_area(void *window, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
+uint64_t ceesafe_window_composition(void *window, const uint8_t **text, uint64_t *caret);
+int32_t ceesafe_window_set_clipboard(void *window, const uint8_t *text, uint64_t length);
+int64_t ceesafe_window_clipboard(void *window, const uint8_t **text);
 
-static void cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c, int32_t d, float x,
-                            float y) {
+/* Queues an event; the queued copy, which a backend may take back (CEE_EVENT_DROPPED) before the next poll, or NULL. */
+static struct cee_window_event *cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c,
+                                                int32_t d, float x, float y) {
     if (w->count == CEE_WINDOW_QUEUE) {
-        return; /* a program that never polls loses the newest events, not the memory */
+        return NULL; /* a program that never polls loses the newest events, not the memory */
     }
     struct cee_window_event *e = &w->queue[(w->head + w->count) % CEE_WINDOW_QUEUE];
     e->kind = kind;
@@ -152,6 +189,7 @@ static void cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32
     e->x = x;
     e->y = y;
     w->count++;
+    return e;
 }
 
 static void cee_window_resized(struct cee_window *w, uint32_t width, uint32_t height) {
@@ -188,6 +226,81 @@ static void cee_window_text(struct cee_window *w, uint32_t scalar) {
         return;
     }
     cee_window_push(w, CEE_EVENT_TEXT, (int32_t)scalar, 0, 0, 0, 0.0f, 0.0f);
+}
+
+/* Grows a byte buffer to hold `length` bytes; 0 when memory ran out (the buffer is then unchanged). */
+static int cee_window_reserve(char **buffer, size_t *capacity, size_t length) {
+    if (length <= *capacity && *buffer != NULL) {
+        return 1;
+    }
+    size_t next = *capacity < 64 ? 64 : *capacity;
+    while (next < length) {
+        next *= 2;
+    }
+    char *grown = (char *)ceesafe_platform_realloc(*buffer, next);
+    if (grown == NULL) {
+        return 0;
+    }
+    *buffer = grown;
+    *capacity = next;
+    return 1;
+}
+
+/* The input method's composition is now `text` (UTF-8) with the caret at byte `caret`, which is clamped to the text
+   and moved back to a character's start. Queues COMPOSITION when that changes it (ADR 0141). */
+static void cee_window_compose(struct cee_window *w, const char *text, size_t length, size_t caret) {
+    if (caret > length) {
+        caret = length;
+    }
+    while (caret > 0 && caret < length && ((unsigned char)text[caret] & 0xc0u) == 0x80u) {
+        caret--;
+    }
+    if (length == w->composing_length && caret == w->composing_caret &&
+        (length == 0 || memcmp(text, w->composing, length) == 0)) {
+        return;
+    }
+    if (!cee_window_reserve(&w->composing, &w->composing_capacity, length + 1u)) {
+        length = 0; /* out of memory: the composition is lost, not the window */
+        caret = 0;
+        if (w->composing_length == 0) {
+            return;
+        }
+    } else if (length > 0) {
+        memcpy(w->composing, text, length);
+    }
+    w->composing_length = length;
+    w->composing_caret = caret;
+    cee_window_push(w, CEE_EVENT_COMPOSITION, 0, 0, 0, 0, 0.0f, 0.0f);
+}
+
+/* The program's copy of the composition becomes the backend's (at a COMPOSITION handed out). */
+static void cee_window_show_composition(struct cee_window *w) {
+    size_t length = w->composing_length;
+    if (!cee_window_reserve(&w->composition, &w->composition_capacity, length + 1u)) {
+        w->composition_length = 0;
+        w->composition_caret = 0;
+        return;
+    }
+    if (length > 0) {
+        memcpy(w->composition, w->composing, length);
+    }
+    w->composition_length = length;
+    w->composition_caret = w->composing_caret;
+}
+
+/* Keeps a copy of clipboard text for lib/std to read; 0 when memory ran out. */
+static int cee_window_paste(struct cee_window *w, const char *text, size_t length) {
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy == NULL) {
+        return 0;
+    }
+    if (length > 0) {
+        memcpy(copy, text, length);
+    }
+    ceesafe_platform_free(w->pasted);
+    w->pasted = copy;
+    w->pasted_length = length;
+    return 1;
 }
 
 /* A letter as lowercase, other printable ASCII as it is: WindowKey.Character. */
@@ -376,6 +489,20 @@ static int cee_window_script_add(struct cee_window *w, size_t *capacity, uint64_
     return 1;
 }
 
+/* Keeps a script item's text in the window; its offset there, or -1 when memory ran out or the script is too long. */
+static int32_t cee_window_script_text(struct cee_window *w, const char *text, size_t length) {
+    size_t offset = w->script_text_length;
+    if (offset + length > 0x7fffffffu ||
+        !cee_window_reserve(&w->script_text, &w->script_text_capacity, offset + length + 1u)) {
+        return -1;
+    }
+    if (length > 0) {
+        memcpy(w->script_text + offset, text, length);
+    }
+    w->script_text_length = offset + length;
+    return (int32_t)offset;
+}
+
 /* One "FRAME:WHAT[:ARGS]" item (type-system.md §26.13); 0 if it is malformed or memory ran out. */
 static int cee_window_script_item(struct cee_window *w, size_t *capacity, const char *s, size_t n) {
     size_t colon = 0;
@@ -475,6 +602,31 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
     if (CEE_IS("close")) {
         return args_length == 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0, 0.0);
     }
+    if (CEE_IS("compose")) { /* compose:C:TEXT, C the caret's byte offset in TEXT (ADR 0141) */
+        size_t k = 0;
+        uint64_t caret = 0;
+        while (k < args_length && args[k] >= '0' && args[k] <= '9' && caret <= 1000000u) {
+            caret = caret * 10u + (uint64_t)(args[k] - '0');
+            k++;
+        }
+        if (k == 0 || k == args_length || args[k] != ':') {
+            return 0;
+        }
+        const char *text = args + k + 1;
+        size_t length = args_length - k - 1;
+        if (caret > length || (caret < length && ((unsigned char)text[caret] & 0xc0u) == 0x80u)) {
+            return 0;
+        }
+        int32_t offset = cee_window_script_text(w, text, length);
+        return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_COMPOSITION, offset,
+                                                    (int32_t)length, (int32_t)caret, 0, 0.0, 0.0);
+    }
+    if (CEE_IS("clipboard")) { /* clipboard:TEXT puts TEXT on the clipboard, clipboard (no colon) no text (ADR 0141) */
+        int has = name_length < rest;
+        int32_t offset = has ? cee_window_script_text(w, args, args_length) : 0;
+        return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_CLIPBOARD, offset,
+                                                    (int32_t)args_length, 0, has, 0.0, 0.0);
+    }
 #undef CEE_IS
     return 0;
 }
@@ -550,6 +702,21 @@ static void cee_window_script_pump(struct cee_window *w) {
             cee_window_rescaled(w, e.x);
         } else if (e.kind == CEE_EVENT_FOCUS) {
             cee_window_focus(w, e.fields[0]);
+        } else if (e.kind == CEE_EVENT_COMPOSITION) {
+            if (w->text_input == 1) { /* with text input off, there is no input method to compose */
+                cee_window_compose(w, w->script_text + e.fields[0], (size_t)e.fields[1], (size_t)e.fields[2]);
+            }
+        } else if (e.kind == CEE_SCRIPT_CLIPBOARD) {
+            char *copy = (char *)ceesafe_platform_alloc((size_t)e.fields[1] + 1u);
+            if (copy != NULL) {
+                if (e.fields[1] > 0) {
+                    memcpy(copy, w->script_text + e.fields[0], (size_t)e.fields[1]);
+                }
+                ceesafe_platform_free(w->clipboard);
+                w->clipboard = copy;
+                w->clipboard_length = (size_t)e.fields[1];
+                w->scripted_clipboard = e.fields[3];
+            }
         } else {
             cee_window_push(w, e.kind, e.fields[0], e.fields[1], e.fields[2], e.fields[3], e.x, e.y);
         }
@@ -577,7 +744,9 @@ static int32_t cee_window_dump(struct cee_window *w, const uint32_t *pixels, uin
 /* ---- The system's windows ---------------------------------------------------------------------------------------- */
 /* Each backend defines: cee_native_open (0 or a CEE_WINDOW_* error), cee_native_close, cee_native_pump (moves pending
    system events into the queue), cee_native_present, cee_native_cursor, cee_native_title, cee_native_wait (until an
-   event or `seconds`), cee_native_handles (the system's handles and their CEE_HANDLE_* kind, ADR 0137). With
+   event or `seconds`), cee_native_handles (the system's handles and their CEE_HANDLE_* kind, ADR 0137),
+   cee_native_text_input and cee_native_text_area (the input method, ADR 0141), cee_native_clipboard_set (0 or minus
+   a CEE_WINDOW_* error) and cee_native_clipboard_get (1 with the text kept by cee_window_paste, 0 without text). With
    `w->external` set before cee_native_open, the backend never paints the content: cee_native_present is not called. */
 
 #if defined(__APPLE__)
@@ -598,6 +767,10 @@ typedef struct {
     cee_point origin;
     cee_size size;
 } cee_rect;
+typedef struct {
+    unsigned long location, length;
+} cee_range; /* NSRange */
+#define CEE_NOT_FOUND 0x7ffffffffffffffful /* NSNotFound */
 
 static struct {
     int state; /* 0 not tried, 1 loaded, -1 failed */
@@ -608,6 +781,8 @@ static struct {
     cee_id (*allocate_class)(cee_id, const char *, size_t);
     signed char (*add_method)(cee_id, cee_sel, cee_fn, const char *);
     void (*register_class)(cee_id);
+    void *(*get_protocol)(const char *);
+    signed char (*add_protocol)(cee_id, void *);
     void *(*pool_push)(void);
     void (*pool_pop)(void *);
     void *(*color_space)(void);
@@ -642,6 +817,8 @@ static struct {
     void *(*color_space_plist)(void *);
     cee_id app;
     cee_id delegate_class;
+    cee_id view_class; /* CeeSafeContentView, an NSTextInputClient (ADR 0141) */
+    cee_id *pasteboard_string; /* NSPasteboardTypeString */
     void *rgb;
 } cee_objc;
 
@@ -666,6 +843,13 @@ struct cee_mac {
     struct cee_window_box pending[2][CEE_MAC_PENDING];
     int pending_count[2];
     int pending_full[2];
+    /* Text input (ADR 0141): the marked text's length and selection in UTF-16 units; during interpretKeyEvents:,
+       whether the input method changed the composition; the key codes whose down the input method took. */
+    int marked;
+    unsigned long marked_utf16;
+    cee_range marked_selection;
+    int in_key, key_composed;
+    unsigned char ime_keys[16];
 };
 
 static cee_fn cee_mac_symbol(void *handle, const char *name) {
@@ -727,6 +911,24 @@ static cee_rect cee_send_rect(cee_id o, const char *s) {
     return ((cee_rect(*)(cee_id, cee_sel))cee_objc.send)(o, cee_mac_sel(s));
 #endif
 }
+static cee_id cee_send_id_id(cee_id o, const char *s, cee_id a) {
+    return ((cee_id(*)(cee_id, cee_sel, cee_id))cee_objc.send)(o, cee_mac_sel(s), a);
+}
+static signed char cee_send_bool_id(cee_id o, const char *s, cee_id a) {
+    return ((signed char (*)(cee_id, cee_sel, cee_id))cee_objc.send)(o, cee_mac_sel(s), a);
+}
+static signed char cee_send_bool_id_id(cee_id o, const char *s, cee_id a, cee_id b) {
+    return ((signed char (*)(cee_id, cee_sel, cee_id, cee_id))cee_objc.send)(o, cee_mac_sel(s), a, b);
+}
+static cee_rect cee_send_rect_rect(cee_id o, const char *s, cee_rect a) {
+#if defined(__x86_64__)
+    cee_rect r;
+    ((void (*)(cee_rect *, cee_id, cee_sel, cee_rect))cee_objc.send_stret)(&r, o, cee_mac_sel(s), a);
+    return r;
+#else
+    return ((cee_rect(*)(cee_id, cee_sel, cee_rect))cee_objc.send)(o, cee_mac_sel(s), a);
+#endif
+}
 static cee_id cee_nsstring(const char *text) { return cee_send_cstr(cee_mac_cls("NSString"), "stringWithUTF8String:", text); }
 
 static struct cee_window *cee_mac_owner(cee_id nswindow) {
@@ -783,6 +985,172 @@ static void cee_mac_did_unfocus(cee_id self, cee_sel cmd, cee_id notification) {
     }
 }
 
+/* The content view's methods (ADR 0141): an NSTextInputClient. The marked text is the composition; insertText: is
+   committed text, TEXT events. During interpretKeyEvents: (cee_mac_translate), `in_key` is set, and a change to the
+   composition marks the key as the input method's. */
+static struct cee_window *cee_mac_view_owner(cee_id view) { return cee_mac_owner(cee_send(view, "window")); }
+
+/* An NSString or NSAttributedString's string, as UTF-8 (autoreleased), or NULL. */
+static const char *cee_mac_text_of(cee_id string, cee_id *plain) {
+    if (string == NULL) {
+        return NULL;
+    }
+    if (cee_send_bool_id(string, "isKindOfClass:", cee_mac_cls("NSAttributedString"))) {
+        string = cee_send(string, "string");
+    }
+    *plain = string;
+    return string != NULL ? cee_send_get_cstr(string, "UTF8String") : NULL;
+}
+
+static void cee_mac_insert_text(cee_id self, cee_sel cmd, cee_id string, cee_range replacement) {
+    (void)cmd;
+    (void)replacement;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return;
+    }
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    cee_id plain = NULL;
+    const char *utf8 = cee_mac_text_of(string, &plain);
+    if (utf8 != NULL) {
+        size_t n = strlen(utf8), i = 0;
+        while (i < n) {
+            cee_window_text(w, cee_window_utf8((const unsigned char *)utf8, n, &i));
+        }
+    }
+    if (m->marked || w->composing_length > 0) {
+        m->key_composed = m->in_key;
+    }
+    m->marked = 0;
+    m->marked_utf16 = 0;
+    cee_window_compose(w, "", 0, 0); /* after the TEXT events: the composition was committed */
+}
+
+static void cee_mac_set_marked_text(cee_id self, cee_sel cmd, cee_id string, cee_range selected, cee_range replacement) {
+    (void)cmd;
+    (void)replacement;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return;
+    }
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    cee_id plain = NULL;
+    const char *utf8 = cee_mac_text_of(string, &plain);
+    size_t n = utf8 != NULL ? strlen(utf8) : 0;
+    m->key_composed = m->in_key;
+    if (n == 0) {
+        m->marked = 0;
+        m->marked_utf16 = 0;
+        cee_window_compose(w, "", 0, 0);
+        return;
+    }
+    unsigned long units = cee_send_ulong(plain, "length");
+    unsigned long at = selected.location > units ? units : selected.location;
+    const char *before = cee_send_get_cstr(cee_send_id_ulong(plain, "substringToIndex:", at), "UTF8String");
+    m->marked = 1;
+    m->marked_utf16 = units;
+    m->marked_selection.location = at;
+    m->marked_selection.length = selected.length > units - at ? units - at : selected.length;
+    cee_window_compose(w, utf8, n, before != NULL ? strlen(before) : 0);
+}
+
+static void cee_mac_unmark_text(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return;
+    }
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    m->key_composed = m->in_key;
+    m->marked = 0;
+    m->marked_utf16 = 0;
+    cee_window_compose(w, "", 0, 0); /* discarded, as winit and SDL do: the input method commits with insertText: */
+}
+
+static signed char cee_mac_has_marked_text(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    return w != NULL && ((struct cee_mac *)w->native)->marked;
+}
+
+static cee_range cee_mac_marked_range(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    cee_range r = {CEE_NOT_FOUND, 0};
+    if (w != NULL && ((struct cee_mac *)w->native)->marked) {
+        r.location = 0;
+        r.length = ((struct cee_mac *)w->native)->marked_utf16;
+    }
+    return r;
+}
+
+static cee_range cee_mac_selected_range(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    cee_range r = {0, 0};
+    if (w != NULL && ((struct cee_mac *)w->native)->marked) {
+        r = ((struct cee_mac *)w->native)->marked_selection;
+    }
+    return r;
+}
+
+/* The text input area (setTextInputArea), in screen coordinates: where the input method puts its candidates. */
+static cee_rect cee_mac_first_rect(cee_id self, cee_sel cmd, cee_range range, cee_range *actual) {
+    (void)cmd;
+    if (actual != NULL) {
+        *actual = range;
+    }
+    struct cee_window *w = cee_mac_view_owner(self);
+    cee_rect r = {{0.0, 0.0}, {0.0, 0.0}};
+    if (w == NULL) {
+        return r;
+    }
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    /* The content view fills the window's content, whose coordinates are the window's, origin bottom left. */
+    r.origin.x = (double)w->text_area.x;
+    r.origin.y = (double)w->height - (double)w->text_area.y - (double)w->text_area.h;
+    r.size.width = (double)w->text_area.w;
+    r.size.height = (double)w->text_area.h;
+    return cee_send_rect_rect(m->window, "convertRectToScreen:", r);
+}
+
+static cee_id cee_mac_valid_attributes(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return cee_send(cee_mac_cls("NSArray"), "array");
+}
+
+static cee_id cee_mac_attributed_substring(cee_id self, cee_sel cmd, cee_range range, cee_range *actual) {
+    (void)self;
+    (void)cmd;
+    (void)range;
+    if (actual != NULL) {
+        actual->location = CEE_NOT_FOUND;
+        actual->length = 0;
+    }
+    return NULL; /* the document's text is the program's: the input method gets none */
+}
+
+static unsigned long cee_mac_character_index(cee_id self, cee_sel cmd, cee_point point) {
+    (void)self;
+    (void)cmd;
+    (void)point;
+    return CEE_NOT_FOUND;
+}
+
+/* A key the input method did not take (insertNewline:, deleteBackward:, moveLeft:, …): its KEY event stays. */
+static void cee_mac_do_command(cee_id self, cee_sel cmd, cee_sel command) {
+    (void)self;
+    (void)cmd;
+    (void)command;
+}
+
+static signed char cee_mac_accepts_first_responder(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return 1;
+}
+
 static int cee_mac_load(void) {
     if (cee_objc.state != 0) {
         return cee_objc.state == 1;
@@ -804,6 +1172,9 @@ static int cee_mac_load(void) {
     cee_objc.allocate_class = (cee_id(*)(cee_id, const char *, size_t))cee_mac_symbol(objc, "objc_allocateClassPair");
     cee_objc.add_method = (signed char (*)(cee_id, cee_sel, cee_fn, const char *))cee_mac_symbol(objc, "class_addMethod");
     cee_objc.register_class = (void (*)(cee_id))cee_mac_symbol(objc, "objc_registerClassPair");
+    cee_objc.get_protocol = (void *(*)(const char *))cee_mac_symbol(objc, "objc_getProtocol");
+    cee_objc.add_protocol = (signed char (*)(cee_id, void *))cee_mac_symbol(objc, "class_addProtocol");
+    cee_objc.pasteboard_string = (cee_id *)cee_mac_data_symbol(appkit, "NSPasteboardTypeString");
     cee_objc.pool_push = (void *(*)(void))cee_mac_symbol(objc, "objc_autoreleasePoolPush");
     cee_objc.pool_pop = (void (*)(void *))cee_mac_symbol(objc, "objc_autoreleasePoolPop");
     cee_objc.color_space = (void *(*)(void))cee_mac_symbol(graphics, "CGColorSpaceCreateDeviceRGB");
@@ -878,6 +1249,38 @@ static int cee_mac_load(void) {
         cee_objc.register_class(delegate);
     }
     cee_objc.delegate_class = delegate;
+    /* The content view (ADR 0141): an NSView that is an NSTextInputClient, so interpretKeyEvents: reaches the input
+       method and the input method's answers reach the window. */
+    cee_id view = cee_objc.allocate_class(cee_mac_cls("NSView"), "CeeSafeContentView", 0);
+    if (view == NULL) {
+        view = cee_mac_cls("CeeSafeContentView");
+    } else {
+        cee_objc.add_method(view, cee_mac_sel("insertText:replacementRange:"), (cee_fn)cee_mac_insert_text,
+                            "v@:@{_NSRange=QQ}");
+        cee_objc.add_method(view, cee_mac_sel("setMarkedText:selectedRange:replacementRange:"),
+                            (cee_fn)cee_mac_set_marked_text, "v@:@{_NSRange=QQ}{_NSRange=QQ}");
+        cee_objc.add_method(view, cee_mac_sel("unmarkText"), (cee_fn)cee_mac_unmark_text, "v@:");
+        cee_objc.add_method(view, cee_mac_sel("hasMarkedText"), (cee_fn)cee_mac_has_marked_text, "c@:");
+        cee_objc.add_method(view, cee_mac_sel("markedRange"), (cee_fn)cee_mac_marked_range, "{_NSRange=QQ}@:");
+        cee_objc.add_method(view, cee_mac_sel("selectedRange"), (cee_fn)cee_mac_selected_range, "{_NSRange=QQ}@:");
+        cee_objc.add_method(view, cee_mac_sel("firstRectForCharacterRange:actualRange:"), (cee_fn)cee_mac_first_rect,
+                            "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}");
+        cee_objc.add_method(view, cee_mac_sel("validAttributesForMarkedText"), (cee_fn)cee_mac_valid_attributes,
+                            "@@:");
+        cee_objc.add_method(view, cee_mac_sel("attributedSubstringForProposedRange:actualRange:"),
+                            (cee_fn)cee_mac_attributed_substring, "@@:{_NSRange=QQ}^{_NSRange=QQ}");
+        cee_objc.add_method(view, cee_mac_sel("characterIndexForPoint:"), (cee_fn)cee_mac_character_index,
+                            "Q@:{CGPoint=dd}");
+        cee_objc.add_method(view, cee_mac_sel("doCommandBySelector:"), (cee_fn)cee_mac_do_command, "v@::");
+        cee_objc.add_method(view, cee_mac_sel("acceptsFirstResponder"), (cee_fn)cee_mac_accepts_first_responder,
+                            "c@:");
+        void *protocol = cee_objc.get_protocol != NULL ? cee_objc.get_protocol("NSTextInputClient") : NULL;
+        if (protocol != NULL && cee_objc.add_protocol != NULL) {
+            cee_objc.add_protocol(view, protocol); /* NSView's inputContext asks for it */
+        }
+        cee_objc.register_class(view);
+    }
+    cee_objc.view_class = view;
     /* The pixels are sRGB values (what ClayWind's rasterizer computes); DeviceRGB would leave them unmanaged. */
     cee_objc.rgb = cee_objc.color_space_named != NULL && cee_objc.srgb_name != NULL
                        ? cee_objc.color_space_named(*cee_objc.srgb_name)
@@ -886,7 +1289,7 @@ static int cee_mac_load(void) {
         cee_objc.rgb = cee_objc.color_space();
     }
     cee_objc.pool_pop(pool);
-    cee_objc.state = cee_objc.app != NULL && delegate != NULL && cee_objc.rgb != NULL ? 1 : -1;
+    cee_objc.state = cee_objc.app != NULL && delegate != NULL && view != NULL && cee_objc.rgb != NULL ? 1 : -1;
     return cee_objc.state == 1;
 }
 
@@ -918,6 +1321,13 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         return CEE_WINDOW_RESOURCES;
     }
     m->window = window;
+    /* Our content view (ADR 0141), retained by the window. */
+    cee_id view = cee_send(cee_objc.view_class, "alloc");
+    view = ((cee_id(*)(cee_id, cee_sel, cee_rect))cee_objc.send)(view, cee_mac_sel("initWithFrame:"), frame);
+    if (view != NULL) {
+        cee_send_v_id(window, "setContentView:", view);
+        cee_send_v(view, "release");
+    }
     m->view = cee_send(window, "contentView");
     m->delegate = cee_send(cee_send(cee_objc.delegate_class, "alloc"), "init");
     w->native = m;
@@ -935,6 +1345,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     cee_send_v_id(layer, "setContentsGravity:", *cee_objc.gravity_resize);
     cee_send_v_id(layer, "setBackgroundColor:", NULL);
     cee_send_v(window, "center");
+    cee_send_bool_id(window, "makeFirstResponder:", m->view);
     cee_send_v_id(window, "makeKeyAndOrderFront:", NULL);
     cee_send_v_bool(cee_objc.app, "activateIgnoringOtherApps:", 1);
     w->scale = (float)cee_send_double(window, "backingScaleFactor");
@@ -1084,6 +1495,33 @@ static int cee_mac_translate(struct cee_window *w, cee_id event) {
         int32_t down = type == 10;
         if (down && (modifiers & CEE_MOD_COMMAND) && (key == CEE_KEY_CHARACTER + 'q' || key == CEE_KEY_CHARACTER + 'w')) {
             cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f); /* ⌘Q and ⌘W ask to close */
+            return 0;
+        }
+        unsigned char bit = (unsigned char)(1u << (code % 8u));
+        if (!down && code < 128u && (m->ime_keys[code / 8u] & bit)) {
+            m->ime_keys[code / 8u] = (unsigned char)(m->ime_keys[code / 8u] & ~bit);
+            return 0; /* the up of a key the input method took */
+        }
+        if (down && w->text_input == 1 && (m->marked || !(modifiers & (CEE_MOD_COMMAND | CEE_MOD_CONTROL)))) {
+            /* Text input (ADR 0141): the key goes to the input method, which answers through the view's methods
+               (insertText: as TEXT, setMarkedText: as COMPOSITION, doCommandBySelector: for a key it leaves). A key
+               that composes, or comes while composing, is the input method's: its KEY is taken back. */
+            struct cee_window_event *queued = cee_window_push(w, CEE_EVENT_KEY, key, 1,
+                                                              (int32_t)cee_send_bool(event, "isARepeat"), modifiers,
+                                                              0.0f, 0.0f);
+            int had = m->marked;
+            m->in_key = 1;
+            m->key_composed = 0;
+            cee_send_v_id(m->view, "interpretKeyEvents:", cee_send_id_id(cee_mac_cls("NSArray"), "arrayWithObject:", event));
+            m->in_key = 0;
+            if (had || m->key_composed) {
+                if (queued != NULL) {
+                    queued->kind = CEE_EVENT_DROPPED;
+                }
+                if (code < 128u) {
+                    m->ime_keys[code / 8u] = (unsigned char)(m->ime_keys[code / 8u] | bit);
+                }
+            }
             return 0;
         }
         cee_window_push(w, CEE_EVENT_KEY, key, down, down ? (int32_t)cee_send_bool(event, "isARepeat") : 0, modifiers,
@@ -1297,6 +1735,70 @@ static void cee_native_title(struct cee_window *w, const char *title) {
     cee_objc.pool_pop(pool);
 }
 
+/* Text input on or off (ADR 0141): on, the view is the first responder, so its input context is the active one;
+   off, a composition is discarded (the input method then calls unmarkText). */
+static void cee_native_text_input(struct cee_window *w, int on) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    void *pool = cee_objc.pool_push();
+    if (on) {
+        cee_send_bool_id(m->window, "makeFirstResponder:", m->view);
+    } else {
+        cee_id context = cee_send(m->view, "inputContext");
+        if (context != NULL && m->marked) {
+            cee_send_v(context, "discardMarkedText");
+        }
+        m->marked = 0;
+        m->marked_utf16 = 0;
+    }
+    cee_objc.pool_pop(pool);
+}
+
+/* A new text input area: the input method asks firstRectForCharacterRange: again. */
+static void cee_native_text_area(struct cee_window *w) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    void *pool = cee_objc.pool_push();
+    cee_id context = cee_send(m->view, "inputContext");
+    if (context != NULL) {
+        cee_send_v(context, "invalidateCharacterCoordinates");
+    }
+    cee_objc.pool_pop(pool);
+}
+
+static cee_id cee_mac_pasteboard_type(void) {
+    return cee_objc.pasteboard_string != NULL ? *cee_objc.pasteboard_string : cee_nsstring("public.utf8-plain-text");
+}
+
+/* The general pasteboard's string (ADR 0141). */
+static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    void *pool = cee_objc.pool_push();
+    cee_id string = cee_send(cee_mac_cls("NSString"), "alloc");
+    string = ((cee_id(*)(cee_id, cee_sel, const void *, unsigned long, unsigned long))cee_objc.send)(
+        string, cee_mac_sel("initWithBytes:length:encoding:"), length > 0 ? (const void *)text : (const void *)"",
+        (unsigned long)length, 4ul /* NSUTF8StringEncoding */);
+    int32_t result = -CEE_WINDOW_RESOURCES;
+    if (string != NULL) {
+        cee_id board = cee_send(cee_mac_cls("NSPasteboard"), "generalPasteboard");
+        cee_send_ulong(board, "clearContents");
+        if (cee_send_bool_id_id(board, "setString:forType:", string, cee_mac_pasteboard_type())) {
+            result = 0;
+        }
+        cee_send_v(string, "release");
+    }
+    cee_objc.pool_pop(pool);
+    return result;
+}
+
+static int cee_native_clipboard_get(struct cee_window *w) {
+    void *pool = cee_objc.pool_push();
+    cee_id board = cee_send(cee_mac_cls("NSPasteboard"), "generalPasteboard");
+    cee_id string = cee_send_id_id(board, "stringForType:", cee_mac_pasteboard_type());
+    const char *utf8 = string != NULL ? cee_send_get_cstr(string, "UTF8String") : NULL;
+    int found = utf8 != NULL && cee_window_paste(w, utf8, strlen(utf8));
+    cee_objc.pool_pop(pool);
+    return found;
+}
+
 static void cee_native_wait(struct cee_window *w, double seconds) {
     (void)w;
     void *pool = cee_objc.pool_push();
@@ -1314,13 +1816,174 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
    WM_PAINT and drawn with StretchDIBits. */
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#include <imm.h> /* the input method's types and constants; its functions come from imm32.dll, loaded at first use */
 
 struct cee_win32 {
     HWND hwnd;
     uint32_t *frame; /* BGRA, the last presented frame */
     uint32_t frame_width, frame_height;
     int captured;
+    unsigned char ime_keys[32]; /* virtual keys whose down the input method took (ADR 0141) */
 };
+
+/* imm32.dll (ADR 0141), loaded with LoadLibraryW like GetDpiForWindow's user32, so no program needs a link flag
+   (MinGW ignores #pragma comment(lib)). */
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    HIMC(WINAPI *get_context)(HWND);
+    BOOL(WINAPI *release_context)(HWND, HIMC);
+    LONG(WINAPI *get_string)(HIMC, DWORD, LPVOID, DWORD);
+    BOOL(WINAPI *set_composition_window)(HIMC, LPCOMPOSITIONFORM);
+    BOOL(WINAPI *set_candidate_window)(HIMC, LPCANDIDATEFORM);
+    BOOL(WINAPI *associate)(HWND, HIMC, DWORD);
+    BOOL(WINAPI *notify)(HIMC, DWORD, DWORD, DWORD);
+} cee_imm;
+
+static int cee_imm_load(void) {
+    if (cee_imm.state != 0) {
+        return cee_imm.state == 1;
+    }
+    cee_imm.state = -1;
+    HMODULE imm = LoadLibraryW(L"imm32.dll");
+    if (imm == NULL) {
+        return 0;
+    }
+    FARPROC p[7] = {GetProcAddress(imm, "ImmGetContext"),           GetProcAddress(imm, "ImmReleaseContext"),
+                    GetProcAddress(imm, "ImmGetCompositionStringW"), GetProcAddress(imm, "ImmSetCompositionWindow"),
+                    GetProcAddress(imm, "ImmSetCandidateWindow"),    GetProcAddress(imm, "ImmAssociateContextEx"),
+                    GetProcAddress(imm, "ImmNotifyIME")};
+    for (int k = 0; k < 7; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    memcpy(&cee_imm.get_context, &p[0], sizeof p[0]);
+    memcpy(&cee_imm.release_context, &p[1], sizeof p[1]);
+    memcpy(&cee_imm.get_string, &p[2], sizeof p[2]);
+    memcpy(&cee_imm.set_composition_window, &p[3], sizeof p[3]);
+    memcpy(&cee_imm.set_candidate_window, &p[4], sizeof p[4]);
+    memcpy(&cee_imm.associate, &p[5], sizeof p[5]);
+    memcpy(&cee_imm.notify, &p[6], sizeof p[6]);
+    cee_imm.state = 1;
+    return 1;
+}
+
+/* One of the input context's strings (GCS_COMPSTR, GCS_RESULTSTR) as UTF-16, allocated; *units its length. */
+static wchar_t *cee_imm_string(HIMC context, DWORD which, size_t *units) {
+    LONG bytes = cee_imm.get_string(context, which, NULL, 0);
+    *units = 0;
+    if (bytes <= 0) {
+        return NULL;
+    }
+    wchar_t *text = (wchar_t *)ceesafe_platform_alloc((size_t)bytes + sizeof(wchar_t));
+    if (text == NULL) {
+        return NULL;
+    }
+    LONG got = cee_imm.get_string(context, which, text, (DWORD)bytes);
+    if (got <= 0) {
+        ceesafe_platform_free(text);
+        return NULL;
+    }
+    *units = (size_t)got / sizeof(wchar_t);
+    return text;
+}
+
+/* UTF-16 as UTF-8, allocated; *length its bytes. An unpaired surrogate becomes U+FFFD. */
+static char *cee_win32_utf8(const wchar_t *text, size_t units, size_t *length) {
+    *length = 0;
+    int count = units == 0 ? 0 : WideCharToMultiByte(CP_UTF8, 0, text, (int)units, NULL, 0, NULL, NULL);
+    char *utf8 = (char *)ceesafe_platform_alloc((size_t)(count > 0 ? count : 0) + 1u);
+    if (utf8 != NULL && count > 0) {
+        *length = (size_t)WideCharToMultiByte(CP_UTF8, 0, text, (int)units, utf8, count, NULL, NULL);
+    }
+    return utf8;
+}
+
+/* Text events for UTF-16 units, surrogate pairs joined. */
+static void cee_win32_text_units(struct cee_window *w, const wchar_t *text, size_t units) {
+    for (size_t k = 0; k < units; k++) {
+        uint32_t unit = (uint32_t)text[k];
+        if (unit >= 0xd800u && unit <= 0xdbffu && k + 1 < units && (uint32_t)text[k + 1] >= 0xdc00u &&
+            (uint32_t)text[k + 1] <= 0xdfffu) {
+            cee_window_text(w, 0x10000u + ((unit - 0xd800u) << 10) + ((uint32_t)text[k + 1] - 0xdc00u));
+            k++;
+        } else {
+            cee_window_text(w, unit);
+        }
+    }
+}
+
+/* Places the input method's windows by the text input area (in pixels): the composition at its top left, the
+   candidates below it, never over it. */
+static void cee_win32_place_ime(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (!cee_imm_load()) {
+        return;
+    }
+    HIMC context = cee_imm.get_context(n->hwnd);
+    if (context == NULL) {
+        return;
+    }
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    LONG left = (LONG)((float)w->text_area.x * scale), top = (LONG)((float)w->text_area.y * scale);
+    LONG right = (LONG)((float)(w->text_area.x + w->text_area.w) * scale);
+    LONG bottom = (LONG)((float)(w->text_area.y + w->text_area.h) * scale);
+    COMPOSITIONFORM composition;
+    memset(&composition, 0, sizeof composition);
+    composition.dwStyle = CFS_POINT;
+    composition.ptCurrentPos.x = left;
+    composition.ptCurrentPos.y = top;
+    cee_imm.set_composition_window(context, &composition);
+    CANDIDATEFORM candidates;
+    memset(&candidates, 0, sizeof candidates);
+    candidates.dwIndex = 0;
+    candidates.dwStyle = CFS_EXCLUDE;
+    candidates.ptCurrentPos.x = left;
+    candidates.ptCurrentPos.y = bottom;
+    candidates.rcArea.left = left;
+    candidates.rcArea.top = top;
+    candidates.rcArea.right = right;
+    candidates.rcArea.bottom = bottom;
+    cee_imm.set_candidate_window(context, &candidates);
+    cee_imm.release_context(n->hwnd, context);
+}
+
+/* WM_IME_COMPOSITION with text input on: the result string as TEXT, the composition string and its caret as the
+   composition. DefWindowProcW is not called, so no WM_IME_CHAR or WM_CHAR repeats the result. */
+static void cee_win32_composition(struct cee_window *w, LPARAM flags) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    HIMC context = cee_imm.get_context(n->hwnd);
+    if (context == NULL) {
+        return;
+    }
+    size_t units = 0;
+    if (flags & GCS_RESULTSTR) {
+        wchar_t *result = cee_imm_string(context, GCS_RESULTSTR, &units);
+        if (result != NULL) {
+            cee_win32_text_units(w, result, units);
+            ceesafe_platform_free(result);
+        }
+    }
+    if (flags & GCS_COMPSTR) {
+        wchar_t *composing = cee_imm_string(context, GCS_COMPSTR, &units);
+        size_t caret_units = units;
+        if (flags & GCS_CURSORPOS) {
+            LONG at = cee_imm.get_string(context, GCS_CURSORPOS, NULL, 0);
+            caret_units = at < 0 ? 0 : (size_t)at > units ? units : (size_t)at;
+        }
+        size_t length = 0, caret = 0;
+        char *utf8 = composing != NULL ? cee_win32_utf8(composing, units, &length) : NULL;
+        if (utf8 != NULL && caret_units > 0) {
+            ceesafe_platform_free(cee_win32_utf8(composing, caret_units, &caret));
+        }
+        cee_window_compose(w, utf8 != NULL ? utf8 : "", length, caret);
+        ceesafe_platform_free(utf8);
+        ceesafe_platform_free(composing);
+    } else if (flags & GCS_RESULTSTR) {
+        cee_window_compose(w, "", 0, 0); /* committed: nothing composed now */
+    }
+    cee_imm.release_context(n->hwnd, context);
+}
 
 static const wchar_t cee_win32_class[] = L"CeeSafeWindow";
 static int cee_win32_registered;
@@ -1461,6 +2124,23 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     case WM_KEYUP:
     case WM_SYSKEYUP: {
         int32_t down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+        if (w->text_input == 1) {
+            /* A key the input method takes comes as VK_PROCESSKEY: no KEY for it, nor for its up (ADR 0141). */
+            UINT vk = (UINT)wparam;
+            if (vk == VK_PROCESSKEY) {
+                vk = MapVirtualKeyW((UINT)((lparam >> 16) & 0xff), 1 /* MAPVK_VSC_TO_VK */) & 0xffu;
+                if (down) {
+                    n->ime_keys[vk / 8u] = (unsigned char)(n->ime_keys[vk / 8u] | (1u << (vk % 8u)));
+                } else {
+                    n->ime_keys[vk / 8u] = (unsigned char)(n->ime_keys[vk / 8u] & ~(1u << (vk % 8u)));
+                }
+                return 0;
+            }
+            if (!down && vk < 256u && (n->ime_keys[vk / 8u] & (1u << (vk % 8u)))) {
+                n->ime_keys[vk / 8u] = (unsigned char)(n->ime_keys[vk / 8u] & ~(1u << (vk % 8u)));
+                return 0;
+            }
+        }
         int32_t repeat = down && ((lparam >> 30) & 1) != 0;
         cee_window_push(w, CEE_EVENT_KEY, cee_win32_key(wparam), down, repeat, cee_win32_modifiers(), 0.0f, 0.0f);
         if (message == WM_SYSKEYDOWN && wparam == VK_F4) {
@@ -1485,6 +2165,29 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
         cee_window_text(w, unit);
         return 0;
     }
+    case WM_IME_SETCONTEXT:
+        if (w->text_input == 1) {
+            lparam &= ~(LPARAM)ISC_SHOWUICOMPOSITIONWINDOW; /* the program shows the composition (ADR 0141) */
+        }
+        break;
+    case WM_IME_STARTCOMPOSITION:
+        if (w->text_input == 1) {
+            cee_win32_place_ime(w);
+            return 0; /* no system composition window */
+        }
+        break;
+    case WM_IME_COMPOSITION:
+        if (w->text_input == 1 && cee_imm_load()) {
+            cee_win32_composition(w, lparam);
+            return 0;
+        }
+        break;
+    case WM_IME_ENDCOMPOSITION:
+        if (w->text_input == 1) {
+            cee_window_compose(w, "", 0, 0);
+            return 0;
+        }
+        break;
     case WM_SETCURSOR:
         if (LOWORD(lparam) == HTCLIENT) {
             SetCursor(cee_win32_cursor(w->cursor));
@@ -1679,6 +2382,101 @@ static void cee_native_title(struct cee_window *w, const char *title) {
     }
 }
 
+/* Text input on: the window's default input context, the input method's windows placed by the area; off: a
+   composition cancelled and no input context, so keys reach the program as keys (ADR 0141). */
+static void cee_native_text_input(struct cee_window *w, int on) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (!cee_imm_load()) {
+        return;
+    }
+    if (on) {
+        cee_imm.associate(n->hwnd, NULL, IACE_DEFAULT);
+        cee_win32_place_ime(w);
+        return;
+    }
+    HIMC context = cee_imm.get_context(n->hwnd);
+    if (context != NULL) {
+        cee_imm.notify(context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+        cee_imm.release_context(n->hwnd, context);
+    }
+    cee_imm.associate(n->hwnd, NULL, 0);
+    memset(n->ime_keys, 0, sizeof n->ime_keys);
+}
+
+static void cee_native_text_area(struct cee_window *w) {
+    if (w->text_input == 1) {
+        cee_win32_place_ime(w);
+    }
+}
+
+/* Another program may hold the clipboard for a moment: a few tries. */
+static int cee_win32_open_clipboard(HWND hwnd) {
+    for (int k = 0; k < 10; k++) {
+        if (OpenClipboard(hwnd)) {
+            return 1;
+        }
+        Sleep(5);
+    }
+    return 0;
+}
+
+/* The clipboard's CF_UNICODETEXT (ADR 0141). */
+static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    int units = length == 0 ? 0 : MultiByteToWideChar(CP_UTF8, 0, text, (int)length, NULL, 0);
+    if (length > 0 && units <= 0) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, ((size_t)units + 1u) * sizeof(wchar_t));
+    wchar_t *wide = memory != NULL ? (wchar_t *)GlobalLock(memory) : NULL;
+    if (wide == NULL) {
+        if (memory != NULL) {
+            GlobalFree(memory);
+        }
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (units > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, text, (int)length, wide, units);
+    }
+    wide[units] = 0;
+    GlobalUnlock(memory);
+    if (!cee_win32_open_clipboard(n->hwnd)) {
+        GlobalFree(memory);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    EmptyClipboard();
+    int32_t result = 0;
+    if (SetClipboardData(CF_UNICODETEXT, memory) == NULL) {
+        GlobalFree(memory); /* still ours: the clipboard took it only on success */
+        result = -CEE_WINDOW_RESOURCES;
+    }
+    CloseClipboard();
+    return result;
+}
+
+static int cee_native_clipboard_get(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (!cee_win32_open_clipboard(n->hwnd)) {
+        return 0;
+    }
+    int found = 0;
+    HANDLE memory = GetClipboardData(CF_UNICODETEXT);
+    const wchar_t *wide = memory != NULL ? (const wchar_t *)GlobalLock(memory) : NULL;
+    if (wide != NULL) {
+        size_t limit = GlobalSize(memory) / sizeof(wchar_t), units = 0;
+        while (units < limit && wide[units] != 0) {
+            units++;
+        }
+        size_t length = 0;
+        char *utf8 = units <= 0x7fffffffu ? cee_win32_utf8(wide, units, &length) : NULL;
+        found = utf8 != NULL && cee_window_paste(w, utf8, length);
+        ceesafe_platform_free(utf8);
+        GlobalUnlock(memory);
+    }
+    CloseClipboard();
+    return found;
+}
+
 static void cee_native_wait(struct cee_window *w, double seconds) {
     (void)w;
     DWORD milliseconds = seconds <= 0.0 ? 0u : (DWORD)(seconds * 1000.0);
@@ -1690,7 +2488,11 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
    are needed to build. A frame is converted to the visual's pixel layout, scaled to the window's size, and drawn
    with XPutImage. */
 #include <dlfcn.h>
+#include <locale.h>
 #include <sys/select.h>
+
+/* KeyPress, KeyRelease, ButtonPress, ButtonRelease, PointerMotion, Exposure, StructureNotify, FocusChange. */
+#define CEE_X_EVENTS (1L | 2L | 4L | 8L | 64L | (1L << 15) | (1L << 17) | (1L << 21))
 
 typedef unsigned long cee_xid;
 typedef struct cee_x_display cee_x_display;
@@ -1732,14 +2534,48 @@ typedef struct {
     int format;
     long data[5];
 } cee_x_client;
+typedef struct { /* XSelectionRequestEvent */
+    int type;
+    unsigned long serial;
+    int send_event;
+    cee_x_display *display;
+    cee_xid owner, requestor;
+    unsigned long selection, target, property, time;
+} cee_x_selection_request;
+typedef struct { /* XSelectionEvent */
+    int type;
+    unsigned long serial;
+    int send_event;
+    cee_x_display *display;
+    cee_xid requestor;
+    unsigned long selection, target, property, time;
+} cee_x_selection;
+typedef struct { /* XSelectionClearEvent */
+    int type;
+    unsigned long serial;
+    int send_event;
+    cee_x_display *display;
+    cee_xid window;
+    unsigned long selection, time;
+} cee_x_selection_clear;
 typedef union {
     int type;
     cee_x_any any;
     cee_x_input input;
     cee_x_configure configure;
     cee_x_client client;
+    cee_x_selection_request request;
+    cee_x_selection selection;
+    cee_x_selection_clear clear;
     long pad[24];
 } cee_x_event;
+typedef struct { /* XIMStyles */
+    unsigned short count;
+    unsigned long *styles;
+} cee_x_styles;
+typedef struct { /* XPoint */
+    short x, y;
+} cee_x_point;
 typedef struct cee_x_image {
     int width, height, xoffset, format;
     char *data;
@@ -1786,6 +2622,33 @@ static struct {
     int (*define_cursor)(cee_x_display *, cee_xid, cee_xid);
     int (*detectable_repeat)(cee_x_display *, int, int *);
     int (*set_background_pixmap)(cee_x_display *, cee_xid, cee_xid); /* for external windows (ADR 0137) */
+    /* The input method and the selections (ADR 0141); the variadic ones are called as variadic. */
+    char *(*set_locale_modifiers)(const char *);
+    void *(*open_im)(cee_x_display *, void *, char *, char *);
+    int (*close_im)(void *);
+    char *(*get_im_values)(void *, ...);
+    void *(*create_ic)(void *, ...);
+    void (*destroy_ic)(void *);
+    void (*set_ic_focus)(void *);
+    void (*unset_ic_focus)(void *);
+    char *(*set_ic_values)(void *, ...);
+    char *(*get_ic_values)(void *, ...);
+    void *(*nested_list)(int, ...);
+    int (*filter_event)(cee_x_event *, cee_xid);
+    int (*utf8_lookup_string)(void *, cee_x_input *, char *, int, unsigned long *, int *);
+    int (*release)(void *); /* XFree */
+    char *(*utf8_reset_ic)(void *);
+    cee_xid (*get_selection_owner)(cee_x_display *, unsigned long);
+    int (*set_selection_owner)(cee_x_display *, unsigned long, cee_xid, unsigned long);
+    int (*convert_selection)(cee_x_display *, unsigned long, unsigned long, unsigned long, cee_xid, unsigned long);
+    int (*change_property)(cee_x_display *, cee_xid, unsigned long, unsigned long, int, int, const unsigned char *,
+                           int);
+    int (*get_window_property)(cee_x_display *, cee_xid, unsigned long, long, long, int, unsigned long,
+                               unsigned long *, int *, unsigned long *, unsigned long *, unsigned char **);
+    int (*send_event)(cee_x_display *, cee_xid, int, long, cee_x_event *);
+    int (*check_typed_window_event)(cee_x_display *, cee_xid, int, cee_x_event *);
+    long (*max_request_size)(cee_x_display *);
+    long (*extended_max_request_size)(cee_x_display *);
 } cee_x;
 
 struct cee_x11 {
@@ -1799,6 +2662,15 @@ struct cee_x11 {
     uint32_t frame_width, frame_height;
     unsigned char keys[32]; /* keycodes held down, for repeats */
     cee_xid cursors[7];
+    /* Text input (ADR 0141): the input method and context, opened at the first setTextInput(true), and whether the
+       context draws its pre-edit at a spot (over the spot, XIMPreeditPosition). */
+    void *im, *ic;
+    int spot;
+    unsigned char ime_keys[32]; /* keycodes whose press the input method took */
+    /* The CLIPBOARD selection while this window owns it, and the atoms it uses. */
+    char *owned;
+    size_t owned_length;
+    unsigned long clipboard_atom, utf8_atom, targets_atom, property_atom, incr_atom;
 };
 
 typedef void (*cee_x_fn)(void);
@@ -1857,6 +2729,38 @@ static int cee_x_load(void) {
     CEE_X(define_cursor, int (*)(cee_x_display *, cee_xid, cee_xid), "XDefineCursor")
     CEE_X(detectable_repeat, int (*)(cee_x_display *, int, int *), "XkbSetDetectableAutoRepeat")
     CEE_X(set_background_pixmap, int (*)(cee_x_display *, cee_xid, cee_xid), "XSetWindowBackgroundPixmap")
+    CEE_X(set_locale_modifiers, char *(*)(const char *), "XSetLocaleModifiers")
+    CEE_X(open_im, void *(*)(cee_x_display *, void *, char *, char *), "XOpenIM")
+    CEE_X(close_im, int (*)(void *), "XCloseIM")
+    CEE_X(get_im_values, char *(*)(void *, ...), "XGetIMValues")
+    CEE_X(create_ic, void *(*)(void *, ...), "XCreateIC")
+    CEE_X(destroy_ic, void (*)(void *), "XDestroyIC")
+    CEE_X(set_ic_focus, void (*)(void *), "XSetICFocus")
+    CEE_X(unset_ic_focus, void (*)(void *), "XUnsetICFocus")
+    CEE_X(set_ic_values, char *(*)(void *, ...), "XSetICValues")
+    CEE_X(get_ic_values, char *(*)(void *, ...), "XGetICValues")
+    CEE_X(nested_list, void *(*)(int, ...), "XVaCreateNestedList")
+    CEE_X(filter_event, int (*)(cee_x_event *, cee_xid), "XFilterEvent")
+    CEE_X(utf8_lookup_string, int (*)(void *, cee_x_input *, char *, int, unsigned long *, int *),
+          "Xutf8LookupString")
+    CEE_X(release, int (*)(void *), "XFree")
+    CEE_X(utf8_reset_ic, char *(*)(void *), "Xutf8ResetIC")
+    CEE_X(get_selection_owner, cee_xid(*)(cee_x_display *, unsigned long), "XGetSelectionOwner")
+    CEE_X(set_selection_owner, int (*)(cee_x_display *, unsigned long, cee_xid, unsigned long), "XSetSelectionOwner")
+    CEE_X(convert_selection,
+          int (*)(cee_x_display *, unsigned long, unsigned long, unsigned long, cee_xid, unsigned long),
+          "XConvertSelection")
+    CEE_X(change_property,
+          int (*)(cee_x_display *, cee_xid, unsigned long, unsigned long, int, int, const unsigned char *, int),
+          "XChangeProperty")
+    CEE_X(get_window_property,
+          int (*)(cee_x_display *, cee_xid, unsigned long, long, long, int, unsigned long, unsigned long *, int *,
+                  unsigned long *, unsigned long *, unsigned char **),
+          "XGetWindowProperty")
+    CEE_X(send_event, int (*)(cee_x_display *, cee_xid, int, long, cee_x_event *), "XSendEvent")
+    CEE_X(check_typed_window_event, int (*)(cee_x_display *, cee_xid, int, cee_x_event *), "XCheckTypedWindowEvent")
+    CEE_X(max_request_size, long (*)(cee_x_display *), "XMaxRequestSize")
+    CEE_X(extended_max_request_size, long (*)(cee_x_display *), "XExtendedMaxRequestSize")
 #undef CEE_X
     cee_x.state = 1;
     return 1;
@@ -1891,8 +2795,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         ceesafe_platform_free(n);
         return CEE_WINDOW_RESOURCES;
     }
-    /* KeyPress, KeyRelease, ButtonPress, ButtonRelease, PointerMotion, Exposure, StructureNotify, FocusChange. */
-    cee_x.select_input(display, n->window, 1L | 2L | 4L | 8L | 64L | (1L << 15) | (1L << 17) | (1L << 21));
+    cee_x.select_input(display, n->window, CEE_X_EVENTS);
     n->delete_atom = cee_x.intern_atom(display, "WM_DELETE_WINDOW", 0);
     cee_x.set_wm_protocols(display, n->window, &n->delete_atom, 1);
     cee_x.detectable_repeat(display, 1, NULL);
@@ -1900,6 +2803,11 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         /* Background None: the X server leaves an exposed part as the GPU drew it, rather than clearing it. */
         cee_x.set_background_pixmap(display, n->window, 0);
     }
+    n->clipboard_atom = cee_x.intern_atom(display, "CLIPBOARD", 0);
+    n->utf8_atom = cee_x.intern_atom(display, "UTF8_STRING", 0);
+    n->targets_atom = cee_x.intern_atom(display, "TARGETS", 0);
+    n->property_atom = cee_x.intern_atom(display, "CEESAFE_CLIPBOARD", 0);
+    n->incr_atom = cee_x.intern_atom(display, "INCR", 0);
     cee_x.store_name(display, n->window, title);
     cee_x.map_window(display, n->window);
     cee_x.flush(display);
@@ -1920,8 +2828,15 @@ static void cee_native_close(struct cee_window *w) {
     if (n == NULL) {
         return;
     }
+    if (n->ic != NULL) {
+        cee_x.destroy_ic(n->ic);
+    }
+    if (n->im != NULL) {
+        cee_x.close_im(n->im);
+    }
     cee_x.destroy_window(n->display, n->window);
     cee_x.close_display(n->display);
+    ceesafe_platform_free(n->owned);
     ceesafe_platform_free(n->frame);
     ceesafe_platform_free(n);
     w->native = NULL;
@@ -1973,11 +2888,85 @@ static uint32_t cee_x_scalar(unsigned long sym) {
 
 static void cee_x_draw(struct cee_window *w);
 
+/* A KeyPress with text input on (ADR 0141): the input context's text, as UTF-8. A key code of 0 is text the input
+   method committed, not a key: no KEY for it. */
+static void cee_x_lookup(struct cee_window *w, cee_x_event *e, unsigned int code, int32_t key, int32_t repeat,
+                         int32_t modifiers) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    char buffer[256];
+    char *text = buffer;
+    unsigned long sym = 0;
+    int status = 0;
+    int count = cee_x.utf8_lookup_string(n->ic, &e->input, buffer, (int)sizeof buffer, &sym, &status);
+    if (status == -1 && count > 0) { /* XBufferOverflow: count is the length needed */
+        text = (char *)ceesafe_platform_alloc((size_t)count);
+        count = text != NULL ? cee_x.utf8_lookup_string(n->ic, &e->input, text, count, &sym, &status) : 0;
+    }
+    if (code != 0) {
+        cee_window_push(w, CEE_EVENT_KEY, key, 1, repeat, modifiers, 0.0f, 0.0f);
+    }
+    if ((status == 2 || status == 4) && count > 0 && (code == 0 || !(modifiers & (CEE_MOD_CONTROL | CEE_MOD_COMMAND)))) {
+        size_t i = 0;
+        while (i < (size_t)count) { /* XLookupChars, XLookupBoth */
+            cee_window_text(w, cee_window_utf8((const unsigned char *)text, (size_t)count, &i));
+        }
+    }
+    if (text != buffer) {
+        ceesafe_platform_free(text);
+    }
+}
+
+/* The most bytes a property may hold in one request (no INCR transfers). */
+static size_t cee_x_max_property(struct cee_x11 *n) {
+    long words = cee_x.extended_max_request_size(n->display);
+    if (words <= 0) {
+        words = cee_x.max_request_size(n->display);
+    }
+    return words > 256 ? (size_t)words * 4u - 1024u : 0u;
+}
+
+/* Answers another program's request for the CLIPBOARD this window owns: TARGETS or UTF8_STRING (ADR 0141). */
+static void cee_x_answer(struct cee_x11 *n, const cee_x_selection_request *r) {
+    cee_x_event reply;
+    memset(&reply, 0, sizeof reply);
+    reply.selection.type = 31; /* SelectionNotify */
+    reply.selection.send_event = 1;
+    reply.selection.display = n->display;
+    reply.selection.requestor = r->requestor;
+    reply.selection.selection = r->selection;
+    reply.selection.target = r->target;
+    reply.selection.time = r->time;
+    unsigned long property = r->property != 0 ? r->property : r->target; /* None: an old client */
+    if (r->selection == n->clipboard_atom && n->owned != NULL) {
+        if (r->target == n->targets_atom) {
+            unsigned long targets[2] = {n->targets_atom, n->utf8_atom}; /* format 32 is longs */
+            cee_x.change_property(n->display, r->requestor, property, 4 /* XA_ATOM */, 32, 0 /* PropModeReplace */,
+                                  (const unsigned char *)targets, 2);
+            reply.selection.property = property;
+        } else if (r->target == n->utf8_atom && n->owned_length <= cee_x_max_property(n)) {
+            cee_x.change_property(n->display, r->requestor, property, n->utf8_atom, 8, 0,
+                                  (const unsigned char *)n->owned, (int)n->owned_length);
+            reply.selection.property = property;
+        }
+    }
+    cee_x.send_event(n->display, r->requestor, 0, 0, &reply);
+    cee_x.flush(n->display);
+}
+
 static void cee_native_pump(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     for (int k = 0; k < 256 && cee_x.pending(n->display) > 0; k++) {
         cee_x_event e;
         cee_x.next_event(n->display, &e);
+        /* The key code before XFilterEvent, which may rewrite the event it puts back (Xlib's own input method). */
+        unsigned int taken = e.input.code & 0xffu;
+        int press = e.type == 2;
+        if (n->im != NULL && cee_x.filter_event(&e, 0)) {
+            if (press) { /* a KeyPress the input method took: its release is no event either (ADR 0141) */
+                n->ime_keys[taken / 8u] = (unsigned char)(n->ime_keys[taken / 8u] | (1u << (taken % 8u)));
+            }
+            continue;
+        }
         switch (e.type) {
         case 2: /* KeyPress */
         case 3: { /* KeyRelease */
@@ -1989,11 +2978,21 @@ static void cee_native_pump(struct cee_window *w) {
             } else {
                 n->keys[code / 8u] = (unsigned char)(n->keys[code / 8u] & ~(1u << (code % 8u)));
             }
+            if (n->ime_keys[code / 8u] & (1u << (code % 8u))) {
+                n->ime_keys[code / 8u] = (unsigned char)(n->ime_keys[code / 8u] & ~(1u << (code % 8u)));
+                if (!down) {
+                    break;
+                }
+            }
             unsigned long unshifted = cee_x.lookup_keysym(&e.input, 0);
+            int32_t modifiers = cee_x_modifiers(e.input.state);
+            if (down && n->ic != NULL && w->text_input == 1) {
+                cee_x_lookup(w, &e, code, cee_x_key(unshifted), repeat, modifiers);
+                break;
+            }
             char text[32];
             unsigned long sym = 0;
             cee_x.lookup_string(&e.input, text, (int)sizeof text, &sym, NULL);
-            int32_t modifiers = cee_x_modifiers(e.input.state);
             cee_window_push(w, CEE_EVENT_KEY, cee_x_key(unshifted), down, repeat, modifiers, 0.0f, 0.0f);
             if (down && !(modifiers & (CEE_MOD_CONTROL | CEE_MOD_COMMAND))) {
                 uint32_t c = cee_x_scalar(sym);
@@ -2021,8 +3020,26 @@ static void cee_native_pump(struct cee_window *w) {
         case 6: /* MotionNotify */
             cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, (float)e.input.x, (float)e.input.y);
             break;
-        case 9: cee_window_focus(w, 1); break;  /* FocusIn */
-        case 10: cee_window_focus(w, 0); break; /* FocusOut */
+        case 9: /* FocusIn */
+            cee_window_focus(w, 1);
+            if (n->ic != NULL && w->text_input == 1) {
+                cee_x.set_ic_focus(n->ic);
+            }
+            break;
+        case 10: /* FocusOut */
+            cee_window_focus(w, 0);
+            if (n->ic != NULL) {
+                cee_x.unset_ic_focus(n->ic);
+            }
+            break;
+        case 29: /* SelectionClear: another program owns the clipboard now */
+            if (e.clear.selection == n->clipboard_atom) {
+                ceesafe_platform_free(n->owned);
+                n->owned = NULL;
+                n->owned_length = 0;
+            }
+            break;
+        case 30: cee_x_answer(n, &e.request); break; /* SelectionRequest */
         case 12: cee_x_draw(w); break;          /* Expose */
         case 22: /* ConfigureNotify */
             if (e.configure.width > 0 && e.configure.height > 0) {
@@ -2163,6 +3180,191 @@ static void cee_native_title(struct cee_window *w, const char *title) {
     cee_x.flush(n->display);
 }
 
+/* The spot the input method draws its pre-edit at, over the spot: the area's bottom left, in pixels. */
+static void cee_x_spot(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->ic == NULL || !n->spot) {
+        return;
+    }
+    cee_x_point point = {(short)(w->text_area.x > 32767u ? 32767u : w->text_area.x),
+                         (short)(w->text_area.y + w->text_area.h > 32767u ? 32767u : w->text_area.y + w->text_area.h)};
+    void *list = cee_x.nested_list(0, "spotLocation", &point, (void *)NULL);
+    if (list != NULL) {
+        cee_x.set_ic_values(n->ic, "preeditAttributes", list, (void *)NULL);
+        cee_x.release(list);
+    }
+}
+
+/* Opens the input method and a context on the window, at the first setTextInput(true). XOpenIM needs a locale
+   that is not C to find most input methods: LC_CTYPE is the environment's for the call, then restored. The style
+   is over the spot (XIMPreeditPosition) if the input method offers it and the context opens, then XIMPreeditNothing
+   (the input method's own window), then XIMPreeditNone. */
+static void cee_x_open_im(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->im == NULL) {
+        char saved[128] = "C";
+        const char *before = setlocale(LC_CTYPE, NULL);
+        if (before != NULL && strlen(before) < sizeof saved) {
+            memcpy(saved, before, strlen(before) + 1u);
+        }
+        int changed = strcmp(saved, "C") == 0 || strcmp(saved, "POSIX") == 0;
+        if (changed) {
+            changed = setlocale(LC_CTYPE, "") != NULL;
+        }
+        cee_x.set_locale_modifiers("");
+        n->im = cee_x.open_im(n->display, NULL, NULL, NULL);
+        if (changed) {
+            setlocale(LC_CTYPE, saved);
+        }
+        if (n->im == NULL) {
+            return;
+        }
+    }
+    if (n->ic != NULL) {
+        return;
+    }
+    cee_x_styles *styles = NULL;
+    if (cee_x.get_im_values(n->im, "queryInputStyle", &styles, (void *)NULL) != NULL) {
+        styles = NULL;
+    }
+    static const unsigned long wanted[3] = {0x0004ul | 0x0400ul, 0x0008ul | 0x0400ul, 0x0010ul | 0x0800ul};
+    for (int k = 0; k < 3 && n->ic == NULL; k++) {
+        int offered = styles == NULL;
+        for (unsigned j = 0; styles != NULL && j < styles->count; j++) {
+            offered = offered || styles->styles[j] == wanted[k];
+        }
+        if (!offered) {
+            continue;
+        }
+        if (k == 0) {
+            cee_x_point point = {0, 0};
+            void *list = cee_x.nested_list(0, "spotLocation", &point, (void *)NULL);
+            if (list == NULL) {
+                continue;
+            }
+            n->ic = cee_x.create_ic(n->im, "inputStyle", wanted[k], "clientWindow", n->window, "focusWindow",
+                                    n->window, "preeditAttributes", list, (void *)NULL);
+            cee_x.release(list);
+            n->spot = n->ic != NULL;
+        } else {
+            n->ic = cee_x.create_ic(n->im, "inputStyle", wanted[k], "clientWindow", n->window, "focusWindow",
+                                    n->window, (void *)NULL);
+        }
+    }
+    if (styles != NULL) {
+        cee_x.release(styles);
+    }
+    if (n->ic != NULL) {
+        unsigned long mask = 0;
+        if (cee_x.get_ic_values(n->ic, "filterEvents", &mask, (void *)NULL) == NULL) {
+            cee_x.select_input(n->display, n->window, CEE_X_EVENTS | (long)mask);
+        }
+    }
+}
+
+/* Text input on or off (ADR 0141). Off, the context loses focus and its pre-edit is dropped; keys then go through
+   XLookupString as before. */
+static void cee_native_text_input(struct cee_window *w, int on) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (on) {
+        cee_x_open_im(w);
+        if (n->ic != NULL) {
+            cee_x.set_ic_focus(n->ic);
+            cee_x_spot(w);
+        }
+    } else if (n->ic != NULL) {
+        char *dropped = cee_x.utf8_reset_ic(n->ic);
+        if (dropped != NULL) {
+            cee_x.release(dropped);
+        }
+        cee_x.unset_ic_focus(n->ic);
+    }
+    cee_x.flush(n->display);
+}
+
+static void cee_native_text_area(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_x_spot(w);
+    cee_x.flush(n->display);
+}
+
+/* The CLIPBOARD selection, as UTF8_STRING (ADR 0141): this window owns it and answers in the pump. */
+static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (length > cee_x_max_property(n)) {
+        return -CEE_WINDOW_RESOURCES; /* more than one request carries: no INCR */
+    }
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (length > 0) {
+        memcpy(copy, text, length);
+    }
+    ceesafe_platform_free(n->owned);
+    n->owned = copy;
+    n->owned_length = length;
+    cee_x.set_selection_owner(n->display, n->clipboard_atom, n->window, 0 /* CurrentTime */);
+    if (cee_x.get_selection_owner(n->display, n->clipboard_atom) != n->window) {
+        ceesafe_platform_free(n->owned);
+        n->owned = NULL;
+        n->owned_length = 0;
+        return -CEE_WINDOW_RESOURCES;
+    }
+    cee_x.flush(n->display);
+    return 0;
+}
+
+/* Asks the owner for UTF8_STRING and waits up to a second for its SelectionNotify; other events stay queued. */
+static int cee_native_clipboard_get(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_xid owner = cee_x.get_selection_owner(n->display, n->clipboard_atom);
+    if (owner == n->window && n->owned != NULL) {
+        return cee_window_paste(w, n->owned, n->owned_length);
+    }
+    if (owner == 0) {
+        return 0;
+    }
+    cee_x.convert_selection(n->display, n->clipboard_atom, n->utf8_atom, n->property_atom, n->window, 0);
+    cee_x.flush(n->display);
+    double deadline = cee_window_now() + 1.0;
+    cee_x_event e;
+    for (;;) {
+        if (cee_x.check_typed_window_event(n->display, n->window, 31 /* SelectionNotify */, &e)) {
+            break;
+        }
+        double left = deadline - cee_window_now();
+        if (left <= 0.0) {
+            return 0;
+        }
+        int fd = cee_x.connection_number(n->display);
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(fd, &set);
+        struct timeval timeout;
+        timeout.tv_sec = 0;
+        timeout.tv_usec = (suseconds_t)((left < 0.05 ? left : 0.05) * 1e6);
+        select(fd + 1, &set, NULL, NULL, &timeout);
+    }
+    if (e.selection.property == 0) {
+        return 0; /* the owner has no UTF8_STRING */
+    }
+    unsigned long type = 0, items = 0, after = 0;
+    int format = 0;
+    unsigned char *data = NULL;
+    int found = 0;
+    if (cee_x.get_window_property(n->display, n->window, n->property_atom, 0, 0x1fffffffL, 1 /* delete */,
+                                  0 /* AnyPropertyType */, &type, &format, &items, &after, &data) == 0) {
+        if (type != n->incr_atom && format == 8 && data != NULL) {
+            found = cee_window_paste(w, (const char *)data, (size_t)items);
+        }
+        if (data != NULL) {
+            cee_x.release(data);
+        }
+    }
+    return found;
+}
+
 static void cee_native_wait(struct cee_window *w, double seconds) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (cee_x.pending(n->display) > 0) {
@@ -2220,6 +3422,7 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
     w->external = surface == CEE_SURFACE_EXTERNAL;
     w->scale = 1.0f;
     w->focused = 1;
+    w->text_input = -1;
     w->last_wait = cee_window_now();
     const char *script = getenv("CEESAFE_WINDOW_SCRIPT");
     if (script != NULL && script[0] != '\0') {
@@ -2268,6 +3471,11 @@ void ceesafe_window_close(void *window) {
 #endif
     ceesafe_platform_free(w->script);
     ceesafe_platform_free(w->kept);
+    ceesafe_platform_free(w->composing);
+    ceesafe_platform_free(w->composition);
+    ceesafe_platform_free(w->pasted);
+    ceesafe_platform_free(w->script_text);
+    ceesafe_platform_free(w->clipboard);
     ceesafe_platform_free(w);
 }
 
@@ -2288,22 +3496,30 @@ int32_t ceesafe_window_native(void *window, uint64_t *first, uint64_t *second) {
 
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position) {
     struct cee_window *w = (struct cee_window *)window;
-    if (w->count == 0) {
-        if (w->scripted) {
-            cee_window_script_pump(w);
-        }
+    struct cee_window_event e;
+    int pumped = 0;
+    do {
+        if (w->count == 0 && !pumped) {
+            pumped = 1;
+            if (w->scripted) {
+                cee_window_script_pump(w);
+            }
 #if !defined(CEE_WINDOW_NO_NATIVE)
-        else {
-            cee_native_pump(w);
-        }
+            else {
+                cee_native_pump(w);
+            }
 #endif
+        }
+        if (w->count == 0) {
+            return 0;
+        }
+        e = w->queue[w->head];
+        w->head = (w->head + 1u) % CEE_WINDOW_QUEUE;
+        w->count--;
+    } while (e.kind == CEE_EVENT_DROPPED); /* a key the input method took back (ADR 0141) */
+    if (e.kind == CEE_EVENT_COMPOSITION) {
+        cee_window_show_composition(w); /* the program's copy changes only here (ADR 0141) */
     }
-    if (w->count == 0) {
-        return 0;
-    }
-    struct cee_window_event e = w->queue[w->head];
-    w->head = (w->head + 1u) % CEE_WINDOW_QUEUE;
-    w->count--;
     memcpy(fields, e.fields, sizeof e.fields);
     position[0] = e.x;
     position[1] = e.y;
@@ -2441,4 +3657,89 @@ void ceesafe_window_wait(void *window) {
 #endif
     now = cee_window_now();
     w->last_wait = now > target ? now : target;
+}
+
+/* ---- Text input and the clipboard (ADR 0141) ------------------------------------------------------------------- */
+
+void ceesafe_window_set_text_input(void *window, int32_t on) {
+    struct cee_window *w = (struct cee_window *)window;
+    int value = on != 0;
+    if (w->text_input == value) {
+        return;
+    }
+    if (!value) {
+        cee_window_compose(w, "", 0, 0); /* off ends a composition: COMPOSITION, before the backend discards it */
+    }
+    w->text_input = value;
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    if (!w->scripted) {
+        cee_native_text_input(w, value);
+    }
+#endif
+}
+
+void ceesafe_window_set_text_area(void *window, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+    struct cee_window *w = (struct cee_window *)window;
+    struct cee_window_box b = {x, y, width, height};
+    w->text_area = b;
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    if (!w->scripted) {
+        cee_native_text_area(w);
+    }
+#endif
+}
+
+/* The program's copy of the composition: its length, the text at *text (valid until the next poll) and the caret. */
+uint64_t ceesafe_window_composition(void *window, const uint8_t **text, uint64_t *caret) {
+    struct cee_window *w = (struct cee_window *)window;
+    *text = (const uint8_t *)w->composition;
+    *caret = w->composition_length == 0 ? 0u : (uint64_t)w->composition_caret;
+    return w->composition_length == 0 ? 0u : (uint64_t)w->composition_length;
+}
+
+/* Puts `length` bytes of UTF-8 on the clipboard: 0, or minus a WindowError's number. */
+int32_t ceesafe_window_set_clipboard(void *window, const uint8_t *text, uint64_t length) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (length > 0x7fffffffu) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (w->scripted) {
+        char *copy = (char *)ceesafe_platform_alloc((size_t)length + 1u);
+        if (copy == NULL) {
+            return -CEE_WINDOW_RESOURCES;
+        }
+        if (length > 0) {
+            memcpy(copy, text, (size_t)length);
+        }
+        ceesafe_platform_free(w->clipboard);
+        w->clipboard = copy;
+        w->clipboard_length = (size_t)length;
+        w->scripted_clipboard = 1;
+        return 0;
+    }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    return cee_native_clipboard_set(w, (const char *)text, (size_t)length);
+#else
+    return -CEE_WINDOW_UNSUPPORTED;
+#endif
+}
+
+/* The clipboard's text: its length, the bytes at *text (valid until the next call), or -1 when it holds no text. */
+int64_t ceesafe_window_clipboard(void *window, const uint8_t **text) {
+    struct cee_window *w = (struct cee_window *)window;
+    int found = 0;
+    *text = NULL;
+    if (w->scripted) {
+        found = w->scripted_clipboard && cee_window_paste(w, w->clipboard, w->clipboard_length);
+    }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    else {
+        found = cee_native_clipboard_get(w);
+    }
+#endif
+    if (!found) {
+        return -1;
+    }
+    *text = (const uint8_t *)w->pasted;
+    return (int64_t)w->pasted_length;
 }

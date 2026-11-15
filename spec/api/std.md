@@ -2679,7 +2679,8 @@ public struct WindowBox {
 }
 ```
 
-A part of an image that changed (`Window.presentChanged`), in the image's pixels.
+A part of an image that changed (`Window.presentChanged`), in the image's pixels; or the text input area
+(`Window.setTextInputArea`), in points from the content's top left.
 
 ## enum WindowButton
 
@@ -2760,6 +2761,7 @@ public enum WindowEvent {
     Wheel(f32, f32),
     Key(WindowKey, bool, bool, WindowModifiers),
     Text(u32),
+    Composition,
 }
 ```
 
@@ -2893,3 +2895,65 @@ public fn waitFrame(borrow mut this)
 
 Returns about 1/60 s after the previous call, or earlier when an event arrives.
 Safety: the runtime only waits on the window it was given.
+
+### Window.setTextInput
+
+```ceesafe
+public fn setTextInput(borrow mut this, on: bool)
+```
+
+Turns the system's input method on for this window, when a text field has focus, or off (ADR 0141). While it is
+on, the input method may take keys: it composes text (`Composition` events, `composition()`) and commits it as
+`Text` events, and a key it takes gives no `Key` event. Turning it off ends a composition. Until the first call,
+the window takes text as it always did.
+Safety: the runtime only reads the flag.
+
+### Window.setTextInputArea
+
+```ceesafe
+public fn setTextInputArea(borrow mut this, area: WindowBox)
+```
+
+Where the text being composed, or the caret, is: a box in points from the content's top left. The input method
+shows its candidates beside it (ADR 0141).
+Safety: the runtime only reads the four numbers.
+
+### Window.composition
+
+```ceesafe
+public fn composition(borrow this) -> StringView
+```
+
+The text the input method is composing, as of the last `Composition` event; empty when there is none
+(ADR 0141). The window owns it, and it changes only when `nextEvent` returns `Composition`.
+Safety: the runtime gives its copy of the composition, valid UTF-8 of the length it returns, which it replaces
+only in `nextEvent`, a `borrow mut` call that the returned view's loan of `this` rules out while the view lives.
+
+### Window.compositionCaret
+
+```ceesafe
+public fn compositionCaret(borrow this) -> usize
+```
+
+The caret's byte offset in `composition()`, at a character's start (ADR 0141).
+Safety: the runtime writes the caret, and the text's address, which is not used.
+
+### Window.setClipboardText
+
+```ceesafe
+public fn setClipboardText(borrow mut this, text: StringView) -> Result<void, WindowError>
+```
+
+Puts `text` on the system's clipboard, replacing what it held (ADR 0141).
+Safety: the runtime copies the text's bytes during the call.
+
+### Window.clipboardText
+
+```ceesafe
+public fn clipboardText(borrow mut this, out: borrow mut String) -> bool
+```
+
+Appends the clipboard's text to `out`; false when the clipboard holds no text, its text is not valid UTF-8, or
+memory ran out (ADR 0141).
+Safety: the runtime gives its copy of the clipboard's text and its length, which it keeps until the next call;
+it is copied into `out` before this returns.

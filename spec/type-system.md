@@ -3138,7 +3138,7 @@ Diagnostics: none new.
     (`runtime/hosted/ceesafe_rt_io.c`).
   - The interpreter models them, and its sandbox (`ceesafec mcp`, `ceesafe_run`) refuses them all.
 
-### 26.11 The wall clock (ADR 0055)
+### 26.11 The wall clock (ADR 0055, ADR 0153)
 - `Clock.now()` (lib/std) is a `UnixTime`: `seconds: i64` since 1970-01-01T00:00:00Z, leap seconds not counted (POSIX
   time), negative before it, and `nanoseconds: u32`, 0 to 999,999,999. `t.millis()` is `seconds * 1000 + nanoseconds /
   1,000,000`, rounded toward minus infinity; `Clock.unixMillis()` is `Clock.now().millis()`.
@@ -3147,7 +3147,14 @@ Diagnostics: none new.
   real-time clock (CosmoOS userland without one) it is 1970.
 - Hosted only: in freestanding code `Clock` and `UnixTime`, being lib/std's, are not defined (N0200).
 - The interpreter answers 2000-01-01T00:00:00Z (946,684,800 seconds) plus its virtual clock (§40.8), so a run stays
-  reproducible. Calendar dates, time zones and formatting are not part of the library.
+  reproducible. Calendar dates and formatting are not part of the library, and of time zones only the local offset is
+  (below).
+- `Clock.localOffset(at: UnixTime)` (ADR 0153) is an `i32`: the seconds to add to UTC to get the local time at `at`, as
+  the system's time zone gives it, daylight saving included (10800 for UTC+3; -18000 for New York in winter, -14400 in
+  summer). It is the offset at `at`, so a stored time is shown with the offset it had. POSIX systems: `localtime_r`'s
+  `tm_gmtoff` (`TZ`, else `/etc/localtime`); Windows: the current zone with its dynamic daylight-saving rules
+  (`SystemTimeToTzSpecificLocalTimeEx`). It is 0 in the interpreter, so a run stays reproducible, where the system
+  has no time zone (CosmoOS userland), and when the system cannot convert `at`. It has no effect.
 - `Clock.monotonicNanos()` (ADR 0075 §2.6): `u64` nanoseconds on the monotonic clock from an arbitrary start, for
   durations and latencies. It never decreases within a process (`CLOCK_MONOTONIC`; `CLOCK_UPTIME_RAW` on Apple
   systems; `QueryPerformanceCounter` on Windows). The interpreter answers its virtual clock in nanoseconds.

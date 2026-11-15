@@ -4,7 +4,8 @@
 // runtime/hosted/ceesafe_rt_window.c: AppKit on macOS, Win32 on Windows, X11 on Linux, or an in-memory window that a
 // script drives when CEESAFE_WINDOW_SCRIPT is set. A window the program draws itself, through the system's handles,
 // is `WindowSurface.External` (ADR 0137). Text input through the system's input method, and the clipboard's text,
-// are ADR 0141. Waiting for events without a tick, and waking a window from another thread, are ADR 0142.
+// are ADR 0141. Waiting for events without a tick, and waking a window from another thread, are ADR 0142; waiting for
+// any of the program's windows is ADR 0145.
 
 extern "C" {
     @effects(sleep, alloc)
@@ -55,6 +56,8 @@ extern "C" {
     fn ceesafe_window_clipboard(window: *mut void, text: *mut (*u8)) -> i64;
     @effects(sleep)
     fn ceesafe_window_wait_event(window: *mut void, timeout: u32);
+    @effects(sleep)
+    fn ceesafe_window_wait_any(timeout: u32);
     @effects()
     fn ceesafe_window_waker(window: *mut void) -> u64;
     @effects()
@@ -188,9 +191,9 @@ public enum WindowEvent {
 public struct WindowWaker {
     id: u64;
 
-    /// Makes the window's current `waitEvent` or `waitFrame` return promptly, or its next one at once. Wakes before the
-    /// window waits again count as one. After the window was dropped, it does nothing. It has no effects, so a task
-    /// or any thread may call it.
+    /// Makes the window's current `waitEvent`, `waitFrame` or `Window.waitAny` return promptly, or the next one at once.
+    /// Wakes before the window waits again count as one. After the window was dropped, it does nothing. It has no
+    /// effects, so a task or any thread may call it.
     /// Safety: the runtime looks the id up among the open windows, under its lock, and touches only a window it
     /// finds there.
     public fn wake(borrow this) {
@@ -388,6 +391,16 @@ public struct Window {
     /// Safety: the runtime only waits on the window it was given.
     public fn waitEvent(borrow mut this, timeoutMs: u32) {
         unsafe { ceesafe_window_wait_event(this.raw, timeoutMs); }
+    }
+
+    /// Sleeps until any window the program has open has an event queued, any of them was woken since a wait on it
+    /// last returned, or `timeoutMs` milliseconds pass; 0 returns at once. It takes every window's wake, and does not
+    /// say which window is ready: drain each window's `nextEvent` after it returns. Like `waitEvent` it does not tick,
+    /// and every window takes the system's events while it sleeps. With no window open, or on any thread but the
+    /// program's first (which alone can have one), it sleeps for `timeoutMs` (ADR 0145).
+    /// Safety: the runtime waits on the windows of its own list of open windows, on the program's first thread only.
+    public fn waitAny(timeoutMs: u32) {
+        unsafe { ceesafe_window_wait_any(timeoutMs); }
     }
 
     /// A handle that wakes this window from any thread or task (ADR 0142). It is Copy and `Send`, where `Window` is

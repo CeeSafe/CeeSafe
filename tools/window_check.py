@@ -22,10 +22,16 @@ that opened a window would open one on the developer's screen:
    returns when another thread wakes it, or a task run on another thread after it sent its result, during a wait of
    20 s; waitFrame takes a wake too, and a dropped window's waker wakes no later window; the interpreter answers
    Unsupported;
-6. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
+6. waiting for any window (ADR 0145): with two scripted windows, Window.waitAny returns at once while either has an
+   event queued (the second's, once the first is drained, and a window opened later), waits out its timeout once
+   both are drained, ends at a thread's wake of either window and at a task's, takes every window's wake, and finds a
+   wake that the other window's waitEvent left; the interpreter answers Unsupported to the open;
+7. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
    least 1, takes frames and closes; an External one gives this system's handles, not zero; a real window's
-   clipboard gives back the text put on it (this replaces the clipboard's contents); and a task on another thread
-   wakes a real window's waitEvent.
+   clipboard gives back the text put on it (this replaces the clipboard's contents); a task on another thread
+   wakes a real window's waitEvent; with two real windows, a task's wake of the second ends a waitAny, and a click
+   posted to the second through the system lands in its queue while only the first window's waitEvent and
+   nextEvent run (ADR 0145 §2.2; not on X11, where windows do not share a connection), and ends a waitAny.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -356,6 +362,314 @@ WAKE_EXPECTED = ["pending script ok", "queued event ok", "key 1", "key 0", "time
                  "wakes are one ok", "thread ok", "task ok", "frame takes the wake ok", "closed ok"]
 
 
+# Waiting for any window (ADR 0145): two scripted windows (each reads ANY_SCRIPT, so each has a key's down and up
+# queued at open), or with "real" two real windows whose second a task wakes. The times are generous bounds, as
+# WAKE's.
+ANY = r"""
+async fn later(ms: u64) -> Result<void, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok();
+}
+
+async fn deliver(out: Channel<u32>, waker: WindowWaker) -> Result<void, AsyncError> {
+    await Timer.sleep(200)?;
+    await out.sendAsync(7)?;
+    waker.wake();
+    return Ok();
+}
+
+fn timedAny(ms: u32) -> u64 {
+    let start = Timer.now();
+    Window.waitAny(ms);
+    return Timer.now() - start;
+}
+
+fn timed(window: borrow mut Window, ms: u32) -> u64 {
+    let start = Timer.now();
+    window.waitEvent(ms);
+    return Timer.now() - start;
+}
+
+fn drain(window: borrow mut Window) -> u32 {
+    var count: u32 = 0;
+    loop {
+        match (window.nextEvent()) {
+            Some(_) => { count += 1; }
+            null => { break; }
+        }
+    }
+    return count;
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+fn received(results: borrow Channel<u32>) -> u32 => match (results.tryRecv()) {
+    Some(v) => v,
+    null => 0,
+};
+
+fn closedWaker() -> WindowWaker {
+    let window = Window.open("window_check any closed", 10, 10)!;
+    return window.waker();
+}
+
+fn main() -> i32 {
+    var a = match (Window.open("window_check any a", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    var b = Window.open("window_check any b", 40, 30)!;
+    let first = a.waker();
+    let second = b.waker();
+    let real = match (Process.argument(1)) {
+        Some(m) => m == "real",
+        null => false,
+    };
+    let results = Channel<u32>.create(4)!;
+    if (real) {
+        // Real windows get events of their own (focus, size) before the task's wake: wait until its result is there.
+        let sender = results.clone();
+        let start = Timer.now();
+        let tasks = Thread.spawn(move () => Async.run(deliver(sender, second)))!;
+        var got: u32 = 0;
+        loop {
+            Window.waitAny(20000);
+            let _ = drain(mut a);
+            let _ = drain(mut b);
+            got = received(borrow results);
+            if (got != 0 || Timer.now() - start >= 20000) {
+                break;
+            }
+        }
+        let elapsed = Timer.now() - start;
+        let finished = tasks.join();
+        verdict("real wake of the second", got == 7 && elapsed >= 150 && elapsed < 5000);
+        return 0;
+    }
+    verdict("both queued", timedAny(20000) < 5000);
+    let ofFirst = drain(mut a);
+    let quick = timedAny(20000);
+    let ofSecond = drain(mut b);
+    verdict("the second's event", quick < 5000 && ofFirst == 2 && ofSecond == 2);
+    let waited = timedAny(100);
+    verdict("timeout", waited >= 90 && waited < 5000);
+    verdict("zero", timedAny(0) < 50);
+    var c = Window.open("window_check any c", 40, 30)!;
+    let opened = timedAny(20000);
+    verdict("a later window's event", opened < 5000 && drain(mut c) == 2);
+    let one = Thread.spawn(move () => {
+        let slept = Async.run(later(200));
+        second.wake();
+    })!;
+    let byOne = timedAny(20000);
+    one.join();
+    verdict("a thread wakes the second", byOne >= 150 && byOne < 10000);
+    let two = Thread.spawn(move () => {
+        let slept = Async.run(later(200));
+        first.wake();
+    })!;
+    let byTwo = timedAny(20000);
+    two.join();
+    verdict("a thread wakes the first", byTwo >= 150 && byTwo < 10000);
+    let sender = results.clone();
+    let tasks = Thread.spawn(move () => Async.run(deliver(sender, second)))!;
+    let delivered = timedAny(20000);
+    let finished = tasks.join();
+    verdict("task", received(borrow results) == 7 && delivered >= 150 && delivered < 10000);
+    first.wake();
+    second.wake();
+    verdict("woken before", timedAny(20000) < 5000);
+    verdict("every wake taken", timedAny(100) >= 90);
+    second.wake();
+    verdict("waitEvent leaves another's wake", timed(mut a, 100) >= 90);
+    verdict("for waitAny", timedAny(20000) < 5000);
+    first.wake();
+    verdict("waitEvent takes its own", timed(mut a, 20000) < 5000);
+    verdict("then waitAny waits", timedAny(100) >= 90);
+    let old = closedWaker();
+    old.wake();
+    verdict("closed", timedAny(100) >= 90);
+    return 0;
+}
+"""
+
+ANY_SCRIPT = "0:key:a"
+ANY_EXPECTED = ["both queued ok", "the second's event ok", "timeout ok", "zero ok", "a later window's event ok",
+                "a thread wakes the second ok", "a thread wakes the first ok", "task ok", "woken before ok",
+                "every wake taken ok", "waitEvent leaves another's wake ok", "for waitAny ok",
+                "waitEvent takes its own ok", "then waitAny waits ok", "closed ok"]
+
+# The routing of events between two real windows (ADR 0145 §2.2), with --display: a package whose C file posts a
+# click (down and up) to the second window through the system (macOS: an NSEvent for its window number, posted to
+# the application; Windows: WM_LBUTTONDOWN and WM_LBUTTONUP posted to its HWND). Only the first window's waitEvent and
+# nextEvent then take the system's events, and the click must be in the second window's queue; then a second click
+# must end a waitAny. On X11 each window has its own connection, so one window's pump never takes another's events:
+# the helper posts nothing there and the program says so.
+ROUTE = r"""
+extern "C" {
+    @effects()
+    fn window_check_post_click(kind: u32, first: u64, second: u64) -> i32;
+}
+
+fn buttons(window: borrow mut Window) -> u32 {
+    var count: u32 = 0;
+    loop {
+        match (window.nextEvent()) {
+            Some(WindowEvent.PointerButton(_, _, _, _)) => { count += 1; }
+            Some(_) => {}
+            null => { break; }
+        }
+    }
+    return count;
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+/// Posts a click to the window through the system; false where the helper cannot.
+/// Safety: the helper only reads the handles and posts two events to that window.
+fn click(window: borrow Window) -> bool {
+    var kind: u32 = 0;
+    var x: u64 = 0;
+    var y: u64 = 0;
+    match (window.nativeHandle()) {
+        WindowHandle.AppKit(p, q) => { kind = 1; x = p; y = q; }
+        WindowHandle.Win32(p, q) => { kind = 2; x = p; y = q; }
+        WindowHandle.Xlib(p, q) => { kind = 3; x = p; y = q; }
+        WindowHandle.Scripted => {}
+    }
+    return unsafe { window_check_post_click(kind, x, y) } != 0;
+}
+
+fn main() -> i32 {
+    var a = match (Window.open("window_check route a", 200, 150)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    var b = Window.open("window_check route b", 200, 150)!;
+    // The windows' own first events (focus, size, the pointer) come and go.
+    for (round in 0u32..10) {
+        Window.waitAny(50);
+        let _ = buttons(mut a);
+        let _ = buttons(mut b);
+    }
+    if (!click(borrow b)) {
+        Console.writeLine("post unsupported");
+        return 0;
+    }
+    var ofFirst: u32 = 0;
+    for (round in 0u32..10) {
+        a.waitEvent(50);
+        ofFirst += buttons(mut a);
+    }
+    let ofSecond = buttons(mut b);
+    verdict("routed", ofFirst == 0 && ofSecond == 2);
+    if (!click(borrow b)) {
+        return 1;
+    }
+    let start = Timer.now();
+    var got: u32 = 0;
+    loop {
+        Window.waitAny(20000);
+        let _ = buttons(mut a);
+        got += buttons(mut b);
+        if (got >= 2 || Timer.now() - start >= 5000) {
+            break;
+        }
+    }
+    verdict("waitAny for the second's click", got == 2 && Timer.now() - start < 5000);
+    return 0;
+}
+"""
+
+ROUTE_C = r"""/* window_check's helper (ADR 0145): posts a primary click at (10, 10) in a window, through the system. */
+#include <stdint.h>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+#include <string.h>
+#elif defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "user32.lib")
+#endif
+#endif
+
+int32_t window_check_post_click(uint32_t kind, uint64_t first, uint64_t second);
+
+#if defined(__APPLE__)
+typedef void *cee_id;
+typedef struct {
+    double x, y;
+} cee_point;
+
+static void *cee_symbol(void *library, const char *name) { return dlsym(library, name); }
+#endif
+
+int32_t window_check_post_click(uint32_t kind, uint64_t first, uint64_t second) {
+    (void)second;
+#if defined(__APPLE__)
+    if (kind != 1) {
+        return 0;
+    }
+    void *objc = dlopen("/usr/lib/libobjc.A.dylib", RTLD_LAZY);
+    if (objc == NULL) {
+        return 0;
+    }
+    void *p[5] = {cee_symbol(objc, "objc_getClass"), cee_symbol(objc, "sel_registerName"),
+                  cee_symbol(objc, "objc_msgSend"), cee_symbol(objc, "objc_autoreleasePoolPush"),
+                  cee_symbol(objc, "objc_autoreleasePoolPop")};
+    cee_id (*get_class)(const char *);
+    cee_id (*sel)(const char *);
+    void (*send)(void);
+    void *(*push)(void);
+    void (*pop)(void *);
+    memcpy(&get_class, &p[0], sizeof get_class);
+    memcpy(&sel, &p[1], sizeof sel);
+    memcpy(&send, &p[2], sizeof send);
+    memcpy(&push, &p[3], sizeof push);
+    memcpy(&pop, &p[4], sizeof pop);
+    void *pool = push();
+    cee_id window = (cee_id)(uintptr_t)first;
+    long number = ((long (*)(cee_id, cee_id))send)(window, sel("windowNumber"));
+    cee_id app = ((cee_id(*)(cee_id, cee_id))send)(get_class("NSApplication"), sel("sharedApplication"));
+    cee_point at = {10.0, 10.0}; /* the window's coordinates: from its bottom left, inside the content */
+    for (unsigned long type = 1; type <= 2; type++) { /* NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp */
+        cee_id event = ((cee_id(*)(cee_id, cee_id, unsigned long, cee_point, unsigned long, double, long, cee_id, long,
+                                   long, float))send)(
+            get_class("NSEvent"),
+            sel("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:"
+                "pressure:"),
+            type, at, 0ul, 0.0, number, NULL, 0l, 1l, 1.0f);
+        if (event == NULL) {
+            pop(pool);
+            return 0;
+        }
+        ((void (*)(cee_id, cee_id, cee_id, signed char))send)(app, sel("postEvent:atStart:"), event, 0);
+    }
+    pop(pool);
+    return 1;
+#elif defined(_WIN32)
+    if (kind != 2) {
+        return 0;
+    }
+    HWND hwnd = (HWND)(uintptr_t)first;
+    return PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(10, 10)) &&
+           PostMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(10, 10));
+#else
+    (void)kind;
+    (void)first;
+    return 0;
+#endif
+}
+"""
+
+
 def text_expected(script):
     """The trace of TEXT run with `script`, by §26.13's grammar and ADR 0141's rules."""
     items = {}
@@ -662,6 +976,23 @@ def build(compiler, source, work, name):
     return path, exe
 
 
+def build_package(compiler, source, c_source, work, name):
+    """A package of one CeeSafe file and one C file (type-system.md §28.6), built to an executable."""
+    root = os.path.join(work, name + "-package")
+    os.makedirs(os.path.join(root, "src"), exist_ok=True)
+    with open(os.path.join(root, "ceesafe.toml"), "w", encoding="utf-8") as f:
+        f.write(f'[package]\nname = "{name}"\nc = ["src/helper.c"]\n')
+    with open(os.path.join(root, "src", "main.cee"), "w", encoding="utf-8") as f:
+        f.write(source)
+    with open(os.path.join(root, "src", "helper.c"), "w", encoding="utf-8") as f:
+        f.write(c_source)
+    exe = os.path.join(work, name + (".exe" if os.name == "nt" else ""))
+    r = subprocess.run([compiler, "build", "-o", exe], capture_output=True, text=True, cwd=root)
+    if r.returncode != 0:
+        sys.exit(f"window_check: building {name} failed:\n{r.stderr}")
+    return exe
+
+
 def run(command, env, cwd):
     full = dict(os.environ)
     full.pop("CEESAFE_WINDOW_SCRIPT", None)
@@ -771,6 +1102,21 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        any_source, any_program = build(compiler, ANY, work, "any")
+        any_script = os.path.join(work, "any.txt")
+        with open(any_script, "w", encoding="utf-8") as f:
+            f.write(ANY_SCRIPT)
+        any_cases = [
+            ("waiting for any window", [any_program], ANY_EXPECTED, 0),
+            ("waitAny in the interpreter", [compiler, "run", "--interp", any_source], ["open failed"], 1),
+        ]
+        for what, command, want, status in any_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": any_script}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -781,7 +1127,7 @@ def main():
             if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
-        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + 8
+        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) + 8
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -798,6 +1144,19 @@ def main():
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake ok":
                 problems.append(f"a real window's wake: expected 'real wake ok', got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
+            r = run([any_program, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "real wake of the second ok":
+                problems.append(f"two real windows' waitAny: expected 'real wake of the second ok', got "
+                                f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            route = build_package(compiler, ROUTE, ROUTE_C, work, "route")
+            r = run([route], {}, work)
+            checks += 1
+            want = (["post unsupported"] if sys.platform.startswith("linux") else
+                    ["routed ok", "waitAny for the second's click ok"])
+            if r.returncode != 0 or r.stdout.splitlines() != want:
+                problems.append(f"two real windows' events: expected {want!r}, got {r.stdout.splitlines()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)

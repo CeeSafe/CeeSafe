@@ -2783,9 +2783,9 @@ Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker(
 public fn wake(borrow this)
 ```
 
-Makes the window's current `waitEvent` or `waitFrame` return promptly, or its next one at once. Wakes before the
-window waits again count as one. After the window was dropped, it does nothing. It has no effects, so a task
-or any thread may call it.
+Makes the window's current `waitEvent`, `waitFrame` or `Window.waitAny` return promptly, or the next one at once.
+Wakes before the window waits again count as one. After the window was dropped, it does nothing. It has no
+effects, so a task or any thread may call it.
 Safety: the runtime looks the id up among the open windows, under its lock, and touches only a window it
 finds there.
 
@@ -2930,6 +2930,19 @@ the last `waitEvent` or `waitFrame` returned, or `timeoutMs` milliseconds pass; 
 `waitFrame` it does not tick, so an idle window uses no CPU. While it sleeps the window takes the system's
 events, so it repaints and answers the clipboard (ADR 0142).
 Safety: the runtime only waits on the window it was given.
+
+### Window.waitAny
+
+```ceesafe
+public fn waitAny(timeoutMs: u32)
+```
+
+Sleeps until any window the program has open has an event queued, any of them was woken since a wait on it
+last returned, or `timeoutMs` milliseconds pass; 0 returns at once. It takes every window's wake, and does not
+say which window is ready: drain each window's `nextEvent` after it returns. Like `waitEvent` it does not tick,
+and every window takes the system's events while it sleeps. With no window open, or on any thread but the
+program's first (which alone can have one), it sleeps for `timeoutMs` (ADR 0145).
+Safety: the runtime waits on the windows of its own list of open windows, on the program's first thread only.
 
 ### Window.waker
 

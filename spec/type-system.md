@@ -3151,7 +3151,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows.
@@ -3256,10 +3256,19 @@ Diagnostics: none new.
     first; 0 returns at once. It does not tick, so an idle window that waits uses no CPU. While it waits the window
     takes the system's events: a system event that gives the program none, such as a repaint or another program's
     request for the clipboard, is handled and does not end the wait.
+  - `Window.waitAny(timeoutMs: u32)` (ADR 0145), a static function, returns when any window the program has open
+    has an event queued, when any of them was woken since a wait on it last returned, or after `timeoutMs`
+    milliseconds, whichever is first; 0 returns at once. Like `waitEvent` it does not tick, and every window takes
+    the system's events while it waits. It does not say which window is ready: the program drains each window's
+    `nextEvent` after it returns. With no window open it sleeps for `timeoutMs`. On any thread but the program's
+    first, which can have no window open, it is that sleep too, and touches no window.
+  - **Events of several windows.** Each window's events go to that window's queue, whichever window's `nextEvent`
+    or wait took them from the system: a window never takes another's events.
 - **Waking** (ADR 0142). `w.waker()` is a `WindowWaker`, a struct with one private `u64`: it is Copy and `Send`, so a
   thread or an async task holds a copy.
-  - `waker.wake()`, on any thread or task, makes the window's current `waitEvent` or `waitFrame` return promptly, or
-    its next one at once. Wakes before the window waits again are one. A wake is not an event: the program reads
+  - `waker.wake()`, on any thread or task, makes the window's current `waitEvent`, `waitFrame` or `Window.waitAny`
+    return promptly, or the next one at once. Wakes before the window waits again are one. `waitAny` takes the wake
+    of every window; `waitEvent` and `waitFrame` take their own window's only. A wake is not an event: the program reads
     what it was woken for (a channel, its own state) after each wait returns, and before it waits again, so a wake
     that comes while it is busy is never lost.
   - After the window is dropped, `wake` does nothing: each window's waker names it by an id that is never reused in
@@ -3271,11 +3280,13 @@ Diagnostics: none new.
     on Windows. macOS: `wake` also signals a run loop source on the main run loop, whose callback, on the main
     thread, posts an application-defined event that ends `nextEventMatchingMask:`; the pump drops it. Windows:
     `MsgWaitForMultipleObjectsEx` with the event, `QS_ALLINPUT` and `MWMO_INPUTAVAILABLE`. X11: `poll` on the
-    connection and the pipe.
-- **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent` and `setTitle` may sleep
-  (`@effects(sleep)`). `setTextInput`, `setClipboardText` and `clipboardText` may sleep and allocate. `nextEvent`,
-  `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`, `compositionCaret`, `waker`,
-  `WindowWaker.wake` and the drop have no effect.
+    connection and the pipe. For `waitAny` (ADR 0145), the process has one more signal, which every `wake` sets too:
+    its wait is the system's (on X11, `poll` on every window's connection) with that one signal, however many
+    windows are open.
+- **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
+  sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText` and `clipboardText` may sleep and allocate.
+  `nextEvent`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`, `compositionCaret`,
+  `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
@@ -3307,10 +3318,13 @@ Diagnostics: none new.
     `ceesafe-window W H`, then the W×H pixels as RGBA bytes.
   - **Waiting.** `waitFrame` returns at once. `waitEvent` returns at once while the script still holds events (they
     come with presents), an event is queued or the window was woken; once the script has given every event, it waits
-    for a wake or its timeout, as an idle window does (ADR 0142).
+    for a wake or its timeout, as an idle window does (ADR 0142). `Window.waitAny` returns at once while any
+    scripted window's script still holds events, and otherwise waits as `waitEvent` does, for every window
+    (ADR 0145). Every window opened while the variable is set reads the same file.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
-  to `open` and `openWith`, so no other window call is reached there.
+  to `open` and `openWith`, so no window is open there and no call on a `Window` is reached. `Window.waitAny`, which
+  needs no window, sleeps there for its timeout on the virtual clock (ADR 0075 §2.6).
 
 ### 26.14 Process limits (ADR 0104)
 - `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft

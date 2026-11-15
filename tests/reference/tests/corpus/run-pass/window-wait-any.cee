@@ -1,0 +1,23 @@
+// ADR 0145: `Window.waitAny(timeoutMs)` waits for any of the program's windows. With no window open it sleeps for its
+// timeout (a loop that waits on it does not spin), and 0 returns at once. On another thread, which can have no window
+// open (type-system.md §26.13), it is the same sleep. It needs no window, so it runs without a display; in the
+// interpreter the sleep is on the virtual clock.
+
+fn slept(ms: u32) -> u64 {
+    let start = Timer.now();
+    Window.waitAny(ms);
+    return Timer.now() - start;
+}
+
+fn main() {
+    let none = slept(60);
+    Console.writeLine(none >= 50 && none < 5000);
+    Console.writeLine(slept(0) < 50);
+    let worker = Thread.spawn(move () => slept(60))!;
+    let there = worker.join();
+    Console.writeLine(there >= 50 && there < 5000);
+}
+
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

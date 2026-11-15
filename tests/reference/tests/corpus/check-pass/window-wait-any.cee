@@ -1,0 +1,59 @@
+// ADR 0145: a host with two windows sleeps on `Window.waitAny`, a static function, until either has an event or is
+// woken, then drains each window's `nextEvent` and its channel. A task on another thread wakes the second window, and
+// `waitEvent` keeps its meaning for one window. (It needs a display to run: run-pass/window-wait-any runs waitAny
+// without a window.)
+
+async fn finish(out: Channel<u32>, waker: WindowWaker) -> Result<void, AsyncError> {
+    await out.sendAsync(42)?;
+    waker.wake();
+    return Ok();
+}
+
+/// The window's pending events; true when one asked to close it.
+fn drain(window: borrow mut Window) -> bool {
+    var closed = false;
+    loop {
+        match (window.nextEvent()) {
+            Some(WindowEvent.Closed) => { closed = true; }
+            Some(_) => {}
+            null => { break; }
+        }
+    }
+    return closed;
+}
+
+fn host(main: borrow mut Window, tools: borrow mut Window, results: borrow Channel<u32>) -> u32 {
+    var total: u32 = 0;
+    for (round in 0u32..3) {
+        Window.waitAny(1000);
+        if (drain(mut main) || drain(mut tools)) {
+            return total;
+        }
+        loop {
+            match (results.tryRecv()) {
+                Some(value) => { total = total + value; }
+                null => { break; }
+            }
+        }
+    }
+    main.waitEvent(0);
+    return total;
+}
+
+fn main() -> i32 {
+    var main = match (Window.open("Main", 320, 200)) {
+        Ok(w) => w,
+        Err(_) => { return 1; }
+    };
+    var tools = match (Window.open("Tools", 120, 200)) {
+        Ok(w) => w,
+        Err(_) => { return 1; }
+    };
+    let results = Channel<u32>.create(4)!;
+    let sender = results.clone();
+    let waker = tools.waker();
+    let worker = Thread.spawn(move () => Async.run(finish(sender, waker)))!;
+    let total = host(mut main, mut tools, borrow results);
+    let finished = worker.join();
+    return if (total == 42) 0 else 2;
+}

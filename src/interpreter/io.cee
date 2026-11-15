@@ -1495,6 +1495,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_window_open")) {
         return "PsuuuP:P";
     }
+    if (sameText(name, "ceesafe_window_wait_any")) {
+        return "u:-";
+    }
     if (sameText(name, "ceesafe_async_op_sendfile")) {
         return "PiPss:l";
     }
@@ -1905,6 +1908,12 @@ fn callC(
         // so every open is WindowError.Unsupported, and no other window call can be reached.
         it.memory.storeBits(arguments[5].bits(0, 8)?, 1, 4)?;
         return Ok(valueOf(0, 8));
+    }
+    if (sameText(n0, "ceesafe_window_wait_any")) {
+        // Window.waitAny (type-system.md §26.13, ADR 0145): no window is ever open here, so it is a sleep of its
+        // timeout, on the virtual clock (ADR 0075 §2.6).
+        it.asyncClock += arguments[0].bits(0, 4)?;
+        return Ok(null);
     }
     if (sameText(n0, "ceesafe_test_begin")) {
         // `ceesafec test --interp` (ADR 0049 §3.3): the allocation report, so a leak is found as natively; the

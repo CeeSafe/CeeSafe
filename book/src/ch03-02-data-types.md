@@ -224,7 +224,8 @@ fn main() {
 20
 ```
 
-`[0; 3]` is three copies of `0`. Indexes start at 0 and are `usize`. Elements can be assigned only when the array
+`[0; 3]` is three copies of `0`. The length is fixed when the program is compiled: a number, a `usize` constant,
+or arithmetic on them, such as `[0u32; 256 * 8]`. Indexes start at 0 and are `usize`. Elements can be assigned only when the array
 is a `var`. An array never changes its length; a `Vector` can grow, and [chapter 8](./ch08-01-vectors) teaches it.
 
 An index is checked each time it is used. An index past the end panics; it never reads other memory.

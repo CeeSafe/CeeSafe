@@ -363,7 +363,8 @@ HELLO
 - An argument is `true`, `false`, an integer literal, a constant (`Buffer<SIZE>`), an enum variant
   (`greet<Mode.Shout>()`) or the caller's own const parameter. A run-time value is not one: choose the instance with
   an `if`, as above.
-- An array length may also name a `usize` constant: `const SIZE: usize = 64;` then `[u8; SIZE]`.
+- An array length may also name a `usize` constant, or be arithmetic on constants: `const SIZE: usize = 64;` then
+  `[u8; SIZE]` or `[u8; SIZE * 2]`.
 - Expressions over a parameter (`[u8; N + 1]`, `render<!UPPER>`) are refused; name a constant, or add a parameter.
 
 ## Dynamic dispatch

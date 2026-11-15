@@ -1,0 +1,47 @@
+// `replace` and `swap` through a binding of type `borrow mut T` (cee-proxy's F15): the place is the referent, as an
+// assignment to the binding writes the referent, and the reference stays usable after the call (a reborrow). Before
+// the fix a parameter was N0248, "parameters are immutable", and a `let` was N0248 too.
+struct Holder {
+    v: Vector<u8>;
+}
+
+fn param(out: borrow mut Vector<u8>) -> Vector<u8> {
+    out.push(7)!;
+    let old = replace(mut out, Vector<u8>.create());
+    out.push(9)!;
+    return old;
+}
+
+fn local(h: borrow mut Holder) -> Vector<u8> {
+    let r = borrow mut h.v;
+    return replace(mut r, Vector<u8>.create());
+}
+
+fn swapped(a: borrow mut Vector<u8>, b: borrow mut Vector<u8>) {
+    swap(mut a, mut b);
+}
+
+fn main() {
+    var h = Holder { v: Vector<u8>.create() };
+    h.v.push(1)!;
+    let taken = param(mut h.v);
+    Console.writeLine(taken.length);
+    Console.writeLine(h.v.length);
+    h.v.push(5)!;
+    let other = local(mut h);
+    Console.writeLine(other.length);
+    Console.writeLine(h.v.length);
+    var x = Vector<u8>.create();
+    x.push(1)!;
+    var y = Vector<u8>.create();
+    swapped(mut x, mut y);
+    Console.writeLine(x.length);
+    Console.writeLine(y.length);
+}
+
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 1

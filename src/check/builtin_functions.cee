@@ -151,7 +151,20 @@ fn mutablePlaceArgument(c: borrow mut Checker, syntax: u32) -> Result<u32, Alloc
     if (c.isBottom(value)) {
         return Ok(value);
     }
+    // A binding of type `borrow mut T` (a parameter, a `let`): the place it changes is the referent, as an assignment
+    // to it writes the referent, so the reference itself is the argument, reborrowed (cee-proxy's F15). Only a bare
+    // binding: a field of reference type (`mut h.r`) is still the field.
+    let t = c.typeOf(value);
     let operandSpan = c.front.ast.exprSpans[operand as usize];
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.LocalRef(_) => {
+            if (c.types.is(t, TypeKind.Reference) && c.types.info(t).mutableReference) {
+                let referent = c.expr(HirExpr.Deref(value), c.types.info(t).pointee, operandSpan.start, operandSpan.end)?;
+                return borrowPlace(c, referent, true, operandSpan);
+            }
+        }
+        _ => {}
+    }
     return borrowPlace(c, value, true, operandSpan);
 }
 

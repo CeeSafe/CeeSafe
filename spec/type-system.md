@@ -295,7 +295,10 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - `replace(mut place, value) -> T` (ADR 0075 §2.11): puts `value` in the place and returns the old value.
     `swap(mut a, mut b)` exchanges two places of one type (N0205 otherwise). Each argument is `mut` and a place
     (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`
-    block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up.
+    block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up. A bare binding of
+    type `borrow mut T` (a parameter, a `let`) names its referent, as an assignment to it does: `replace(mut out, v)`
+    with `out: borrow mut T` replaces what `out` refers to, through a reborrow, so `out` is usable after it; a field of
+    reference type (`mut h.r`) is still the field.
   - A package's own function or item of one of these names shadows the built-in (§2).
 - An expression statement must be a call, an `await`, or `?` or `!` on any operand (N0225; ADR 0138 §5): `x!;` checks
   that `x` holds a value, and `x?;` returns when it does not. `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).

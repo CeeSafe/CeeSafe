@@ -1792,6 +1792,17 @@ public fn unixMillis() -> i64
 
 Now, in milliseconds since 1970.
 
+### Clock.localOffset
+
+```ceesafe
+public fn localOffset(at: UnixTime) -> i32
+```
+
+The seconds to add to UTC to get the local time at `at`, as the system's time zone gives it, daylight saving
+included (ADR 0153): 10800 for UTC+3, -18000 for New York in winter and -14400 in summer. 0 in the interpreter,
+so its runs stay reproducible, and where the system has no time zone.
+Safety: the runtime only reads the system's time zone.
+
 ### Clock.monotonicNanos
 
 ```ceesafe

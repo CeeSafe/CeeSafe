@@ -247,6 +247,30 @@ fn pushMinGwSystemLibraries(arguments: borrow mut Vector<Vector<u8>>) -> Result<
     return Ok();
 }
 
+/// A windowed executable's link on Windows (ADR 0151, tooling.md §8.3): the Windows subsystem, with `main` kept as the
+/// entry, so the generated C needs no `WinMain`. gcc's `-mwindows` (MinGW-w64's start code calls `main` in a GUI
+/// program too); the MSVC linker's `/SUBSYSTEM:WINDOWS` with `/ENTRY:mainCRTStartup`, which is the C runtime's console
+/// start and calls `main`, through clang's `-Wl,` or after cl's `/link`. Nothing elsewhere, or for a console program.
+fn pushWindowedLink(
+    arguments: borrow mut Vector<Vector<u8>>,
+    compiler: borrow CCompiler,
+    windowed: bool,
+) -> Result<void, AllocError> {
+    if (!windowed || !hostIsWindows()) {
+        return Ok();
+    }
+    if (compiler.msvc) {
+        pushText(arguments, "/SUBSYSTEM:WINDOWS")?;
+        pushText(arguments, "/ENTRY:mainCRTStartup")?;
+    } else if (isGccName(compiler.path.view())) {
+        pushText(arguments, "-mwindows")?;
+    } else {
+        pushText(arguments, "-Wl,/SUBSYSTEM:WINDOWS")?;
+        pushText(arguments, "-Wl,/ENTRY:mainCRTStartup")?;
+    }
+    return Ok();
+}
+
 /// The same after cl's `/link`: `/LIBPATH:dir`, then `name.lib`.
 fn pushMsvcLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow NativeBuild) -> Result<void, AllocError> {
     for (d in native.libDirs.view()) {
@@ -264,7 +288,7 @@ fn pushMsvcLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow Na
 
 /// `build`'s compile of an executable (CompileExecutable, §8.3): `compiler`'s flag dialect and environment; `debug` is
 /// debug information and no optimisation; on Windows the 8 MiB stack that Linux and macOS give the main thread
-/// (c-backend.md §1.1).
+/// (c-backend.md §1.1); `windowed`, a windowed executable's subsystem (ADR 0151).
 fn compileExecutable(
     compiler: borrow CCompiler,
     directory: Slice<u8>,
@@ -276,6 +300,7 @@ fn compileExecutable(
     native: borrow NativeBuild,
     split: bool,
     jobs: u32,
+    windowed: bool,
 ) -> Result<ToolOutcome, AllocError> {
     var objects = Vector<Vector<u8>>.create();
     match (compileSeparate(compiler, directory, debug, userFlags, freestanding, native, mut objects)?) {
@@ -310,6 +335,7 @@ fn compileExecutable(
                 native,
                 objects,
                 jobs,
+                windowed,
             );
         }
         var arguments = msvcArguments(directory, files, output, debug, withIncludes)?;
@@ -328,6 +354,7 @@ fn compileExecutable(
             pushBytes(mut withObjects, arguments[k].view())?;
         }
         pushMsvcLinkFlags(mut withObjects, native)?;
+        pushWindowedLink(mut withObjects, compiler, windowed && !freestanding)?;
         return runCompiler(compiler, directory, withObjects);
     }
     if (split) {
@@ -342,6 +369,7 @@ fn compileExecutable(
             native,
             objects,
             jobs,
+            windowed,
         );
     }
     var arguments = Vector<Vector<u8>>.create();
@@ -362,6 +390,7 @@ fn compileExecutable(
             pushMinGwSystemLibraries(mut arguments)?;
         }
         pushText(mut arguments, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
+        pushWindowedLink(mut arguments, compiler, windowed)?;
     } else if (!freestanding && hostIsFreeBsd()) {
         pushFreeBsdSystemLibraries(mut arguments)?;
     }
@@ -459,6 +488,7 @@ fn compileUnitsAndLink(
     native: borrow NativeBuild,
     separate: borrow Vector<Vector<u8>>,
     jobs: u32,
+    windowed: bool,
 ) -> Result<ToolOutcome, AllocError> {
     // The C files, by path.
     var units = Vector<usize>.create();
@@ -607,6 +637,7 @@ fn compileUnitsAndLink(
         pushText(mut link, "/link")?;
         pushText(mut link, "/STACK:8388608")?;
         pushMsvcLinkFlags(mut link, native)?;
+        pushWindowedLink(mut link, compiler, windowed && !freestanding)?;
         return linkUnits(compiler, directory, link, stdout, stderr, "".bytes());
     }
     if (debug) {
@@ -628,6 +659,7 @@ fn compileUnitsAndLink(
             pushMinGwSystemLibraries(mut link)?;
         }
         pushText(mut link, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
+        pushWindowedLink(mut link, compiler, windowed)?;
     } else if (!freestanding && hostIsFreeBsd()) {
         pushFreeBsdSystemLibraries(mut link)?;
     }

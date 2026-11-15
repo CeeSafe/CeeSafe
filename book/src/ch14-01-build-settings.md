@@ -231,6 +231,7 @@ flags. The manifest holds what is true of the package in every build. Beside the
 | `profile = "freestanding"` | The package is for a machine with no operating system. The option `--profile` says the same. |
 | `c = ["src/shim.c"]` | C files compiled and linked with the program. Chapter 20 covers calling C. |
 | `links`, `lib-dirs`, `include-dirs` | System libraries to link, and where they and their headers are. |
+| `windowed = true` | The program has a window. On Windows no console window opens beneath it when it is started from Explorer or a shortcut; its output still reaches a terminal that starts it. Nothing changes on other systems. The option `--windowed` says the same. |
 
 A table `[target.windows]`, `[target.macos]` or `[target.linux]` holds `links`, `lib-dirs` and `include-dirs` for
 one system. `[embed]` holds `roots`, which the first mistake below uses.

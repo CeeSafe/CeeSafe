@@ -145,6 +145,13 @@
     Shape` in src/thing.cee and adds their methods in `impl` blocks in src/additions.cee, a file that sorts before it.
     app imports both: `check` is clean (0.49.0 took the first impl as the type's declaration, which is private, and
     gave N0312 at each import) and the program prints 42 and 12, in the interpreter and compiled.
+39. windowed (ADR 0151, tooling.md §4.1): `windowed = true` checks and builds; the program prints what it should
+    through a pipe (on Windows a redirected stream keeps its handle), and its C `main` calls `ceesafe_rt_windowed()`
+    first, which a build without the field does not; `--windowed` gives the same C. On Windows the executable's PE
+    subsystem is 2 (GUI) with the field, alone and with `--split`, and 3 (console) without, and the test program of
+    a windowed package is still 3. `windowed` on a library, an object, a freestanding package or in [target.windows],
+    and a value that is not a boolean, are one N0321 each; `--windowed` with `--emit obj`, `--emit lib` or
+    `--profile freestanding`, and in a freestanding package, is a usage error (status 2).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -967,6 +974,108 @@ def driver_messages(compiler, work, problems):
         p = run([compiler, "publish"], tally)
         if p.returncode != 1 or place(p.stderr) != expected + ": error[N0335]":
             problems.append(f"publish: N0335 at {expected}: {p.returncode} {p.stderr[:300]!r}")
+
+
+def pe_subsystem(path):
+    """A PE executable's subsystem: 2 GUI, 3 console; None if the file is not one."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(4096)
+    except OSError:
+        return None
+    if data[:2] != b"MZ":
+        return None
+    at = int.from_bytes(data[0x3C:0x40], "little")
+    if data[at:at + 4] != b"PE\0\0":
+        return None
+    return int.from_bytes(data[at + 24 + 68:at + 24 + 70], "little")
+
+
+def windowed_executables(compiler, work, problems):
+    """39. A windowed executable (ADR 0151): the field, the option, the start in `main`, the subsystem on Windows."""
+    base = os.path.join(work, "windowed")
+    app = os.path.join(base, "app")
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def manifest(fields, extra=""):
+        write(os.path.join(app, "ceesafe.toml"), '[package]\nname = "app"\n' + fields + extra)
+
+    def codes(p):
+        try:
+            return [(d["code"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            return [p.stdout[:200] + p.stderr[:200]]
+
+    write(os.path.join(app, "src", "main.cee"), 'fn main() {\n    Console.writeLine("windowed");\n}\n')
+    write(os.path.join(app, "tests", "one.cee"), "@test\nfn one() {\n    assert(1 + 1 == 2);\n}\n")
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    manifest("windowed = true\n")
+    p = run([compiler, "check"], app)
+    if p.returncode != 0:
+        problems.append(f"windowed: check failed: {p.stderr[:300]}")
+    for flags in ([], ["--split"]):
+        p = run([compiler, "build"] + flags, app)
+        if p.returncode != 0:
+            problems.append(f"windowed: build {flags} failed: {p.stderr[-400:]}")
+            continue
+        q = run([exe], app)
+        if q.returncode != 0 or q.stdout.strip() != "windowed":
+            problems.append(f"windowed: the program {flags} printed {q.stdout!r} ({q.returncode}) {q.stderr[:200]}")
+        if WINDOWS and pe_subsystem(exe) != 2:
+            problems.append(f"windowed: build {flags}: the PE subsystem is {pe_subsystem(exe)}, not 2 (GUI)")
+    for name, fields, flags, expected in (("field", "windowed = true\n", [], 1), ("none", "", [], 0),
+                                          ("false", "windowed = false\n", [], 0), ("option", "", ["--windowed"], 1)):
+        manifest(fields)
+        directory = os.path.join(base, "c-" + name)
+        p = run([compiler, "build", "--emit", "c", "-o", directory] + flags, app)
+        try:
+            with open(os.path.join(directory, "main.c"), encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            text = ""
+        main = text[text.find("int main(int argc, char **argv) {"):].split("\n")
+        found = sum(1 for line in main if line.strip() == "ceesafe_rt_windowed();")
+        first = len(main) > 1 and main[1].strip() == "ceesafe_rt_windowed();"
+        if p.returncode != 0 or found != expected or (expected and not first):
+            problems.append(f"windowed: --emit c ({name}): main calls ceesafe_rt_windowed() {found} times, not "
+                            f"{expected} (first): {p.returncode} {p.stderr[:200]}")
+    if WINDOWS:
+        manifest("")
+        p = run([compiler, "build"], app)
+        if p.returncode != 0 or pe_subsystem(exe) != 3:
+            problems.append(f"windowed: without the field the PE subsystem is {pe_subsystem(exe)}, not 3 (console)")
+    manifest("windowed = true\n")
+    p = run([compiler, "test"], app)
+    if p.returncode != 0:
+        problems.append(f"windowed: test failed: {p.stdout[-300:]} {p.stderr[-300:]}")
+    elif WINDOWS and pe_subsystem(os.path.join(app, "out", "app-tests.exe")) != 3:
+        problems.append("windowed: the test program of a windowed package is not a console program")
+    for name, fields, extra in (("library", 'kind = "library"\nwindowed = true\n', ""),
+                                ("object", 'kind = "object"\nwindowed = true\n', ""),
+                                ("freestanding", 'profile = "freestanding"\nwindowed = true\n', ""),
+                                ("not a boolean", 'windowed = "yes"\n', ""),
+                                ("target table", "", "\n[target.windows]\nwindowed = true\n")):
+        manifest(fields, extra)
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        line = 4 if not extra else 5
+        if name == "not a boolean":
+            line = 3
+        if p.returncode != 1 or codes(p) != [("N0321", line)]:
+            problems.append(f"windowed: {name}: expected one N0321 on line {line}: {codes(p)}")
+    manifest("")
+    for flags in (["--emit", "obj"], ["--emit", "lib"], ["--profile", "freestanding"]):
+        p = run([compiler, "build", "--windowed"] + flags, app)
+        if p.returncode != 2 or "--windowed is for an executable of the hosted profile" not in p.stderr:
+            problems.append(f"windowed: --windowed {' '.join(flags)} is not a usage error: {p.returncode} "
+                            f"{p.stderr[:200]}")
+    manifest('profile = "freestanding"\n')
+    p = run([compiler, "build", "--windowed"], app)
+    if p.returncode != 2 or "--windowed is for an executable of the hosted profile" not in p.stderr:
+        problems.append(f"windowed: --windowed in a freestanding package is not a usage error: {p.returncode}")
 
 
 def main():
@@ -1973,9 +2082,10 @@ def main():
         if not freebsd:
             interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
+        windowed_executables(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 36 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 37 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

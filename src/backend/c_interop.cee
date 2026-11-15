@@ -837,6 +837,10 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
         return Ok();
     }
     e.line("int main(int argc, char **argv) {")?;
+    if (e.windowed) {
+        // A windowed program (ADR 0151): on Windows, standard streams without a handle get the parent's console or NUL.
+        e.line("    ceesafe_rt_windowed();")?;
+    }
     // The runtime's one start path (ADR 0088 §2.2): the environment's settings and argv, through ceesafe_init.
     e.line("    ceesafe_config config = {")?;
     e.line("        .size = (uint32_t)sizeof(ceesafe_config),")?;

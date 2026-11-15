@@ -3549,6 +3549,12 @@ static void *cee_extension(SOCKET s, GUID id) {
     return function;
 }
 
+/* Stores an extension's function pointer, kept as an object pointer, in *function (size bytes): copied, as ISO C has no
+   conversion between the two (gcc's -Wpedantic under MinGW), the way the window runtime takes imm32's functions. */
+static void cee_function_from(void *function, size_t size, void *object) {
+    memcpy(function, &object, size);
+}
+
 static void *cee_extension_kept(void *volatile *slot, SOCKET s, GUID id) {
     void *function = InterlockedCompareExchangePointer(slot, NULL, NULL);
     if (function == NULL) {
@@ -4000,7 +4006,8 @@ int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
     SOCKET s = cee_iocp_socket(fd);
     if (s != INVALID_SOCKET) {
         GUID id = WSAID_ACCEPTEX;
-        LPFN_ACCEPTEX accept_ex = (LPFN_ACCEPTEX)cee_extension_kept(&cee_accept_ex, s, id);
+        LPFN_ACCEPTEX accept_ex;
+        cee_function_from(&accept_ex, sizeof accept_ex, cee_extension_kept(&cee_accept_ex, s, id));
         if (accept_ex != NULL) {
             cee_iocp_begin(o, 3u, s);
             o->listener = s;
@@ -4063,7 +4070,8 @@ static int64_t cee_op_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
         local.sa.sa_family = (ADDRESS_FAMILY)family; /* the any-address of its family, any port */
         int localLength = family == AF_INET6 ? (int)sizeof local.v6 : (int)sizeof local.v4;
         GUID id = WSAID_CONNECTEX;
-        LPFN_CONNECTEX connect_ex = (LPFN_CONNECTEX)cee_extension_kept(&cee_connect_ex, s, id);
+        LPFN_CONNECTEX connect_ex;
+        cee_function_from(&connect_ex, sizeof connect_ex, cee_extension_kept(&cee_connect_ex, s, id));
         if (connect_ex == NULL || bind(s, &local.sa, localLength) != 0 ||
             CreateIoCompletionPort((HANDLE)s, cee_exec.port, 0, 0) == NULL) {
             int64_t failed = cee_wsa_failure();
@@ -4316,7 +4324,9 @@ static void *volatile cee_wsa_recvmsg; /* LPFN_WSARECVMSG, kept as the extension
 /* The WSARecvMsg extension, found once on the first socket that asks; NULL if there is none. */
 static LPFN_WSARECVMSG cee_recvmsg_of(SOCKET s) {
     GUID id = WSAID_WSARECVMSG;
-    return (LPFN_WSARECVMSG)cee_extension_kept(&cee_wsa_recvmsg, s, id);
+    LPFN_WSARECVMSG receive_msg;
+    cee_function_from(&receive_msg, sizeof receive_msg, cee_extension_kept(&cee_wsa_recvmsg, s, id));
+    return receive_msg;
 }
 
 static void cee_msg_received(cee_op *o, DWORD flags, bool truncated) {
@@ -4904,7 +4914,8 @@ int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, ui
         length = (uint64_t)size.QuadPart - offset;
     }
     GUID id = WSAID_TRANSMITFILE;
-    LPFN_TRANSMITFILE transmit_file = (LPFN_TRANSMITFILE)cee_extension_kept(&cee_transmit_file, s, id);
+    LPFN_TRANSMITFILE transmit_file;
+    cee_function_from(&transmit_file, sizeof transmit_file, cee_extension_kept(&cee_transmit_file, s, id));
     if (transmit_file == NULL) {
         return CEE_ASYNC_NO_SENDFILE;
     }

@@ -3659,6 +3659,7 @@ static int cee_udp_receive_ecn(cee_udp_socket s, bool v6) {
     if (v6) failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_RECVECN, 1);
     int v4 = cee_udp_flag(s, IPPROTO_IP, IP_RECVECN, 1);
 #else
+    (void)s; /* a Windows SDK without the ECN options (MinGW's): nothing to set */
     if (v6) failure = EOPNOTSUPP;
     int v4 = EOPNOTSUPP;
 #endif

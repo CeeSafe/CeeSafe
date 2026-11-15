@@ -180,6 +180,9 @@ typedef struct {
 #if defined(_WIN32) && !defined(CEE_FREESTANDING) /* a freestanding build has no <windows.h>, whatever its target */
     HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
     HANDLE port;         /* Windows: the thread's completion port (IOCP, ADR 0035), or NULL with CEESAFE_REACTOR_POLL */
+    HANDLE timer;        /* Windows: a high-resolution waitable timer for deadlines (ADR 0148), or NULL */
+    PTP_WAIT timer_wait; /* Windows: the thread pool's wait on it, which posts to `port`, or NULL */
+    bool timer_tried;    /* Windows: whether `timer` was asked for (it is not asked again when it failed) */
 #endif
     uint32_t wake_count; /* tasks parked on_wake */
     uint32_t fd_count;   /* tasks parked on a descriptor */
@@ -902,7 +905,13 @@ uint64_t ceesafe_async_now(void) {
 #if defined(CEE_FREESTANDING)
     return ceesafe_env_now_ms();
 #elif defined(_WIN32)
-    return (uint64_t)GetTickCount64();
+    /* The performance counter, in ms: GetTickCount64 moves once a system tick, about 15.6 ms (ADR 0148). */
+    LARGE_INTEGER frequency, counter;
+    (void)QueryPerformanceFrequency(&frequency);
+    (void)QueryPerformanceCounter(&counter);
+    uint64_t f = (uint64_t)frequency.QuadPart;
+    uint64_t c = (uint64_t)counter.QuadPart;
+    return c / f * 1000u + c % f * 1000u / f;
 #else
     struct timespec now;
     (void)clock_gettime(CLOCK_MONOTONIC, &now);
@@ -2008,6 +2017,81 @@ static unsigned cee_poll_sockets(void) {
 #endif
 
 #if defined(_WIN32)
+/* ---- Waits that end on time (ADR 0148) ----
+   A wait's own timeout (GetQueuedCompletionStatusEx, WaitForSingleObject, Sleep) ends at a system tick, about
+   15.6 ms. A high-resolution waitable timer (CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, Windows 10 1803 on) is signalled
+   within about a millisecond, so a wait on it, with the executor's event or alone, ends on time. A completion port
+   cannot be waited on with it, and such a timer takes no completion routine, so for the port the thread pool waits on
+   the timer, and its callback posts an empty completion to the port, which ends the wait as another thread's wake
+   does. The timer and the pool's wait are the executor's, made at its first deadline and closed when it ends. Where
+   they cannot be made, waits keep the tick. */
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+/* The thread pool's callback for an executor's port (`context`): the timer was signalled. A post that comes after the
+   wait ended for another reason is read by a later wait as a wake, and the executor recomputes its deadline, as after
+   any early return. The port is the thread's for the life of the thread, so the post never names a closed one. */
+static VOID CALLBACK cee_timer_posted(PTP_CALLBACK_INSTANCE instance, PVOID context, PTP_WAIT wait,
+                                      TP_WAIT_RESULT result) {
+    (void)instance;
+    (void)wait;
+    (void)result;
+    (void)PostQueuedCompletionStatus((HANDLE)context, 0, 0, NULL);
+}
+
+/* Sets the executor's timer to be signalled in `timeout` ms, before a wait: true if it was set (then cee_timer_disarm
+   after the wait). False for no deadline (`timeout` < 0), for one already due, and without the timer. With `port`,
+   the thread pool waits on it for the executor's completion port. */
+static bool cee_timer_arm(int timeout, bool port) {
+    if (timeout <= 0) {
+        return false;
+    }
+    if (!cee_exec.timer_tried) {
+        cee_exec.timer_tried = true;
+        cee_exec.timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    }
+    if (cee_exec.timer == NULL) {
+        return false;
+    }
+    if (port && cee_exec.timer_wait == NULL) {
+        cee_exec.timer_wait = CreateThreadpoolWait(cee_timer_posted, cee_exec.port, NULL);
+        if (cee_exec.timer_wait == NULL) {
+            return false;
+        }
+    }
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)timeout * 10000; /* relative, in 100 ns units */
+    if (!SetWaitableTimer(cee_exec.timer, &due, 0, NULL, NULL, FALSE)) {
+        return false;
+    }
+    if (port) {
+        SetThreadpoolWait(cee_exec.timer_wait, cee_exec.timer, NULL);
+    }
+    return true;
+}
+
+static void cee_timer_disarm(bool armed, bool port) {
+    if (armed) {
+        (void)CancelWaitableTimer(cee_exec.timer);
+        if (port) {
+            SetThreadpoolWait(cee_exec.timer_wait, NULL, NULL); /* no new callback; one running may still post */
+        }
+    }
+}
+
+/* Waits up to `timeout` ms (none when negative) for the executor's event, and with a deadline for its timer too. */
+static void cee_wait_event(int timeout) {
+    bool armed = cee_timer_arm(timeout, false);
+    if (armed) {
+        HANDLE both[2] = {cee_exec.wake_event, cee_exec.timer};
+        (void)WaitForMultipleObjects(2, both, FALSE, (DWORD)timeout);
+    } else {
+        (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout);
+    }
+    cee_timer_disarm(armed, false);
+}
+
 /* Windows: consoles and files count as ready; sockets signal the executor's event (WSAEventSelect), and WSAPoll
    says which are ready. True if a task was readied. */
 static bool cee_iocp_drain(int timeout);
@@ -2034,9 +2118,13 @@ static bool cee_wait_windows(int timeout) {
         if (sockets && (slice < 0 || slice > 1)) {
             slice = 1;
         }
+        /* The timer is set for the deadline, not the slice: the slices between socket polls keep the tick, so a
+           deadline ends the wait on time without polling a thousand times a second. */
+        bool armed = slice != 0 && cee_timer_arm(timeout, true);
         if (cee_iocp_drain(slice)) {
             any = true;
         }
+        cee_timer_disarm(armed, true);
         if (sockets && cee_poll_sockets() > 0) {
             any = true;
         }
@@ -2057,7 +2145,7 @@ static bool cee_wait_windows(int timeout) {
         /* Each socket was selected for the executor's event when its task parked; WSAPoll says which are ready. A
            socket that becomes ready between the poll and the wait signals the event, so no readiness is lost. */
         if (!any && cee_poll_sockets() == 0) {
-            (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout);
+            cee_wait_event(timeout);
             any = cee_poll_sockets() > 0;
         } else {
             any = true;
@@ -2065,9 +2153,15 @@ static bool cee_wait_windows(int timeout) {
     } else if (any) {
         /* retry the unparked tasks at once */
     } else if (cee_exec.wake_count > 0u && cee_exec.wake_event != NULL) {
-        (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout); /* or a wake */
+        cee_wait_event(timeout); /* or a wake */
     } else if (timeout > 0) {
-        Sleep((DWORD)timeout);
+        bool armed = cee_timer_arm(timeout, false);
+        if (armed) {
+            (void)WaitForSingleObject(cee_exec.timer, (DWORD)timeout);
+        } else {
+            Sleep((DWORD)timeout);
+        }
+        cee_timer_disarm(armed, false);
     }
     return any;
 }
@@ -2465,6 +2559,9 @@ static void cee_exec_begin(cee_run *run) {
 #if defined(_WIN32)
     cee_exec.wake_event = NULL;
     cee_exec.port = NULL;
+    cee_exec.timer = NULL;
+    cee_exec.timer_wait = NULL;
+    cee_exec.timer_tried = false;
 #endif
 #if defined(CEE_COSMOOS)
     cee_exec.wake_lock = (cosmo_mutex_t)COSMO_MUTEX_INIT;
@@ -2534,6 +2631,16 @@ static void cee_exec_end(void) {
         ceesafe_mutex_unlock(run->lock);
     }
 #if defined(_WIN32)
+    if (cee_exec.timer_wait != NULL) {
+        SetThreadpoolWait(cee_exec.timer_wait, NULL, NULL);
+        WaitForThreadpoolWaitCallbacks(cee_exec.timer_wait, TRUE); /* none still running when it is closed */
+        CloseThreadpoolWait(cee_exec.timer_wait);
+        cee_exec.timer_wait = NULL;
+    }
+    if (cee_exec.timer != NULL) {
+        (void)CloseHandle(cee_exec.timer);
+        cee_exec.timer = NULL;
+    }
     if (cee_exec.wake_event != NULL) {
         ceesafe_socket_unselect(cee_exec.wake_event); /* before the handle can name anything else */
         (void)CloseHandle(cee_exec.wake_event);
@@ -3609,7 +3716,8 @@ static void cee_iocp_complete(cee_op *o) {
     cee_op_done(o, o->result);
 }
 
-/* Waits up to `timeout` ms for completions and takes every one there is. True if a task was readied. */
+/* Waits up to `timeout` ms for completions and takes every one there is. True if a task was readied. The
+   executor's timer, when set (cee_timer_arm), ends the wait with an empty completion. */
 static bool cee_iocp_drain(int timeout) {
     OVERLAPPED_ENTRY entries[64];
     ULONG removed = 0;

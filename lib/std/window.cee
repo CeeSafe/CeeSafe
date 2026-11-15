@@ -5,7 +5,7 @@
 // script drives when CEESAFE_WINDOW_SCRIPT is set. A window the program draws itself, through the system's handles,
 // is `WindowSurface.External` (ADR 0137). Text input through the system's input method, and the clipboard's text,
 // are ADR 0141. Waiting for events without a tick, and waking a window from another thread, are ADR 0142; waiting for
-// any of the program's windows is ADR 0145.
+// any of the program's windows is ADR 0145. Menus and the system's file dialogs are ADR 0146.
 
 extern "C" {
     @effects(sleep, alloc)
@@ -62,12 +62,29 @@ extern "C" {
     fn ceesafe_window_waker(window: *mut void) -> u64;
     @effects()
     fn ceesafe_window_wake(id: u64);
+    @effects(sleep, alloc)
+    fn ceesafe_window_set_menu(window: *mut void, entries: *u8, length: u64) -> i32;
+    @effects()
+    fn ceesafe_window_menu_choice(window: *mut void) -> i64;
+    @effects(sleep, alloc)
+    fn ceesafe_window_dialog(
+        window: *mut void,
+        kind: i32,
+        title: *u8,
+        titleLength: u64,
+        name: *u8,
+        nameLength: u64,
+        extensions: *u8,
+        extensionsLength: u64,
+        answer: *mut (*u8),
+    ) -> i64;
 }
 
 /// Why a window could not be opened or drawn (§26.13).
 public enum WindowError {
-    /// No backend for this system, the interpreter, a size of 0 or over 16384, or a `present` to a window opened with
-    /// `WindowSurface.External`.
+    /// No backend for this system, the interpreter, a size of 0 or over 16384, a `present` to a window opened with
+    /// `WindowSurface.External`, a menu on X11 or one with an item before its first `addMenu` or over 4096 entries,
+    /// a file dialog on a Linux system without `zenity` or `kdialog`, or a dialog's path that is not UTF-8.
     Unsupported,
     /// No window server: no `DISPLAY`, no X11 library, or a session without one.
     NoDisplay,
@@ -461,6 +478,28 @@ public struct Window {
         return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
     }
 
+    /// Shows `menu` as this window's menus (ADR 0146), replacing the ones it showed; an empty `Menu` removes them. The
+    /// window keeps a copy: a later change to `menu` shows only when it is set again. macOS has one menu bar: it shows
+    /// the application's menu (About, Hide, Hide Others, Show All, Quit) and then the menus of the window that set
+    /// them last, until that window is dropped. Windows: the window's own menu bar. X11 has none: `Unsupported`.
+    /// Safety: the runtime copies the entries' bytes, lib/std's encoding of the menu, during the call.
+    public fn setMenu(borrow mut this, menu: borrow Menu) -> Result<void, WindowError> {
+        let bytes = menu.entries.view();
+        let result = unsafe { ceesafe_window_set_menu(this.raw, bytes.ptr, bytes.length as u64) };
+        return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
+    }
+
+    /// The id of the next menu item the user chose in this window's menus, or null; it never blocks (ADR 0146). A
+    /// queued choice ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event does.
+    /// Safety: the runtime only returns a number: an id, or -1 for none.
+    public fn nextMenuChoice(borrow mut this) -> u32? {
+        let choice = unsafe { ceesafe_window_menu_choice(this.raw) };
+        if (choice < 0) {
+            return null;
+        }
+        return truncate<u32>(choice);
+    }
+
     /// Appends the clipboard's text to `out`; false when the clipboard holds no text, its text is not valid UTF-8, or
     /// memory ran out (ADR 0141).
     /// Safety: the runtime gives its copy of the clipboard's text and its length, which it keeps until the next call;
@@ -539,5 +578,256 @@ public struct Window {
     /// Safety: the handle is this window's, and nothing uses it after the drop.
     drop {
         unsafe { ceesafe_window_close(this.raw); }
+    }
+}
+
+/// A keyboard shortcut that a menu item shows (§26.13, ADR 0146). On macOS a shortcut of an enabled item chooses it,
+/// and its key gives no `Key` event; on Windows it is the text after the item's title, and the key stays a `Key`.
+/// `Other` keys, `Function` outside 1 to 12, and a `Character` that is not a printable scalar show none.
+public struct MenuShortcut {
+    public key: WindowKey;
+    public modifiers: WindowModifiers;
+}
+
+/// A program's menus (§26.13, ADR 0146): top-level menus in order, each a list of items and separators, which
+/// `Window.setMenu` shows. An item has an id the program chooses, which `Window.nextMenuChoice` gives back when the
+/// user chooses it, a title, an optional shortcut, and whether it is enabled and checked. The titles are copied, so a
+/// `Menu` owns everything it holds. There are no submenus.
+public struct Menu {
+    /// lib/std's encoding, which ceesafe_rt_window.c reads: per entry 16 bytes, the kind (1 a menu, 2 an item, 3 a
+    /// separator), the flags (1 enabled, 2 checked), the shortcut's modifier bits, 0, then the id, the shortcut's key
+    /// number (0 for none) and the title's length, each a little-endian u32, then the title's UTF-8 bytes.
+    entries: Vector<u8>;
+
+    /// An empty menu: `setMenu` with it removes a window's menus.
+    public fn create() -> Menu {
+        return Menu { entries: Vector<u8>.create() };
+    }
+
+    /// Starts a top-level menu titled `title`: the items added next are its own.
+    public fn addMenu(borrow mut this, title: StringView) -> Result<void, AllocError> {
+        return this.add(1, 1, 0, 0, title);
+    }
+
+    /// Adds an enabled, unchecked item to the last menu added; `setMenu` is `Unsupported` for an item before the
+    /// first `addMenu`.
+    public fn addItem(
+        borrow mut this,
+        id: u32,
+        title: StringView,
+        shortcut: MenuShortcut?,
+    ) -> Result<void, AllocError> {
+        var modifiers: u8 = 0;
+        var key: u32 = 0;
+        match (shortcut) {
+            Some(s) => {
+                key = Menu.keyNumber(s.key);
+                modifiers = (if (s.modifiers.shift) 1u8 else 0u8) | (if (s.modifiers.control) 2u8 else 0u8) |
+                    (if (s.modifiers.alt) 4u8 else 0u8) | (if (s.modifiers.command) 8u8 else 0u8);
+            }
+            null => {}
+        }
+        return this.addEntry(2, 1, modifiers, id, key, title);
+    }
+
+    /// Adds a separator line to the last menu added.
+    public fn addSeparator(borrow mut this) -> Result<void, AllocError> {
+        return this.add(3, 0, 0, 0, "");
+    }
+
+    /// Enables or disables every item with the id `id`. A disabled item is shown dimmed and cannot be chosen.
+    public fn setEnabled(borrow mut this, id: u32, enabled: bool) {
+        this.setFlag(id, 1, enabled);
+    }
+
+    /// Shows or hides a check mark beside every item with the id `id`.
+    public fn setChecked(borrow mut this, id: u32, checked: bool) {
+        this.setFlag(id, 2, checked);
+    }
+
+    fn add(
+        borrow mut this,
+        kind: u8,
+        flags: u8,
+        modifiers: u8,
+        id: u32,
+        title: StringView,
+    ) -> Result<void, AllocError> {
+        return this.addEntry(kind, flags, modifiers, id, 0, title);
+    }
+
+    /// One entry, or none when memory ran out: a failed push takes back what the entry had written.
+    fn addEntry(
+        borrow mut this,
+        kind: u8,
+        flags: u8,
+        modifiers: u8,
+        id: u32,
+        key: u32,
+        title: StringView,
+    ) -> Result<void, AllocError> {
+        let start = this.entries.length;
+        match (this.writeEntry(kind, flags, modifiers, id, key, title)) {
+            Ok() => { return Ok(); }
+            Err(e) => {
+                this.entries.truncate(start);
+                return Err(e);
+            }
+        }
+    }
+
+    fn writeEntry(
+        borrow mut this,
+        kind: u8,
+        flags: u8,
+        modifiers: u8,
+        id: u32,
+        key: u32,
+        title: StringView,
+    ) -> Result<void, AllocError> {
+        this.entries.reserve(16 + title.length)?;
+        this.entries.push(kind)?;
+        this.entries.push(flags)?;
+        this.entries.push(modifiers)?;
+        this.entries.push(0)?;
+        this.entries.pushLE(id)?;
+        this.entries.pushLE(key)?;
+        this.entries.pushLE(truncate<u32>(title.length))?;
+        this.entries.extend(title.bytes())?;
+        return Ok();
+    }
+
+    fn setFlag(borrow mut this, id: u32, bit: u8, on: bool) {
+        var at: usize = 0;
+        while (at + 16 <= this.entries.length) {
+            let length = this.entries.view().readLE<u32>(at + 12) as usize;
+            if (this.entries[at] == 2 && this.entries.view().readLE<u32>(at + 4) == id) {
+                let flags = this.entries[at + 1];
+                this.entries[at + 1] = if (on) flags | bit else flags & (bit ^ 0xFF);
+            }
+            at = at + 16 + length;
+        }
+    }
+
+    /// The runtime's key numbers (Window.keyOf's): 1-14 the named keys, 100 + n F(n), 0x10000 + c a character; 0 for
+    /// a key no menu can show.
+    fn keyNumber(key: WindowKey) -> u32 => match (key) {
+        WindowKey.Tab => 1,
+        WindowKey.Enter => 2,
+        WindowKey.Escape => 3,
+        WindowKey.Backspace => 4,
+        WindowKey.Delete => 5,
+        WindowKey.Left => 6,
+        WindowKey.Right => 7,
+        WindowKey.Up => 8,
+        WindowKey.Down => 9,
+        WindowKey.Home => 10,
+        WindowKey.End => 11,
+        WindowKey.PageUp => 12,
+        WindowKey.PageDown => 13,
+        WindowKey.Space => 14,
+        WindowKey.Character(c) => if (c > 0x20 && c <= 0x10FFFF && (c < 0xD800 || c > 0xDFFF)) 0x10000 + c else 0,
+        WindowKey.Function(n) => if (n >= 1 && n <= 12) 100 + (n as u32) else 0,
+        WindowKey.Other(_) => 0,
+    };
+}
+
+/// The system's file dialogs (§26.13, ADR 0146): modal, they return when the user answers. Paths are UTF-8 and
+/// absolute. `extensions` is a comma-separated list of file name extensions without the dot, such as "png,jpg", which
+/// the dialog offers alone; empty offers every file. The program's windows are not repainted by the program while a
+/// dialog runs (the system shows their last frames). macOS: NSOpenPanel and NSSavePanel. Windows: IFileOpenDialog and
+/// IFileSaveDialog, owned by `window`. Linux: `zenity`, or `kdialog`, found on `PATH`, else `Unsupported`.
+public struct FileDialog {
+    /// One existing file the user chose, or null when they cancelled.
+    public fn openFile(
+        window: borrow mut Window,
+        title: StringView,
+        extensions: StringView,
+    ) -> Result<String?, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 0, title, "", extensions, mut paths)?;
+        return Ok(paths.pop());
+    }
+
+    /// The existing files the user chose, one or more; empty when they cancelled.
+    public fn openFiles(
+        window: borrow mut Window,
+        title: StringView,
+        extensions: StringView,
+    ) -> Result<Vector<String>, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 1, title, "", extensions, mut paths)?;
+        return Ok(paths);
+    }
+
+    /// Where the user chose to save a file, the dialog's field starting as `suggestedName`, or null when they
+    /// cancelled. The system asks before an existing file is chosen; the program writes the file.
+    public fn saveFile(
+        window: borrow mut Window,
+        title: StringView,
+        suggestedName: StringView,
+        extensions: StringView,
+    ) -> Result<String?, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 2, title, suggestedName, extensions, mut paths)?;
+        return Ok(paths.pop());
+    }
+
+    /// One existing folder the user chose, or null when they cancelled.
+    public fn chooseFolder(window: borrow mut Window, title: StringView) -> Result<String?, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 3, title, "", "", mut paths)?;
+        return Ok(paths.pop());
+    }
+
+    /// Runs the dialog of `kind` (0 a file, 1 files, 2 save, 3 a folder) and appends its paths to `out`.
+    /// Safety: the runtime reads the three texts during the call, and gives its copy of the answer, each path followed
+    /// by a zero byte, which it keeps until the window's next dialog; the paths are copied before this returns.
+    fn run(
+        window: borrow mut Window,
+        kind: i32,
+        title: StringView,
+        name: StringView,
+        extensions: StringView,
+        out: borrow mut Vector<String>,
+    ) -> Result<void, WindowError> {
+        var answer = 0 as *u8;
+        let length = unsafe { ceesafe_window_dialog(
+            window.raw,
+            kind,
+            title.ptr,
+            title.length as u64,
+            name.ptr,
+            name.length as u64,
+            extensions.ptr,
+            extensions.length as u64,
+            borrow mut answer as *mut (*u8),
+        ) };
+        if (length < 0) {
+            return Err(Window.errorOf(truncate<i32>(0 - length)));
+        }
+        if (length == 0) {
+            return Ok();
+        }
+        let bytes = unsafe { Slice.fromRaw(answer, truncate<usize>(length)) };
+        var start: usize = 0;
+        for (k in 0..bytes.length) {
+            if (bytes[k] == 0) {
+                let path = match (StringView.fromUtf8(bytes[start..k])) {
+                    Some(p) => p,
+                    null => { return Err(WindowError.Unsupported); }
+                };
+                let copy = match (String.from(path)) {
+                    Ok(c) => c,
+                    Err(_) => { return Err(WindowError.Resources); }
+                };
+                match (out.push(copy)) {
+                    Ok() => {}
+                    Err(_) => { return Err(WindowError.Resources); }
+                }
+                start = k + 1;
+            }
+        }
+        return Ok();
     }
 }

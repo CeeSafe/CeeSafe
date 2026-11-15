@@ -31,7 +31,16 @@ that opened a window would open one on the developer's screen:
    clipboard gives back the text put on it (this replaces the clipboard's contents); a task on another thread
    wakes a real window's waitEvent; with two real windows, a task's wake of the second ends a waitAny, and a click
    posted to the second through the system lands in its queue while only the first window's waitEvent and
-   nextEvent run (ADR 0145 §2.2; not on X11, where windows do not share a connection), and ends a waitAny.
+   nextEvent run (ADR 0145 §2.2; not on X11, where windows do not share a connection), and ends a waitAny;
+8. menus and file dialogs (ADR 0146): a scripted window accepts a menu, hands out the script's `menu` choices of
+   enabled items only, answers each FileDialog function from the script's `dialog` items (and cancels without one), and
+   a choice alone ends a waitEvent and a waitAny of 20 s; an item before the first menu is Unsupported, a menu id over
+   32 bits a malformed script, and the interpreter answers Unsupported. With --display: on macOS, System Events reads
+   the real menu bar (the application menu, the program's menus, an item's shortcut, enabled and check mark), clicks an
+   item, types an enabled item's shortcut (a choice and no Key) and a disabled one's (a Key), and cancels one open panel
+   and answers another by typing a path; on Windows, a WM_COMMAND posted for an item arrives as its id; on Linux,
+   setMenu is Unsupported and the dialogs run a stand-in zenity put first on PATH (its arguments checked), and with no
+   zenity or kdialog on PATH they are Unsupported.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -587,6 +596,460 @@ fn main() -> i32 {
 }
 """
 
+# Menus and file dialogs (ADR 0146). Scripted: the window's menu set, MENU_SCRIPT's frame 0 choices handed out but for
+# an unknown and a disabled item, each dialog function answered by the script's `dialog` items in order (a path, a
+# cancel; several paths, the first alone for a one-path dialog), a dialog with no answer left cancelled, then frame 1's
+# choice, the script's last item, ending a waitEvent of 20 s, and a second window's ending a waitAny; an item before the
+# first menu is Unsupported and keeps the menu, and an empty menu is accepted. With "real" (--display, macOS), the
+# menu is a real one that tools/window_check.py inspects and drives through System Events, reading each line the
+# program prints.
+MENU = r"""
+fn say(text: StringView) {
+    Console.writeLine(text);
+    Console.flush();
+}
+
+fn sayNumber(text: StringView, n: u32) {
+    Console.write(text);
+    Console.writeLine(n);
+    Console.flush();
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+fn command(c: u32) -> MenuShortcut? => MenuShortcut {
+    key: WindowKey.Character(c),
+    modifiers: WindowModifiers { shift: false, control: false, alt: false, command: true },
+};
+
+fn menus() -> Menu {
+    var menu = Menu.create();
+    menu.addMenu("File")!;
+    menu.addItem(1, "Open…", command(0x6F))!;
+    menu.addItem(2, "Save", command(0x73))!;
+    menu.addSeparator()!;
+    menu.addItem(3, "Close", null)!;
+    menu.addMenu("Edit")!;
+    menu.addItem(4, "Undo", MenuShortcut {
+        key: WindowKey.Function(5),
+        modifiers: WindowModifiers { shift: true, control: false, alt: false, command: false },
+    })!;
+    menu.addItem(5, "Wrap", null)!;
+    menu.setEnabled(3, false);
+    menu.setChecked(5, true);
+    return menu;
+}
+
+fn choices(window: borrow mut Window) {
+    var line = String.create();
+    line.append("choices")!;
+    loop {
+        match (window.nextMenuChoice()) {
+            Some(id) => {
+                line.append(" ")!;
+                line.appendNumber(id)!;
+            }
+            null => { break; }
+        }
+    }
+    Console.writeLine(line.view());
+}
+
+fn one(answer: Result<String?, WindowError>) {
+    match (answer) {
+        Ok(Some(path)) => {
+            Console.write("path ");
+            Console.writeLine(path.view());
+        }
+        Ok(null) => { Console.writeLine("cancelled"); }
+        Err(e) => {
+            Console.write("error ");
+            Console.writeLine(codeOf(e));
+        }
+    }
+    Console.flush();
+}
+
+fn several(answer: Result<Vector<String>, WindowError>) {
+    match (answer) {
+        Ok(paths) => {
+            Console.write("paths");
+            Console.writeLine(paths.length);
+            for (k in 0..paths.length) {
+                Console.write("  ");
+                Console.writeLine(paths[k].view());
+            }
+        }
+        Err(e) => {
+            Console.write("error ");
+            Console.writeLine(codeOf(e));
+        }
+    }
+}
+
+fn drain(window: borrow mut Window) -> u32 {
+    var count: u32 = 0;
+    loop {
+        match (window.nextEvent()) {
+            Some(_) => { count += 1; }
+            null => { break; }
+        }
+    }
+    return count;
+}
+
+fn timed(window: borrow mut Window, ms: u32) -> u64 {
+    let start = Timer.now();
+    window.waitEvent(ms);
+    return Timer.now() - start;
+}
+
+fn timedAny(ms: u32) -> u64 {
+    let start = Timer.now();
+    Window.waitAny(ms);
+    return Timer.now() - start;
+}
+
+fn codeOf(error: WindowError) -> u32 => match (error) {
+    WindowError.Unsupported => 1,
+    WindowError.NoDisplay => 2,
+    WindowError.NotMainThread => 3,
+    WindowError.Resources => 4,
+};
+
+fn errorCode(result: Result<void, WindowError>) -> u32 => match (result) {
+    Ok() => 0,
+    Err(e) => codeOf(e),
+};
+
+/// X11 (--display on Linux, with the checker's stand-in `zenity` first on PATH, or none): no menu bar, and the
+/// dialogs through the program found on PATH.
+fn x11(window: borrow mut Window) -> i32 {
+    let menu = menus();
+    sayNumber("setMenu ", errorCode(window.setMenu(borrow menu)));
+    one(FileDialog.openFile(mut window, "Open", "png, jpg"));
+    one(FileDialog.openFile(mut window, "cancel", ""));
+    several(FileDialog.openFiles(mut window, "Open", "png"));
+    one(FileDialog.saveFile(mut window, "Save", "name.txt", "txt"));
+    one(FileDialog.chooseFolder(mut window, "Folder"));
+    return 0;
+}
+
+/// The real menu (--display): choices and keys until the checker's clicks and keystrokes have come, then two dialogs.
+fn real(window: borrow mut Window) -> i32 {
+    var menu = Menu.create();
+    menu.addMenu("File")!;
+    menu.addItem(7, "Choose Seven", command(0x6F))!;
+    menu.addItem(8, "Disabled Eight", command(0x64))!;
+    menu.addSeparator()!;
+    menu.addItem(9, "Checked Nine", null)!;
+    menu.addMenu("Edit")!;
+    menu.addItem(10, "Ten", null)!;
+    menu.setEnabled(8, false);
+    menu.setChecked(9, true);
+    match (window.setMenu(borrow menu)) {
+        Ok() => { say("menu set"); }
+        Err(_) => { say("setMenu failed"); return 1; }
+    }
+    let start = Timer.now();
+    var sevens: u32 = 0;
+    var keysD: u32 = 0;
+    while (sevens < 2 || keysD < 1) {
+        if (Timer.now() - start > 60000) {
+            say("timeout");
+            return 1;
+        }
+        window.waitEvent(500);
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Key(WindowKey.Character(c), true, _, _)) => {
+                    if (c == 0x6F) {
+                        say("key o");
+                    }
+                    if (c == 0x64) {
+                        keysD += 1;
+                        say("key d");
+                    }
+                }
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        loop {
+            match (window.nextMenuChoice()) {
+                Some(id) => {
+                    sayNumber("choice ", id);
+                    if (id == 7) {
+                        sevens += 1;
+                    }
+                }
+                null => { break; }
+            }
+        }
+    }
+    say("dialog");
+    one(FileDialog.openFile(mut window, "window_check cancel", "txt"));
+    say("dialog");
+    one(FileDialog.openFile(mut window, "window_check answer", "txt"));
+    return 0;
+}
+
+fn main() -> i32 {
+    var a = match (Window.open("window_check menu", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let isReal = match (Process.argument(1)) {
+        Some(m) => m == "real",
+        null => false,
+    };
+    if (isReal) {
+        return real(mut a);
+    }
+    let isX11 = match (Process.argument(1)) {
+        Some(m) => m == "x11",
+        null => false,
+    };
+    if (isX11) {
+        return x11(mut a);
+    }
+    let menu = menus();
+    verdict("set", errorCode(a.setMenu(borrow menu)) == 0);
+    choices(mut a);
+    one(FileDialog.openFile(mut a, "Open", "png, .jpg"));
+    one(FileDialog.openFile(mut a, "Open", ""));
+    several(FileDialog.openFiles(mut a, "Open", "png"));
+    several(FileDialog.openFiles(mut a, "Open", "png"));
+    one(FileDialog.saveFile(mut a, "Save", "untitled.txt", "txt"));
+    one(FileDialog.saveFile(mut a, "Save", "untitled.txt", "txt"));
+    one(FileDialog.chooseFolder(mut a, "Folder"));
+    one(FileDialog.chooseFolder(mut a, "Folder"));
+    one(FileDialog.openFile(mut a, "Open", ""));
+    let pixels = [0u32; 1200];
+    a.present(pixels[..], 40, 30)!;
+    let _ = drain(mut a);
+    verdict("a choice ends waitEvent", timed(mut a, 20000) < 5000);
+    choices(mut a);
+    verdict("then waitEvent waits", timed(mut a, 100) >= 90);
+    var b = Window.open("window_check menu b", 40, 30)!;
+    verdict("the second's menu set", errorCode(b.setMenu(borrow menu)) == 0);
+    let _ = drain(mut b);
+    choices(mut b);
+    b.present(pixels[..], 40, 30)!;
+    let _ = drain(mut b);
+    verdict("a choice ends waitAny", timedAny(20000) < 5000);
+    choices(mut a);
+    choices(mut b);
+    verdict("then waitAny waits", timedAny(100) >= 90);
+    var bad = Menu.create();
+    bad.addItem(1, "No menu", null)!;
+    sayNumber("an item before a menu ", errorCode(b.setMenu(borrow bad)));
+    let empty = Menu.create();
+    verdict("an empty menu", errorCode(b.setMenu(borrow empty)) == 0);
+    return 0;
+}
+"""
+
+MENU_SCRIPT = ("0:menu:1;0:menu:99;0:menu:3;0:menu:2;0:dialog:/tmp/ünï.png;0:dialog;0:dialog:/x/one|/x/two;0:dialog;"
+               "0:dialog:/y/save.txt;0:dialog;0:dialog:/z/folder|/z/other;0:dialog;1:menu:4")
+MENU_EXPECTED = ["set ok", "choices 1 2", "path /tmp/ünï.png", "cancelled", "paths2", "  /x/one", "  /x/two", "paths0",
+                 "path /y/save.txt", "cancelled", "path /z/folder", "cancelled", "cancelled",
+                 "a choice ends waitEvent ok", "choices 4", "then waitEvent waits ok", "the second's menu set ok",
+                 "choices 1 2", "a choice ends waitAny ok", "choices", "choices 4", "then waitAny waits ok",
+                 "an item before a menu 1", "an empty menu ok"]
+
+# Windows' menu commands (ADR 0146), with --display there: a package whose C file posts WM_COMMAND for the menu's
+# first and third items (commands 1 and 3) to the window, which must arrive as the items' ids, 7 and 9.
+MENU_POST = r"""
+extern "C" {
+    @effects()
+    fn window_check_post_command(kind: u32, first: u64, command: u32) -> i32;
+}
+
+/// Posts WM_COMMAND to the window; false where the helper cannot.
+/// Safety: the helper only reads the handle and posts one message to that window.
+fn post(window: borrow Window, command: u32) -> bool => match (window.nativeHandle()) {
+    WindowHandle.Win32(hwnd, _) => unsafe { window_check_post_command(2, hwnd, command) } != 0,
+    _ => false,
+};
+
+fn main() -> i32 {
+    var w = match (Window.open("window_check menu post", 200, 150)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    var menu = Menu.create();
+    menu.addMenu("File")!;
+    menu.addItem(7, "Seven", null)!;
+    menu.addItem(8, "Eight", null)!;
+    menu.addSeparator()!;
+    menu.addItem(9, "Nine", null)!;
+    w.setMenu(borrow menu)!;
+    if (!post(borrow w, 1) || !post(borrow w, 3)) {
+        Console.writeLine("post unsupported");
+        return 0;
+    }
+    var line = String.create();
+    line.append("choices")!;
+    let start = Timer.now();
+    while (Timer.now() - start < 3000) {
+        w.waitEvent(200);
+        loop {
+            match (w.nextEvent()) {
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        loop {
+            match (w.nextMenuChoice()) {
+                Some(id) => {
+                    line.append(" ")!;
+                    line.appendNumber(id)!;
+                }
+                null => { break; }
+            }
+        }
+    }
+    Console.writeLine(line.view());
+    return 0;
+}
+"""
+
+MENU_POST_C = r"""/* window_check's helper (ADR 0146): posts a menu's WM_COMMAND to a window, on Windows. */
+#include <stdint.h>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "user32.lib")
+#endif
+#endif
+
+int32_t window_check_post_command(uint32_t kind, uint64_t first, uint32_t command);
+
+int32_t window_check_post_command(uint32_t kind, uint64_t first, uint32_t command) {
+#if defined(_WIN32)
+    return kind == 2 && PostMessageW((HWND)(uintptr_t)first, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+#else
+    (void)kind;
+    (void)first;
+    (void)command;
+    return 0;
+#endif
+}
+"""
+
+# The stand-in for zenity (ADR 0146, --display on Linux): it records its arguments, and answers as a user would.
+FAKE_ZENITY = r"""#!/bin/sh
+for a in "$@"; do printf '[%s]\n' "$a" >> "$WINDOW_CHECK_ARGS"; done
+echo --- >> "$WINDOW_CHECK_ARGS"
+case "$*" in
+  *--title=cancel*) exit 1 ;;
+  *--multiple*) printf '/fake/one.png\n/fake/two.png\n' ;;
+  *--directory*) echo /fake/folder ;;
+  *--save*) echo /fake/save.txt ;;
+  *) echo /fake/open.png ;;
+esac
+"""
+X11_EXPECTED = ["setMenu 1", "path /fake/open.png", "cancelled", "paths2", "  /fake/one.png", "  /fake/two.png",
+                "path /fake/save.txt", "path /fake/folder"]
+X11_ARGUMENTS = ["[--file-selection]", "[--title=Open]", "[--file-filter=*.png *.jpg]", "[--multiple]",
+                 "[--separator=\n]", "[--save]", "[--filename=name.txt]", "[--file-filter=*.txt]", "[--directory]"]
+
+
+def mac_menu(exe, work):
+    """ADR 0146 on macOS with a real menu bar: System Events reads the menus, chooses an item, types a shortcut of an
+    enabled item (a choice, no Key) and of a disabled one (a Key), cancels one open panel and answers another. A list
+    of problems."""
+    import queue
+    import threading
+    import time
+    name = os.path.basename(exe)
+    env = dict(os.environ)
+    env.pop("CEESAFE_WINDOW_SCRIPT", None)
+    env.pop("CEESAFE_WINDOW_DUMP", None)
+    p = subprocess.Popen([exe, "real"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=work)
+    lines = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(line.rstrip("\n")) for line in p.stdout], daemon=True).start()
+    seen = []
+
+    def expect(want, seconds=20):
+        end = time.time() + seconds
+        while time.time() < end:
+            try:
+                line = lines.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            seen.append(line)
+            if line == want:
+                return
+        raise RuntimeError(f"expected {want!r}, the program printed {seen!r}")
+
+    def osa(*statements):
+        command = ["osascript"]
+        for s in statements:
+            command += ["-e", s]
+        r = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError(f"osascript {statements!r}: {r.stderr.strip()}")
+        return r.stdout.strip()
+
+    events = 'tell application "System Events" to '
+    process = events + f'tell process "{name}" to '
+    file_menu = 'menu "File" of menu bar item "File" of menu bar 1'
+    problems = []
+    try:
+        expect("menu set")
+        bar = osa(process + "get name of every menu bar item of menu bar 1")
+        if bar != f"Apple, {name}, File, Edit":
+            problems.append(f"a real menu bar: expected 'Apple, {name}, File, Edit', got {bar!r}")
+        items = osa(process + f"get {{name, enabled}} of every menu item of {file_menu}")
+        want = "Choose Seven, Disabled Eight, missing value, Checked Nine, true, false, false, true"
+        if items != want:
+            problems.append(f"a real menu's items: expected {want!r}, got {items!r}")
+        shortcut = osa(process + f'get value of attribute "AXMenuItemCmdChar" of menu item "Choose Seven" of {file_menu}')
+        mark = osa(process + f'get value of attribute "AXMenuItemMarkChar" of menu item "Checked Nine" of {file_menu}')
+        if shortcut != "O" or mark != "✓":
+            problems.append(f"a real menu's shortcut and check mark: expected 'O' and '✓', got {shortcut!r} {mark!r}")
+        osa(process + f'click menu item "Choose Seven" of {file_menu}')
+        expect("choice 7")
+        osa(process + "set frontmost to true", "delay 0.5", events + 'keystroke "o" using command down')
+        expect("choice 7")
+        osa(events + 'keystroke "d" using command down')
+        expect("key d")
+        if "key o" in seen:
+            problems.append("a real menu's shortcut also gave a Key event")
+        expect("dialog")
+        answer = os.path.realpath(os.path.join(work, "answer.txt"))
+        with open(answer, "w", encoding="utf-8") as f:
+            f.write("window_check\n")
+        for title in ("window_check cancel", "window_check answer"):
+            osa("repeat 40 times", 'tell application "System Events"',
+                f'if exists window "{title}" of process "{name}" then exit repeat', "end tell", "delay 0.25",
+                "end repeat", "delay 0.5")
+            if title.endswith("cancel"):
+                osa(events + "key code 53")
+                expect("cancelled")
+                expect("dialog")
+            else:
+                osa(events + 'keystroke "g" using {command down, shift down}', "delay 1.5",
+                    events + f'keystroke "{answer}"', "delay 2", events + "key code 36", "delay 2",
+                    events + "key code 36")
+                expect("path " + answer)
+        if p.wait(timeout=20) != 0:
+            problems.append(f"a real menu: the program ended with status {p.returncode}")
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        problems.append(f"a real menu and dialogs: {e}")
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+    return problems
+
+
 ROUTE_C = r"""/* window_check's helper (ADR 0145): posts a primary click at (10, 10) in a window, through the system. */
 #include <stdint.h>
 #if defined(__APPLE__)
@@ -1117,6 +1580,25 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        menu_source, menu = build(compiler, MENU, work, "window_check_menu")
+        menu_script = os.path.join(work, "menu.txt")
+        with open(menu_script, "w", encoding="utf-8") as f:
+            f.write(MENU_SCRIPT)
+        bad_menu = os.path.join(work, "badmenu.txt")
+        with open(bad_menu, "w", encoding="utf-8") as f:
+            f.write("0:menu:4294967296")
+        menu_cases = [
+            ("menus and file dialogs", [menu], menu_script, MENU_EXPECTED, 0),
+            ("menus in the interpreter", [compiler, "run", "--interp", menu_source], menu_script, ["open failed"], 1),
+            ("a menu id over 32 bits", [menu], bad_menu, ["open failed"], 1),
+        ]
+        for what, command, path, want, status in menu_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": path}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -1127,7 +1609,8 @@ def main():
             if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
-        checks = 1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) + 8
+        checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
+                  len(menu_cases) + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -1158,6 +1641,37 @@ def main():
             if r.returncode != 0 or r.stdout.splitlines() != want:
                 problems.append(f"two real windows' events: expected {want!r}, got {r.stdout.splitlines()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
+            checks += 1
+            if sys.platform == "darwin":
+                problems.extend(mac_menu(menu, work))
+            elif os.name == "nt":
+                post = build_package(compiler, MENU_POST, MENU_POST_C, work, "menupost")
+                r = run([post], {}, work)
+                if r.returncode != 0 or r.stdout.strip() != "choices 7 9":
+                    problems.append(f"a real window's menu commands: expected 'choices 7 9', got "
+                                    f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            else:
+                fake = os.path.join(work, "fakebin")
+                os.makedirs(fake, exist_ok=True)
+                with open(os.path.join(fake, "zenity"), "w", encoding="utf-8") as f:
+                    f.write(FAKE_ZENITY)
+                os.chmod(os.path.join(fake, "zenity"), 0o755)
+                arguments = os.path.join(work, "zenity-arguments.txt")
+                r = run([menu, "x11"], {"PATH": fake + os.pathsep + os.environ.get("PATH", ""),
+                                        "WINDOW_CHECK_ARGS": arguments, "XDG_CURRENT_DESKTOP": "GNOME"}, work)
+                recorded = open(arguments, encoding="utf-8").read() if os.path.exists(arguments) else ""
+                missing = [a for a in X11_ARGUMENTS if a not in recorded]
+                if r.returncode != 0 or r.stdout.splitlines() != X11_EXPECTED or missing:
+                    problems.append("X11's menu and dialogs: expected\n  " + "\n  ".join(X11_EXPECTED) +
+                                    f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) +
+                                    f"\nzenity's arguments missing {missing!r}\n" + r.stderr)
+                empty_path = os.path.join(work, "emptybin")
+                os.makedirs(empty_path, exist_ok=True)
+                r = run([menu, "x11"], {"PATH": empty_path}, work)
+                checks += 1
+                if r.returncode != 0 or r.stdout.splitlines()[1:2] != ["error 1"]:
+                    problems.append(f"X11's dialogs with no zenity or kdialog: expected 'error 1', got "
+                                    f"{r.stdout.splitlines()!r} (status {r.returncode}) {r.stderr.strip()}")
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)
             checks += 1

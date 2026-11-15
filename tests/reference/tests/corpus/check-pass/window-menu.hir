@@ -1,0 +1,128 @@
+(program
+  (const OPEN: u32 = 1:u32)
+  (const SAVE: u32 = 2:u32)
+  (const WRAP: u32 = 3:u32)
+  (const QUIT: u32 = 4:u32)
+  (fn command ((c#0: u32)) -> MenuShortcut
+    (block
+      (return (new MenuShortcut (key (WindowKey.Character c#0)) (modifiers (new WindowModifiers (shift false) (control false) (alt false) (command true)))))
+    )
+  )
+  (fn menus ((wrap#0: bool)) -> Result<Menu, AllocError>
+    (block
+      (var menu#1: Menu = (call Menu.create):Menu)
+      (expr (try (call Menu.addMenu (borrow-mut menu#1) "File"):Result<void, AllocError>):void)
+      (expr (try (call Menu.addItem (borrow-mut menu#1) 1:u32 "Open…" (MenuShortcut?.Some (call command 111:u32):MenuShortcut)):Result<void, AllocError>):void)
+      (expr (try (call Menu.addItem (borrow-mut menu#1) 2:u32 "Save As…" (MenuShortcut?.Some (call command 115:u32):MenuShortcut)):Result<void, AllocError>):void)
+      (expr (try (call Menu.addSeparator (borrow-mut menu#1)):Result<void, AllocError>):void)
+      (expr (try (call Menu.addItem (borrow-mut menu#1) 4:u32 "Quit" (MenuShortcut?.null)):Result<void, AllocError>):void)
+      (expr (try (call Menu.addMenu (borrow-mut menu#1) "View"):Result<void, AllocError>):void)
+      (expr (try (call Menu.addItem (borrow-mut menu#1) 3:u32 "Wrap Lines" (MenuShortcut?.null)):Result<void, AllocError>):void)
+      (expr (call Menu.setChecked (borrow-mut menu#1) 3:u32 wrap#0):void)
+      (return (Result<Menu, AllocError>.Ok menu#1))
+    )
+  )
+  (fn choose ((window#0: borrow mut Window) (id#1: u32) (wrap#2: borrow mut bool)) -> Result<bool, WindowError>
+    (block
+      (if (== id#1 1:u32):bool
+        (block
+          (match-consume (try (call FileDialog.openFile (reborrow-mut window#0) "Open a picture" "png,jpg"):Result<String?, WindowError>):String?
+            (arm Some (path#3: String = payload 0)
+              (block
+                (expr (Console.writeLine (borrow (*path#3))))
+              )
+            )
+            (arm null
+              (block)
+            )
+          )
+        )
+        (else
+          (if (== id#1 2:u32):bool
+            (block
+              (let path#4: String? = (try (call FileDialog.saveFile (reborrow-mut window#0) "Save the picture" "untitled.png" "png"):Result<String?, WindowError>):String?)
+              (expr (Console.writeLine (is-some (borrow path#4)):bool))
+            )
+            (else
+              (if (== id#1 3:u32):bool
+                (block
+                  (= (*wrap#2) (not (deref wrap#2):bool):bool)
+                  (let menu#6: Menu = (value (match-consume (call menus (deref wrap#2):bool):Result<Menu, AllocError> (arm Ok (m#5: Menu = payload 0) (block (yield m#5))) (arm Err (block (return (Result<bool, WindowError>.Err (WindowError.Resources))))))):Menu)
+                  (expr (try (call Window.setMenu (reborrow-mut window#0) (borrow menu#6)):Result<void, WindowError>):void)
+                )
+                (else
+                  (if (== id#1 4:u32):bool
+                    (block
+                      (return (Result<bool, WindowError>.Ok false))
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+      (return (Result<bool, WindowError>.Ok true))
+    )
+  )
+  (fn host ((window#0: borrow mut Window)) -> Result<void, WindowError>
+    (block
+      (var wrap#1: bool = false)
+      (let menu#3: Menu = (value (match-consume (call menus wrap#1):Result<Menu, AllocError> (arm Ok (m#2: Menu = payload 0) (block (yield m#2))) (arm Err (block (return (Result<void, WindowError>.Err (WindowError.Resources))))))):Menu)
+      (expr (try (call Window.setMenu (reborrow-mut window#0) (borrow menu#3)):Result<void, WindowError>):void)
+      (loop
+        (block
+          (expr (call Window.waitEvent (reborrow-mut window#0) 1000:u32):void)
+          (loop
+            (block
+              (match (call Window.nextEvent (reborrow-mut window#0)):WindowEvent?
+                (arm Some(Closed)
+                  (block
+                    (return (Result<void, WindowError>.Ok))
+                  )
+                )
+                (arm Some(_)
+                  (block)
+                )
+                (arm null
+                  (block
+                    (break)
+                  )
+                )
+              )
+            )
+          )
+          (loop
+            (block
+              (match (call Window.nextMenuChoice (reborrow-mut window#0)):u32?
+                (arm Some (id#4: u32 = payload 0)
+                  (block
+                    (if (not (try (call choose (reborrow-mut window#0) id#4 (borrow-mut wrap#1)):Result<bool, WindowError>):bool):bool
+                      (block
+                        (return (Result<void, WindowError>.Ok))
+                      )
+                    )
+                  )
+                )
+                (arm null
+                  (block
+                    (break)
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (fn main () -> i32
+    (block
+      (var window#1: Window = (value (match-consume (call Window.open "Pictures" 640:u32 480:u32):Result<Window, WindowError> (arm Ok (w#0: Window = payload 0) (block (yield w#0))) (arm Err (block (return 1:i32))))):Window)
+      (let pictures#2: Vector<String> = (unwrap (call FileDialog.openFiles (borrow-mut window#1) "Add pictures" "png, jpg"):Result<Vector<String>, WindowError>):Vector<String>)
+      (expr (Console.writeLine (length pictures#2):usize))
+      (let folder#3: Result<String?, WindowError> = (call FileDialog.chooseFolder (borrow-mut window#1) "Export to"):Result<String?, WindowError>)
+      (return (value (match (call host (borrow-mut window#1)):Result<void, WindowError> (arm Ok (block (yield 0:i32))) (arm Err (block (yield 2:i32))))):i32)
+    )
+  )
+)

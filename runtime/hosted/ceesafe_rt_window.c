@@ -67,6 +67,29 @@
 #define CEE_SCRIPT_SCALE 100
 /* A scripted clipboard (`clipboard[:TEXT]`, ADR 0141): never queued, it replaces the scripted clipboard. */
 #define CEE_SCRIPT_CLIPBOARD 101
+/* A scripted menu choice (`menu:ID`, ADR 0146): never queued as an event, it queues the choice. */
+#define CEE_SCRIPT_MENU 102
+/* A scripted dialog answer (`dialog[:PATHS]`, ADR 0146): never queued as an event, it is the next dialog's answer. */
+#define CEE_SCRIPT_DIALOG 103
+
+/* Menus (ADR 0146): lib/std's encoding is, per entry, a header of CEE_MENU_HEADER bytes (the kind, the flags, the
+   shortcut's modifier bits, 0, then the id, the shortcut's key number and the title's length as little-endian u32s)
+   and the title's UTF-8 bytes. */
+#define CEE_MENU_TITLE 1
+#define CEE_MENU_ITEM 2
+#define CEE_MENU_SEPARATOR 3
+#define CEE_MENU_ENABLED 1
+#define CEE_MENU_CHECKED 2
+#define CEE_MENU_HEADER 16u
+#define CEE_MENU_MAX_ENTRIES 4096u
+#define CEE_MENU_CHOICES 64u
+
+/* File dialogs' kinds (lib/std's FileDialog.run) and the scripted window's ring of due answers (ADR 0146). */
+#define CEE_DIALOG_FILE 0
+#define CEE_DIALOG_FILES 1
+#define CEE_DIALOG_SAVE 2
+#define CEE_DIALOG_FOLDER 3
+#define CEE_DIALOG_ANSWERS 64u
 
 /* WindowSurface's numbers (ADR 0137): who draws the content. */
 #define CEE_SURFACE_FRAMES 0
@@ -123,6 +146,12 @@ struct cee_window_scripted {
     struct cee_window_event event;
 };
 
+/* A scripted dialog's answer (`dialog[:PATHS]`, ADR 0146): PATHS at script_text + offset, or a cancel. */
+struct cee_window_answer {
+    int32_t offset, length;
+    int cancel;
+};
+
 struct cee_window {
     int scripted;
     int external; /* WindowSurface.External: the program draws the content, the runtime never does (ADR 0137) */
@@ -171,6 +200,21 @@ struct cee_window {
     int wake_read, wake_write;
     void *wake_event;
     struct cee_window *wake_link;
+    /* Menus (ADR 0146): the ids of the items chosen and not yet handed out (a ring); the copy of lib/std's encoding of
+       the menu last set, which a scripted choice is checked against, and its items' ids in order (Windows' command
+       k + 1 is item k). */
+    uint32_t choices[CEE_MENU_CHOICES];
+    unsigned choice_head, choice_count;
+    uint8_t *menu;
+    size_t menu_length;
+    uint32_t *menu_ids;
+    size_t menu_items;
+    /* File dialogs (ADR 0146): the last answer, each path followed by a zero byte, for lib/std to copy; the scripted
+       window's answers that are due (offsets into script_text, a ring). */
+    char *answer;
+    size_t answer_length, answer_capacity;
+    struct cee_window_answer answers[CEE_DIALOG_ANSWERS];
+    unsigned answer_head, answer_count;
     /* The system's window. */
     void *native;
 };
@@ -197,6 +241,11 @@ void ceesafe_window_wait_event(void *window, uint32_t timeout_ms);
 void ceesafe_window_wait_any(uint32_t timeout_ms);
 uint64_t ceesafe_window_waker(void *window);
 void ceesafe_window_wake(uint64_t id);
+int32_t ceesafe_window_set_menu(void *window, const uint8_t *entries, uint64_t length);
+int64_t ceesafe_window_menu_choice(void *window);
+int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, uint64_t title_length,
+                              const uint8_t *name, uint64_t name_length, const uint8_t *extensions,
+                              uint64_t extensions_length, const uint8_t **answer);
 
 /* Queues an event; the queued copy, which a backend may take back (CEE_EVENT_DROPPED) before the next poll, or NULL. */
 static struct cee_window_event *cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c,
@@ -326,6 +375,142 @@ static int cee_window_paste(struct cee_window *w, const char *text, size_t lengt
     w->pasted_length = length;
     return 1;
 }
+
+/* ---- Menus and file dialogs: what every backend shares (ADR 0146) ------------------------------------------------ */
+
+/* Queues a chosen item's id; a program that never takes its choices loses the newest, as with events. */
+static void cee_window_choose(struct cee_window *w, uint32_t id) {
+    if (w->choice_count == CEE_MENU_CHOICES) {
+        return;
+    }
+    w->choices[(w->choice_head + w->choice_count) % CEE_MENU_CHOICES] = id;
+    w->choice_count++;
+}
+
+static uint32_t cee_menu_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* One entry of lib/std's encoding, read from bytes[*at..length) and moved past; 0 at the end or when malformed. */
+struct cee_menu_entry {
+    int kind, flags;
+    int32_t modifiers;
+    uint32_t id, key;
+    const char *title;
+    size_t title_length;
+};
+
+static int cee_menu_next(const uint8_t *bytes, size_t length, size_t *at, struct cee_menu_entry *e) {
+    if (*at >= length || length - *at < CEE_MENU_HEADER) {
+        return 0;
+    }
+    const uint8_t *p = bytes + *at;
+    size_t title = cee_menu_u32(p + 12);
+    if (title > length - *at - CEE_MENU_HEADER) {
+        return 0;
+    }
+    e->kind = p[0];
+    e->flags = p[1];
+    e->modifiers = p[2] & 15;
+    e->id = cee_menu_u32(p + 4);
+    e->key = cee_menu_u32(p + 8);
+    e->title = (const char *)(p + CEE_MENU_HEADER);
+    e->title_length = title;
+    *at += CEE_MENU_HEADER + title;
+    return 1;
+}
+
+/* Checks lib/std's encoding: every entry whole and of a known kind, a menu's title before any item or separator, at
+   most CEE_MENU_MAX_ENTRIES entries. 0 with the number of items, or CEE_WINDOW_UNSUPPORTED. */
+static int cee_menu_check(const uint8_t *bytes, size_t length, size_t *items) {
+    size_t at = 0, entries = 0;
+    int menus = 0;
+    struct cee_menu_entry e;
+    *items = 0;
+    while (cee_menu_next(bytes, length, &at, &e)) {
+        if (++entries > CEE_MENU_MAX_ENTRIES || e.kind < CEE_MENU_TITLE || e.kind > CEE_MENU_SEPARATOR ||
+            (e.kind != CEE_MENU_TITLE && menus == 0)) {
+            return CEE_WINDOW_UNSUPPORTED;
+        }
+        menus += e.kind == CEE_MENU_TITLE;
+        *items += e.kind == CEE_MENU_ITEM;
+    }
+    return at == length ? 0 : CEE_WINDOW_UNSUPPORTED;
+}
+
+/* Whether the window's menu has an enabled item `id` (a scripted choice is the user's choice of one). */
+static int cee_menu_enabled(struct cee_window *w, uint32_t id) {
+    size_t at = 0;
+    struct cee_menu_entry e;
+    while (cee_menu_next(w->menu, w->menu_length, &at, &e)) {
+        if (e.kind == CEE_MENU_ITEM && e.id == id && (e.flags & CEE_MENU_ENABLED)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Adds one path, and its zero byte, to the window's answer; 0 when memory ran out. */
+static int cee_window_answer_add(struct cee_window *w, const char *path, size_t length) {
+    if (length == 0) {
+        return 1; /* no path is empty: a dialog never answers one */
+    }
+    if (!cee_window_reserve(&w->answer, &w->answer_capacity, w->answer_length + length + 1u)) {
+        return 0;
+    }
+    memcpy(w->answer + w->answer_length, path, length);
+    w->answer[w->answer_length + length] = '\0';
+    w->answer_length += length + 1u;
+    return 1;
+}
+
+/* Adds the paths of `text`, separated by `separator` (a scripted answer's '|', a dialog program's lines); 0 when
+   memory ran out. With `first`, only the first path. */
+static int cee_window_answer_split(struct cee_window *w, const char *text, size_t length, char separator, int first) {
+    size_t start = 0;
+    for (size_t k = 0; k <= length; k++) {
+        if (k == length || text[k] == separator) {
+            if (k > start) {
+                if (!cee_window_answer_add(w, text + start, k - start)) {
+                    return 0;
+                }
+                if (first) {
+                    return 1;
+                }
+            }
+            start = k + 1;
+        }
+    }
+    return 1;
+}
+
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
+/* Calls f(extension, length, context) for each extension of a comma-separated list, trimmed, without a leading dot,
+   skipping empty ones; the number of them (the backends' dialogs). */
+static size_t cee_dialog_extensions(const char *list, size_t length,
+                                    void (*f)(const char *extension, size_t length, void *context), void *context) {
+    size_t count = 0, start = 0;
+    for (size_t k = 0; k <= length; k++) {
+        if (k == length || list[k] == ',') {
+            size_t a = start, b = k;
+            while (a < b && (list[a] == ' ' || list[a] == '\t' || list[a] == '.')) {
+                a++;
+            }
+            while (b > a && (list[b - 1] == ' ' || list[b - 1] == '\t')) {
+                b--;
+            }
+            if (b > a) {
+                if (f != NULL) {
+                    f(list + a, b - a, context);
+                }
+                count++;
+            }
+            start = k + 1;
+        }
+    }
+    return count;
+}
+#endif
 
 /* A letter as lowercase, other printable ASCII as it is: WindowKey.Character. */
 static int32_t cee_window_character(uint32_t c) {
@@ -914,6 +1099,28 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_CLIPBOARD, offset,
                                                     (int32_t)args_length, 0, has, 0.0, 0.0);
     }
+    if (CEE_IS("menu")) { /* menu:ID chooses the menu item ID (ADR 0146) */
+        uint64_t id = 0;
+        for (size_t k = 0; k < args_length; k++) {
+            if (args[k] < '0' || args[k] > '9' || id > 0xffffffffu / 10u) {
+                return 0;
+            }
+            id = id * 10u + (uint64_t)(args[k] - '0');
+        }
+        if (args_length == 0 || id > 0xffffffffu) {
+            return 0;
+        }
+        return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_MENU, (int32_t)(uint32_t)id, 0, 0, 0, 0.0, 0.0);
+    }
+    if (CEE_IS("dialog")) { /* dialog:PATH[|PATH…] answers the next dialog, dialog (no colon) cancels it (ADR 0146) */
+        int has = name_length < rest;
+        if (has && args_length == 0) {
+            return 0;
+        }
+        int32_t offset = has ? cee_window_script_text(w, args, args_length) : 0;
+        return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DIALOG, offset,
+                                                    (int32_t)args_length, 0, has, 0.0, 0.0);
+    }
 #undef CEE_IS
     return 0;
 }
@@ -1004,6 +1211,16 @@ static void cee_window_script_pump(struct cee_window *w) {
                 w->clipboard_length = (size_t)e.fields[1];
                 w->scripted_clipboard = e.fields[3];
             }
+        } else if (e.kind == CEE_SCRIPT_MENU) {
+            cee_window_choose(w, (uint32_t)e.fields[0]);
+        } else if (e.kind == CEE_SCRIPT_DIALOG) {
+            if (w->answer_count < CEE_DIALOG_ANSWERS) {
+                struct cee_window_answer *a = &w->answers[(w->answer_head + w->answer_count) % CEE_DIALOG_ANSWERS];
+                a->offset = e.fields[0];
+                a->length = e.fields[1];
+                a->cancel = !e.fields[3];
+                w->answer_count++;
+            }
         } else {
             cee_window_push(w, e.kind, e.fields[0], e.fields[1], e.fields[2], e.fields[3], e.x, e.y);
         }
@@ -1033,8 +1250,10 @@ static int32_t cee_window_dump(struct cee_window *w, const uint32_t *pixels, uin
    system events into the queue), cee_native_present, cee_native_cursor, cee_native_title, cee_native_wait (until an
    event or `seconds`), cee_native_handles (the system's handles and their CEE_HANDLE_* kind, ADR 0137),
    cee_native_text_input and cee_native_text_area (the input method, ADR 0141), cee_native_clipboard_set (0 or minus
-   a CEE_WINDOW_* error) and cee_native_clipboard_get (1 with the text kept by cee_window_paste, 0 without text). With
-   `w->external` set before cee_native_open, the backend never paints the content: cee_native_present is not called. */
+   a CEE_WINDOW_* error) and cee_native_clipboard_get (1 with the text kept by cee_window_paste, 0 without text),
+   cee_native_menu (shows w->menu: 0 or minus an error) and cee_native_dialog (runs a file dialog and adds its paths
+   with cee_window_answer_add: 0, none added for a cancel, or minus an error) (ADR 0146). With `w->external` set
+   before cee_native_open, the backend never paints the content: cee_native_present is not called. */
 
 #if defined(__APPLE__)
 /* AppKit through the Objective-C runtime. Every call goes through objc_msgSend cast to the method's C type; on x86_64,
@@ -1140,6 +1359,13 @@ static struct {
     struct cee_window *window;
 } cee_mac_windows[CEE_MAC_WINDOWS];
 
+/* Menus (ADR 0146): whether the runtime set the application's main menu, the window whose menus it shows (NULL when
+   that window was dropped: only the application's menu is left), and the object their items send their action to. */
+static int cee_mac_menu_set;
+static struct cee_window *cee_mac_menu_owner;
+static cee_id cee_mac_menu_target;
+static int cee_mac_build_menu(const uint8_t *bytes, size_t length);
+
 /* A window's frame: two IOSurfaces shown in turn (the layer's contents), and the frame itself as BGRA. A surface
    that is not shown still lacks the boxes presented since it last was: `pending` (or all of it, `pending_full`). */
 #define CEE_MAC_PENDING 16
@@ -1155,7 +1381,8 @@ struct cee_mac {
     int pending_count[2];
     int pending_full[2];
     /* Text input (ADR 0141): the marked text's length and selection in UTF-16 units; during interpretKeyEvents:,
-       whether the input method changed the composition; the key codes whose down the input method took. */
+       whether the input method changed the composition; the key codes whose down the input method, or a menu's
+       shortcut (ADR 0146), took. */
     int marked;
     unsigned long marked_utf16;
     cee_range marked_selection;
@@ -1723,6 +1950,10 @@ static void cee_native_close(struct cee_window *w) {
             cee_mac_windows[k].window = NULL;
         }
     }
+    if (cee_mac_menu_owner == w) { /* its menus leave the menu bar; the application's menu stays (ADR 0146) */
+        cee_mac_menu_owner = NULL;
+        cee_mac_build_menu(NULL, 0);
+    }
     cee_send_v_id(m->window, "setDelegate:", NULL);
     cee_send_v_id(cee_send(m->view, "layer"), "setContents:", NULL);
     cee_send_v(m->window, "close");
@@ -1851,11 +2082,20 @@ static int cee_mac_translate(struct cee_window *w, cee_id event) {
         int32_t modifiers = cee_mac_modifiers(cee_send_ulong(event, "modifierFlags"));
         int32_t key = cee_mac_key(code, event);
         int32_t down = type == 10;
+        unsigned char bit = (unsigned char)(1u << (code % 8u));
+        if (down && cee_mac_menu_set && !m->marked &&
+            cee_send_bool_id(cee_send(cee_objc.app, "mainMenu"), "performKeyEquivalent:", event)) {
+            /* A shortcut of an enabled menu item (ADR 0146): its action queued the choice; no KEY for the key, nor
+               for its up. */
+            if (code < 128u) {
+                m->ime_keys[code / 8u] = (unsigned char)(m->ime_keys[code / 8u] | bit);
+            }
+            return 0;
+        }
         if (down && (modifiers & CEE_MOD_COMMAND) && (key == CEE_KEY_CHARACTER + 'q' || key == CEE_KEY_CHARACTER + 'w')) {
             cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f); /* ⌘Q and ⌘W ask to close */
             return 0;
         }
-        unsigned char bit = (unsigned char)(1u << (code % 8u));
         if (!down && code < 128u && (m->ime_keys[code / 8u] & bit)) {
             m->ime_keys[code / 8u] = (unsigned char)(m->ime_keys[code / 8u] & ~bit);
             return 0; /* the up of a key the input method took */
@@ -2193,6 +2433,316 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
 /* waitAny's wait (ADR 0145): AppKit's queue is the application's, and every wake signals the wake source. */
 static void cee_native_wait_any(double seconds) { cee_native_wait(NULL, seconds); }
 
+/* Menus (ADR 0146): the application's main menu, the application menu first, then the program's; each item's tag is
+   its id, and its action, on the main thread (in a pump's sendEvent:, AppKit's run loop, or performKeyEquivalent:),
+   queues it in the window whose menus the bar shows. */
+
+/* `length` bytes of UTF-8 as an autoreleased NSString (an empty one if AppKit refused). */
+static cee_id cee_mac_string(const char *text, size_t length) {
+    cee_id string = cee_send(cee_mac_cls("NSString"), "alloc");
+    string = ((cee_id(*)(cee_id, cee_sel, const void *, unsigned long, unsigned long))cee_objc.send)(
+        string, cee_mac_sel("initWithBytes:length:encoding:"), length > 0 ? (const void *)text : (const void *)"",
+        (unsigned long)length, 4ul /* NSUTF8StringEncoding */);
+    return string != NULL ? cee_send(string, "autorelease") : cee_nsstring("");
+}
+
+/* An item's action: its tag is the program's id. The wake event then ends a wait whose run loop ran the action. */
+static void cee_mac_menu_choose(cee_id self, cee_sel cmd, cee_id sender) {
+    (void)self;
+    (void)cmd;
+    if (cee_mac_menu_owner != NULL) {
+        cee_window_choose(cee_mac_menu_owner, (uint32_t)(unsigned long)cee_send_long(sender, "tag"));
+        cee_mac_wake_perform(NULL);
+    }
+}
+
+/* The application menu's Quit (⌘Q): every window of the program is asked to close. */
+static void cee_mac_menu_quit(cee_id self, cee_sel cmd, cee_id sender) {
+    (void)self;
+    (void)cmd;
+    (void)sender;
+    for (int k = 0; k < CEE_MAC_WINDOWS; k++) {
+        if (cee_mac_windows[k].window != NULL) {
+            cee_window_push(cee_mac_windows[k].window, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
+        }
+    }
+    cee_mac_wake_perform(NULL);
+}
+
+/* A new item, retained: `action` (none if NULL) goes to `target`. */
+static cee_id cee_mac_item(cee_id title, const char *action, cee_id target, cee_id key, unsigned long mask) {
+    cee_id item = cee_send(cee_mac_cls("NSMenuItem"), "alloc");
+    item = ((cee_id(*)(cee_id, cee_sel, cee_id, cee_sel, cee_id))cee_objc.send)(
+        item, cee_mac_sel("initWithTitle:action:keyEquivalent:"), title, action != NULL ? cee_mac_sel(action) : NULL,
+        key);
+    if (item != NULL) {
+        if (target != NULL) {
+            cee_send_v_id(item, "setTarget:", target);
+        }
+        ((void (*)(cee_id, cee_sel, unsigned long))cee_objc.send)(item, cee_mac_sel("setKeyEquivalentModifierMask:"),
+                                                                   mask);
+    }
+    return item;
+}
+
+/* Adds a retained item to a menu, which retains it. */
+static void cee_mac_add(cee_id menu, cee_id item) {
+    if (item != NULL) {
+        cee_send_v_id(menu, "addItem:", item);
+        cee_send_v(item, "release");
+    }
+}
+
+/* A shortcut's key as a key equivalent's character (AppKit's function-key characters for the named keys); 0 for none.
+   A letter with ⇧ is uppercase, as AppKit expects. */
+static uint32_t cee_mac_key_equivalent(uint32_t key, int32_t modifiers) {
+    switch (key) {
+    case CEE_KEY_TAB: return 0x09u;
+    case CEE_KEY_ENTER: return 0x0du;
+    case CEE_KEY_ESCAPE: return 0x1bu;
+    case CEE_KEY_BACKSPACE: return 0x08u;
+    case CEE_KEY_DELETE: return 0xf728u;
+    case CEE_KEY_LEFT: return 0xf702u;
+    case CEE_KEY_RIGHT: return 0xf703u;
+    case CEE_KEY_UP: return 0xf700u;
+    case CEE_KEY_DOWN: return 0xf701u;
+    case CEE_KEY_HOME: return 0xf729u;
+    case CEE_KEY_END: return 0xf72bu;
+    case CEE_KEY_PAGE_UP: return 0xf72cu;
+    case CEE_KEY_PAGE_DOWN: return 0xf72du;
+    case CEE_KEY_SPACE: return 0x20u;
+    default: break;
+    }
+    if (key > CEE_KEY_FUNCTION && key <= CEE_KEY_FUNCTION + 12u) {
+        return 0xf704u + (key - CEE_KEY_FUNCTION - 1u);
+    }
+    if (key > CEE_KEY_CHARACTER + 0x20u && key <= CEE_KEY_CHARACTER + 0x10ffffu) {
+        uint32_t c = key - CEE_KEY_CHARACTER;
+        if (c >= 'A' && c <= 'Z') {
+            c += 'a' - 'A';
+        }
+        if ((modifiers & CEE_MOD_SHIFT) && c >= 'a' && c <= 'z') {
+            c -= 'a' - 'A';
+        }
+        return c;
+    }
+    return 0;
+}
+
+/* A scalar as an autoreleased NSString; empty for 0. */
+static cee_id cee_mac_scalar(uint32_t c) {
+    char utf8[4];
+    size_t n = 0;
+    if (c == 0) {
+        return cee_nsstring("");
+    } else if (c < 0x80u) {
+        utf8[n++] = (char)c;
+    } else if (c < 0x800u) {
+        utf8[n++] = (char)(0xc0u | (c >> 6));
+        utf8[n++] = (char)(0x80u | (c & 0x3fu));
+    } else if (c < 0x10000u) {
+        utf8[n++] = (char)(0xe0u | (c >> 12));
+        utf8[n++] = (char)(0x80u | ((c >> 6) & 0x3fu));
+        utf8[n++] = (char)(0x80u | (c & 0x3fu));
+    } else {
+        utf8[n++] = (char)(0xf0u | (c >> 18));
+        utf8[n++] = (char)(0x80u | ((c >> 12) & 0x3fu));
+        utf8[n++] = (char)(0x80u | ((c >> 6) & 0x3fu));
+        utf8[n++] = (char)(0x80u | (c & 0x3fu));
+    }
+    return cee_mac_string(utf8, n);
+}
+
+static unsigned long cee_mac_mask(int32_t modifiers) {
+    return ((modifiers & CEE_MOD_SHIFT) ? 1ul << 17 : 0ul) | ((modifiers & CEE_MOD_CONTROL) ? 1ul << 18 : 0ul) |
+           ((modifiers & CEE_MOD_ALT) ? 1ul << 19 : 0ul) | ((modifiers & CEE_MOD_COMMAND) ? 1ul << 20 : 0ul);
+}
+
+/* Sets the main menu: the application menu, then the menus of lib/std's encoding (none for NULL); 0 if AppKit
+   refused. The items' target, CeeSafeMenuTarget, is made at the first call and kept for the process. */
+static int cee_mac_build_menu(const uint8_t *bytes, size_t length) {
+    if (cee_mac_menu_target == NULL) {
+        cee_id target = cee_objc.allocate_class(cee_mac_cls("NSObject"), "CeeSafeMenuTarget", 0);
+        if (target == NULL) {
+            target = cee_mac_cls("CeeSafeMenuTarget"); /* a second runtime in the process registered it */
+        } else {
+            cee_objc.add_method(target, cee_mac_sel("choose:"), (cee_fn)cee_mac_menu_choose, "v@:@");
+            cee_objc.add_method(target, cee_mac_sel("quit:"), (cee_fn)cee_mac_menu_quit, "v@:@");
+            cee_objc.register_class(target);
+        }
+        cee_mac_menu_target = target != NULL ? cee_send(cee_send(target, "alloc"), "init") : NULL;
+        if (cee_mac_menu_target == NULL) {
+            return 0;
+        }
+    }
+    void *pool = cee_objc.pool_push();
+    cee_id none = cee_nsstring("");
+    cee_id bar = cee_send_id_id(cee_send(cee_mac_cls("NSMenu"), "alloc"), "initWithTitle:", none);
+    if (bar == NULL) {
+        cee_objc.pool_pop(pool);
+        return 0;
+    }
+    cee_id name = cee_send(cee_send(cee_mac_cls("NSProcessInfo"), "processInfo"), "processName");
+    if (name == NULL) {
+        name = none;
+    }
+    cee_id app = cee_objc.app;
+    cee_id app_menu = cee_send_id_id(cee_send(cee_mac_cls("NSMenu"), "alloc"), "initWithTitle:", name);
+    if (app_menu != NULL) {
+        cee_mac_add(app_menu, cee_mac_item(cee_send_id_id(cee_nsstring("About "), "stringByAppendingString:", name),
+                                           "orderFrontStandardAboutPanel:", app, none, 0ul));
+        cee_send_v_id(app_menu, "addItem:", cee_send(cee_mac_cls("NSMenuItem"), "separatorItem"));
+        cee_mac_add(app_menu, cee_mac_item(cee_send_id_id(cee_nsstring("Hide "), "stringByAppendingString:", name),
+                                           "hide:", app, cee_nsstring("h"), 1ul << 20));
+        cee_mac_add(app_menu, cee_mac_item(cee_nsstring("Hide Others"), "hideOtherApplications:", app,
+                                           cee_nsstring("h"), (1ul << 20) | (1ul << 19)));
+        cee_mac_add(app_menu, cee_mac_item(cee_nsstring("Show All"), "unhideAllApplications:", app, none, 0ul));
+        cee_send_v_id(app_menu, "addItem:", cee_send(cee_mac_cls("NSMenuItem"), "separatorItem"));
+        cee_mac_add(app_menu, cee_mac_item(cee_send_id_id(cee_nsstring("Quit "), "stringByAppendingString:", name),
+                                           "quit:", cee_mac_menu_target, cee_nsstring("q"), 1ul << 20));
+        cee_id app_item = cee_mac_item(name, NULL, NULL, none, 0ul);
+        if (app_item != NULL) {
+            cee_send_v_id(app_item, "setSubmenu:", app_menu);
+        }
+        cee_mac_add(bar, app_item);
+        cee_send_v(app_menu, "release");
+    }
+    cee_id current = NULL; /* the menu being filled, retained by its item in the bar */
+    size_t at = 0;
+    struct cee_menu_entry e;
+    while (bytes != NULL && cee_menu_next(bytes, length, &at, &e)) {
+        cee_id title = cee_mac_string(e.title, e.title_length);
+        if (e.kind == CEE_MENU_TITLE) {
+            cee_id menu = cee_send_id_id(cee_send(cee_mac_cls("NSMenu"), "alloc"), "initWithTitle:", title);
+            cee_id item = cee_mac_item(title, NULL, NULL, none, 0ul);
+            current = NULL;
+            if (menu != NULL && item != NULL) {
+                cee_send_v_bool(menu, "setAutoenablesItems:", 0); /* the program's flags, not AppKit's validation */
+                cee_send_v_id(item, "setSubmenu:", menu);
+                current = menu;
+            }
+            cee_mac_add(bar, item);
+            if (menu != NULL) {
+                cee_send_v(menu, "release");
+            }
+        } else if (current != NULL && e.kind == CEE_MENU_ITEM) {
+            cee_id item = cee_mac_item(title, "choose:", cee_mac_menu_target,
+                                       cee_mac_scalar(cee_mac_key_equivalent(e.key, e.modifiers)),
+                                       cee_mac_mask(e.modifiers));
+            if (item != NULL) {
+                cee_send_v_long(item, "setTag:", (long)e.id);
+                cee_send_v_bool(item, "setEnabled:", (e.flags & CEE_MENU_ENABLED) ? 1 : 0);
+                cee_send_v_long(item, "setState:", (e.flags & CEE_MENU_CHECKED) ? 1l : 0l); /* NSControlStateValueOn */
+            }
+            cee_mac_add(current, item);
+        } else if (current != NULL) {
+            cee_send_v_id(current, "addItem:", cee_send(cee_mac_cls("NSMenuItem"), "separatorItem"));
+        }
+    }
+    cee_send_v_id(app, "setMainMenu:", bar);
+    cee_send_v(bar, "release");
+    cee_mac_menu_set = 1;
+    cee_objc.pool_pop(pool);
+    return 1;
+}
+
+static int32_t cee_native_menu(struct cee_window *w) {
+    if (!cee_mac_build_menu(w->menu, w->menu_length)) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    cee_mac_menu_owner = w; /* the last window to set its menus has the menu bar */
+    return 0;
+}
+
+/* File dialogs (ADR 0146): NSOpenPanel and NSSavePanel, run app-modally. The allowed types are UTTypes where AppKit
+   takes them (macOS 11), UniformTypeIdentifiers loaded with dlopen like AppKit; else the extensions themselves. */
+static int cee_mac_uttypes(void) {
+    static int state; /* 0 not tried, 1 loaded, -1 not there */
+    if (state == 0) {
+        void *uti = dlopen("/System/Library/Frameworks/UniformTypeIdentifiers.framework/UniformTypeIdentifiers",
+                           RTLD_NOW | RTLD_GLOBAL);
+        state = uti != NULL && cee_mac_cls("UTType") != NULL ? 1 : -1;
+    }
+    return state == 1;
+}
+
+/* One extension into the lists: [0] its NSString, [1] (if there) its UTType. */
+static void cee_mac_extension(const char *extension, size_t length, void *context) {
+    cee_id *lists = (cee_id *)context;
+    cee_id text = cee_mac_string(extension, length);
+    cee_send_v_id(lists[0], "addObject:", text);
+    if (lists[1] != NULL) {
+        cee_id type = cee_send_id_id(cee_mac_cls("UTType"), "typeWithFilenameExtension:", text);
+        if (type != NULL) {
+            cee_send_v_id(lists[1], "addObject:", type);
+        }
+    }
+}
+
+/* An NSURL's path into the window's answer; 0 when memory ran out. */
+static int cee_mac_answer_url(struct cee_window *w, cee_id url) {
+    cee_id path = url != NULL ? cee_send(url, "path") : NULL;
+    const char *utf8 = path != NULL ? cee_send_get_cstr(path, "UTF8String") : NULL;
+    return utf8 == NULL || cee_window_answer_add(w, utf8, strlen(utf8));
+}
+
+static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                 const char *extensions, size_t extensions_length) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    void *pool = cee_objc.pool_push();
+    cee_id panel = kind == CEE_DIALOG_SAVE ? cee_send(cee_mac_cls("NSSavePanel"), "savePanel")
+                                           : cee_send(cee_mac_cls("NSOpenPanel"), "openPanel");
+    if (panel == NULL) {
+        cee_objc.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (title[0] != '\0') {
+        cee_send_v_id(panel, "setTitle:", cee_nsstring(title));
+        cee_send_v_id(panel, "setMessage:", cee_nsstring(title)); /* panels without a title bar show the message */
+    }
+    if (kind != CEE_DIALOG_SAVE) {
+        cee_send_v_bool(panel, "setCanChooseFiles:", kind != CEE_DIALOG_FOLDER);
+        cee_send_v_bool(panel, "setCanChooseDirectories:", kind == CEE_DIALOG_FOLDER);
+        cee_send_v_bool(panel, "setAllowsMultipleSelection:", kind == CEE_DIALOG_FILES);
+    }
+    cee_send_v_bool(panel, "setCanCreateDirectories:", kind == CEE_DIALOG_SAVE || kind == CEE_DIALOG_FOLDER);
+    if (kind == CEE_DIALOG_SAVE && name[0] != '\0') {
+        cee_send_v_id(panel, "setNameFieldStringValue:", cee_nsstring(name));
+    }
+    if (kind != CEE_DIALOG_FOLDER && extensions_length > 0) {
+        int types = cee_mac_uttypes() &&
+                    cee_send_bool_sel(panel, "respondsToSelector:", cee_mac_sel("setAllowedContentTypes:"));
+        cee_id lists[2] = {cee_send(cee_mac_cls("NSMutableArray"), "array"),
+                           types ? cee_send(cee_mac_cls("NSMutableArray"), "array") : NULL};
+        if (lists[0] != NULL && cee_dialog_extensions(extensions, extensions_length, cee_mac_extension, lists) > 0) {
+            if (lists[1] != NULL && cee_send_ulong(lists[1], "count") > 0) {
+                cee_send_v_id(panel, "setAllowedContentTypes:", lists[1]);
+            } else {
+                cee_send_v_id(panel, "setAllowedFileTypes:", lists[0]); /* before macOS 11 */
+            }
+        }
+    }
+    cee_send_v_bool(cee_objc.app, "activateIgnoringOtherApps:", 1);
+    long response = cee_send_long(panel, "runModal");
+    int32_t result = 0;
+    if (response == 1) { /* NSModalResponseOK */
+        if (kind == CEE_DIALOG_SAVE) {
+            result = cee_mac_answer_url(w, cee_send(panel, "URL")) ? 0 : -CEE_WINDOW_RESOURCES;
+        } else {
+            cee_id urls = cee_send(panel, "URLs");
+            unsigned long count = urls != NULL ? cee_send_ulong(urls, "count") : 0ul;
+            for (unsigned long k = 0; k < count && result == 0; k++) {
+                if (!cee_mac_answer_url(w, cee_send_id_ulong(urls, "objectAtIndex:", k))) {
+                    result = -CEE_WINDOW_RESOURCES;
+                }
+            }
+        }
+    }
+    cee_send_v_id(m->window, "makeKeyAndOrderFront:", NULL);
+    cee_objc.pool_pop(pool);
+    return result;
+}
+
 #elif defined(_WIN32)
 /* Win32 and GDI. The window procedure queues events while PeekMessageW dispatches; a frame is kept as BGRA for
    WM_PAINT and drawn with StretchDIBits. */
@@ -2201,6 +2751,8 @@ static void cee_native_wait_any(double seconds) { cee_native_wait(NULL, seconds)
 #pragma comment(lib, "gdi32.lib")
 #endif
 #include <imm.h> /* the input method's types and constants; its functions come from imm32.dll, loaded at first use */
+#define COBJMACROS    /* the COM interfaces' C calls, IFileDialog_Show and the like (ADR 0146) */
+#include <shobjidl.h> /* the file dialogs' interfaces; their functions come from ole32.dll, loaded at first use */
 
 struct cee_win32 {
     HWND hwnd;
@@ -2208,6 +2760,7 @@ struct cee_win32 {
     uint32_t frame_width, frame_height;
     int captured;
     unsigned char ime_keys[32]; /* virtual keys whose down the input method took (ADR 0141) */
+    int menu_sizing;            /* while setMenu keeps the content's size, WM_SIZE is not the user's (ADR 0146) */
 };
 
 /* imm32.dll (ADR 0141), loaded with LoadLibraryW like GetDpiForWindow's user32, so no program needs a link flag
@@ -2460,6 +3013,9 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
         return 0;
     case WM_SIZE: {
+        if (n->menu_sizing) {
+            return 0; /* setMenu reports the size it ends with (ADR 0146) */
+        }
         uint32_t width = (uint32_t)((float)LOWORD(lparam) / scale + 0.5f);
         uint32_t height = (uint32_t)((float)HIWORD(lparam) / scale + 0.5f);
         if (width > 0 && height > 0) {
@@ -2530,8 +3086,21 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
         if (message == WM_SYSKEYDOWN && wparam == VK_F4) {
             break; /* Alt+F4 still closes through WM_CLOSE */
         }
+        if ((message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) && (wparam == VK_MENU || wparam == VK_F10) &&
+            GetMenu(hwnd) != NULL) {
+            break; /* Alt alone, or F10, opens the menu bar, as in every Windows program with one (ADR 0146) */
+        }
         return 0;
     }
+    case WM_COMMAND: /* a menu item (ADR 0146): its command is its index in the menu plus 1 */
+        if (HIWORD(wparam) == 0 && lparam == 0) {
+            size_t command = (size_t)LOWORD(wparam);
+            if (command >= 1 && command <= w->menu_items) {
+                cee_window_choose(w, w->menu_ids[command - 1]);
+            }
+            return 0;
+        }
+        break;
     case WM_CHAR: {
         uint32_t unit = (uint32_t)wparam;
         if (unit >= 0xd800u && unit <= 0xdbffu) {
@@ -2884,6 +3453,326 @@ static void cee_native_wait_any(double seconds) {
     DWORD milliseconds = ms <= 0.0 ? 0u : ms >= 4294967294.0 ? 4294967294u : (DWORD)ms;
     HANDLE wake = cee_wake_any_event;
     MsgWaitForMultipleObjectsEx(1, &wake, milliseconds, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+}
+
+/* Menus (ADR 0146): the window's menu bar, an HMENU of popups, which DestroyWindow destroys with the window. An item's
+   command is its index plus 1 (WM_COMMAND carries 16 bits, an id 32); its shortcut is the text after a tab, which
+   Windows shows right-aligned and does not act on. */
+
+/* A shortcut as Windows writes it, "Ctrl+Shift+S", into `out` (at least 64 bytes), NUL-terminated; its length, 0 for
+   a key no text names. */
+static size_t cee_win32_shortcut(uint32_t key, int32_t modifiers, char *out) {
+    static const char *const named[] = {"",     "Tab",  "Enter", "Esc",  "Backspace", "Del",  "Left", "Right",
+                                        "Up",   "Down", "Home",  "End",  "PgUp",      "PgDn", "Space"};
+    char name[16];
+    if (key >= 1 && key <= CEE_KEY_SPACE) {
+        snprintf(name, sizeof name, "%s", named[key]);
+    } else if (key > CEE_KEY_FUNCTION && key <= CEE_KEY_FUNCTION + 12u) {
+        snprintf(name, sizeof name, "F%u", (unsigned)(key - CEE_KEY_FUNCTION));
+    } else if (key > CEE_KEY_CHARACTER + 0x20u && key < CEE_KEY_CHARACTER + 0x7fu) {
+        uint32_t c = key - CEE_KEY_CHARACTER;
+        name[0] = (char)(c >= 'a' && c <= 'z' ? c - ('a' - 'A') : c);
+        name[1] = '\0';
+    } else {
+        return 0; /* a key beyond ASCII has no name on every layout */
+    }
+    int n = snprintf(out, 64, "%s%s%s%s%s", (modifiers & CEE_MOD_CONTROL) ? "Ctrl+" : "",
+                     (modifiers & CEE_MOD_ALT) ? "Alt+" : "", (modifiers & CEE_MOD_SHIFT) ? "Shift+" : "",
+                     (modifiers & CEE_MOD_COMMAND) ? "Win+" : "", name);
+    return n > 0 ? (size_t)n : 0;
+}
+
+/* An entry's text as UTF-16, allocated: the title with each '&' doubled (no mnemonics), then a tab and the shortcut. */
+static wchar_t *cee_win32_menu_text(const struct cee_menu_entry *e) {
+    char shortcut[64];
+    size_t extra = e->kind == CEE_MENU_ITEM ? cee_win32_shortcut(e->key, e->modifiers, shortcut) : 0;
+    char *text = (char *)ceesafe_platform_alloc(e->title_length * 2u + extra + 2u);
+    if (text == NULL) {
+        return NULL;
+    }
+    size_t n = 0;
+    for (size_t k = 0; k < e->title_length; k++) {
+        if (e->title[k] == '&') {
+            text[n++] = '&';
+        }
+        text[n++] = e->title[k] == '\0' ? ' ' : e->title[k];
+    }
+    if (extra > 0) {
+        text[n++] = '\t';
+        memcpy(text + n, shortcut, extra);
+        n += extra;
+    }
+    text[n] = '\0';
+    wchar_t *wide = cee_win32_wide(text);
+    ceesafe_platform_free(text);
+    return wide;
+}
+
+/* The menu bar of lib/std's encoding, or NULL with *failed set when the system refused; NULL for no menus. */
+static HMENU cee_win32_build_menu(const uint8_t *bytes, size_t length, int *failed) {
+    HMENU bar = NULL, current = NULL;
+    size_t at = 0, command = 0;
+    struct cee_menu_entry e;
+    *failed = 0;
+    while (!*failed && cee_menu_next(bytes, length, &at, &e)) {
+        if (e.kind == CEE_MENU_SEPARATOR) {
+            *failed = !AppendMenuW(current, MF_SEPARATOR, 0, NULL);
+            continue;
+        }
+        wchar_t *text = cee_win32_menu_text(&e);
+        if (text == NULL) {
+            *failed = 1;
+            break;
+        }
+        if (e.kind == CEE_MENU_TITLE) {
+            if (bar == NULL) {
+                bar = CreateMenu();
+            }
+            current = CreatePopupMenu();
+            if (bar == NULL || current == NULL || !AppendMenuW(bar, MF_POPUP | MF_STRING, (UINT_PTR)current, text)) {
+                if (current != NULL) {
+                    DestroyMenu(current); /* not yet the bar's */
+                }
+                *failed = 1;
+            }
+        } else {
+            UINT flags = (UINT)(MF_STRING | ((e.flags & CEE_MENU_ENABLED) ? MF_ENABLED : MF_GRAYED) |
+                                ((e.flags & CEE_MENU_CHECKED) ? MF_CHECKED : MF_UNCHECKED));
+            *failed = !AppendMenuW(current, flags, (UINT_PTR)++command, text);
+        }
+        ceesafe_platform_free(text);
+    }
+    if (*failed && bar != NULL) {
+        DestroyMenu(bar); /* with its popups */
+        bar = NULL;
+    }
+    return bar;
+}
+
+/* Sets the window's menu bar; the content keeps its size (the window grows by the bar), unless it is maximized. */
+static int32_t cee_native_menu(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    int failed = 0;
+    HMENU bar = cee_win32_build_menu(w->menu, w->menu_length, &failed);
+    if (failed) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    HMENU old = GetMenu(n->hwnd);
+    RECT client;
+    GetClientRect(n->hwnd, &client);
+    n->menu_sizing = 1;
+    if (!SetMenu(n->hwnd, bar)) {
+        n->menu_sizing = 0;
+        if (bar != NULL) {
+            DestroyMenu(bar);
+        }
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (!IsZoomed(n->hwnd)) {
+        RECT r = client;
+        AdjustWindowRectEx(&r, (DWORD)GetWindowLongPtrW(n->hwnd, GWL_STYLE), bar != NULL,
+                           (DWORD)GetWindowLongPtrW(n->hwnd, GWL_EXSTYLE));
+        SetWindowPos(n->hwnd, NULL, 0, 0, r.right - r.left, r.bottom - r.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    n->menu_sizing = 0;
+    if (old != NULL) {
+        DestroyMenu(old);
+    }
+    DrawMenuBar(n->hwnd);
+    GetClientRect(n->hwnd, &client);
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    uint32_t width = (uint32_t)((float)(client.right - client.left) / scale + 0.5f);
+    uint32_t height = (uint32_t)((float)(client.bottom - client.top) / scale + 0.5f);
+    if (width > 0 && height > 0) {
+        cee_window_resized(w, width, height);
+    }
+    return 0;
+}
+
+/* File dialogs (ADR 0146): the common item dialogs, through COM. ole32.dll is loaded with LoadLibraryW like imm32.dll,
+   so no program needs a link flag; the class and interface ids are written here, so no uuid library is needed. */
+static const CLSID cee_clsid_open = {0xdc1c5a9c, 0xe88a, 0x4dde, {0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7}};
+static const CLSID cee_clsid_save = {0xc0b4e2f3, 0xba21, 0x4773, {0x8d, 0xba, 0x33, 0x5e, 0xc9, 0x46, 0xeb, 0x8b}};
+static const IID cee_iid_open = {0xd57c7288, 0xd4ad, 0x4768, {0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60}};
+static const IID cee_iid_save = {0x84bccd23, 0x5fde, 0x4cdb, {0xae, 0xa4, 0xaf, 0x64, 0xb8, 0x3d, 0x78, 0xab}};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    HRESULT(WINAPI *initialize)(LPVOID, DWORD);
+    void(WINAPI *uninitialize)(void);
+    HRESULT(WINAPI *create)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID *);
+    void(WINAPI *free)(LPVOID);
+} cee_ole;
+
+static int cee_ole_load(void) {
+    if (cee_ole.state != 0) {
+        return cee_ole.state == 1;
+    }
+    cee_ole.state = -1;
+    HMODULE ole = LoadLibraryW(L"ole32.dll");
+    if (ole == NULL) {
+        return 0;
+    }
+    FARPROC p[4] = {GetProcAddress(ole, "CoInitializeEx"), GetProcAddress(ole, "CoUninitialize"),
+                    GetProcAddress(ole, "CoCreateInstance"), GetProcAddress(ole, "CoTaskMemFree")};
+    for (int k = 0; k < 4; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    memcpy(&cee_ole.initialize, &p[0], sizeof p[0]);
+    memcpy(&cee_ole.uninitialize, &p[1], sizeof p[1]);
+    memcpy(&cee_ole.create, &p[2], sizeof p[2]);
+    memcpy(&cee_ole.free, &p[3], sizeof p[3]);
+    cee_ole.state = 1;
+    return 1;
+}
+
+/* The filter's pattern, "*.png;*.jpg", being built. */
+struct cee_win32_patterns {
+    char *text;
+    size_t length;
+};
+
+static void cee_win32_pattern(const char *extension, size_t length, void *context) {
+    struct cee_win32_patterns *p = (struct cee_win32_patterns *)context;
+    if (p->length > 0) {
+        p->text[p->length++] = ';';
+    }
+    p->text[p->length++] = '*';
+    p->text[p->length++] = '.';
+    memcpy(p->text + p->length, extension, length);
+    p->length += length;
+    p->text[p->length] = '\0';
+}
+
+/* A shell item's file system path into the window's answer: 0 done, or minus a WindowError's number (a path that is
+   not valid UTF-16, so not UTF-8 either, is Unsupported). */
+static int32_t cee_win32_answer_item(struct cee_window *w, IShellItem *item) {
+    LPWSTR path = NULL;
+    if (FAILED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path)) || path == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    int32_t result = -CEE_WINDOW_UNSUPPORTED;
+    int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, NULL, 0, NULL, NULL);
+    char *utf8 = count > 0 ? (char *)ceesafe_platform_alloc((size_t)count) : NULL;
+    if (count > 0 && utf8 == NULL) {
+        result = -CEE_WINDOW_RESOURCES;
+    } else if (utf8 != NULL &&
+               WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, utf8, count, NULL, NULL) == count) {
+        result = cee_window_answer_add(w, utf8, (size_t)count - 1u) ? 0 : -CEE_WINDOW_RESOURCES;
+    }
+    ceesafe_platform_free(utf8);
+    cee_ole.free(path);
+    return result;
+}
+
+/* The dialog, once COM is initialized on this thread: 0 (with the answer, none if cancelled) or minus an error. */
+static int32_t cee_win32_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                const char *extensions, size_t extensions_length) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    IFileDialog *dialog = NULL;
+    HRESULT made = kind == CEE_DIALOG_SAVE
+                       ? cee_ole.create(&cee_clsid_save, NULL, CLSCTX_INPROC_SERVER, &cee_iid_save, (void **)&dialog)
+                       : cee_ole.create(&cee_clsid_open, NULL, CLSCTX_INPROC_SERVER, &cee_iid_open, (void **)&dialog);
+    if (FAILED(made) || dialog == NULL) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    int32_t result = 0;
+    FILEOPENDIALOGOPTIONS options = 0;
+    IFileDialog_GetOptions(dialog, &options);
+    options |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+    if (kind == CEE_DIALOG_FILE || kind == CEE_DIALOG_FILES) {
+        options |= FOS_FILEMUSTEXIST;
+    }
+    if (kind == CEE_DIALOG_FILES) {
+        options |= FOS_ALLOWMULTISELECT;
+    }
+    if (kind == CEE_DIALOG_FOLDER) {
+        options |= FOS_PICKFOLDERS;
+    }
+    if (kind == CEE_DIALOG_SAVE) {
+        options |= FOS_OVERWRITEPROMPT;
+    }
+    IFileDialog_SetOptions(dialog, options);
+    wchar_t *wide = title[0] != '\0' ? cee_win32_wide(title) : NULL;
+    if (wide != NULL) {
+        IFileDialog_SetTitle(dialog, wide);
+        ceesafe_platform_free(wide);
+    }
+    wide = kind == CEE_DIALOG_SAVE && name[0] != '\0' ? cee_win32_wide(name) : NULL;
+    if (wide != NULL) {
+        IFileDialog_SetFileName(dialog, wide);
+        ceesafe_platform_free(wide);
+    }
+    wchar_t *filter_text = NULL; /* the dialog keeps a pointer to it until it is released */
+    if (kind != CEE_DIALOG_FOLDER && extensions_length > 0) {
+        struct cee_win32_patterns patterns = {(char *)ceesafe_platform_alloc(extensions_length * 3u + 4u), 0};
+        if (patterns.text != NULL &&
+            cee_dialog_extensions(extensions, extensions_length, cee_win32_pattern, &patterns) > 0) {
+            filter_text = cee_win32_wide(patterns.text);
+            if (filter_text != NULL) {
+                COMDLG_FILTERSPEC filter = {filter_text, filter_text};
+                IFileDialog_SetFileTypes(dialog, 1, &filter);
+                if (kind == CEE_DIALOG_SAVE) {
+                    IFileDialog_SetDefaultExtension(dialog, filter_text + 2); /* the first, after its "*." */
+                }
+            }
+        }
+        ceesafe_platform_free(patterns.text);
+    }
+    HRESULT shown = IFileDialog_Show(dialog, n->hwnd);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        result = 0;
+    } else if (FAILED(shown)) {
+        result = -CEE_WINDOW_RESOURCES;
+    } else if (kind == CEE_DIALOG_FILES) {
+        IShellItemArray *items = NULL;
+        DWORD count = 0;
+        if (FAILED(IFileOpenDialog_GetResults((IFileOpenDialog *)dialog, &items)) || items == NULL ||
+            FAILED(IShellItemArray_GetCount(items, &count))) {
+            result = -CEE_WINDOW_RESOURCES;
+        }
+        for (DWORD k = 0; k < count && result == 0; k++) {
+            IShellItem *item = NULL;
+            if (FAILED(IShellItemArray_GetItemAt(items, k, &item)) || item == NULL) {
+                result = -CEE_WINDOW_RESOURCES;
+            } else {
+                result = cee_win32_answer_item(w, item);
+                IShellItem_Release(item);
+            }
+        }
+        if (items != NULL) {
+            IShellItemArray_Release(items);
+        }
+    } else {
+        IShellItem *item = NULL;
+        if (FAILED(IFileDialog_GetResult(dialog, &item)) || item == NULL) {
+            result = -CEE_WINDOW_RESOURCES;
+        } else {
+            result = cee_win32_answer_item(w, item);
+            IShellItem_Release(item);
+        }
+    }
+    IFileDialog_Release(dialog);
+    ceesafe_platform_free(filter_text);
+    return result;
+}
+
+/* COM on the program's first thread, apartment-threaded as the shell's dialogs need, for the call only: a thread that
+   already initialized COM keeps its own (S_FALSE, or RPC_E_CHANGED_MODE for a multithreaded apartment). */
+static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                 const char *extensions, size_t extensions_length) {
+    if (!cee_ole_load()) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    HRESULT initialized = cee_ole.initialize(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    int32_t result = cee_win32_dialog(w, kind, title, name, extensions, extensions_length);
+    if (SUCCEEDED(initialized)) {
+        cee_ole.uninitialize();
+    }
+    return result;
 }
 
 #elif defined(__linux__)
@@ -3823,6 +4712,197 @@ static void cee_native_wait_any(double seconds) {
     }
 }
 
+/* Menus (ADR 0146): X11 has no menu bar of its own, so a program draws its menus. */
+static int32_t cee_native_menu(struct cee_window *w) {
+    (void)w;
+    return -CEE_WINDOW_UNSUPPORTED;
+}
+
+/* File dialogs (ADR 0146): another program, zenity or kdialog (kdialog first on KDE), found on PATH. Its standard
+   output is the answer, a path a line; exit status 1 is a cancel. While it runs, every window is pumped, so each
+   repaints its last frame and answers the clipboard; their input is queued as usual, since the dialog is another
+   program's window and not modal to them. */
+#include <spawn.h>
+#include <sys/wait.h>
+
+/* `a` then `b`, allocated, or NULL. */
+static char *cee_x_join(const char *a, const char *b) {
+    size_t n = strlen(a), m = strlen(b);
+    char *s = (char *)ceesafe_platform_alloc(n + m + 1u);
+    if (s != NULL) {
+        memcpy(s, a, n);
+        memcpy(s + n, b, m + 1u);
+    }
+    return s;
+}
+
+/* The filter's patterns being built: "*.png *.jpg". */
+struct cee_x_patterns {
+    char *text;
+    size_t length;
+};
+
+static void cee_x_pattern(const char *extension, size_t length, void *context) {
+    struct cee_x_patterns *p = (struct cee_x_patterns *)context;
+    if (p->length > 0) {
+        p->text[p->length++] = ' ';
+    }
+    p->text[p->length++] = '*';
+    p->text[p->length++] = '.';
+    memcpy(p->text + p->length, extension, length);
+    p->length += length;
+    p->text[p->length] = '\0';
+}
+
+/* Runs argv with its output on a pipe, its input and errors on /dev/null, and waits, pumping every window: 0 with the
+   answer, 1 if no such program is on PATH, or minus an error. */
+static int32_t cee_x_run_dialog(struct cee_window *w, char *const *argv, int first) {
+    int ends[2];
+    if (pipe(ends) != 0) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    (void)fcntl(ends[0], F_SETFD, FD_CLOEXEC);
+    posix_spawn_file_actions_t actions;
+    pid_t pid = -1;
+    int started = posix_spawn_file_actions_init(&actions);
+    if (started == 0) {
+        started = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+        if (started == 0) {
+            started = posix_spawn_file_actions_adddup2(&actions, ends[1], 1);
+        }
+        if (started == 0) {
+            started = posix_spawn_file_actions_addclose(&actions, ends[1]);
+        }
+        if (started == 0) {
+            started = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
+        }
+        if (started == 0) {
+            started = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+        }
+        (void)posix_spawn_file_actions_destroy(&actions);
+    }
+    close(ends[1]);
+    if (started != 0) {
+        close(ends[0]);
+        return started == ENOENT ? 1 : -CEE_WINDOW_RESOURCES;
+    }
+    char *out = NULL;
+    size_t used = 0, capacity = 0;
+    int failed = 0;
+    for (;;) {
+        struct pollfd p = {ends[0], POLLIN, 0};
+        int ready = poll(&p, 1, 50);
+        if (ready > 0) {
+            if (!cee_window_reserve(&out, &capacity, used + 4096u)) {
+                failed = 1;
+                break; /* the dialog's output then fails to write, and it ends */
+            }
+            ssize_t got = read(ends[0], out + used, 4096u);
+            if (got > 0) {
+                used += (size_t)got;
+            } else if (got == 0 || errno != EINTR) {
+                break;
+            }
+        } else if (ready < 0 && errno != EINTR) {
+            failed = 1;
+            break;
+        }
+        for (struct cee_window *other = cee_wake_windows; other != NULL; other = other->wake_link) {
+            if (!other->scripted) {
+                cee_native_pump(other);
+            }
+        }
+    }
+    close(ends[0]);
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    int32_t result = 0;
+    if (failed || waited < 0 || !WIFEXITED(status) || WEXITSTATUS(status) > 1) {
+        result = -CEE_WINDOW_RESOURCES;
+    } else if (WEXITSTATUS(status) == 0 && !cee_window_answer_split(w, out, used, '\n', first)) {
+        result = -CEE_WINDOW_RESOURCES;
+    }
+    ceesafe_platform_free(out);
+    return result;
+}
+
+static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                 const char *extensions, size_t extensions_length) {
+    struct cee_x_patterns patterns = {(char *)ceesafe_platform_alloc(extensions_length * 3u + 4u), 0};
+    if (patterns.text == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    patterns.text[0] = '\0';
+    if (kind != CEE_DIALOG_FOLDER) {
+        cee_dialog_extensions(extensions, extensions_length, cee_x_pattern, &patterns);
+    }
+    char xid[24];
+    snprintf(xid, sizeof xid, "%lu", (unsigned long)((struct cee_x11 *)w->native)->window);
+    const char *desktop = getenv("XDG_CURRENT_DESKTOP");
+    int kde = desktop != NULL && strstr(desktop, "KDE") != NULL;
+    int32_t result = 1;
+    for (int attempt = 0; attempt < 2 && result == 1; attempt++) {
+        int kdialog = (attempt == 0) == kde;
+        char *owned[3] = {NULL, NULL, NULL};
+        const char *argv[16];
+        int n = 0, ok = 1;
+        if (kdialog) {
+            argv[n++] = "kdialog";
+            argv[n++] = "--attach";
+            argv[n++] = xid;
+            if (title[0] != '\0') {
+                argv[n++] = "--title";
+                argv[n++] = title;
+            }
+            argv[n++] = kind == CEE_DIALOG_SAVE     ? "--getsavefilename"
+                        : kind == CEE_DIALOG_FOLDER ? "--getexistingdirectory"
+                                                    : "--getopenfilename";
+            argv[n++] = kind == CEE_DIALOG_SAVE && name[0] != '\0' ? name : ".";
+            if (patterns.length > 0) {
+                argv[n++] = patterns.text;
+            }
+            if (kind == CEE_DIALOG_FILES) {
+                argv[n++] = "--multiple";
+                argv[n++] = "--separate-output";
+            }
+        } else {
+            argv[n++] = "zenity";
+            argv[n++] = "--file-selection";
+            if (title[0] != '\0') {
+                ok = (owned[0] = cee_x_join("--title=", title)) != NULL;
+                argv[n++] = owned[0];
+            }
+            if (patterns.length > 0) {
+                ok = ok && (owned[1] = cee_x_join("--file-filter=", patterns.text)) != NULL;
+                argv[n++] = owned[1];
+            }
+            if (kind == CEE_DIALOG_FILES) {
+                argv[n++] = "--multiple";
+                argv[n++] = "--separator=\n";
+            } else if (kind == CEE_DIALOG_SAVE) {
+                argv[n++] = "--save";
+                argv[n++] = "--confirm-overwrite";
+                if (name[0] != '\0') {
+                    ok = ok && (owned[2] = cee_x_join("--filename=", name)) != NULL;
+                    argv[n++] = owned[2];
+                }
+            } else if (kind == CEE_DIALOG_FOLDER) {
+                argv[n++] = "--directory";
+            }
+        }
+        argv[n] = NULL;
+        result = ok ? cee_x_run_dialog(w, (char *const *)argv, kind != CEE_DIALOG_FILES) : -CEE_WINDOW_RESOURCES;
+        for (int k = 0; k < 3; k++) {
+            ceesafe_platform_free(owned[k]);
+        }
+    }
+    ceesafe_platform_free(patterns.text);
+    return result == 1 ? -CEE_WINDOW_UNSUPPORTED : result;
+}
+
 #else
 #define CEE_WINDOW_NO_NATIVE 1
 #endif
@@ -3933,6 +5013,9 @@ void ceesafe_window_close(void *window) {
     ceesafe_platform_free(w->pasted);
     ceesafe_platform_free(w->script_text);
     ceesafe_platform_free(w->clipboard);
+    ceesafe_platform_free(w->menu);
+    ceesafe_platform_free(w->menu_ids);
+    ceesafe_platform_free(w->answer);
     ceesafe_platform_free(w);
 }
 
@@ -4105,7 +5188,7 @@ void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t lengt
 void ceesafe_window_wait(void *window) {
     struct cee_window *w = (struct cee_window *)window;
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
-    if (w->scripted || now >= target || w->count > 0 || cee_wake_pending(w)) {
+    if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
         cee_wake_take(w);
         return;
@@ -4120,10 +5203,16 @@ void ceesafe_window_wait(void *window) {
 
 /* ---- Waiting for events and waking (ADR 0142) ------------------------------------------------------------------- */
 
-/* Whether nextEvent would return an event: one is queued that was not taken back. */
+/* Whether nextEvent would return an event (one is queued that was not taken back), or nextMenuChoice an id (ADR 0146:
+   a scripted window's choice only of an enabled item of its menu). */
 static int cee_window_has_event(struct cee_window *w) {
     for (unsigned k = 0; k < w->count; k++) {
         if (w->queue[(w->head + k) % CEE_WINDOW_QUEUE].kind != CEE_EVENT_DROPPED) {
+            return 1;
+        }
+    }
+    for (unsigned k = 0; k < w->choice_count; k++) {
+        if (!w->scripted || cee_menu_enabled(w, w->choices[(w->choice_head + k) % CEE_MENU_CHOICES])) {
             return 1;
         }
     }
@@ -4345,4 +5434,141 @@ int64_t ceesafe_window_clipboard(void *window, const uint8_t **text) {
     }
     *text = (const uint8_t *)w->pasted;
     return (int64_t)w->pasted_length;
+}
+
+/* ---- Menus and file dialogs (ADR 0146) --------------------------------------------------------------------------- */
+
+/* Shows lib/std's encoding of a menu as the window's menus: 0, or minus a WindowError's number. The window keeps a
+   copy, and its items' ids in order; on a failure it keeps the menu it had. */
+int32_t ceesafe_window_set_menu(void *window, const uint8_t *entries, uint64_t length) {
+    struct cee_window *w = (struct cee_window *)window;
+    size_t items = 0;
+    if (length > 0x7fffffffu || (length > 0 && entries == NULL)) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    int bad = cee_menu_check(entries, (size_t)length, &items);
+    if (bad != 0) {
+        return -bad;
+    }
+    uint8_t *copy = (uint8_t *)ceesafe_platform_alloc((size_t)length + 1u);
+    uint32_t *ids = (uint32_t *)ceesafe_platform_alloc((items + 1u) * sizeof(uint32_t));
+    if (copy == NULL || ids == NULL) {
+        ceesafe_platform_free(copy);
+        ceesafe_platform_free(ids);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (length > 0) {
+        memcpy(copy, entries, (size_t)length);
+    }
+    size_t at = 0, k = 0;
+    struct cee_menu_entry e;
+    while (cee_menu_next(copy, (size_t)length, &at, &e)) {
+        if (e.kind == CEE_MENU_ITEM) {
+            ids[k++] = e.id;
+        }
+    }
+    uint8_t *old_menu = w->menu;
+    uint32_t *old_ids = w->menu_ids;
+    size_t old_length = w->menu_length, old_items = w->menu_items;
+    w->menu = copy;
+    w->menu_length = (size_t)length;
+    w->menu_ids = ids;
+    w->menu_items = items;
+    int32_t result = 0;
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    if (!w->scripted) {
+        result = cee_native_menu(w);
+    }
+#endif
+    if (result != 0) {
+        w->menu = old_menu;
+        w->menu_length = old_length;
+        w->menu_ids = old_ids;
+        w->menu_items = old_items;
+        old_menu = copy;
+        old_ids = ids;
+    }
+    ceesafe_platform_free(old_menu);
+    ceesafe_platform_free(old_ids);
+    return result;
+}
+
+/* The next chosen item's id, or -1. With none queued, the window takes the system's (or its script's) events first,
+   as ceesafe_window_poll does. A scripted choice of an item that the window's menu does not have enabled is dropped:
+   the system never delivers one. */
+int64_t ceesafe_window_menu_choice(void *window) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (w->choice_count == 0) {
+        if (w->scripted) {
+            cee_window_script_pump(w);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+        }
+#endif
+    }
+    while (w->choice_count > 0) {
+        uint32_t id = w->choices[w->choice_head];
+        w->choice_head = (w->choice_head + 1u) % CEE_MENU_CHOICES;
+        w->choice_count--;
+        if (!w->scripted || cee_menu_enabled(w, id)) {
+            return (int64_t)id;
+        }
+    }
+    return -1;
+}
+
+/* Runs a file dialog of `kind` (CEE_DIALOG_*) for the window: the answer's length (its paths, each followed by a zero
+   byte, at *answer until the window's next dialog), 0 for a cancel, or minus a WindowError's number. A scripted window
+   answers with its script's first due `dialog` item, and cancels without one. */
+int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, uint64_t title_length,
+                              const uint8_t *name, uint64_t name_length, const uint8_t *extensions,
+                              uint64_t extensions_length, const uint8_t **answer) {
+    struct cee_window *w = (struct cee_window *)window;
+    *answer = NULL;
+    w->answer_length = 0;
+    if (kind < CEE_DIALOG_FILE || kind > CEE_DIALOG_FOLDER || title_length > 0x7fffffffu ||
+        name_length > 0x7fffffffu || extensions_length > 0x7fffffffu) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    if (!cee_window_on_main_thread()) {
+        return -CEE_WINDOW_NOT_MAIN_THREAD; /* not reached: a Window is never on another thread */
+    }
+    int32_t result = 0;
+    if (w->scripted) {
+        cee_window_script_pump(w);
+        if (w->answer_count > 0) {
+            struct cee_window_answer a = w->answers[w->answer_head];
+            w->answer_head = (w->answer_head + 1u) % CEE_DIALOG_ANSWERS;
+            w->answer_count--;
+            if (!a.cancel && !cee_window_answer_split(w, w->script_text + a.offset, (size_t)a.length, '|',
+                                                       kind != CEE_DIALOG_FILES)) {
+                result = -CEE_WINDOW_RESOURCES;
+            }
+        }
+    } else {
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        char *t = cee_window_cstring(title, title_length);
+        char *n = cee_window_cstring(name, name_length);
+        char *x = cee_window_cstring(extensions, extensions_length);
+        result = t == NULL || n == NULL || x == NULL
+                     ? -CEE_WINDOW_RESOURCES
+                     : cee_native_dialog(w, (int)kind, t, n, x, (size_t)extensions_length);
+        ceesafe_platform_free(t);
+        ceesafe_platform_free(n);
+        ceesafe_platform_free(x);
+#else
+        (void)title;
+        (void)name;
+        (void)extensions;
+        result = -CEE_WINDOW_UNSUPPORTED; /* not reached: without a backend, only scripted windows open */
+#endif
+    }
+    if (result < 0) {
+        w->answer_length = 0;
+        return result;
+    }
+    *answer = (const uint8_t *)w->answer;
+    return (int64_t)w->answer_length;
 }

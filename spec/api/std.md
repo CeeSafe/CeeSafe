@@ -70,6 +70,9 @@
 - [enum WindowEvent](#enum-windowevent)
 - [struct WindowWaker](#struct-windowwaker)
 - [struct Window](#struct-window)
+- [struct MenuShortcut](#struct-menushortcut)
+- [struct Menu](#struct-menu)
+- [struct FileDialog](#struct-filedialog)
 
 ## struct AsyncConsole
 
@@ -3005,6 +3008,28 @@ public fn setClipboardText(borrow mut this, text: StringView) -> Result<void, Wi
 Puts `text` on the system's clipboard, replacing what it held (ADR 0141).
 Safety: the runtime copies the text's bytes during the call.
 
+### Window.setMenu
+
+```ceesafe
+public fn setMenu(borrow mut this, menu: borrow Menu) -> Result<void, WindowError>
+```
+
+Shows `menu` as this window's menus (ADR 0146), replacing the ones it showed; an empty `Menu` removes them. The
+window keeps a copy: a later change to `menu` shows only when it is set again. macOS has one menu bar: it shows
+the application's menu (About, Hide, Hide Others, Show All, Quit) and then the menus of the window that set
+them last, until that window is dropped. Windows: the window's own menu bar. X11 has none: `Unsupported`.
+Safety: the runtime copies the entries' bytes, lib/std's encoding of the menu, during the call.
+
+### Window.nextMenuChoice
+
+```ceesafe
+public fn nextMenuChoice(borrow mut this) -> u32?
+```
+
+The id of the next menu item the user chose in this window's menus, or null; it never blocks (ADR 0146). A
+queued choice ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event does.
+Safety: the runtime only returns a number: an id, or -1 for none.
+
 ### Window.clipboardText
 
 ```ceesafe
@@ -3015,3 +3040,139 @@ Appends the clipboard's text to `out`; false when the clipboard holds no text, i
 memory ran out (ADR 0141).
 Safety: the runtime gives its copy of the clipboard's text and its length, which it keeps until the next call;
 it is copied into `out` before this returns.
+
+## struct MenuShortcut
+
+```ceesafe
+public struct MenuShortcut {
+    public key: WindowKey;
+    public modifiers: WindowModifiers;
+}
+```
+
+A keyboard shortcut that a menu item shows (§26.13, ADR 0146). On macOS a shortcut of an enabled item chooses it,
+and its key gives no `Key` event; on Windows it is the text after the item's title, and the key stays a `Key`.
+`Other` keys, `Function` outside 1 to 12, and a `Character` that is not a printable scalar show none.
+
+## struct Menu
+
+```ceesafe
+public struct Menu
+```
+
+A program's menus (§26.13, ADR 0146): top-level menus in order, each a list of items and separators, which
+`Window.setMenu` shows. An item has an id the program chooses, which `Window.nextMenuChoice` gives back when the
+user chooses it, a title, an optional shortcut, and whether it is enabled and checked. The titles are copied, so a
+`Menu` owns everything it holds. There are no submenus.
+
+### Menu.create
+
+```ceesafe
+public fn create() -> Menu
+```
+
+An empty menu: `setMenu` with it removes a window's menus.
+
+### Menu.addMenu
+
+```ceesafe
+public fn addMenu(borrow mut this, title: StringView) -> Result<void, AllocError>
+```
+
+Starts a top-level menu titled `title`: the items added next are its own.
+
+### Menu.addItem
+
+```ceesafe
+public fn addItem(
+    borrow mut this,
+    id: u32,
+    title: StringView,
+    shortcut: MenuShortcut?,
+) -> Result<void, AllocError>
+```
+
+Adds an enabled, unchecked item to the last menu added; `setMenu` is `Unsupported` for an item before the
+first `addMenu`.
+
+### Menu.addSeparator
+
+```ceesafe
+public fn addSeparator(borrow mut this) -> Result<void, AllocError>
+```
+
+Adds a separator line to the last menu added.
+
+### Menu.setEnabled
+
+```ceesafe
+public fn setEnabled(borrow mut this, id: u32, enabled: bool)
+```
+
+Enables or disables every item with the id `id`. A disabled item is shown dimmed and cannot be chosen.
+
+### Menu.setChecked
+
+```ceesafe
+public fn setChecked(borrow mut this, id: u32, checked: bool)
+```
+
+Shows or hides a check mark beside every item with the id `id`.
+
+## struct FileDialog
+
+```ceesafe
+public struct FileDialog
+```
+
+The system's file dialogs (§26.13, ADR 0146): modal, they return when the user answers. Paths are UTF-8 and
+absolute. `extensions` is a comma-separated list of file name extensions without the dot, such as "png,jpg", which
+the dialog offers alone; empty offers every file. The program's windows are not repainted by the program while a
+dialog runs (the system shows their last frames). macOS: NSOpenPanel and NSSavePanel. Windows: IFileOpenDialog and
+IFileSaveDialog, owned by `window`. Linux: `zenity`, or `kdialog`, found on `PATH`, else `Unsupported`.
+
+### FileDialog.openFile
+
+```ceesafe
+public fn openFile(
+    window: borrow mut Window,
+    title: StringView,
+    extensions: StringView,
+) -> Result<String?, WindowError>
+```
+
+One existing file the user chose, or null when they cancelled.
+
+### FileDialog.openFiles
+
+```ceesafe
+public fn openFiles(
+    window: borrow mut Window,
+    title: StringView,
+    extensions: StringView,
+) -> Result<Vector<String>, WindowError>
+```
+
+The existing files the user chose, one or more; empty when they cancelled.
+
+### FileDialog.saveFile
+
+```ceesafe
+public fn saveFile(
+    window: borrow mut Window,
+    title: StringView,
+    suggestedName: StringView,
+    extensions: StringView,
+) -> Result<String?, WindowError>
+```
+
+Where the user chose to save a file, the dialog's field starting as `suggestedName`, or null when they
+cancelled. The system asks before an existing file is chosen; the program writes the file.
+
+### FileDialog.chooseFolder
+
+```ceesafe
+public fn chooseFolder(window: borrow mut Window, title: StringView) -> Result<String?, WindowError>
+```
+
+One existing folder the user chose, or null when they cancelled.

@@ -1,0 +1,44 @@
+// A view of what a `borrow mut` parameter refers to, a closure's environment included, is still refused where it
+// reaches what the parameter refers to (type-system.md §25.7 rule 2): stored into it directly, through a local that
+// is then stored into it, into another capture, or returned from a closure whose result outlives its environment.
+// The view kept in a local only (run-pass/closure-capture-view-in-local.cee, ClayWind's M1) is accepted; so here the
+// lines that only push into a local carry no error.
+struct Buffer<region r> {
+    text: String;
+    views: Vector<StringView<r>>;
+}
+// Into what the parameter itself refers to.
+fn store<region r>(env: borrow mut Buffer<r>) {
+    let pushed = env.views.push(env.text.view()); // error[N0272]
+}
+// A view kept in a local, then the local stored into the parameter.
+fn storeLater<region r>(env: borrow mut Buffer<r>) {
+    var views = Vector<StringView>.create();
+    let pushed = views.push(env.text.view());
+    env.views = views; // error[N0272]
+}
+// Into another capture.
+fn intoCapture(into: borrow mut Vector<StringView>) {
+    let text = String.from("local")!;
+    let keep = () => { // error[N0272]
+        var views = Vector<StringView>.create();
+        let pushed = views.push(text.view());
+        let kept = into.push(views[0]); // error[N0272]
+    };
+    keep();
+}
+// Returned from a boxed closure whose result outlives its environment.
+fn returned() {
+    let text = String.from("hello")!;
+    var f: Box<dyn mut fn(borrow String) -> StringView> = Box.create(move (s: borrow String) => text.view())!; // error[N0245]
+    let other = String.from("x")!;
+    Console.writeLine(f(other));
+}
+fn main() {
+    var b = Buffer { text: String.from("a")!, views: Vector<StringView>.create() };
+    store(mut b);
+    storeLater(mut b);
+    var all = Vector<StringView>.create();
+    intoCapture(mut all);
+    returned();
+}

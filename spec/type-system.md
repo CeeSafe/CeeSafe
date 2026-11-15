@@ -2767,6 +2767,11 @@ With one loan set per value:
    loans must all come from parameters that flow into `p` (§25.6): otherwise N0272. What `p`'s own referent held (its
    deep loans, not the loan of `p` itself) may always go back into it (ADR 0075 §8): `let x = take(mut this.a);
    this.b.push(x)!;`.
+   Only mutable borrows are followed back (and shared ones for a write a shared reference allows, a `StableVector`'s
+   `push`): a value reached through a shared reference, a view or a slice (`p.text.view()`) only reads what `p`
+   refers to, so a local it is stored into is not what `p` refers to. So a closure's body may keep a view of a
+   capture in a vector of its own (`views.push(text.view())`, its environment being the `borrow mut` parameter);
+   storing that view into the environment, into another capture, or into either through a local, is N0272.
 3. `push`, `insert` and `append` write their argument through their receiver (rule 2).
 4. At a call, an argument that flows into a `borrow mut` parameter adds its loans to what that
    argument refers to.

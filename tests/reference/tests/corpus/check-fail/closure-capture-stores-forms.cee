@@ -63,7 +63,9 @@ struct Buffer {
 }
 fn w6<T>(f: fn(borrow Buffer) -> T, into: borrow mut Vector<T>) {
     let buffer = Buffer { text: String.from("local local local local local local")! };
-    let g = () => into.push(f(buffer)); // error[N0272] // error[N0272] // error[N0272]
+    // One N0272 fewer after 0.52.0: the one dropped said 'a value borrowed from 'into' into what 'into' refers to',
+    // a capture by shared reference taken for one written through (ClayWind's M1, type-system.md §25.7 rule 2).
+    let g = () => into.push(f(buffer)); // error[N0272] // error[N0272]
     g()!;
 }
 // w7: the closure takes the view as an argument

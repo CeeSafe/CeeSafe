@@ -302,7 +302,7 @@ The manifest `ceesafe.toml`, the lock file `ceesafe.lock`, dependencies, version
 |---|---|---|---|
 | N0320 | error | `ceesafe.toml` or `ceesafe.lock` is not valid in the subset of TOML that CeeSafe reads, for example a string without quotes. Correct the line the message names. | [the specification](https://ceesafe.github.io/CeeSafe/reference/diagnostics#build-n0300%E2%80%93n0399) |
 | N0321 | error | A field of the manifest is missing, unknown or has a value it cannot have (`kind = "binary"`), or a dependency is an executable. `kind` is `"executable"` or `"library"`. | [7.1](./ch07-01-package-and-manifest), [7.4](./ch07-04-dependencies) |
-| N0322 | error | A path dependency's directory or its `ceesafe.toml` is missing, or the package there has another name than the key. Correct the path or the key. | [7.4](./ch07-04-dependencies) |
+| N0322 | error | A dependency's directory or its `ceesafe.toml` is missing, a git package's `dir` or path dependency leads out of its checkout, or the package there has another name than the key. Correct the path, the `dir` or the key. | [7.4](./ch07-04-dependencies) |
 | N0323 | error | A git dependency cannot be fetched or resolved, or is not in the cache when `--offline` is given. Check the address and the tag, and run `ceesafec fetch` with a network. | [7.4](./ch07-04-dependencies) |
 | N0324 | error | `ceesafe.lock` is missing, or does not match the manifest. Run `ceesafec fetch`. | [7.4](./ch07-04-dependencies) |
 | N0325 | error | A fetched dependency's manifest and sources do not match the hash in `ceesafe.lock`, as when a file in the cache was edited. Put the files back as they were fetched. | [the specification](https://ceesafe.github.io/CeeSafe/reference/diagnostics#build-n0300%E2%80%93n0399) |

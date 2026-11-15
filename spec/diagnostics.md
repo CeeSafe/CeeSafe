@@ -306,7 +306,7 @@ Packages (N0320–N0329 and N0335; `tooling.md` §4, ADR 0013):
 |---|---|---|
 | N0320 | `ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset | `name = app` (no quotes) |
 | N0321 | A manifest field is missing, unknown or invalid, or a dependency is an executable | `kind = "binary"` |
-| N0322 | A path dependency's directory or manifest is missing, or its name differs from its key | `geometry = { path = "../geo" }` with no `../geo/ceesafe.toml` |
+| N0322 | A dependency's directory or manifest is missing, a git package's `dir` or path dependency leads out of its checkout, or its name differs from its key | `geometry = { path = "../geo" }` with no `../geo/ceesafe.toml` |
 | N0323 | A git dependency cannot be fetched or resolved, or is absent with `--offline` | an unknown tag |
 | N0324 | The lock file is missing or does not match the manifest | a dependency added without `ceesafec fetch` |
 | N0325 | A git checkout's manifest and sources do not match the lock's hash | a file edited in the cache |

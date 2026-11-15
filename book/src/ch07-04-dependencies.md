@@ -116,6 +116,19 @@ The repositories and the checked-out commits are kept in a cache in your home di
 directory the environment variable `CEESAFE_HOME` names. Nothing from a dependency runs during a fetch or a build:
 packages have no build scripts.
 
+One repository can hold several packages, each in a directory of its own. `dir` names the directory:
+
+```toml
+[dependencies]
+widgets = { git = "https://example.org/ui.git", tag = "v0.3.0", dir = "widgets" }
+layout = { git = "https://example.org/ui.git", tag = "v0.3.0", dir = "layout" }
+```
+
+If `widgets` depends on its neighbour with `layout = { path = "../layout" }`, that path means the `layout`
+directory of the same commit. Both lines then reach one `layout`, and the repository is fetched once. The lock file
+gives each package a `dir` line. A `dir` must stay inside the repository: `../x` or an absolute path is `N0321`, and
+a directory with no `ceesafe.toml` is `N0322`.
+
 ## A dependency from the registry
 
 The third form gives no location, only a **version requirement**:
@@ -245,8 +258,8 @@ dependencies live in one cache for all your packages, and nothing of theirs runs
 
 ## Summary
 
-- `[dependencies]` names libraries by `path`, by `git` with one of `tag`, `branch` or `rev`, or by a version
-  requirement looked up in the registry's index.
+- `[dependencies]` names libraries by `path`, by `git` with one of `tag`, `branch` or `rev` (and `dir` for a
+  package in a directory of the repository), or by a version requirement looked up in the registry's index.
 - The key is the library's own name (`N0322` if not).
 - `ceesafec fetch` writes `ceesafe.lock`; every other command only reads it, and a missing or stale one is `N0324`.
 - For a git or registry dependency the lock file pins a commit and a hash of the files.

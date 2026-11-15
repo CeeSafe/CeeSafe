@@ -152,7 +152,7 @@
     a windowed package is still 3. `windowed` on a library, an object, a freestanding package or in [target.windows],
     and a value that is not a boolean, are one N0321 each; `--windowed` with `--emit obj`, `--emit lib` or
     `--profile freestanding`, and in a freestanding package, is a usage error (status 2).
-39. interface-scope (type-system.md §2, ClayWind's finding M3): shapes' `Source.drag` returns shapes' `Drag?`. app
+40. interface-scope (type-system.md §2, ClayWind's finding M3): shapes' `Source.drag` returns shapes' `Drag?`. app
     imports `Source` and `Point`, not `Drag`, and writes `Drag?` in a field and in its impl of `drag`: `check` gives
     N0204 at those two places alone (0.53.0 gave a third, at the offset of shapes' `Drag` read in app's file, since
     the interface's signature was resolved in the impl's file). mine declares a `Drag` of its own and returns it from

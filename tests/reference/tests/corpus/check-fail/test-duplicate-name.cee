@@ -1,0 +1,9 @@
+// Two `@test` functions of one name (cee-proxy's F14): the second is N0201, "already defined", and nothing else. Before
+// the fix its `@test` was also N0348, "a test is not generic", since the name resolved to the first function.
+@test
+fn same() {}
+
+@test
+fn same() {} // error[N0201]
+
+fn main() {}

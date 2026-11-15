@@ -428,13 +428,19 @@ fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, Al
         let decl = c.front.ast.functions[f as usize];
         var why = Vector<u8>.create();
         var testFunction = none();
+        var duplicate = false;
         match (ownEntity(c, name)) {
             Entity.Function(function) => {
                 if (c.hir.functions[function as usize].syntax == f) {
                     testFunction = function;
+                } else {
+                    duplicate = true; // a second function of this name: N0201 says so, and this one is not checked
                 }
             }
             _ => {}
+        }
+        if (duplicate) {
+            continue;
         }
         if (a.hasParentheses) {
             appendText(mut why, "'@test' takes no arguments")?;

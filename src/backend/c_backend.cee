@@ -46,6 +46,7 @@ struct CBuildOptions {
     structured: bool;            // c-backend.md §3 (off: --flat-c)
     debugAssertions: bool;       // `debugAssert` compiled in (ADR 0087 §2.5)
     omitMain: bool;              // no C `main`: `--emit lib` without `--lib-main` (ADR 0088 §2.1)
+    windowed: bool;              // the C `main` starts a windowed program: ceesafe_rt_windowed (ADR 0151)
 }
 
 fn generateC(
@@ -103,6 +104,7 @@ fn generateC(
     trial.debugAssertions = o.debugAssertions;
     trial.hosted = !freestanding;
     trial.omitMain = o.omitMain;
+    trial.windowed = o.windowed;
     trial.oce = o.oce;
     setUpEmitter(mut trial, c, n)?;
     emitProgram(mut trial, c, n, sources)?;
@@ -129,6 +131,7 @@ fn generateC(
     emitter.debugAssertions = o.debugAssertions;
     emitter.hosted = !freestanding;
     emitter.omitMain = o.omitMain;
+    emitter.windowed = o.windowed;
     emitter.oce = o.oce;
     emitter.usedTypes = trial.usedTypes;
     setUpEmitter(mut emitter, c, n)?;

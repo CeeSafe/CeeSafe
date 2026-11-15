@@ -76,6 +76,7 @@ struct CEmitter {
     debugAssertions: bool; // `debugAssert` compiled in (ADR 0087 §2.5)
     hosted: bool;          // not the freestanding profile: exports and callbacks check the panicked flag (ADR 0088 §2.4)
     omitMain: bool;        // no C `main` for the CeeSafe one: `--emit lib` without `--lib-main` (ADR 0088 §2.1)
+    windowed: bool;        // the C `main` calls ceesafe_rt_windowed first (ADR 0151)
     capturing: bool;       // structured form: statement lines are collected for the tree
     capture: Vector<Vector<u8>>;
 
@@ -134,6 +135,7 @@ struct CEmitter {
         debugAssertions: false,
         hosted: true,
         omitMain: false,
+        windowed: false,
         capturing: false,
         capture: Vector<Vector<u8>>.create(),
     };

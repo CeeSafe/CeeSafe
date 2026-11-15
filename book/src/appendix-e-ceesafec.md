@@ -107,6 +107,7 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--ld` | `<linker>` | With `--emit obj`, joins the objects with `<linker> -r` instead of the C compiler, as `ld.lld` does for another processor ([22.1](./ch22-01-the-freestanding-profile)). With `--emit lib` it is a usage error. | the C compiler joins them |
 | `--ar` | `<archiver>` | With `--emit lib`, names the archiver that makes the library. Without `--emit lib` it is a usage error. | `llvm-ar` beside an LLVM clang, else `ar` |
 | `--lib-main` | none | With `--emit lib`, keeps the C `main` of a package that has a CeeSafe `main`. Without `--emit lib` it is a usage error. | off: a library has no C `main`, since its host has one |
+| `--windowed` | none | Builds a program with a window: on Windows it is linked as a GUI program, so no console window opens beneath it, and its output still reaches a terminal that starts it. Nothing changes on other systems. With `--emit obj`, `--emit lib` or the freestanding profile it is a usage error. | off, or the manifest's `windowed` |
 | `--exports-header` | `<name>` | Names the header that declares the program's `@export` items for C. | `ceesafe_exports.h` |
 | `-g` | none | Makes a debug build: `#line` directives, the C compiled with `-g -O0`, and debug assertions on ([14.1](./ch14-01-build-settings)). | off |
 | `--line-directives` | none | Maps the generated C to CeeSafe lines with `#line`, without changing the optimisation level. | off; on with `-g` |
@@ -366,6 +367,7 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 | `--sweep-strict` | `test` |
 | `--timeout` | `test` |
 | `--whole-program` | `check` |
+| `--windowed` | `build`, `test` |
 | `-g` | `build`, `test` |
 | `-o` | `build`, `test` |
 
@@ -433,6 +435,7 @@ unknown key is `N0321`. Taught in [7.1](./ch07-01-package-and-manifest), [7.4](.
 | `[package]` | `float` | `true` or `false` | `false` rejects float types and literals, as `--no-float`. | `true` |
 | `[package]` | `kernel` | `"cosmoos"` | With `profile = "freestanding"`, includes the kernel library, as `--kernel cosmoos`. | none |
 | `[package]` | `trusted` | `true` or `false` | `true` lets the package declare its own types `@threadSafe`. | `false` |
+| `[package]` | `windowed` | `true` or `false` | `true` makes the executable a program with a window: on Windows no console window opens beneath it, as `--windowed`. Only for an executable of the hosted profile. | `false` |
 | `[package]` | `sources` | an array of directories | Where the package's `.cee` files are. | `["src"]` |
 | `[package]` | `tests` | an array of directories | The test directories. Their files are sources for `check` and `test` only. | `["tests"]` |
 | `[package]` | `c` | an array of files | C files compiled and linked with the executable. | none |

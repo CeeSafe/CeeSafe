@@ -900,6 +900,10 @@ extern uint32_t ceesafe_rt_allocated;
    allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. A host has
    no way to ask for this: ceesafe_init masks config.flags' reserved bits off. */
 int32_t ceesafe_rt_init_main(const ceesafe_config *config);
+/* The generated `main` of a windowed build calls this first (ADR 0151, type-system.md §26.3): on Windows each standard
+   stream without a handle is opened on the parent's console, when attaching to it succeeds, or on NUL; a stream with
+   a handle (redirected, a pipe) is kept. Elsewhere it does nothing. It never fails. */
+void ceesafe_rt_windowed(void);
 /* Installs the host's allocator hook in the platform functions (NULL: the C library's again), from ceesafe_init only,
    before it publishes STARTED (ADR 0088 §2.5). */
 void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator);

@@ -13,6 +13,7 @@ version = "0.1.0"
 kind = "executable"          # "executable", "library", or "object" (one .o for a kernel's build)
 profile = "hosted"           # or "freestanding"
 float = true                 # false is --no-float
+windowed = true              # a program with a window: on Windows no console window opens for it (--windowed)
 sources = ["src"]            # the default
 c = ["src/shim.c"]           # C files built with an executable
 ceesafec = ">=0.20.0"        # the compiler this package needs: an older one stops here, naming both versions

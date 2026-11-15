@@ -15,6 +15,8 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 /* Windows translates "\n" to "\r\n" in text mode: CeeSafe's output is bytes, so both streams become binary. Several
@@ -32,6 +34,64 @@ static void ceesafe_binary_streams(void) {
         } else {
             while (ceesafe_atomic_load_u32(&ceesafe_binary_state) != 2u) {
             }
+        }
+    }
+#endif
+}
+
+/* A windowed program's standard streams (ADR 0151, type-system.md §26.3). Windows gives a GUI program no console, so
+   a stream its parent passed no handle has no descriptor in the C runtime (-2 in the UCRT): writes and fflush fail,
+   and _setmode on it is an invalid parameter. Before anything is written, each such stream is opened on the parent's
+   console (CONOUT$, CONIN$), when attaching to it succeeds, or on NUL, so writes succeed and reads see the end. A
+   stream with a valid handle (a redirected file, a pipe, a console handle the parent passed) is kept: attaching is
+   tried only when one has none, and a valid one gets its handle back if attaching changed it. */
+#ifdef _WIN32
+static bool cee_std_handle_valid(HANDLE h) {
+    return h != NULL && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN;
+}
+
+/* The C runtime's stream `stream` reopened on `device`, its descriptor made `fd` again when the reopening gave another
+   (the old descriptor's slot may still count as taken), and the system's standard handle set to it, so Console, the
+   descriptor-level reads and a child's inherited handles all see it. A step that fails leaves the stream as it is. */
+static void cee_reopen_std(DWORD id, int fd, FILE *stream, const char *device, const char *mode) {
+    if (freopen(device, mode, stream) == NULL) {
+        return;
+    }
+    int now = _fileno(stream);
+    if (now >= 0 && now != fd) {
+        (void)_dup2(now, fd);
+    }
+    intptr_t handle = _get_osfhandle(fd);
+    if (handle != -1 && handle != -2) {
+        (void)SetStdHandle(id, (HANDLE)handle);
+    }
+}
+#endif
+
+void ceesafe_rt_windowed(void) {
+#ifdef _WIN32
+    static const DWORD ids[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    HANDLE kept[3];
+    bool valid[3];
+    bool all = true;
+    for (int k = 0; k < 3; k++) {
+        kept[k] = GetStdHandle(ids[k]);
+        valid[k] = cee_std_handle_valid(kept[k]);
+        all = all && valid[k];
+    }
+    if (all) {
+        return; /* every stream redirected or passed: nothing to do */
+    }
+    bool attached = AttachConsole(ATTACH_PARENT_PROCESS) != 0;
+    FILE *streams[3] = {stdin, stdout, stderr};
+    for (int k = 0; k < 3; k++) {
+        if (valid[k]) {
+            if (GetStdHandle(ids[k]) != kept[k]) {
+                (void)SetStdHandle(ids[k], kept[k]);
+            }
+        } else {
+            const char *device = !attached ? "NUL" : k == 0 ? "CONIN$" : "CONOUT$";
+            cee_reopen_std(ids[k], k, streams[k], device, k == 0 ? "r" : "w");
         }
     }
 #endif

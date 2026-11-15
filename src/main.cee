@@ -187,6 +187,14 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "                    library leaves out by default since its host has its own\n")?;
     appendText(
         out,
+        "  --windowed        (build) a program with a window: on Windows linked for the Windows subsystem, so no\n",
+    )?;
+    appendText(
+        out,
+        "                    console window opens for it; nothing changes elsewhere (tooling.md §4.1, ADR 0151)\n",
+    )?;
+    appendText(
+        out,
         "  --exports-header <name>\n                    (build) the exports header's name (default ceesafe_exports.h)\n",
     )?;
     appendText(out, "  --line-directives (build) map the generated C to CeeSafe lines with #line\n")?;
@@ -301,6 +309,7 @@ struct Options {
     debugAssertions: u8;        // --debug-assertions 1, --no-debug-assertions 2, else 0 (build, run; ADR 0087 §2.5)
     split: bool;                // --split (build)
     libMain: bool;              // --lib-main (build --emit lib)
+    windowed: bool;             // --windowed (build), or the manifest's windowed (ADR 0151)
     programName: Vector<u8>;    // --program (build), or the package's name
     cc: Vector<u8>;             // --cc, else $CC (build)
     cflags: Vector<Vector<u8>>; // --cflag (build)
@@ -433,6 +442,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.split = true;
         } else if (options.building && arg == "--lib-main") {
             options.libMain = true;
+        } else if (options.building && arg == "--windowed") {
+            options.windowed = true;
         } else if (options.building && (arg == "--emit" || arg == "-o" || arg == "--exports-header" || arg == "--cc" ||
             arg == "--cflag" || arg == "--ld" || arg == "--ar" || arg == "--program")) {
             let value = match (Process.argument(a)) {
@@ -605,11 +616,18 @@ fn readOptions(options: borrow mut Options) -> i32 {
     if (options.libMain && !sameText(options.emit.view(), "lib")) {
         return fail("--lib-main needs --emit lib: only a library leaves `main` out (ADR 0088 §2.1)");
     }
+    if (options.windowed && (options.freestanding || sameText(options.emit.view(), "obj") ||
+        sameText(options.emit.view(), "lib"))) {
+        return fail(windowedUsage());
+    }
     if (options.linker.length > 0 && sameText(options.emit.view(), "lib")) {
         return fail("--ld does not apply to --emit lib, which archives with --ar instead of linking (ADR 0088 §2.1)");
     }
     return 0;
 }
+
+fn windowedUsage() -> StringView =>
+    "--windowed is for an executable of the hosted profile: an object or a library is linked by its host (ADR 0151)";
 
 /// One of `test`'s options with its value (ADR 0049 §3.3), or `run`'s hidden `--ceesafe-harness`.
 fn readTestOption(options: borrow mut Options, arg: StringView, value: StringView) -> i32 {
@@ -872,6 +890,7 @@ fn parseCommand() -> i32 {
         debugAssertions: 0,
         split: false,
         libMain: false,
+        windowed: false,
         programName: Vector<u8>.create(),
         cc: match (Environment.variable("CC")) {
             Some(v) => copyBytes(v.bytes())!,
@@ -1042,6 +1061,15 @@ fn loadPackage(
     if (!options.emitGiven && workspace.root.kind == 2) {
         options.emit = copyBytes("obj".bytes())!;
     }
+    // A windowed executable (ADR 0151): --windowed in a freestanding or object package is a usage error; the manifest's field
+    // applies where an executable or its C is made, and does nothing for an object, a library or a freestanding build.
+    if (options.windowed && (options.freestanding || sameText(options.emit.view(), "obj"))) {
+        return fail(windowedUsage());
+    }
+    if (workspace.root.windowed && !options.freestanding &&
+        (sameText(options.emit.view(), "exe") || sameText(options.emit.view(), "c"))) {
+        options.windowed = true;
+    }
     options.defaultOutput = joinPath(workspace.root.directory.view(), "out".bytes())!;
     options.defaultOutput.push('/')!;
     appendBytes(mut options.defaultOutput, workspace.root.name.view())!;
@@ -1115,6 +1143,7 @@ fn interpretChecked(
         structured: options.structured,
         debugAssertions: false,
         omitMain: false,
+        windowed: false,
     };
     if (!generateC(checker, nir, sources, build, mut files)!) {
         return report(options.json, checker.front.diagnostics, sources);
@@ -1228,6 +1257,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     debugAssertions: 0,
     split: false,
     libMain: false,
+    windowed: false,
     programName: Vector<u8>.create(),
     cc: match (Environment.variable("CC")) {
         Some(v) => copyBytes(v.bytes())!,
@@ -1562,6 +1592,7 @@ fn compileFiles(
             debugAssertions: options.debugAssertions == 1 ||
                 (options.debugAssertions == 0 && (options.debug || options.testing)),
             omitMain: sameText(options.emit.view(), "lib") && !options.libMain,
+            windowed: options.windowed && !options.testing, // a test program is a console program
         };
         if (!generateC(mut checker, mut nir, sources, build, mut files)!) {
             return report(options.json, checker.front.diagnostics, sources);

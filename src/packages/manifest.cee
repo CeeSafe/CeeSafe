@@ -117,6 +117,7 @@ struct Manifest {
     floatAllowed: bool; // float = false is --no-float
     kernel: bool;       // kernel = "cosmoos": lib/kernel is part of the build (ADR 0025)
     trusted: bool;      // trusted = true: the package's types may be declared @threadSafe (ADR 0025 §3.2)
+    windowed: bool;     // windowed = true: on Windows, linked for the Windows subsystem (ADR 0151)
     sources: Vector<Vector<u8>>;
     cFiles: Vector<Vector<u8>>;
     dependencies: Vector<DependencySpec>;
@@ -308,6 +309,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         floatAllowed: true,
         kernel: false,
         trusted: false,
+        windowed: false,
         sources: sources,
         cFiles: Vector<Vector<u8>>.create(),
         dependencies: Vector<DependencySpec>.create(),
@@ -362,6 +364,11 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             valid = v.isBool();
             if (valid) {
                 manifest.trusted = v.flag;
+            }
+        } else if (sameText(key, "windowed")) {
+            valid = v.isBool();
+            if (valid) {
+                manifest.windowed = v.flag;
             }
         } else if (sameText(key, "sources")) {
             valid = v.isArray() && v.strings.length > 0;
@@ -418,6 +425,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 "trusted",
             )) "'trusted' is true or false" else if (sameText(
                 key,
+                "windowed",
+            )) "'windowed' is true or false" else if (sameText(
+                key,
                 "sources",
             )) "'sources' is a non-empty array of directories: [\"src\"]" else if (sameText(
                 key,
@@ -452,6 +462,27 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             start,
             end,
             copyBytes("'kernel' needs profile = \"freestanding\": lib/kernel is for a kernel (ADR 0025)".bytes())?,
+        )?;
+    }
+    if (manifest.windowed && (manifest.kind != 0 || manifest.freestanding)) {
+        // A windowed executable (ADR 0151): a library, an object or a freestanding program is linked by its host.
+        var start = package.start;
+        var end = package.end;
+        match (package.find("windowed")) {
+            Some(k) => {
+                start = package.entries[k].value.start;
+                end = package.entries[k].value.end;
+            }
+            null => {}
+        }
+        manifestError(
+            report,
+            file,
+            start,
+            end,
+            copyBytes(
+                "'windowed' is for an executable of the hosted profile: a library, an object or a freestanding program is linked by its host (ADR 0151)".bytes(),
+            )?,
         )?;
     }
     // The [target.OS] tables (ADR 0047): each checked, the host's added after [package].

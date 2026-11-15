@@ -4170,6 +4170,11 @@ static int64_t cee_op_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
             return -(int64_t)EAFNOSUPPORT;
         }
         int family = endpoint->family == 6u ? AF_INET6 : AF_INET;
+        /* Winsock is started on first use (ceesafe_rt_io.c). A program whose first socket is this connect, a client
+           that never listens or resolves first, would otherwise fail with WSANOTINITIALISED (ClayWind's N4). */
+        if (!ceesafe_winsock_ready()) {
+            return -(int64_t)ENOSYS;
+        }
         SOCKET s = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
         if (s == INVALID_SOCKET) {
             return cee_wsa_failure();

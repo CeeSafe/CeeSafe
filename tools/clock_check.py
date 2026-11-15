@@ -5,7 +5,11 @@ the interpreter and the two answer different times:
 1. natively, `Clock.now()` is within two seconds of Python's `time.time()` around it, with nanoseconds below 10^9,
    and `Clock.unixMillis()` agrees with it;
 2. in the interpreter, outside `Async.run`, it is 2000-01-01T00:00:00Z exactly (946684800 seconds, 0 nanoseconds), and
-   inside, the epoch plus the virtual clock: after a sleep of 1500 ms, 946684801 seconds and 500 000 000 nanoseconds.
+   inside, the epoch plus the virtual clock: after a sleep of 1500 ms, 946684801 seconds and 500 000 000 nanoseconds;
+3. `Clock.localOffset` (ADR 0153), natively, for times in winter, summer, 1970 and before it: on POSIX systems under
+   several `TZ` zones (UTC, UTC+3, UTC+5:30, New York's daylight saving, Lord Howe's half hour, Kathmandu's 5:45),
+   equal to Python's `zoneinfo`; on Windows, under the system's own zone, equal to Python's `datetime.astimezone()`;
+   and in the interpreter, 0.
 
 usage: python3 tools/clock_check.py --compiler out/ceesafec
 """
@@ -27,6 +31,35 @@ fn main() {
     Console.writeLine(Clock.unixMillis());
 }
 """
+
+OFFSETS = """
+fn main() {
+    let times: [i64; 6] = [1700000000, 1720000000, 0, 1000000000, 1300000000, -100000000];
+    for (t in times) {
+        Console.write(Clock.localOffset(UnixTime { seconds: t, nanoseconds: 0 }));
+        Console.write(" ");
+    }
+    Console.writeLine("");
+}
+"""
+OFFSET_TIMES = [1700000000, 1720000000, 0, 1000000000, 1300000000, -100000000]
+OFFSET_ZONES = ["UTC", "Asia/Riyadh", "Asia/Kolkata", "America/New_York", "Australia/Lord_Howe", "Asia/Kathmandu"]
+
+
+def expected_offsets(zone):
+    """Each OFFSET_TIMES' offset in seconds: in `zone` (zoneinfo), or in the system's zone when it is None."""
+    import datetime
+    out = []
+    for t in OFFSET_TIMES:
+        moment = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=t)
+        if zone is None:
+            local = moment.astimezone()
+        else:
+            import zoneinfo
+            local = moment.astimezone(zoneinfo.ZoneInfo(zone))
+        out.append(int(local.utcoffset().total_seconds()))
+    return out
+
 
 VIRTUAL = """
 async fn later() -> Result<UnixTime, AsyncError> {
@@ -88,7 +121,30 @@ def main():
         want = ["946684800 0", "946684801 500000000"]
         if p.stdout.strip().splitlines() != want:
             problems.append(f"interpreter: printed {p.stdout.strip().splitlines()!r}, want {want!r}")
-    print(f"clock_check: the native clock against Python's, the interpreter's epoch; {len(problems)} problems")
+        offsets = os.path.join(work, "offsets.cee")
+        open(offsets, "w").write(OFFSETS)
+        exe = os.path.join(work, "offsets")
+        b = subprocess.run([compiler, "build", offsets, "-o", exe], capture_output=True, text=True)
+        if b.returncode != 0:
+            problems.append(f"localOffset: build failed: {b.stderr.strip()[-400:]}")
+        else:
+            if os.name == "nt" and not exe.endswith(".exe"):
+                exe += ".exe"
+            zones = [None] if os.name == "nt" else OFFSET_ZONES  # Windows takes its zone from the system, not TZ
+            for zone in zones:
+                env = dict(os.environ)
+                if zone is not None:
+                    env["TZ"] = zone
+                p = subprocess.run([exe], capture_output=True, text=True, timeout=60, env=env)
+                got = [int(f) for f in p.stdout.split()] if p.returncode == 0 else None
+                want = expected_offsets(zone)
+                if got != want:
+                    problems.append(f"localOffset in {zone or 'the system zone'}: got {got}, want {want}")
+        p = subprocess.run([compiler, "run", "--interp", offsets], capture_output=True, text=True, timeout=120)
+        if p.stdout.split() != ["0"] * len(OFFSET_TIMES):
+            problems.append(f"localOffset in the interpreter: printed {p.stdout.strip()!r}, want zeros")
+    print(f"clock_check: the native clock against Python's, the interpreter's epoch, local offsets; {len(problems)} "
+          "problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

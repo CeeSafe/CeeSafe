@@ -3577,10 +3577,22 @@ int32_t ceesafe_clock_local_offset(int64_t seconds) {
     uint64_t steps = (uint64_t)(seconds + before) * UINT64_C(10000000);
     FILETIME utc = {(DWORD)(steps & 0xffffffffu), (DWORD)(steps >> 32)};
     SYSTEMTIME universal, local;
-    DYNAMIC_TIME_ZONE_INFORMATION zone;
     FILETIME converted;
-    if (GetDynamicTimeZoneInformation(&zone) == TIME_ZONE_ID_INVALID || !FileTimeToSystemTime(&utc, &universal) ||
-        !SystemTimeToTzSpecificLocalTimeEx(&zone, &universal, &local) || !SystemTimeToFileTime(&local, &converted)) {
+    if (!FileTimeToSystemTime(&utc, &universal)) {
+        return 0;
+    }
+    /* SystemTimeToTzSpecificLocalTimeEx (Windows 8) applies the zone's rules for `at`'s year; it is looked up, since
+       MinGW declares it only for a newer _WIN32_WINNT than its default. Without it, the current year's rules. */
+    typedef BOOL(WINAPI * cee_tz_convert)(const DYNAMIC_TIME_ZONE_INFORMATION *, const SYSTEMTIME *, LPSYSTEMTIME);
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    FARPROC found = kernel != NULL ? GetProcAddress(kernel, "SystemTimeToTzSpecificLocalTimeEx") : NULL;
+    cee_tz_convert convert = NULL;
+    ceesafe_mem_copy(&convert, &found, sizeof convert); /* ISO C has no object-to-function pointer conversion */
+    DYNAMIC_TIME_ZONE_INFORMATION zone;
+    BOOL ok = convert != NULL && GetDynamicTimeZoneInformation(&zone) != TIME_ZONE_ID_INVALID
+                  ? convert(&zone, &universal, &local)
+                  : SystemTimeToTzSpecificLocalTime(NULL, &universal, &local);
+    if (!ok || !SystemTimeToFileTime(&local, &converted)) {
         return 0;
     }
     uint64_t back = ((uint64_t)converted.dwHighDateTime << 32) | (uint64_t)converted.dwLowDateTime;

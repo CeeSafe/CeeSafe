@@ -21,6 +21,12 @@
  * ceesafe_window_poll hands that event out, so a view of it stays valid until the next poll. Committed text is TEXT
  * events, as typed text always was. The clipboard holds UTF-8 text; a read lands in the window (`pasted`) for
  * lib/std to copy at once.
+ *
+ * Waiting and waking (ADR 0142): ceesafe_window_wait_event sleeps until an event, a wake or a timeout, taking the
+ * system's events meanwhile. Every open window is in a list under a spin lock, with an id that names it to
+ * ceesafe_window_wake, which any thread may call: it sets the window's `woken` flag and its signal (a pipe, or on
+ * Windows an event), which every wait includes, and on macOS signals a run loop source whose callback, on the main
+ * thread, posts an application-defined event that ends AppKit's wait.
  */
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE /* dlopen, syscall(SYS_gettid), select, clock_gettime under glibc's strict C11 headers */
@@ -151,6 +157,15 @@ struct cee_window {
     char *clipboard;
     size_t clipboard_length;
     int scripted_clipboard;
+    /* Waking (ADR 0142): the id ceesafe_window_wake knows the window by (from 1, never reused), whether a wake came
+       since a wait last returned, the signal every wait includes (a non-blocking pipe's two ends; on Windows a
+       manual-reset event), and the link in the list of open windows. Another thread touches `woken`, the signal's
+       writing side and nothing else, and only under cee_wake_lock, as does this one. */
+    uint64_t wake_id;
+    int woken;
+    int wake_read, wake_write;
+    void *wake_event;
+    struct cee_window *wake_link;
     /* The system's window. */
     void *native;
 };
@@ -173,6 +188,9 @@ void ceesafe_window_set_text_area(void *window, uint32_t x, uint32_t y, uint32_t
 uint64_t ceesafe_window_composition(void *window, const uint8_t **text, uint64_t *caret);
 int32_t ceesafe_window_set_clipboard(void *window, const uint8_t *text, uint64_t length);
 int64_t ceesafe_window_clipboard(void *window, const uint8_t **text);
+void ceesafe_window_wait_event(void *window, uint32_t timeout_ms);
+uint64_t ceesafe_window_waker(void *window);
+void ceesafe_window_wake(uint64_t id);
 
 /* Queues an event; the queued copy, which a backend may take back (CEE_EVENT_DROPPED) before the next poll, or NULL. */
 static struct cee_window_event *cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c,
@@ -401,6 +419,140 @@ static int cee_window_on_main_thread(void) { return GetCurrentThreadId() == cee_
 #else
 static int cee_window_on_main_thread(void) { return 1; }
 #endif
+
+/* ---- Waking a window from any thread (ADR 0142) ------------------------------------------------------------------ */
+/* The open windows, linked through `wake_link`, and the next id, under a spin lock (the channels' kind, ADR 0032: a
+   wake never sleeps). A window is added once it opened and taken out before close frees anything, so a wake finds
+   only windows that are open. */
+
+#if !defined(_WIN32)
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sched.h>
+#include <unistd.h>
+#endif
+
+static uint32_t cee_wake_lock;
+static uint64_t cee_wake_next_id = 1;
+static struct cee_window *cee_wake_windows;
+
+static void cee_wake_acquire(void) {
+    while (ceesafe_atomic_swap_ord_u32(&cee_wake_lock, 1u, 1) != 0u) {
+        while (ceesafe_atomic_load_ord_u32(&cee_wake_lock, 0) != 0u) {
+#if defined(_WIN32)
+            YieldProcessor();
+#else
+            sched_yield();
+#endif
+        }
+    }
+}
+
+static void cee_wake_release(void) { ceesafe_atomic_store_ord_u32(&cee_wake_lock, 0u, 2); }
+
+/* Makes the window's signal; 0 if the system refused. */
+static int cee_wake_signal_open(struct cee_window *w) {
+    w->wake_read = -1;
+    w->wake_write = -1;
+#if defined(_WIN32)
+    w->wake_event = (void *)CreateEventW(NULL, TRUE, FALSE, NULL); /* manual reset, not signalled */
+    return w->wake_event != NULL;
+#else
+    int ends[2];
+    if (pipe(ends) != 0) {
+        return 0;
+    }
+    for (int k = 0; k < 2; k++) {
+        int flags = fcntl(ends[k], F_GETFL);
+        if (flags < 0 || fcntl(ends[k], F_SETFL, flags | O_NONBLOCK) != 0 ||
+            fcntl(ends[k], F_SETFD, FD_CLOEXEC) != 0) {
+            close(ends[0]);
+            close(ends[1]);
+            return 0;
+        }
+    }
+    w->wake_read = ends[0];
+    w->wake_write = ends[1];
+    return 1;
+#endif
+}
+
+static void cee_wake_signal_close(struct cee_window *w) {
+#if defined(_WIN32)
+    if (w->wake_event != NULL) {
+        CloseHandle((HANDLE)w->wake_event);
+        w->wake_event = NULL;
+    }
+#else
+    if (w->wake_read >= 0) {
+        close(w->wake_read);
+        close(w->wake_write);
+        w->wake_read = -1;
+        w->wake_write = -1;
+    }
+#endif
+}
+
+/* Adds an open window to the list, with the next id. */
+static void cee_wake_register(struct cee_window *w) {
+    cee_wake_acquire();
+    w->wake_id = cee_wake_next_id++;
+    w->wake_link = cee_wake_windows;
+    cee_wake_windows = w;
+    cee_wake_release();
+}
+
+/* Takes a window out of the list, before it is closed; a later wake does not find it. */
+static void cee_wake_unregister(struct cee_window *w) {
+    cee_wake_acquire();
+    for (struct cee_window **p = &cee_wake_windows; *p != NULL; p = &(*p)->wake_link) {
+        if (*p == w) {
+            *p = w->wake_link;
+            break;
+        }
+    }
+    w->wake_link = NULL;
+    cee_wake_release();
+}
+
+/* Whether the window was woken since a wait last returned. */
+static int cee_wake_pending(struct cee_window *w) {
+    cee_wake_acquire();
+    int woken = w->woken;
+    cee_wake_release();
+    return woken;
+}
+
+/* Takes the wake when a wait returns: clears the flag and the signal together, so they agree. */
+static void cee_wake_take(struct cee_window *w) {
+    cee_wake_acquire();
+    if (w->woken) {
+        w->woken = 0;
+#if defined(_WIN32)
+        ResetEvent((HANDLE)w->wake_event);
+#else
+        char drain[64];
+        while (read(w->wake_read, drain, sizeof drain) > 0) {
+        }
+#endif
+    }
+    cee_wake_release();
+}
+
+/* Waits up to `seconds` for the signal alone (the scripted window's wait). */
+static void cee_wake_signal_wait(struct cee_window *w, double seconds) {
+    double ms = seconds * 1000.0 + 0.999;
+    if (ms <= 0.0) {
+        return;
+    }
+#if defined(_WIN32)
+    WaitForSingleObject((HANDLE)w->wake_event, ms >= 4294967294.0 ? 4294967294u : (DWORD)ms);
+#else
+    struct pollfd p = {w->wake_read, POLLIN, 0};
+    poll(&p, 1, ms >= 2147483647.0 ? 2147483647 : (int)ms);
+#endif
+}
 
 /* ---- The scripted window ----------------------------------------------------------------------------------------- */
 
@@ -820,7 +972,31 @@ static struct {
     cee_id view_class; /* CeeSafeContentView, an NSTextInputClient (ADR 0141) */
     cee_id *pasteboard_string; /* NSPasteboardTypeString */
     void *rgb;
+    /* Waking (ADR 0142): a run loop source on the main run loop, which another thread signals; NULL without
+       CoreFoundation's run loop calls, and then a wake ends AppKit's wait only at its timeout. */
+    void *wake_source;
+    void *main_loop;
+    void (*source_signal)(void *);
+    void (*loop_wake_up)(void *);
 } cee_objc;
+
+/* CFRunLoopSourceContext, version 0 (CoreFoundation's CFRunLoop.h). */
+typedef struct {
+    long version;
+    void *info;
+    const void *(*retain)(const void *);
+    void (*release)(const void *);
+    void *(*copy_description)(const void *);
+    unsigned char (*equal)(const void *, const void *);
+    unsigned long (*hash)(const void *);
+    void (*schedule)(void *, void *, void *);
+    void (*cancel)(void *, void *, void *);
+    void (*perform)(void *);
+} cee_cf_source_context;
+
+/* The application-defined event that ends a wait (ADR 0142): its subtype and data1, which the pump drops. */
+#define CEE_MAC_WAKE_SUBTYPE 0x4345
+#define CEE_MAC_WAKE_DATA 0x0142l
 
 /* The windows the delegate's callbacks report to (one delegate per window). */
 #define CEE_MAC_WINDOWS 16
@@ -887,6 +1063,8 @@ static unsigned long cee_send_ulong(cee_id o, const char *s) {
 static unsigned short cee_send_ushort(cee_id o, const char *s) {
     return ((unsigned short (*)(cee_id, cee_sel))cee_objc.send)(o, cee_mac_sel(s));
 }
+static short cee_send_short(cee_id o, const char *s) { return ((short (*)(cee_id, cee_sel))cee_objc.send)(o, cee_mac_sel(s)); }
+static long cee_send_long(cee_id o, const char *s) { return ((long (*)(cee_id, cee_sel))cee_objc.send)(o, cee_mac_sel(s)); }
 static double cee_send_double(cee_id o, const char *s) {
     return ((double (*)(cee_id, cee_sel))cee_objc.send)(o, cee_mac_sel(s));
 }
@@ -1151,6 +1329,24 @@ static signed char cee_mac_accepts_first_responder(cee_id self, cee_sel cmd) {
     return 1;
 }
 
+/* The wake source's callback (ADR 0142), on the main thread inside the run loop AppKit's wait runs: an
+   application-defined event, which ends nextEventMatchingMask: and which the pump drops. */
+static void cee_mac_wake_perform(void *info) {
+    (void)info;
+    void *pool = cee_objc.pool_push();
+    cee_point origin = {0.0, 0.0};
+    cee_id event = ((cee_id(*)(cee_id, cee_sel, unsigned long, cee_point, unsigned long, double, long, cee_id, short, long,
+                               long))cee_objc.send)(
+        cee_mac_cls("NSEvent"),
+        cee_mac_sel("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), 15ul,
+        origin, 0ul, 0.0, 0l, NULL, (short)CEE_MAC_WAKE_SUBTYPE, CEE_MAC_WAKE_DATA, 0l);
+    if (event != NULL) {
+        ((void (*)(cee_id, cee_sel, cee_id, signed char))cee_objc.send)(cee_objc.app, cee_mac_sel("postEvent:atStart:"),
+                                                                         event, 0);
+    }
+    cee_objc.pool_pop(pool);
+}
+
 static int cee_mac_load(void) {
     if (cee_objc.state != 0) {
         return cee_objc.state == 1;
@@ -1281,6 +1477,33 @@ static int cee_mac_load(void) {
         cee_objc.register_class(view);
     }
     cee_objc.view_class = view;
+    /* Waking from another thread (ADR 0142): a version 0 run loop source in the main run loop's common modes.
+       CFRunLoopSourceSignal and CFRunLoopWakeUp may be called from any thread and allocate nothing; the callback runs
+       here, on the main thread. */
+    void *core = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_GLOBAL);
+    if (core != NULL) {
+        void *(*source_create)(void *, long, cee_cf_source_context *) =
+            (void *(*)(void *, long, cee_cf_source_context *))cee_mac_symbol(core, "CFRunLoopSourceCreate");
+        void *(*get_main)(void) = (void *(*)(void))cee_mac_symbol(core, "CFRunLoopGetMain");
+        void (*add_source)(void *, void *, void *) =
+            (void (*)(void *, void *, void *))cee_mac_symbol(core, "CFRunLoopAddSource");
+        void **common = (void **)cee_mac_data_symbol(core, "kCFRunLoopCommonModes");
+        cee_objc.source_signal = (void (*)(void *))cee_mac_symbol(core, "CFRunLoopSourceSignal");
+        cee_objc.loop_wake_up = (void (*)(void *))cee_mac_symbol(core, "CFRunLoopWakeUp");
+        if (source_create != NULL && get_main != NULL && add_source != NULL && common != NULL &&
+            cee_objc.source_signal != NULL && cee_objc.loop_wake_up != NULL) {
+            cee_cf_source_context context; /* copied by CFRunLoopSourceCreate */
+            memset(&context, 0, sizeof context);
+            context.perform = cee_mac_wake_perform;
+            void *loop = get_main();
+            void *source = loop != NULL ? source_create(NULL, 0, &context) : NULL;
+            if (source != NULL) {
+                add_source(loop, source, *common);
+                cee_objc.main_loop = loop;
+                cee_objc.wake_source = source;
+            }
+        }
+    }
     /* The pixels are sRGB values (what ClayWind's rasterizer computes); DeviceRGB would leave them unmanaged. */
     cee_objc.rgb = cee_objc.color_space_named != NULL && cee_objc.srgb_name != NULL
                        ? cee_objc.color_space_named(*cee_objc.srgb_name)
@@ -1538,6 +1761,9 @@ static int cee_mac_translate(struct cee_window *w, cee_id event) {
         }
         return 0; /* not to AppKit: an unhandled key beeps */
     }
+    case 15: /* NSEventTypeApplicationDefined: the runtime's own only ended a wait (ADR 0142) */
+        return !(cee_send_short(event, "subtype") == CEE_MAC_WAKE_SUBTYPE &&
+                 cee_send_long(event, "data1") == CEE_MAC_WAKE_DATA);
     default:
         return 1;
     }
@@ -1799,6 +2025,15 @@ static int cee_native_clipboard_get(struct cee_window *w) {
     return found;
 }
 
+/* A wake from another thread (ADR 0142), after its flag is set: the wake source ends AppKit's wait. */
+static void cee_native_wake(void) {
+    if (cee_objc.wake_source != NULL) {
+        cee_objc.source_signal(cee_objc.wake_source);
+        cee_objc.loop_wake_up(cee_objc.main_loop);
+    }
+}
+
+/* Until an event, a wake (the wake source's event) or `seconds`. */
 static void cee_native_wait(struct cee_window *w, double seconds) {
     (void)w;
     void *pool = cee_objc.pool_push();
@@ -2477,10 +2712,14 @@ static int cee_native_clipboard_get(struct cee_window *w) {
     return found;
 }
 
+static void cee_native_wake(void) {} /* the window's event, which the wait includes, is set (ADR 0142) */
+
+/* Until a message, one already queued included, the window's wake event (ADR 0142) or `seconds`. */
 static void cee_native_wait(struct cee_window *w, double seconds) {
-    (void)w;
-    DWORD milliseconds = seconds <= 0.0 ? 0u : (DWORD)(seconds * 1000.0);
-    MsgWaitForMultipleObjects(0, NULL, FALSE, milliseconds, QS_ALLINPUT);
+    double ms = seconds * 1000.0 + 0.999;
+    DWORD milliseconds = ms <= 0.0 ? 0u : ms >= 4294967294.0 ? 4294967294u : (DWORD)ms;
+    HANDLE wake = (HANDLE)w->wake_event;
+    MsgWaitForMultipleObjectsEx(1, &wake, milliseconds, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
 }
 
 #elif defined(__linux__)
@@ -3365,19 +3604,18 @@ static int cee_native_clipboard_get(struct cee_window *w) {
     return found;
 }
 
+static void cee_native_wake(void) {} /* the window's pipe, which the wait includes, has its byte (ADR 0142) */
+
+/* Until an event (Xlib's queue, which XPending flushes and fills, or the connection), the window's pipe (ADR 0142) or
+   `seconds`. */
 static void cee_native_wait(struct cee_window *w, double seconds) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (cee_x.pending(n->display) > 0) {
         return;
     }
-    int fd = cee_x.connection_number(n->display);
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(fd, &set);
-    struct timeval timeout;
-    timeout.tv_sec = (time_t)seconds;
-    timeout.tv_usec = (suseconds_t)((seconds - (double)timeout.tv_sec) * 1e6);
-    select(fd + 1, &set, NULL, NULL, &timeout);
+    double ms = seconds * 1000.0 + 0.999;
+    struct pollfd p[2] = {{cee_x.connection_number(n->display), POLLIN, 0}, {w->wake_read, POLLIN, 0}};
+    poll(p, 2, ms <= 0.0 ? 0 : ms >= 2147483647.0 ? 2147483647 : (int)ms);
 }
 
 #else
@@ -3424,6 +3662,12 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
     w->focused = 1;
     w->text_input = -1;
     w->last_wait = cee_window_now();
+    if (!cee_wake_signal_open(w)) {
+        ceesafe_platform_free(w);
+        ceesafe_platform_free(name);
+        *error = CEE_WINDOW_RESOURCES;
+        return NULL;
+    }
     const char *script = getenv("CEESAFE_WINDOW_SCRIPT");
     if (script != NULL && script[0] != '\0') {
         w->scripted = 1;
@@ -3432,7 +3676,9 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
             w->dump = NULL;
         }
         if (!cee_window_script_load(w, script)) {
+            cee_wake_signal_close(w);
             ceesafe_platform_free(w->script);
+            ceesafe_platform_free(w->script_text);
             ceesafe_platform_free(w);
             ceesafe_platform_free(name);
             *error = CEE_WINDOW_RESOURCES;
@@ -3440,9 +3686,11 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
         }
         ceesafe_platform_free(name);
         cee_window_script_pump(w);
+        cee_wake_register(w);
         return w;
     }
 #if defined(CEE_WINDOW_NO_NATIVE)
+    cee_wake_signal_close(w);
     ceesafe_platform_free(w);
     ceesafe_platform_free(name);
     *error = CEE_WINDOW_UNSUPPORTED;
@@ -3451,10 +3699,12 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
     int failed = cee_native_open(w, name);
     ceesafe_platform_free(name);
     if (failed != 0) {
+        cee_wake_signal_close(w);
         ceesafe_platform_free(w);
         *error = failed;
         return NULL;
     }
+    cee_wake_register(w);
     return w;
 #endif
 }
@@ -3464,11 +3714,13 @@ void ceesafe_window_close(void *window) {
     if (w == NULL) {
         return;
     }
+    cee_wake_unregister(w); /* first: no wake reaches the window after this (ADR 0142) */
 #if !defined(CEE_WINDOW_NO_NATIVE)
     if (!w->scripted) {
         cee_native_close(w);
     }
 #endif
+    cee_wake_signal_close(w);
     ceesafe_platform_free(w->script);
     ceesafe_platform_free(w->kept);
     ceesafe_platform_free(w->composing);
@@ -3648,8 +3900,9 @@ void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t lengt
 void ceesafe_window_wait(void *window) {
     struct cee_window *w = (struct cee_window *)window;
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
-    if (w->scripted || now >= target || w->count > 0) {
+    if (w->scripted || now >= target || w->count > 0 || cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
+        cee_wake_take(w);
         return;
     }
 #if !defined(CEE_WINDOW_NO_NATIVE)
@@ -3657,6 +3910,92 @@ void ceesafe_window_wait(void *window) {
 #endif
     now = cee_window_now();
     w->last_wait = now > target ? now : target;
+    cee_wake_take(w);
+}
+
+/* ---- Waiting for events and waking (ADR 0142) ------------------------------------------------------------------- */
+
+/* Whether nextEvent would return an event: one is queued that was not taken back. */
+static int cee_window_has_event(struct cee_window *w) {
+    for (unsigned k = 0; k < w->count; k++) {
+        if (w->queue[(w->head + k) % CEE_WINDOW_QUEUE].kind != CEE_EVENT_DROPPED) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Sleeps until an event is queued, the window is woken, or `timeout_ms` pass, taking the system's events (the pump)
+   meanwhile, so that a system event that gives the program none does not end the wait. A scripted window returns at
+   once while its script still holds events, which come only with presents; then it waits on its signal alone. */
+void ceesafe_window_wait_event(void *window, uint32_t timeout_ms) {
+    struct cee_window *w = (struct cee_window *)window;
+    double deadline = cee_window_now() + (double)timeout_ms / 1000.0;
+    for (;;) {
+        if (cee_window_has_event(w) || cee_wake_pending(w)) {
+            break;
+        }
+        if (w->scripted) {
+            cee_window_script_pump(w);
+            if (cee_window_has_event(w) || w->script_next < w->script_count) {
+                break;
+            }
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+            if (cee_window_has_event(w)) {
+                break;
+            }
+        }
+#endif
+        double left = deadline - cee_window_now();
+        if (left <= 0.0 || cee_wake_pending(w)) {
+            break;
+        }
+        if (w->scripted) {
+            cee_wake_signal_wait(w, left);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_wait(w, left);
+        }
+#endif
+    }
+    cee_wake_take(w);
+}
+
+/* The id ceesafe_window_wake knows the window by. */
+uint64_t ceesafe_window_waker(void *window) { return ((struct cee_window *)window)->wake_id; }
+
+/* From any thread: sets the woken flag and the signal of the open window `id` names, once until a wait takes it; a
+   window that was closed is not in the list, and nothing happens. */
+void ceesafe_window_wake(uint64_t id) {
+    int native = 0;
+    cee_wake_acquire();
+    for (struct cee_window *w = cee_wake_windows; w != NULL; w = w->wake_link) {
+        if (w->wake_id == id) {
+            if (!w->woken) {
+                w->woken = 1;
+#if defined(_WIN32)
+                SetEvent((HANDLE)w->wake_event);
+#else
+                ssize_t written = write(w->wake_write, "", 1); /* the pipe is empty: there is room for the byte */
+                (void)written;
+#endif
+                native = !w->scripted;
+            }
+            break;
+        }
+    }
+    cee_wake_release();
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    if (native) {
+        cee_native_wake();
+    }
+#else
+    (void)native;
+#endif
 }
 
 /* ---- Text input and the clipboard (ADR 0141) ------------------------------------------------------------------- */

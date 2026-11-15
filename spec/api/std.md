@@ -68,6 +68,7 @@
 - [enum WindowKey](#enum-windowkey)
 - [enum WindowCursor](#enum-windowcursor)
 - [enum WindowEvent](#enum-windowevent)
+- [struct WindowWaker](#struct-windowwaker)
 - [struct Window](#struct-window)
 
 ## struct AsyncConsole
@@ -2767,6 +2768,27 @@ public enum WindowEvent {
 
 What happened to a window (§26.13). Positions are points from the content's top left.
 
+## struct WindowWaker
+
+```ceesafe
+public struct WindowWaker
+```
+
+Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker()`. It is a plain value, Copy and
+`Send`: the window's id in the runtime's list of open windows, never reused for another window.
+
+### WindowWaker.wake
+
+```ceesafe
+public fn wake(borrow this)
+```
+
+Makes the window's current `waitEvent` or `waitFrame` return promptly, or its next one at once. Wakes before the
+window waits again count as one. After the window was dropped, it does nothing. It has no effects, so a task
+or any thread may call it.
+Safety: the runtime looks the id up among the open windows, under its lock, and touches only a window it
+finds there.
+
 ## struct Window
 
 ```ceesafe
@@ -2893,8 +2915,31 @@ Safety: the runtime reads the title's bytes during the call only.
 public fn waitFrame(borrow mut this)
 ```
 
-Returns about 1/60 s after the previous call, or earlier when an event arrives.
+Returns about 1/60 s after the previous call, or earlier when an event arrives or the window is woken
+(`WindowWaker`, ADR 0142).
 Safety: the runtime only waits on the window it was given.
+
+### Window.waitEvent
+
+```ceesafe
+public fn waitEvent(borrow mut this, timeoutMs: u32)
+```
+
+Sleeps until an event is queued (`nextEvent` would return one), the window is woken (`WindowWaker.wake`) since
+the last `waitEvent` or `waitFrame` returned, or `timeoutMs` milliseconds pass; 0 returns at once. Unlike
+`waitFrame` it does not tick, so an idle window uses no CPU. While it sleeps the window takes the system's
+events, so it repaints and answers the clipboard (ADR 0142).
+Safety: the runtime only waits on the window it was given.
+
+### Window.waker
+
+```ceesafe
+public fn waker(borrow this) -> WindowWaker
+```
+
+A handle that wakes this window from any thread or task (ADR 0142). It is Copy and `Send`, where `Window` is
+neither, and does nothing once the window is dropped.
+Safety: the runtime only reads the window's waker id.
 
 ### Window.setTextInput
 

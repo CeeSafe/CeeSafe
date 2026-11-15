@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.49.1
+## Releases 0.25.0 to 0.50.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.50.0 | 2026-11-15 | Windows that sleep, and three findings of ClayWind. `window.waitEvent(timeoutMs)` waits for an event, a wake or the timeout without ticking, so an idle program uses no processor; `window.waker()` gives a `WindowWaker` that any thread or task may keep and `wake()` (ADR 0142). An array length may be any constant expression of type `usize`, such as `[0u32; 256 * 8]` (ADR 0143). N0200 on a slice, vector or string lists the byte and text methods too, such as `trim` (ADR 0144). | [Appendix C](./appendix-c-built-in-types) |
 | 0.49.1 | 2026-11-15 | Fixes and no new feature. A type with methods added in an `impl` block that sat in a file sorting before the type's own file was private to other packages, whose `import` of it was N0312: an impl declares no name, and no longer decides its type's visibility. | — |
 | 0.49.0 | 2026-11-15 | Text input through the platform's input method, and the clipboard's text (ADR 0141). `window.setTextInput(true)` lets the input method compose for the window: `WindowEvent.Composition` says its text changed, `window.composition()` and `window.compositionCaret()` read it, committed text still arrives as `Text` events, and `window.setTextInputArea(box)` puts the candidate window by the caret. `window.setClipboardText(text)` and `window.clipboardText(out)` write and read the system clipboard. A window that never calls `setTextInput` behaves as before. A `match` on `WindowEvent` that names every variant needs the new arm. | [Appendix C](./appendix-c-built-in-types) |
 | 0.48.3 | 2026-11-15 | Fixes and no new feature. An impl's static function, written without `public`, can be called through an interface bound from another package, as its methods could: it is as visible as the interface. And `ceesafec run --interp` drops a value nested very deeply, a tree 100,000 levels deep, as the compiled program does, where it used to crash. | [11.1](./ch11-01-writing-tests) |

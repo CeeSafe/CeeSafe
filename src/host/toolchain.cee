@@ -61,8 +61,32 @@ struct ToolOutcome {
 
 /// Runs `program` with `arguments`, capturing its output (Toolchain.Run).
 fn runTool(program: Slice<u8>, arguments: borrow Vector<Vector<u8>>) -> Result<ToolOutcome, AllocError> {
+    let none = Vector<Vector<u8>>.create();
+    return runToolWith(program, arguments, none);
+}
+
+/// `runTool` with `environment` ("NAME=value" entries) added to the program's environment. lib/std cannot set a
+/// child's environment (§26.9), so on POSIX systems the program runs through `env`, and on Windows, which has no
+/// `env`, its batch file sets them (ClayWind's N2).
+fn runToolWith(
+    program: Slice<u8>,
+    arguments: borrow Vector<Vector<u8>>,
+    environment: borrow Vector<Vector<u8>>,
+) -> Result<ToolOutcome, AllocError> {
     if (hostIsWindows()) {
-        return runThroughBatch(program, arguments, "".bytes());
+        return runThroughBatch(program, arguments, "".bytes(), environment);
+    }
+    if (environment.length > 0) {
+        var all = Vector<Vector<u8>>.create();
+        for (e in environment.view()) {
+            all.push(copyBytes(e.view())?)?;
+        }
+        all.push(copyBytes(program)?)?;
+        for (a in arguments.view()) {
+            all.push(copyBytes(a.view())?)?;
+        }
+        let none = Vector<Vector<u8>>.create();
+        return runToolWith("env".bytes(), all, none);
     }
     var views = Vector<StringView>.create();
     for (a in arguments.view()) {
@@ -1155,10 +1179,23 @@ fn notStarted(error: IoError) -> ToolOutcome => ToolOutcome {
 /// runtime reopens it to read, which Windows refuses (docs/p8-plan.md, upstream gaps). So a batch file in a fresh
 /// temporary directory runs the program with its output redirected to files, Process.run runs the batch file, and the
 /// files are read back.
+/// `bytes` in a batch file's line: each `%` doubled, which cmd.exe reads back as one, so that an argument such as a
+/// percent-encoded URL is not taken for a variable.
+fn appendBatchText(text: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result<void, AllocError> {
+    for (b in bytes) {
+        if (b == '%') {
+            text.push('%')?;
+        }
+        text.push(b)?;
+    }
+    return Ok();
+}
+
 fn runThroughBatch(
     program: Slice<u8>,
     arguments: borrow Vector<Vector<u8>>,
     vcvars: Slice<u8>,
+    environment: borrow Vector<Vector<u8>>,
 ) -> Result<ToolOutcome, AllocError> {
     let temporary = match (Directory.temporary()) {
         Ok(d) => d,
@@ -1176,12 +1213,17 @@ fn runThroughBatch(
         appendText(mut text, hostArchitecture())?;
         appendText(mut text, " >nul 2>&1 || exit /b 1\r\n")?;
     }
+    for (e in environment.view()) {
+        appendText(mut text, "set \"")?;
+        appendBatchText(mut text, e.view())?;
+        appendText(mut text, "\"\r\n")?;
+    }
     text.push('"')?;
     appendBytes(mut text, program)?;
     text.push('"')?;
     for (a in arguments.view()) {
         appendText(mut text, " \"")?;
-        appendBytes(mut text, a.view())?;
+        appendBatchText(mut text, a.view())?;
         text.push('"')?;
     }
     appendText(mut text, " >\"")?;

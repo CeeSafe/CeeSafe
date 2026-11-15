@@ -1,6 +1,6 @@
 // A package and every package it depends on, resolved (the reference's Packages/Workspace.cs; tooling.md
 // §4.2–§4.3): `fetch` resolves and writes `ceesafe.lock`; every other command resolves through the lock. Nothing
-// runs but `git` (through `env`, which sets GIT_TERMINAL_PROMPT=0; lib/std cannot set a child's environment).
+// runs but `git`, with GIT_TERMINAL_PROMPT=0 (toolchain.cee's runToolWith) and LF line endings in checkouts.
 
 /// One dependency as the lock records it (LockEntry): a registry package has a version and a repository.
 struct LockEntry {
@@ -309,9 +309,14 @@ struct GitCache {
         directory: Slice<u8>,
         arguments: borrow Vector<Vector<u8>>,
     ) -> Result<Vector<u8>?, AllocError> {
+        var environment = Vector<Vector<u8>>.create();
+        environment.push(copyBytes("GIT_TERMINAL_PROMPT=0".bytes())?)?;
         var all = Vector<Vector<u8>>.create();
-        all.push(copyBytes("GIT_TERMINAL_PROMPT=0".bytes())?)?;
-        all.push(copyBytes("git".bytes())?)?;
+        // A checkout's files as the repository holds them: Git for Windows converts them to CRLF by default
+        // (core.autocrlf), and then they never match the lock's hash, made where they were LF (ClayWind's N3).
+        for (setting in ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]) {
+            all.push(copyBytes(setting.bytes())?)?;
+        }
         if (directory.length > 0) {
             all.push(copyBytes("-C".bytes())?)?;
             all.push(copyBytes(directory)?)?;
@@ -319,7 +324,7 @@ struct GitCache {
         for (a in arguments.view()) {
             all.push(copyBytes(a.view())?)?;
         }
-        let outcome = runTool("env".bytes(), all)?;
+        let outcome = runToolWith("git".bytes(), all, environment)?;
         if (!outcome.started || outcome.status == 127) {
             this.lastError = copyBytes("git is not installed or not on the PATH".bytes())?;
             return Ok(null);

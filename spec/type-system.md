@@ -370,7 +370,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - An associated constant takes no attributes (N0290).
   - An interface's constants (§21.1, ADR 0086 §2.4) become associated constants of each impl's target.
   - An array length in a type or a repeat may name a `usize` constant, top-level or associated (§16.1, ADR 0083
-    §2.7): `[u8; LENGTH]` and `[u8; Oid.LENGTH]` are accepted.
+    §2.7): `[u8; LENGTH]` and `[u8; Oid.LENGTH]` are accepted, and so is a constant expression of type `usize` over
+    them (ADR 0143): `[u8; Oid.LENGTH * 2]`.
 
 ### 10.1 Embedded files (ADR 0087 §2.8)
 
@@ -1042,10 +1043,14 @@ fn area(s: Shape) -> u32 {
 
 ### 16.1 Types
 - `[T; N]` is a fixed array of `N` elements. `N` is an integer literal (no suffix or `usize`), a `usize` constant
-  (`LENGTH`, or an associated one, `Oid.LENGTH`; §10), or a `usize` const parameter in scope (§20.5; ADR 0083 §2.7),
-  with 1 ≤ N ≤ 2^48 − 1 (N0259), and the array is at most 2^31 − 1 bytes. Any other expression is N0259, and one
-  over a const parameter (`[u8; N + 1]`) N0353. It is laid out as `N` consecutive `T`s: size `N × size(T)`, the
-  alignment of `T`. The same holds for the `N` of a repeat `[v; N]` (§16.2).
+  (`LENGTH`, or an associated one, `Oid.LENGTH`; §10), a constant expression of type `usize` (§10: operators and `as`
+  over literals and constants, `[u32; CHARS * 8]`, `[u8; (CHARS + 1) / 2]`; ADR 0143), or a `usize` const parameter
+  in scope (§20.5; ADR 0083 §2.7), with 1 ≤ N ≤ 2^48 − 1 (N0259), and the array is at most 2^31 − 1 bytes. A constant
+  expression is checked against `usize` and evaluated as a constant's value is: an overflow, a negative result or a
+  division by zero is N0217, an operand of another type N0205, and `[u8; 256 * 8]` is the type `[u8; 2048]`. An
+  expression over a const parameter (`[u8; N + 1]`) or a local (`[u8; n * 2]`) is N0353, and any other form N0259.
+  It is laid out as `N` consecutive `T`s: size `N × size(T)`, the alignment of `T`. The same holds for the `N` of a
+  repeat `[v; N]` (§16.2).
   - **v0 restriction:** `T` must be a Copy type, so arrays are Copy and never need drop. Arrays of
     move types need element-wise move tracking (future). Slices may have move-type elements
     since M6b (§21.3).

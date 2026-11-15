@@ -138,6 +138,9 @@
     argument and a field: `check` is clean (0.44.0 gave N0313 at the literal's `Item`, and a parse error for the
     generic one) and the program prints what it should, in the interpreter and compiled. The simple names in a
     literal are still N0313.
+37. impl-statics (type-system.md §2, cee-proxy's F16): `impl Make for Thing` in app, its functions without
+    `public`; make's generic `build<T: Make>` calls the static `T.make` through the bound: `check` is clean (0.48.2
+    gave N0222, "'Thing.make' is not public") and the program prints 42 and 4, in the interpreter and compiled.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -403,6 +406,29 @@ def qualified_literals(compiler, work, problems):
     found = [(d["code"], d["start"]["line"]) for d in document["diagnostics"]] if document else []
     if status != 1 or found != [("N0313", 6), ("N0313", 7)]:
         problems.append(f"qualified-literals/ambiguous: expected N0313 at lines 6 and 7: {status} {found}")
+
+
+def impl_statics(compiler, work, problems):
+    """An interface's static function is as visible as the interface: called through a bound from the interface's
+    package, an impl's function written without `public` checks (cee-proxy's F16)."""
+    root = os.path.join(work, "impl-statics")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "impl-statics"), root)
+    app = os.path.join(root, "app")
+    status, document = json_check(compiler, app)
+    found = [d["code"] for d in document["diagnostics"]] if document else ["no document"]
+    if status != 0 or found:
+        problems.append(f"impl-statics: check should be clean: {status} {found}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.split() != ["42", "4"]:
+        problems.append(f"impl-statics: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-300:]}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0:
+        problems.append(f"impl-statics: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], app).stdout.split()
+        if out != ["42", "4"]:
+            problems.append(f"impl-statics: the program printed {out!r}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -1910,6 +1936,7 @@ def main():
         impl_bounds_order(compiler, work, problems)
         region_bounds(compiler, work, problems)
         qualified_literals(compiler, work, problems)
+        impl_statics(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)

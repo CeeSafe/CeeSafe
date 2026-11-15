@@ -349,8 +349,10 @@ fn checkStaticCall(
     completeMembers(c, typ, span)?; // an instance whose functions waited for a use (lazy_instances.cee)
     let definition = c.types.info(typ).structDef;
     var function = findStructFunction(c, definition, memberIdent.symbol);
+    var fromImpl = false;
     if (function == none()) {
         function = implMethodFor(c, typ, memberIdent.symbol); // an impl's static function (ADR 0086 §2.3)
+        fromImpl = function != none();
     }
     if (function == none() && reportUnmetImplBounds(
         c,
@@ -371,7 +373,15 @@ fn checkStaticCall(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    checkMethodVisible(c, function, Span { start: memberIdent.start, end: memberIdent.end })?;
+    let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+    if (fromImpl) {
+        // An interface's function is as visible as the interface (§2), as a method found through an impl is
+        // (findMethod): only an enum's own block and a file-private block are checked (cee-proxy's F16).
+        checkEnumMethodVisible(c, function, memberSpan)?;
+        checkMethodPrivate(c, function, memberSpan)?;
+    } else {
+        checkMethodVisible(c, function, memberSpan)?;
+    }
     if (isMethod(c, function)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;

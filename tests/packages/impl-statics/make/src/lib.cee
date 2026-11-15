@@ -1,0 +1,12 @@
+// An interface with a static function, and generic code that calls it through a bound (cee-proxy's F16).
+
+public interface Make {
+    fn make(seed: u32) -> Self;
+    fn twice(borrow this) -> u32;
+}
+
+/// The static function through the bound.
+public fn build<T: Make>(seed: u32) -> T => T.make(seed);
+
+/// A method through the bound.
+public fn doubled<T: Make>(value: borrow T) -> u32 => value.twice();

@@ -1,0 +1,22 @@
+// `impl Make for Thing` in another package than `Make`'s, its functions written without `public` (type-system.md §2:
+// an interface's function is as visible as the interface). Before 0.48.3 the static `make`, called through the bound
+// in `make.build`, was N0222 with "'Thing.make' is not public"; the method `twice` was accepted.
+import make.Make;
+import make.build;
+import make.doubled;
+
+struct Thing {
+    n: u32;
+}
+
+impl Make for Thing {
+    fn make(seed: u32) -> Thing => Thing { n: seed };
+
+    fn twice(borrow this) -> u32 => this.n * 2;
+}
+
+fn main() {
+    let t = build<Thing>(21);
+    Console.writeLine(doubled(t));
+    Console.writeLine(Thing.make(4).n); // and directly, in its own package
+}

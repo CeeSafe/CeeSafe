@@ -71,6 +71,32 @@
 - The VM action is a third-party action in the release workflow, pinned to a commit; its job has no secret and only
   produces an artifact that `publish` checksums with the rest.
 
+- **Also found and fixed on the way:**
+  - The record cache of interface records (ADR 0082) reads fstat's layout, known only for Linux and macOS: on FreeBSD
+    `statLayout` gives 0, so no record is made and every check is the full one, as with a cold cache. Correct, and
+    slower for a warm check. `tools/package_tests.py` skips its two record checks there.
+  - `run-pass/async-tcp-vectored` set a 4,096-byte receive buffer as well as the send buffer. On FreeBSD's `lo0`
+    (an MSS of about 16 KiB) such a window never opens by the amount that makes the receiver send a window update,
+    so the sender waited for TCP's persist timer, and the program took 77 s (truss: every send's `EAGAIN` followed by
+    a wait for writability that only the timer ended; the same on the poll() fallback). Its generator now makes the
+    sender's buffer small only: 3.1 s, still with 144 `EAGAIN`s, so the sends still stop inside parts. The expected
+    lines are unchanged.
+
 ## 4. Tests
 
-See ROADMAP §10's row for the runs of `freebsd.yml` on this branch.
+Run on 2026-11-15.
+
+- **`freebsd.yml` on this branch** (GitHub Actions, FreeBSD 14.4 amd64 in a VM): the first run stopped at the seed's
+  compile (`IP_PKTINFO`, §2.1). From the second on: generation 1 built by `cc` from the C alone, generation 2 by
+  generation 1, both emitting the same C ("the fixed point holds on FreeBSD"); the smoke test passes (the interpreter,
+  a native build, a scripted window, the MCP server). The third: the corpus, every family, 0 failures but
+  `run-pass/async-tcp-vectored` (above), and the same under leak checks; `tests/support` 9 of 9;
+  `test_command_check.py` 7 checks, `frame_stack_check.py`, `udp_check.py` (both reactors), `clock_check.py`,
+  `random_check.py`, `wake_check.py`: 0 problems each.
+- **On the owner's FreeBSD 15.1 amd64 PC** (clang 19.1.7, 4 CPUs), a ceesafec built there by `cc` from this tree's C
+  (126 s) and then by itself: the corpus, every family (the 4 freestanding files partial, as everywhere), and run-pass
+  (396) and run-fail (55) again with leak checks: 0 failures; `package_tests.py` 36 checks (the records skipped),
+  `cli_check.py`, `signal_check.py` (27 cases), `dns_check.py` (4 programs), `embed_check.py` (83 passed),
+  `fault_sweep.py` on the support library (573 of 573 failure points handled), `fix_paths_check.py`: 0 problems each.
+- **Not run on FreeBSD:** the sanitizer runs (`--no-sanitizers` where a check has the option), the contract suite as one
+  command, the window runtime with a display, arm64.

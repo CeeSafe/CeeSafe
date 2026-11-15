@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.48.2
+## Releases 0.25.0 to 0.48.3
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.48.3 | 2026-11-15 | Fixes and no new feature. An impl's static function, written without `public`, can be called through an interface bound from another package, as its methods could: it is as visible as the interface. And `ceesafec run --interp` drops a value nested very deeply, a tree 100,000 levels deep, as the compiled program does, where it used to crash. | [11.1](./ch11-01-writing-tests) |
 | 0.48.2 | 2026-11-15 | A fix and no new feature: `replace(mut out, value)` and `swap(mut a, mut b)` accept a parameter or a `let` of type `borrow mut T` and change what it refers to, as an assignment to it does, and the reference stays usable after the call. | [Appendix C](./appendix-c-built-in-types) |
 | 0.48.1 | 2026-11-15 | A fix and no new feature: two `@test` functions with one name are reported once, as a name defined twice (N0201), without a second, misleading error that the test is generic. | [11.1](./ch11-01-writing-tests) |
 | 0.48.0 | 2026-11-15 | `ProcessSignal.Hangup`: a program that subscribes to `ProcessSignals` also gets POSIX `SIGHUP`, queued like Ctrl+C and `SIGTERM` instead of ending the process, so a daemon can reload its configuration on `kill -HUP` or systemd's `ExecReload` (ADR 0140). Windows has no such request. A `match` on `ProcessSignal` that names every variant needs the new arm. | [21.5](./ch21-05-graceful-shutdown) |

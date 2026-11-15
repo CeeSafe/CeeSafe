@@ -198,6 +198,46 @@ fn inPackageCache(path: Slice<u8>) -> Result<bool, AllocError> {
     return Ok(isRooted(home.view()) && realPathWithin(pathWritten.view(), homeWritten.view()));
 }
 
+/// Where a package whose directory `path` lies in the package cache may embed from (tooling.md §4.1, ADR 0152): the
+/// checkout that holds it, `$CEESAFE_HOME/git/checkouts/<repository>/<commit>` by its real path, when it lies in one,
+/// else its own directory. Null when it does not lie in the package cache.
+fn packageCacheBoundary(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    if (!inPackageCache(path)?) {
+        return Ok(null);
+    }
+    let home = defaultHome()?;
+    let checkouts = joinPath(home.view(), "git/checkouts".bytes())?;
+    match (realPath(checkouts.view())?) {
+        Some(realCheckouts) => {
+            match (realPath(path)?) {
+                Some(real) => {
+                    let base = realCheckouts.length;
+                    if (realPathWithin(
+                        real.view(),
+                        realCheckouts.view(),
+                    ) && real.length > base + 1 && real[base] == '/') {
+                        // `/<repository>/<commit>` after the checkouts' directory: both parts must be there.
+                        var end = base + 1;
+                        while (end < real.length && real[end] != '/') {
+                            end += 1;
+                        }
+                        if (end > base + 1 && end + 1 < real.length) {
+                            var last = end + 1;
+                            while (last < real.length && real[last] != '/') {
+                                last += 1;
+                            }
+                            return Ok(copyBytes(real[0..last])?);
+                        }
+                    }
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return Ok(copyBytes(path)?);
+}
+
 /// What reading an embedded file found: its bytes and real path, or why it cannot be embedded (`problem`).
 struct EmbeddedRead {
     bytes: Vector<u8>;

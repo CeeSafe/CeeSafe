@@ -65,10 +65,11 @@
     - evil, a git dependency, has a path dependency inner whose [embed] roots climb out of the checkout; evildeep
       reaches its deep the same way through two path dependencies. Neither reads the secret: N0362 at the embed, and
       `run --interp` does not print it (a package reached through a git or registry package embeds only from itself).
+      evilout's path dependency leads out of its checkout, which `fetch` refuses (N0322, ADR 0152).
     - evilroots, a git dependency with roots outside its checkout, gets N0362; so does `check` run inside its checkout
       and the language server opening its file there (a package in the package cache embeds only from itself, even as
       the root package). evilout's path dependency lies outside the package cache (made here) and has roots outside
-      it: N0362 through the victim, and with `check` run in evilout's checkout (its lock committed for that).
+      it: N0362 with `check` run in evilout's checkout (its lock committed for that).
     - local: a symbolic link to the secret and a missing file get the same N0362 message, which names the path as
       written and neither the secret's directory nor its name; a FIFO is refused at once (not a regular file), and
       the language server answers with it there.
@@ -158,6 +159,18 @@
     the interface's signature was resolved in the impl's file). mine declares a `Drag` of its own and returns it from
     `drag`: N0267 alone (0.53.0 accepted it, taking the interface's `Drag` for mine's). imported imports `Drag`:
     `check` is clean and the program prints 42, in the interpreter and compiled.
+41. git-subdirectories (ADR 0152, tooling.md §4.1–§4.3, §4.6–§4.8), a repository made here (pushed to a bare one,
+    tagged v1 to v5): shapes and extra in subdirectories, extra naming shapes `{ path = "../shapes" }`, shapes
+    embedding from the repository's assets/. app names both by `git`, `tag` and `dir`: `fetch` locks two packages (one
+    shapes, no N0326), each with its `dir`; `check` is clean and the program prints 6 and the embedded word, in the
+    interpreter and compiled; the language server and `check` in shapes' directory of the checkout find nothing (its
+    embed from assets/ is inside the checkout); `check --offline` and `fetch --offline` work with the remote gone; the
+    lock's `dir` spelled otherwise (`shapes/../shapes`) is the same, another `dir` is N0324.
+    A `dir` that is absolute, has `\`, `$` or a leading `~`, is empty or leaves the checkout, and `dir` on a path
+    dependency, are N0321; a directory without a manifest, a path dependency out of the checkout (v3), and a symbolic
+    link leading out of it (v4, POSIX) are N0322; shapes at v1 and extra at v2, whose path names shapes2, are N0326
+    naming both directories. `publish` in a subdirectory writes `dir`, `index-check` accepts the entry, and an
+    application using it from that index runs, its lock recording `dir`.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -167,6 +180,7 @@ import itertools
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -204,10 +218,10 @@ def build_library(work):
     return lib
 
 
-def language_server(compiler, path, hover=None):
+def language_server(compiler, path, hover=None, method="textDocument/hover"):
     """What `ceesafec lsp` answers for the file at `path` once opened: the diagnostics it publishes, as JSON text, and
-    with `hover` (a line and a character) the hover's answer; both empty on a timeout (a FIFO that hung the check
-    would be one)."""
+    with `hover` (a line and a character) the answer of `method` there (the hover's, or another position request's,
+    such as a definition's); both empty on a timeout (a FIFO that hung the check would be one)."""
     with open(path) as f:
         text = f.read()
     uri = "file://" + ("/" if not path.startswith("/") else "") + path.replace(chr(92), "/")
@@ -218,7 +232,7 @@ def language_server(compiler, path, hover=None):
             "uri": uri, "languageId": "ceesafe", "version": 1, "text": text}}},
     ]
     if hover:
-        messages.append({"jsonrpc": "2.0", "id": 7, "method": "textDocument/hover", "params": {
+        messages.append({"jsonrpc": "2.0", "id": 7, "method": method, "params": {
             "textDocument": {"uri": uri}, "position": {"line": hover[0], "character": hover[1]}}})
     messages += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
     data = b""
@@ -1011,6 +1025,178 @@ def driver_messages(compiler, work, problems):
         p = run([compiler, "publish"], tally)
         if p.returncode != 1 or place(p.stderr) != expected + ": error[N0335]":
             problems.append(f"publish: N0335 at {expected}: {p.returncode} {p.stderr[:300]!r}")
+
+
+def git_subdirectories(compiler, work, problems):
+    """41. Packages in a repository's subdirectories (ADR 0152): `dir`, a path dependency inside a checkout, the lock,
+    embedding from the checkout, the registry."""
+    base = os.path.join(work, "git-subdirectories")
+    repository, remote, app = (os.path.join(base, name) for name in ("repository", "remote.git", "app"))
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@localhost"]
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def read(path):
+        return open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+
+    def codes(p):
+        try:
+            return [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            return [p.stdout[:300] + p.stderr[:300]]
+
+    def fetch_codes(p):
+        """The codes of `fetch`'s diagnostics (it prints them as text)."""
+        return re.findall(r"error\[(N[0-9]{4})\]", p.stderr)
+
+    def commit_and_tag(tag):
+        for argv in (["add", "-A"], ["commit", "-qm", tag], ["tag", tag], ["push", "-q", "origin", "HEAD:main", tag]):
+            run(git + argv, repository)
+
+    # The repository: shapes, and extra, which names shapes by a path, and assets beside them; v1. At v2 extra names
+    # a copy of shapes in another directory; at v3, a path out of the checkout.
+    write(os.path.join(repository, "assets", "word.txt"), "shared")
+    write(os.path.join(repository, "shapes", "ceesafe.toml"),
+          '[package]\nname = "shapes"\nkind = "library"\n\n[embed]\nroots = ["../assets"]\n')
+    write(os.path.join(repository, "shapes", "src", "lib.cee"),
+          'public const WORD: StringView = embedText("../../assets/word.txt");\n\npublic fn two() -> i32 => 2;\n')
+    write(os.path.join(repository, "extra", "ceesafe.toml"),
+          '[package]\nname = "extra"\nkind = "library"\n\n[dependencies]\nshapes = { path = "../shapes" }\n')
+    write(os.path.join(repository, "extra", "src", "lib.cee"), "public fn four() -> i32 => shapes.two() * 2;\n")
+    os.makedirs(remote)
+    run(["git", "init", "-q", "--bare"], remote)
+    run(git + ["init", "-q"], repository)
+    run(git + ["remote", "add", "origin", remote], repository)
+    commit_and_tag("v1")
+    shutil.copytree(os.path.join(repository, "shapes"), os.path.join(repository, "shapes2"))
+    write(os.path.join(repository, "extra", "ceesafe.toml"),
+          '[package]\nname = "extra"\nkind = "library"\n\n[dependencies]\nshapes = { path = "../shapes2" }\n')
+    commit_and_tag("v2")
+    write(os.path.join(repository, "extra", "ceesafe.toml"),
+          '[package]\nname = "extra"\nkind = "library"\n\n[dependencies]\nshapes = { path = "../../outside" }\n')
+    commit_and_tag("v3")
+    url = remote.replace("\\", "/")
+
+    def application(directory, dependencies, main=None):
+        write(os.path.join(directory, "ceesafe.toml"), '[package]\nname = "app"\n\n[dependencies]\n' + dependencies)
+        write(os.path.join(directory, "src", "main.cee"), main or
+              "fn main() {\n    Console.writeLine(extra.four() + shapes.two());\n    Console.writeLine(shapes.WORD);\n}\n")
+        return directory
+
+    # Both packages by git, tag and dir: one shapes (no N0326), the lock records the directories, and everything works.
+    application(app, f'shapes = {{ git = "{url}", tag = "v1", dir = "shapes" }}\n'
+                     f'extra = {{ git = "{url}", tag = "v1", dir = "./extra/" }}\n')
+    p = run([compiler, "fetch"], app)
+    lock = read(os.path.join(app, "ceesafe.lock"))
+    if p.returncode != 0 or lock.count("[[package]]") != 2 or 'dir = "shapes"' not in lock or 'dir = "extra"' not in lock:
+        problems.append(f"git dir: fetch: {p.returncode} {p.stderr[:400]!r} lock {lock!r}")
+    p = run([compiler, "check", "--diagnostics-format=json"], app)
+    if p.returncode != 0 or codes(p):
+        problems.append(f"git dir: check: {p.returncode} {codes(p)}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.split() != ["6", "shared"]:
+        problems.append(f"git dir: run --interp: {p.returncode} {p.stdout!r} {p.stderr[-300:]!r}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0 or run([exe], app).stdout.split() != ["6", "shared"]:
+        problems.append(f"git dir: build: {p.returncode} {p.stderr[-400:]!r}")
+    # shapes' file in its directory of the checkout, as an editor opens it there: the language server and `check`
+    # check it as its package, which embeds from the checkout's assets/ (the whole checkout, not its directory).
+    checkouts = os.path.join(os.environ["CEESAFE_HOME"], "git", "checkouts")
+    found = [top for top, _, files in os.walk(checkouts)
+             if "lib.cee" in files and top.replace("\\", "/").endswith("/shapes/src")]
+    if len(found) != 1:
+        problems.append(f"git dir: one checkout of shapes' directory in the package cache: {found}")
+    else:
+        published = language_server_diagnostics(compiler, os.path.join(found[0], "lib.cee"))
+        if "publishDiagnostics" not in published or '"code"' in published:
+            problems.append(f"git dir: the language server in shapes' checkout: {published[:400]}")
+        p = run([compiler, "check", "--diagnostics-format=json"], os.path.dirname(found[0]))
+        if p.returncode != 0 or codes(p):
+            problems.append(f"git dir: check in shapes' directory of the checkout: {p.returncode} {codes(p)}")
+    # Offline, without the remote: the cache has it.
+    moved = remote + ".away"
+    os.rename(remote, moved)
+    p = run([compiler, "check", "--offline"], app)
+    q = run([compiler, "fetch", "--offline"], app)
+    os.rename(moved, remote)
+    if p.returncode != 0 or q.returncode != 0:
+        problems.append(f"git dir: --offline: {p.returncode} {p.stderr[:300]!r} {q.returncode} {q.stderr[:300]!r}")
+    # Another directory than the lock's is N0324; the same one spelled otherwise is not.
+    application(app, f'shapes = {{ git = "{url}", tag = "v1", dir = "shapes/../shapes" }}\n'
+                     f'extra = {{ git = "{url}", tag = "v1", dir = "extra" }}\n')
+    p = run([compiler, "check", "--diagnostics-format=json"], app)
+    if p.returncode != 0 or codes(p):
+        problems.append(f"git dir: the lock's directory spelled otherwise: {p.returncode} {codes(p)}")
+    application(app, f'shapes = {{ git = "{url}", tag = "v1", dir = "shapes2" }}\n'
+                     f'extra = {{ git = "{url}", tag = "v1", dir = "extra" }}\n')
+    p = run([compiler, "check", "--diagnostics-format=json"], app)
+    if p.returncode != 1 or codes(p) != ["N0324"]:
+        problems.append(f"git dir: a directory the lock does not record: {p.returncode} {codes(p)}")
+
+    # Spelling: N0321 when the manifest is read.
+    spelling = os.path.join(base, "spelling")
+    for written in ("../shapes", "/shapes", "shapes/../..", "a\\\\b", "$HOME/x", "~/x", ""):
+        application(spelling, f'shapes = {{ git = "{url}", tag = "v1", dir = "{written}" }}\n', "fn main() {}\n")
+        p = run([compiler, "fetch"], spelling)
+        if p.returncode != 1 or fetch_codes(p) != ["N0321"]:
+            problems.append(f"git dir: dir = {written!r}: expected N0321: {p.returncode} {p.stderr[:300]}")
+    application(spelling, 'shapes = { path = "../x", dir = "shapes" }\n', "fn main() {}\n")
+    p = run([compiler, "fetch"], spelling)
+    if p.returncode != 1 or fetch_codes(p) != ["N0321"]:
+        problems.append(f"git dir: a path dependency with dir: expected N0321: {p.returncode} {p.stderr[:300]}")
+
+    # Where it leads: N0322 for a directory without a manifest, a path out of the checkout, and a symbolic link out.
+    cases = [("missing", f'shapes = {{ git = "{url}", tag = "v1", dir = "assets" }}\n', "no ceesafe.toml"),
+             ("outside", f'extra = {{ git = "{url}", tag = "v3", dir = "extra" }}\n',
+              "is not a directory of its checkout")]
+    if not WINDOWS:
+        shutil.copytree(os.path.join(repository, "shapes"), os.path.join(base, "elsewhere"))
+        os.symlink(os.path.join(base, "elsewhere"), os.path.join(repository, "linked"))
+        commit_and_tag("v4")
+        cases.append(("linked", f'shapes = {{ git = "{url}", tag = "v4", dir = "linked" }}\n', "symbolic link"))
+    for name, dependencies, said in cases:
+        directory = application(os.path.join(base, name), dependencies, "fn main() {}\n")
+        p = run([compiler, "fetch"], directory)
+        if p.returncode != 1 or fetch_codes(p) != ["N0322"] or said not in p.stderr:
+            problems.append(f"git dir: {name}: expected N0322 saying {said!r}: {p.returncode} {p.stderr[:400]}")
+
+    # Two directories under one name, at two tags: N0326 naming both.
+    directory = application(os.path.join(base, "two"), f'shapes = {{ git = "{url}", tag = "v1", dir = "shapes" }}\n'
+                                                       f'extra = {{ git = "{url}", tag = "v2", dir = "extra" }}\n')
+    p = run([compiler, "fetch"], directory)
+    if (p.returncode != 1 or fetch_codes(p) != ["N0326"] or "directory 'shapes'" not in p.stderr
+            or "directory 'shapes2'" not in p.stderr):
+        problems.append(f"git dir: two directories under one name: {p.returncode} {p.stderr[:400]}")
+
+    # The registry: publish in a subdirectory writes dir; index-check and an application using it agree.
+    index = os.path.join(base, "index")
+    write(os.path.join(repository, "tally", "ceesafe.toml"),
+          '[package]\nname = "tally"\nversion = "0.1.0"\nkind = "library"\n')
+    write(os.path.join(repository, "tally", "src", "lib.cee"), "public fn three() -> i32 => 3;\n")
+    commit_and_tag("v5")
+    run(git + ["fetch", "-q", "origin"], repository)
+    p = run([compiler, "publish"], os.path.join(repository, "tally"))
+    if p.returncode != 0 or 'dir = "tally"' not in p.stdout:
+        problems.append(f"git dir: publish in a subdirectory: {p.returncode} {p.stdout[:300]!r} {p.stderr[:300]!r}")
+        return
+    write(os.path.join(index, "packages", "tally.toml"), p.stdout)
+    for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "one"]):
+        run(git + argv, index)
+    p = run([compiler, "index-check", "."], index)
+    if p.returncode != 0:
+        problems.append(f"git dir: index-check of an entry with dir: {p.returncode} {p.stderr[:300]!r}")
+    user = application(os.path.join(base, "user"), 'tally = "0.1"\n',
+                       "fn main() {\n    Console.writeLine(tally.three());\n}\n")
+    p = run([compiler, "fetch"], user, {"CEESAFE_INDEX": index})
+    q = run([compiler, "run", "--interp"], user, {"CEESAFE_INDEX": index})
+    lock = read(os.path.join(user, "ceesafe.lock"))
+    if p.returncode != 0 or q.stdout.strip() != "3" or 'dir = "tally"' not in lock:
+        problems.append(f"git dir: a registry package in a subdirectory: {p.stderr[:300]!r} {q.stdout!r} "
+                        f"{q.stderr[:300]!r} {lock!r}")
 
 
 def pe_subsystem(path):
@@ -1840,6 +2026,12 @@ def main():
         shutil.move(os.path.join(security, "outside-inner"), os.path.join(work, "outside-inner"))
         for dependency in ("evil", "evildeep", "evilroots", "evilout"):
             directory = victim("victim", dependency)
+            if dependency == "evilout":
+                # A git package's path dependency is a directory of its checkout (ADR 0152): one out of it is N0322.
+                p = run([compiler, "fetch"], directory)
+                if p.returncode != 1 or "error[N0322]" not in p.stderr or "outside-inner" not in p.stderr:
+                    problems.append(f"embed security: evilout: fetch: expected N0322 at its path: {p.stderr[:400]}")
+                continue
             p = run([compiler, "check", "--whole-program", "--diagnostics-format=json"], directory)
             found = diagnostics(p)
             if p.returncode != 1 or [c for c, _ in found] != ["N0362"] or "TOPSECRET" in p.stdout + p.stderr:
@@ -2121,9 +2313,10 @@ def main():
             interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
         windowed_executables(compiler, work, problems)
+        git_subdirectories(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 37 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 38 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

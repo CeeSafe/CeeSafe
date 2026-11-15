@@ -48,6 +48,7 @@ fn indexEntryText(
     version: Slice<u8>,
     git: Slice<u8>,
     commit: Slice<u8>,
+    dir: Slice<u8>,
     hash: Slice<u8>,
     dependencies: borrow Vector<DependencySpec>,
 ) -> Result<Vector<u8>, AllocError> {
@@ -55,6 +56,9 @@ fn indexEntryText(
     appendLockLine(mut text, "version", version)?;
     appendLockLine(mut text, "git", git)?;
     appendLockLine(mut text, "commit", commit)?;
+    if (dir.length > 0) {
+        appendLockLine(mut text, "dir", dir)?;
+    }
     appendLockLine(mut text, "hash", hash)?;
     var order = Vector<usize>.create();
     for (k in 0..dependencies.length) {
@@ -196,8 +200,35 @@ fn publishCheck(
         )?;
         return Ok(null);
     }
+    // The package's directory from the repository's top (ADR 0152): "" at the top, else "a/b/".
+    let prefix = match (gitIn(dir, words("rev-parse", "--show-prefix", "", "", 2)?, "".bytes())?) {
+        Some(p) => p,
+        null => Vector<u8>.create(),
+    };
+    var packageDir = Vector<u8>.create();
+    if (prefix.length > 0) {
+        let problem = checkoutDirectory(prefix.view(), mut packageDir)?;
+        if (problem.length > 0) {
+            var m = Words.create();
+            m.t("the package's directory in its repository, '")?;
+            m.b(prefix.view())?;
+            m.t("', cannot be an index entry's 'dir': ")?;
+            m.b(problem.view())?;
+            publishRefuse(report, manifest, 0, 0, m.out)?;
+            return Ok(null);
+        }
+    }
     let hash = packageHash(manifest)?;
-    return Ok(indexEntryText(manifest.version.view(), url.view(), commit.view(), hash.view(), manifest.dependencies)?);
+    return Ok(
+        indexEntryText(
+            manifest.version.view(),
+            url.view(),
+            commit.view(),
+            packageDir.view(),
+            hash.view(),
+            manifest.dependencies,
+        )?,
+    );
 }
 
 /// The checks of an index's continuous integration over the index in `directory` (Publishing.CheckIndex): each
@@ -205,7 +236,7 @@ fn publishCheck(
 /// and each package's versions increase in file order. Returns the number of entries checked.
 fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: bool) -> Result<u32, AllocError> {
     var index = PackageIndex { directory: copyBytes(directory)?, packages: Vector<IndexPackage>.create() };
-    var git = GitCache { home: defaultHome()?, lastError: Vector<u8>.create() };
+    var git = GitCache.create()?;
     var checked: u32 = 0;
     let packages = joinPath(directory, "packages".bytes())?;
     var files = Vector<Vector<u8>>.create();
@@ -276,7 +307,33 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
             manifestDisplay.push('@')?;
             entry.version.appendTo(mut manifestDisplay)?;
             appendText(mut manifestDisplay, "/ceesafe.toml")?;
-            let manifest = match (loadManifest(checkout.view(), report, manifestDisplay.view())?) {
+            // The package's directory in the commit (ADR 0152): it must lie inside the checkout.
+            let packageDirectory = joinPath(checkout.view(), entry.dir.view())?;
+            if (entry.dir.length > 0) {
+                var inside = false;
+                match (realPath(checkout.view())?) {
+                    Some(realCheckout) => {
+                        match (realPath(packageDirectory.view())?) {
+                            Some(real) => { inside = realPathWithin(real.view(), realCheckout.view()); }
+                            null => { inside = true; } // missing: loadManifest says so
+                        }
+                    }
+                    null => {}
+                }
+                if (!inside) {
+                    var m = Words.create();
+                    m.t("'")?;
+                    m.b(name)?;
+                    m.t("' ")?;
+                    entry.version.appendTo(mut m.out)?;
+                    m.t(": the directory '")?;
+                    m.b(entry.dir.view())?;
+                    m.t("' leads out of the checkout, through a symbolic link")?;
+                    report.error(328, source, entry.start, entry.end, m.out)?;
+                    continue;
+                }
+            }
+            let manifest = match (loadManifest(packageDirectory.view(), report, manifestDisplay.view())?) {
                 Some(m) => m,
                 null => { continue; }
             };

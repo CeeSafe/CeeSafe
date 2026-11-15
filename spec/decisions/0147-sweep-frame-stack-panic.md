@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-15. Asked whether "the test sweep accepts the §3.3 panic as the fault
   script does, or keeps failing it", the owner chose "Count apart (Recommended)". Reported by CeeSafe.Web as U18
   (`~/dev/CeeSafe.Web/docs/ceesafe-upstream-work.md`, found 2026-11-03 with ceesafec 0.10.1). Implemented on branch
-  `ceesafe-0.52.0`.
+  `release-0.53.0-prep`.
 - Scope: `ceesafec test --sweep alloc` (`src/host/test_runner.cee`), its help (`src/main.cee`), spec/tooling.md §10.2,
   guide/testing.md, ADR 0056 §3.3's note, `tools/test_command_check.py` and its fixture
   `tests/packages/sweep-frame-stack`. No change to the language, the C backend, the runtime or the interpreter.

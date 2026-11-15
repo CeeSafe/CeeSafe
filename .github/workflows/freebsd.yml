@@ -9,7 +9,7 @@ name: freebsd
 on:
   push:
     tags: ["v*"]
-    branches: ["ceesafe-0.52.0"] # bring-up only: removed before the branch is merged
+    branches: ["release-0.53.0-prep"] # bring-up only: removed before the branch is merged
   workflow_dispatch:
 
 permissions:

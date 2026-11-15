@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-15: "Go ahead and do the works required in CeeSafe and cut a release",
   for CeeSafe.Web's upstream items, this one U21 (`~/dev/CeeSafe.Web/docs/ceesafe-upstream-work.md`, found 2026-11-05
-  with ceesafec 0.11.0 on Windows 11 ARM64). Implemented on branch `ceesafe-0.52.0`.
+  with ceesafec 0.11.0 on Windows 11 ARM64). Implemented on branch `release-0.53.0-prep`.
 - Scope: the hosted runtime's executor on Windows (`runtime/hosted/ceesafe_rt_async.c`: `ceesafe_async_now`,
   `cee_wait_windows`, `cee_iocp_drain`, the executor's begin and end); ADR 0055's note. No change to the language,
   lib/, the compiler, the interpreter or any other system.

@@ -4728,6 +4728,9 @@ static int32_t cee_native_menu(struct cee_window *w) {
    program's window and not modal to them. */
 #include <spawn.h>
 #include <sys/wait.h>
+#if defined(__FreeBSD__)
+extern char **environ; /* POSIX's, which FreeBSD's unistd.h does not declare (glibc does, under _GNU_SOURCE) */
+#endif
 
 /* `a` then `b`, allocated, or NULL. */
 static char *cee_x_join(const char *a, const char *b) {

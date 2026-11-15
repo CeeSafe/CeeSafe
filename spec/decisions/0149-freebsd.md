@@ -6,7 +6,7 @@
   job with `vmactions/freebsd-vm` pinned to a commit, the owner chose "Yes, vmactions (Recommended)", and "One release,
   0.52.0 (Recommended)": FreeBSD brought up in CI first, then released with ADRs 0147 and 0148. Meanwhile 0.51.2 and
   0.52.0 were released from main for other work, so the three are released as 0.53.0. Implemented on branch
-  `ceesafe-0.52.0` (the name it had before).
+  `release-0.53.0-prep` (first named `ceesafe-0.52.0`, the version then expected).
 - Scope: the compiler's host checks (`src/host/toolchain.cee`, `src/host/embedding.cee`,
   `src/packages/manifest.cee`), the hosted runtime (`ceesafe_rt_async.c`, `ceesafe_rt_window.c`),
   `.github/workflows/freebsd.yml` (new) and `release.yml`, `site/public/install.sh`, tooling.md §4.1 and §8.3,

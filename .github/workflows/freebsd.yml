@@ -93,17 +93,6 @@ jobs:
             head -1 window-frame.bin | grep -Fx "ceesafe-window 8 6"
             echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | out/ceesafec mcp | grep -F '"result":{}'
             echo "the smoke test passes on FreeBSD"
-            # Bring-up diagnosis (removed with the branch trigger): run-pass/async-tcp-vectored, which timed out, on
-            # kqueue and on the poll() fallback, and under truss.
-            out/ceesafec build tests/reference/tests/corpus/run-pass/async-tcp-vectored.cee -o vectored
-            timeout 30 ./vectored > vectored.out 2>&1 && echo "vectored (kqueue): passed" || echo "vectored (kqueue): status $?"
-            cat vectored.out
-            CEESAFE_REACTOR_POLL=1 timeout 30 ./vectored > vectored.out 2>&1 && echo "vectored (poll): passed" || echo "vectored (poll): status $?"
-            cat vectored.out
-            timeout 20 truss -f -o vectored.truss ./vectored > /dev/null 2>&1 || true
-            wc -l vectored.truss
-            grep -c kevent vectored.truss || true
-            tail -60 vectored.truss
             # CeeSafe's tests (spec/testing.md), each step's result kept, every one run.
             status=0
             step() {

@@ -100,8 +100,9 @@ async fn sendAll(
     };
     let client = await AsyncTcpStream.connect("127.0.0.1", port)?;
     let server = await listener.accept()?;
+    // The sender's buffer only: a 4,096-byte receive buffer on FreeBSD's lo0 (an MSS of 16 KiB) never opens by the
+    // amount that sends a window update, so the sender waited for TCP's persist timer, over a minute in all (ADR 0149).
     done(client.setSendBuffer(4096))?;
-    done(server.setRecvBuffer(4096))?;
     var h: u32 = 0;
     await Async.all(
         async () => {

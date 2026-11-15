@@ -109,7 +109,7 @@ N0314	A `public` item's signature names a type that other packages cannot see. M
 N0315	An item or a type parameter has the name of one of the package's dependencies. Rename it.
 N0320	`ceesafe.toml` or `ceesafe.lock` is not valid in the subset of TOML that CeeSafe reads, for example a string without quotes. Correct the line the message names.
 N0321	A field of the manifest is missing, unknown or has a value it cannot have (`kind = "binary"`), or a dependency is an executable. `kind` is `"executable"` or `"library"`.
-N0322	A path dependency's directory or its `ceesafe.toml` is missing, or the package there has another name than the key. Correct the path or the key.
+N0322	A dependency's directory or its `ceesafe.toml` is missing, a git package's `dir` or path dependency leads out of its checkout, or the package there has another name than the key. Correct the path, the `dir` or the key.
 N0323	A git dependency cannot be fetched or resolved, or is not in the cache when `--offline` is given. Check the address and the tag, and run `ceesafec fetch` with a network.
 N0324	`ceesafe.lock` is missing, or does not match the manifest. Run `ceesafec fetch`.
 N0325	A fetched dependency's manifest and sources do not match the hash in `ceesafe.lock`, as when a file in the cache was edited. Put the files back as they were fetched.

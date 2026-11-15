@@ -223,6 +223,7 @@ roots = ["../build/codegen"]
 [dependencies]
 geometry = { path = "../geometry" }
 lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
+widgets = { git = "https://example.org/ui.git", tag = "v0.3.0", dir = "widgets" }   # a package in a subdirectory
 shapes = "2.1"               # from the registry (§4.6): a version requirement
 json = { version = "0.9", index = "https://example.org/my-index.git" }   # from another index
 ```
@@ -282,21 +283,40 @@ directory (the one holding `ceesafe.toml`), and inside each directory `[embed] r
   outside their directory.** They are code the user works on, whose manifests the user wrote. A git or registry
   dependency, and every package reached through one (its path dependencies, at any depth), embeds only inside that
   checkout: a root counts only when its real path is inside it, so a checkout reaches nothing outside itself, through
-  `..`, through a symbolic link it holds, or through a path dependency it names. So does a package whose directory
-  lies in the package cache (`$CEESAFE_HOME`, §4.3), even as the root package: the language server going to a
-  definition in a checkout, or `check` run there, gives it no more than the build that fetched it, and the path
-  dependencies such a root reaches are kept inside its directory, wherever they lie.
+  `..`, through a symbolic link it holds, or through a path dependency it names. The checkout is the whole commit's,
+  also for a package in one of its directories (`dir`, ADR 0152): such a package may embed from a sibling directory
+  of its repository, and from nothing outside it. So does a package whose directory lies in the package cache
+  (`$CEESAFE_HOME`, §4.3), even as the root package: the language server going to a definition in a checkout, or
+  `check` run there, gives it no more than the build that fetched it, and the path dependencies such a root reaches
+  are kept inside the checkout that holds it (`$CEESAFE_HOME/git/checkouts/<repository>/<commit>`), or inside its
+  own directory when it lies in no checkout, wherever they lie.
 
 
 From the package being built, every dependency is resolved, and then its dependencies, recursively:
 - `path` is a directory relative to the manifest that names it, holding the dependency's `ceesafe.toml`;
 - `git` is a repository; `rev` names a commit, `tag` and `branch` are resolved to one (§4.3). The commit is
   checked out into the cache, `$CEESAFE_HOME/git/checkouts/<repository>/<commit>` (default `~/.ceesafe`), and the
-  dependency is the package at the checkout's root.
+  dependency is the package at the checkout's root, or in its directory `dir` (ADR 0152). A command fetches each
+  repository once, so one tag or branch written by two dependencies names one commit.
 
-A package name reached by two different sources (two paths, two commits, a path and a commit) is N0326, naming both
-dependents. A package that depends on itself, directly or not, is N0327. A missing directory or manifest is N0322.
-Nothing runs during resolution except `git` (ADR 0013 D5).
+**`dir`** (ADR 0152) goes with `git` and any of `rev`, `tag` and `branch`; on a path or registry dependency it is
+N0321. It is a directory relative to the checkout's root, with `/` separators, and nothing in it is expanded: an
+empty string, an absolute path, a drive, a `\`, `:`, `$` or `%`, a NUL, a leading `~`, and a `..` that leaves the
+checkout are N0321 at the value. `.` and empty parts are dropped and `a/../b` is `b`; `.` is the root. When the
+package is loaded, a directory without a `ceesafe.toml`, or whose real path lies outside the checkout's (through a
+symbolic link), is N0322 at the dependency.
+
+**A git package's source is its repository, its commit and its directory.** A path dependency of a git package (or
+of a package that is one by this rule, at any depth) is a directory of the same checkout: the same repository and
+commit, and the dependent's directory joined with the path, in the normal form above. So a package of one
+repository that names a sibling `{ path = "../core" }`, and an application that names the same sibling `{ git = …,
+dir = "core" }` at the same commit, reach one package. Such a path that leaves the checkout (`..` past its root, or
+absolute) is N0322 at the dependency.
+
+A package name reached by two different sources (two paths, two commits, two directories of a repository, a path and
+a commit) is N0326, naming both dependents, and each source's directory. A package that depends on itself, directly
+or not, is N0327. A missing directory or manifest is N0322. Nothing runs during resolution except `git` (ADR 0013
+D5).
 
 ### 4.3 The lock file
 
@@ -311,9 +331,21 @@ commit = "3f2a9c0d…"         # the full commit id
 hash = "sha256:…"            # of the checkout's manifest and sources
 
 [[package]]
+name = "widgets"
+source = "git+https://example.org/ui.git"
+commit = "9e8d7c6b…"
+dir = "widgets"              # the package's directory in the checkout (ADR 0152); none at the root
+hash = "sha256:…"            # of its manifest and sources, by their paths in its directory
+
+[[package]]
 name = "geometry"
 source = "path+../geometry"
 ```
+
+- A git or registry package not at its checkout's root has `dir`, its directory in normal form (§4.1); an entry
+  without `dir` is at the root. A path dependency of a git package is locked as the git package it is: `git+` its
+  repository, the dependent's `commit`, its `dir` and its `hash`. A git dependency whose `dir` differs from the
+  lock's is N0324, as one whose repository or `rev` does.
 
 - `ceesafec fetch` resolves every dependency, fetching git repositories and resolving tags and branches (`git
   ls-remote`, `git fetch`), and writes the lock. A `rev` is used as written; a `tag` or `branch` is the commit it names
@@ -447,7 +479,7 @@ lock's hash (§4.3), which covers a package's manifest and sources, nor `fetch` 
 |---|---|
 | N0320 | `ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset of §4.1 |
 | N0321 | A manifest field is missing, unknown, or has an invalid value |
-| N0322 | A path dependency's directory or manifest is missing, or a dependency is named differently from its key |
+| N0322 | A dependency's directory or manifest is missing, a git package's `dir` or path dependency leads out of its checkout (ADR 0152), or a dependency is named differently from its key |
 | N0323 | A git dependency cannot be fetched or resolved, or is needed with `--offline` and absent |
 | N0324 | The lock file is missing or does not match the manifest: run `ceesafec fetch` |
 | N0325 | A git checkout's manifest and sources do not match the lock's hash |
@@ -476,12 +508,14 @@ repository, by default `https://github.com/CeeSafe/CeeSafe-index`, or `$CEESAFE_
   version = "1.4.0"
   git = "https://github.com/someone/geometry.git"
   commit = "3f2a9c0d…"                      # a full commit id
+  dir = "geometry"                          # optional: the package's directory in the commit (ADR 0152)
   hash = "sha256:…"                         # of the commit's manifest and sources (§4.3)
   dependencies = { shapes = "2.1" }         # its registry requirements, as its ceesafe.toml writes them
   yanked = false                            # optional; a yanked version is never chosen for a new resolution
   ```
   Entries are only appended. A published package's dependencies are all registry dependencies, and those without
-  an `index` come from the index that published the package.
+  an `index` come from the index that published the package. `dir`, as a git dependency's (§4.1), says where in the
+  commit the package is; without it, at the root. An invalid `dir` is N0328, as any other invalid field.
 
 ### 4.7 Version solving
 
@@ -500,8 +534,8 @@ index's entries:
   `no version of 'shapes' satisfies ^2.1 (from geometry 1.4.0) and ^1.0 (from plot 0.3.0)`.
 - Each chosen version's commit is checked out as for a git dependency (§4.2). Its hash must be the index's (N0325),
   and its manifest's name and version must be the entry's (N0328).
-- The lock records each as `source = "registry+<index>"` with `version`, `repository` (the git URL), `commit` and
-  `hash`. Other commands use the lock: an entry whose version no longer satisfies the manifest's requirement is
+- The lock records each as `source = "registry+<index>"` with `version`, `repository` (the git URL), `commit`,
+  `dir` when the entry has one, and `hash`. Other commands use the lock: an entry whose version no longer satisfies the manifest's requirement is
   N0324.
 
 ### 4.8 Publishing
@@ -516,11 +550,13 @@ index's entries:
 A package that fails a check is N0335, at what is wrong where the manifest has it: the `kind` that is not a library,
 `[package]` without a version, the dependency that is not a registry one; otherwise at the manifest's start.
 
-It then prints the index entry for the version: the remote's URL, the commit, the hash and the requirements. To
+It then prints the index entry for the version: the remote's URL, the commit, the package's directory in the
+repository when it is not at the top (`dir`, from `git rev-parse --show-prefix`; ADR 0152), the hash and the
+requirements. To
 publish, add that entry to `packages/<name>.toml` in the index by pull request. The index's continuous integration
 runs `ceesafec index-check`, which checks every new entry:
 - the commit exists;
-- its manifest has the entry's name and version;
+- its manifest, at the entry's `dir`, has the entry's name and version;
 - its hash and dependencies are the entry's;
 - the version is newer than every earlier entry.
 

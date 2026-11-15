@@ -21,11 +21,17 @@ ceesafec = ">=0.20.0"        # the compiler this package needs: an older one sto
 [dependencies]
 geometry = { path = "../geometry" }
 lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
+widgets = { git = "https://example.org/ui.git", tag = "v0.3.0", dir = "widgets" }   # a package in a directory
 ```
 
 Only `name` is required. `ceesafec` takes a version requirement like a dependency's (`>=0.20.0, <0.21.0`); a compiler
 older than the field reports it as unknown, at the same line. A dependency's key must be the name its own manifest gives it, and a dependency must be a
 library.
+
+A repository may hold several packages, each in its own directory: `dir` names it, relative to the repository's top
+and inside it. A path dependency between two packages of one repository (`{ path = "../layout" }` in `widgets`)
+means the same commit's directory, so an application that names both by `git` and `dir` at one tag gets one of
+each, and the lock records each package's `dir` ([ADR 0152](../spec/decisions/0152-git-subdirectories.md)).
 
 ## C libraries
 

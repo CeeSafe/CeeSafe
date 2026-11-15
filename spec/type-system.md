@@ -3143,7 +3143,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows.
@@ -3181,8 +3181,9 @@ Diagnostics: none new.
   - `Wheel(dx, dy)`, in lines, positive `dy` away from the user (scrolling up);
   - `Key(WindowKey, down, repeat, WindowModifiers)`. `WindowModifiers` has `shift`, `control`, `alt` and `command`:
     `command` is ⌘ on macOS and the Windows key elsewhere;
-  - `Text(u32)`: a Unicode scalar the user typed, after the key's own `Key` event; control characters are not
-    reported as `Text`.
+  - `Text(u32)`: a Unicode scalar the user typed, after the key's own `Key` event, or that the input method committed;
+    control characters are not reported as `Text`;
+  - `Composition`: the input method's composition or its caret changed, or the composition ended (ADR 0141, below).
 - **Keys.** `WindowKey` is one of:
   - `Tab`, `Enter`, `Escape`, `Backspace`, `Delete`, `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `PageUp`,
     `PageDown` and `Space`;
@@ -3207,6 +3208,34 @@ Diagnostics: none new.
     - An empty `changed` shows nothing new, and a box of zero size is skipped.
     - Pixels outside the boxes may be shown from `pixels` or from the window's copy of the last frame, so a program
       that breaks the promise sees either. A scripted window shows the copy.
+- **Text input** (ADR 0141). The system's input method composes text over several keys (Japanese, Chinese, Korean,
+  dead keys) and commits it:
+  - `w.setTextInput(on: bool)` turns it on for the window, while a text field has focus, or off. Off ends a
+    composition, with a `Composition` event. Until the first call, the window takes text as it did before ADR 0141:
+    keys and their characters, and on Windows the system's own composition window.
+  - With it on, the input method may take a key. Such a key gives no `Key` event, and its release none either. The
+    text it commits arrives as `Text` events, one per scalar, after any `Key` of the key that committed it.
+  - `w.setTextInputArea(area: WindowBox)`: where the caret or the composed text is, in points from the content's top
+    left. The input method shows its candidates beside it, not over it.
+  - `w.composition()` is a `StringView` of the text being composed, as UTF-8, and empty when there is none.
+    `w.compositionCaret()` is the caret's byte offset in it, at a character's start.
+    - **Ownership.** The window owns the text. It changes only when `nextEvent` returns `Composition`, which then makes
+      it the latest composition. The view borrows the window, so no `borrow mut` call (`nextEvent` among them) is
+      allowed while it is used (N0241).
+    - **Events.** A change gives one `Composition` only when the text or the caret differs.
+  - **Backends.** macOS: the content view is an `NSTextInputClient`, and keys go through `interpretKeyEvents:`, except
+    those with ⌘ or Control outside a composition. Windows: the IMM32 messages, with `GCS_COMPSTR` and
+    `GCS_CURSORPOS` as the composition and `GCS_RESULTSTR` as `Text`; off removes the window's input context. X11: an
+    XIM input context, over the spot where the input method offers it: the input method draws the composition, and
+    **X11 gives no `Composition` events**.
+- **The clipboard** (ADR 0141), as UTF-8 text:
+  - `w.setClipboardText(text: StringView)` is `Result<void, WindowError>`: `Resources` when the system refuses, or,
+    on X11, when the text is larger than one request carries;
+  - `w.clipboardText(out: borrow mut String)` is `bool`. It appends the clipboard's text to `out`, and is false, with
+    `out` unchanged, when the clipboard holds no text, its text is not valid UTF-8, or memory ran out.
+  - **Backends.** macOS: the general pasteboard's `NSPasteboardTypeString`. Windows: `CF_UNICODETEXT`. X11: the
+    `CLIPBOARD` selection as `UTF8_STRING`. The window owns it after a set and answers other programs while the program
+    polls. A read waits up to one second for the owner.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
@@ -3214,7 +3243,8 @@ Diagnostics: none new.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
     arrives, so an idle loop does not spin.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`).
-  `nextEvent`, `size`, `scale`, `nativeHandle`, `setCursor` and the drop have no effect.
+  `setTextInput`, `setClipboardText` and `clipboardText` may sleep and allocate. `nextEvent`, `size`, `scale`,
+  `nativeHandle`, `setCursor`, `setTextInputArea`, `composition`, `compositionCaret` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
@@ -3235,7 +3265,11 @@ Diagnostics: none new.
     - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`;
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
-    - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale.
+    - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
+    - `compose:C:TEXT` (ADR 0141): the composition becomes TEXT, with the caret at byte C. It is delivered only while
+      text input is on. C must be at most TEXT's length and at a character's start;
+    - `clipboard:TEXT` puts TEXT on the window's scripted clipboard, which `setClipboardText` and `clipboardText` also
+      use. `clipboard`, without a colon, leaves it with no text. The clipboard starts with no text.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
     `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
@@ -3243,7 +3277,7 @@ Diagnostics: none new.
   - **Waiting.** `waitFrame` returns at once.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
-  to `open` and `openWith`.
+  to `open` and `openWith`, so no other window call is reached there.
 
 ### 26.14 Process limits (ADR 0104)
 - `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft

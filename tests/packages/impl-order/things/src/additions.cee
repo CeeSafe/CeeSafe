@@ -1,0 +1,13 @@
+// Inherent impls in a file that sorts before thing.cee: they declare no name, so Thing and Shape stay public
+// (ClayWind's finding K3: 0.49.0 took the first impl as Thing's declaration, private, and N0312 followed).
+
+impl<T: Copy> Thing<T> {
+    public fn get(borrow this) -> T => this.value;
+}
+
+impl Shape {
+    public fn area(borrow this) -> u32 => match (this) {
+        Shape.Square(s) => s * s,
+        Shape.Rect(w, h) => w * h,
+    };
+}

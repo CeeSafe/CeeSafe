@@ -141,6 +141,10 @@
 37. impl-statics (type-system.md §2, cee-proxy's F16): `impl Make for Thing` in app, its functions without
     `public`; make's generic `build<T: Make>` calls the static `T.make` through the bound: `check` is clean (0.48.2
     gave N0222, "'Thing.make' is not public") and the program prints 42 and 4, in the interpreter and compiled.
+38. impl-order (type-system.md §2, ClayWind's finding K3): things declares `public struct Thing<T>` and `public enum
+    Shape` in src/thing.cee and adds their methods in `impl` blocks in src/additions.cee, a file that sorts before it.
+    app imports both: `check` is clean (0.49.0 took the first impl as the type's declaration, which is private, and
+    gave N0312 at each import) and the program prints 42 and 12, in the interpreter and compiled.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -429,6 +433,29 @@ def impl_statics(compiler, work, problems):
         out = run([exe], app).stdout.split()
         if out != ["42", "4"]:
             problems.append(f"impl-statics: the program printed {out!r}")
+
+
+def impl_order(compiler, work, problems):
+    """An inherent impl declares no name: in a file that sorts before its type's, it leaves the type public (ClayWind's
+    finding K3)."""
+    root = os.path.join(work, "impl-order")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "impl-order"), root)
+    app = os.path.join(root, "app")
+    status, document = json_check(compiler, app)
+    found = [d["code"] for d in document["diagnostics"]] if document else ["no document"]
+    if status != 0 or found:
+        problems.append(f"impl-order: check should be clean: {status} {found}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.split() != ["42", "12"]:
+        problems.append(f"impl-order: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-300:]}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0:
+        problems.append(f"impl-order: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], app).stdout.split()
+        if out != ["42", "12"]:
+            problems.append(f"impl-order: the program printed {out!r}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -1937,6 +1964,7 @@ def main():
         region_bounds(compiler, work, problems)
         qualified_literals(compiler, work, problems)
         impl_statics(compiler, work, problems)
+        impl_order(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)

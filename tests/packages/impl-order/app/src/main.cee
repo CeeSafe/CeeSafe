@@ -1,0 +1,9 @@
+import things.Thing;
+import things.Shape;
+
+fn main() {
+    let t = Thing<u32>.of(42);
+    Console.writeLine(t.get() as u64);
+    let s = Shape.Rect(3, 4);
+    Console.writeLine(s.area() as u64);
+}

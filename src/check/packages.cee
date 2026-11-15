@@ -759,7 +759,10 @@ fn declarePackageNames(c: borrow mut Checker) -> Result<void, AllocError> {
                         declarePackageName(c, package, symbol, isPublicVisibility(visibility))?;
                     }
                 }
+                // An impl declares no name: its methods belong to a type declared elsewhere. (An inherent impl taken
+                // as a declaration of its type's name made the type private when its file came first.)
                 ItemKind.Impl(_, _, _, _, _) => {}
+                ItemKind.InherentImpl(_, _, _, _, _) => {}
                 _ => {
                     let entry = c.front.ast.items[item as usize];
                     let symbol = c.front.ast.idents[entry.name as usize].symbol;

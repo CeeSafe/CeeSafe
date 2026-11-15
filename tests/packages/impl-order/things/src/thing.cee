@@ -1,0 +1,11 @@
+/// A public generic struct and a public enum, declared in a file that sorts after the impls that add to them.
+public struct Thing<T> {
+    value: T;
+
+    public fn of(v: T) -> Thing<T> => Thing { value: v };
+}
+
+public enum Shape {
+    Square(u32),
+    Rect(u32, u32),
+}

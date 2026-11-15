@@ -1,0 +1,31 @@
+// A vector of references (`Vector<borrow T>`, cee-proxy's F19): its extend helper's parameter is `T const *`, so an
+// element that is itself a pointer to const is `const T * const *`, not `const const T * *`, which clang warns of
+// (-Wduplicate-decl-specifier) and the corpus's -Werror run refuses.
+struct Item {
+    value: u32;
+}
+
+fn total(items: borrow Vector<borrow Item>) -> u32 {
+    var sum: u32 = 0;
+    for (it in items) {
+        sum += it.value;
+    }
+    return sum;
+}
+
+fn main() {
+    let a = Item { value: 3 };
+    let b = Item { value: 4 };
+    var refs = Vector<borrow Item>.create();
+    refs.push(borrow a)!;
+    refs.push(borrow b)!;
+    var more = Vector<borrow Item>.create();
+    more.extend(refs.view())!;
+    Console.writeLine(total(borrow refs));
+    Console.writeLine(more.length);
+    Console.writeLine(more[1].value);
+}
+
+// expect-stdout: 7
+// expect-stdout: 2
+// expect-stdout: 4

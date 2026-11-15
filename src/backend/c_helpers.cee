@@ -1715,9 +1715,11 @@ fn emitVectorHelperPrototypes(e: borrow mut CEmitter, c: borrow Checker) -> Resu
                 e.b(m.view())?;
                 e.t("(")?;
                 e.b(name.view())?;
-                e.t(" *, const ")?;
+                e.t(" *, ")?;
+                // `T const *`, not `const T *`: for an element that is itself a pointer to const (a `borrow T`), the
+                // prefix doubled the qualifier (`const const T * *`, clang's -Wduplicate-decl-specifier)
                 appendCTypeName(c, mut e.buf, elementType)?;
-                e.t(" *, uint64_t);")?;
+                e.t(" const *, uint64_t);")?;
                 e.emit()?;
                 e.helperProto()?;
                 appendCTypeName(c, mut e.buf, voidResult)?;
@@ -2016,9 +2018,9 @@ fn emitVectorBulkHelpers(
     e.b(m.view())?;
     e.t("(")?;
     e.b(name.view())?;
-    e.t(" *v, const ")?;
-    e.b(element.view())?;
-    e.t(" *src, uint64_t n) {")?;
+    e.t(" *v, ")?;
+    e.b(element.view())?; // `T const *`: see the prototype
+    e.t(" const *src, uint64_t n) {")?;
     e.emit()?;
     e.t("    ")?;
     e.b(result)?;

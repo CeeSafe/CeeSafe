@@ -7,6 +7,7 @@ struct IndexEntry {
     version: PackageVersion;
     git: Vector<u8>;
     commit: Vector<u8>;
+    dir: Vector<u8>; // the package's directory in the commit, in normal form (ADR 0152); empty at the root
     hash: Vector<u8>;
     dependencyNames: Vector<Vector<u8>>;
     dependencyRequirements: Vector<Vector<u8>>;
@@ -143,6 +144,24 @@ fn loadIndexPackage(
             package.valid = false;
             return Ok(package);
         }
+        var dir = Vector<u8>.create();
+        match (textCopy(t, "dir")?) {
+            Some(written) => {
+                let problem = checkoutDirectory(written.view(), mut dir)?;
+                if (problem.length > 0) {
+                    var message = copyBytes(
+                        "an index entry's 'dir' is the package's directory in the commit, and '".bytes(),
+                    )?;
+                    appendBytes(mut message, written.view())?;
+                    appendText(mut message, "' is not: ")?;
+                    appendBytes(mut message, problem.view())?;
+                    report.error(328, file, t.start, t.end, message)?;
+                    package.valid = false;
+                    return Ok(package);
+                }
+            }
+            null => {}
+        }
         var yanked = false;
         match (t.find("yanked")) {
             Some(k) => { yanked = t.entries[k].value.isBool() && t.entries[k].value.flag; }
@@ -154,6 +173,7 @@ fn loadIndexPackage(
                 version: version,
                 git: textCopy(t, "git")?!,
                 commit: textCopy(t, "commit")?!,
+                dir: dir,
                 hash: textCopy(t, "hash")?!,
                 dependencyNames: dependencyNames,
                 dependencyRequirements: dependencyRequirements,
@@ -258,6 +278,7 @@ fn copyIndexEntry(e: borrow IndexEntry) -> Result<IndexEntry, AllocError> {
             version: e.version,
             git: copyBytes(e.git.view())?,
             commit: copyBytes(e.commit.view())?,
+            dir: copyBytes(e.dir.view())?,
             hash: copyBytes(e.hash.view())?,
             dependencyNames: names,
             dependencyRequirements: requirements,
@@ -522,6 +543,8 @@ fn solve(w: borrow mut Workspace, report: borrow mut PackageReport) -> Result<bo
             var entry = newLockEntry(solver.chosenNames[k].view(), source.view())?;
             entry.hasCommit = true;
             entry.commit = copyBytes(chosen.commit.view())?;
+            entry.hasDirectory = chosen.dir.length > 0;
+            entry.directory = copyBytes(chosen.dir.view())?;
             entry.hasHash = true;
             entry.hash = copyBytes(chosen.hash.view())?;
             entry.hasVersion = true;

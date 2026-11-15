@@ -42,8 +42,8 @@ struct Workspace {
     /// dependencies' names, `trusted`, and where its files may embed from (ADR 0087 §2.8). Only code the user works
     /// on, the root package and what it reaches through path dependencies alone, may have `[embed] roots` outside its
     /// directory. A git or registry package, and a path dependency reached through one, is kept inside the checkout;
-    /// a package that lies in the package cache inside its own directory, even as the root package (the language
-    /// server going to a definition in a checkout, or `check` run there).
+    /// a package that lies in the package cache inside the checkout that holds it, or its own directory, even as the
+    /// root package (the language server going to a definition in a checkout, or `check` run there; ADR 0152).
     fn packageInfo(borrow this, p: usize) -> Result<PackageInfo, AllocError> {
         let manifest = this.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
         var dependencies = Vector<Vector<u8>>.create();
@@ -58,8 +58,11 @@ struct Workspace {
         if (p > 0) {
             boundary = copyBytes(this.resolved[p - 1].boundary.view())?;
         }
-        if (boundary.length == 0 && inPackageCache(manifest.directory.view())?) {
-            boundary = copyBytes(manifest.directory.view())?;
+        if (boundary.length == 0) {
+            match (packageCacheBoundary(manifest.directory.view())?) {
+                Some(b) => { boundary = b; }
+                null => {}
+            }
         }
         return Ok(
             PackageInfo {
@@ -115,7 +118,80 @@ fn describeEntry(words: borrow mut Words, entry: borrow LockEntry) -> Result<voi
         words.t(" at ")?;
         words.b(entry.commit[0..(if (entry.commit.length < 12) entry.commit.length else 12)])?;
     }
+    if (entry.hasDirectory) {
+        words.t(", directory '")?;
+        words.b(entry.directory.view())?;
+        words.t("'")?;
+    }
     return Ok();
+}
+
+/// `path` from the directory `base` of a checkout (both relative to its root), in normal form into `out`
+/// (checkoutDirectory); what is wrong with it, or "".
+fn joinedCheckoutDirectory(
+    base: Slice<u8>,
+    path: Slice<u8>,
+    out: borrow mut Vector<u8>,
+) -> Result<Vector<u8>, AllocError> {
+    if (path.length > 0 && (path[0] == '/' || path[0] == '\\' || hasDrive(path))) {
+        out.clear();
+        return copyBytes("it is absolute".bytes());
+    }
+    var joined = copyBytes(base)?;
+    if (joined.length > 0) {
+        joined.push('/')?;
+    }
+    appendBytes(mut joined, path)?;
+    if (joined.length == 0) {
+        joined.push('.')?;
+    }
+    return checkoutDirectory(joined.view(), out);
+}
+
+/// A path dependency of a git package is a directory of the same checkout (ADR 0152, tooling.md §4.2): `spec`
+/// becomes that git package's, at the dependent's repository and commit, in the dependent's directory joined with the
+/// path. Any other dependency is left as it is. False after N0322 for a path that leaves the checkout.
+fn pathInCheckout(
+    w: borrow Workspace,
+    dependent: u32,
+    spec: borrow mut DependencySpec,
+    report: borrow mut PackageReport,
+) -> Result<bool, AllocError> {
+    if (!spec.hasPath || dependent == none()) {
+        return Ok(true);
+    }
+    let e = borrow w.resolved[dependent as usize].entry;
+    if (!startsWithText(e.source.view(), "git+") || !e.hasCommit) {
+        return Ok(true);
+    }
+    var directory = Vector<u8>.create();
+    let problem = joinedCheckoutDirectory(e.directory.view(), spec.path.view(), mut directory)?;
+    if (problem.length > 0) {
+        var m = Words.create();
+        let dependentName = w.dependentName(dependent)?;
+        m.t("'")?;
+        m.b(spec.name.view())?;
+        m.t("': the path '")?;
+        m.b(spec.path.view())?;
+        m.t("' of '")?;
+        m.b(dependentName.view())?;
+        m.t("' is not a directory of its checkout of ")?;
+        m.b(e.source[4..])?;
+        m.t(" (")?;
+        m.b(problem.view())?;
+        m.t("): a git package's path dependencies are directories of the same checkout (ADR 0152)")?;
+        w.error(report, 322, dependent, spec, m.out)?;
+        return Ok(false);
+    }
+    spec.hasPath = false;
+    spec.fromPath = true;
+    spec.hasGit = true;
+    spec.git = copyBytes(e.source[4..])?;
+    spec.hasRev = true;
+    spec.rev = copyBytes(e.commit.view())?;
+    spec.hasDir = directory.length > 0;
+    spec.dir = directory;
+    return Ok(true);
 }
 
 /// Resolves the package in `directory` (Workspace.Resolve). With `fetch`, from the manifests (fetching git
@@ -185,7 +261,7 @@ fn resolveWorkspace(
         hasUpdate: hasUpdate,
         update: names,
         resolvedHashes: Vector<LockEntry>.create(),
-        git: GitCache { home: defaultHome()?, lastError: Vector<u8>.create() },
+        git: GitCache.create()?,
     };
     let before = report.count();
     resolveAll(mut workspace, report)?;
@@ -250,8 +326,11 @@ fn drain(
     var next: usize = 0;
     while (next < queue.length) {
         let dependent = queue[next].dependent;
-        let spec = copyDependency(queue[next].spec)?;
+        var spec = copyDependency(queue[next].spec)?;
         next += 1;
+        if (!pathInCheckout(w, dependent, mut spec, report)?) {
+            continue;
+        }
         var solved = false;
         for (s in w.solution.view()) {
             solved = solved || sameBytes(s.name.view(), spec.name.view());
@@ -283,7 +362,8 @@ fn drain(
                 }
                 let existing = borrow w.resolved[k].entry;
                 var conflict = !sameBytes(existing.source.view(), entry.source.view()) ||
-                    existing.hasCommit != entry.hasCommit || !sameBytes(existing.commit.view(), entry.commit.view());
+                    existing.hasCommit != entry.hasCommit || !sameBytes(existing.commit.view(), entry.commit.view()) ||
+                    !sameBytes(existing.directory.view(), entry.directory.view());
                 if (!conflict && spec.isRegistry) {
                     let requirement = parseRequirement(spec.version.view())?!;
                     let version = parseVersion(entry.version.view())?!;
@@ -318,7 +398,9 @@ fn drain(
         let version = copyBytes(entry.version.view())?;
         var kept = boundary;
         if (!spec.hasPath) {
-            kept = copyBytes(manifest.directory.view())?; // a git or registry checkout
+            // A git or registry package: its whole checkout, also when it is in one of its directories (ADR 0152).
+            let url = if (spec.hasGit) spec.git.view() else entry.repository.view();
+            kept = w.git.checkoutPath(url, entry.commit.view())?;
         }
         w.resolved.push(ResolvedPackage { manifest: manifest, entry: entry, via: via, boundary: kept })?;
         let index = truncate<u32>(w.resolved.length - 1);
@@ -351,11 +433,12 @@ fn reachedBoundary(w: borrow Workspace, dependent: u32, spec: borrow DependencyS
         return copyBytes("/".bytes());
     }
     if (dependent == none()) {
-        // The root's own, unless the root lies in the package cache (packageInfo): then what it reaches is kept in it.
-        if (inPackageCache(w.root.directory.view())?) {
-            return copyBytes(w.root.directory.view());
-        }
-        return Ok(Vector<u8>.create());
+        // The root's own, unless the root lies in the package cache (packageInfo): then what it reaches is kept in the
+        // checkout that holds it.
+        return match (packageCacheBoundary(w.root.directory.view())?) {
+            Some(b) => Ok(b),
+            null => Ok(Vector<u8>.create()),
+        };
     }
     return copyBytes(w.resolved[dependent as usize].boundary.view());
 }
@@ -488,10 +571,13 @@ fn locate(
             Some(k) => {
                 let e = borrow w.locked[k];
                 let revMatches = !spec.hasRev || startsWithBytes(e.commit.view(), spec.rev.view());
-                if (sameBytes(e.source.view(), git.view()) && e.hasCommit && revMatches) {
+                let dirMatches = sameBytes(e.directory.view(), spec.dir.view());
+                if (sameBytes(e.source.view(), git.view()) && e.hasCommit && revMatches && dirMatches) {
                     var entry = newLockEntry(spec.name.view(), git.view())?;
                     entry.hasCommit = true;
                     entry.commit = copyBytes(e.commit.view())?;
+                    entry.hasDirectory = spec.hasDir;
+                    entry.directory = copyBytes(spec.dir.view())?;
                     entry.hasHash = e.hasHash;
                     entry.hash = copyBytes(e.hash.view())?;
                     return Ok(entry);
@@ -507,6 +593,8 @@ fn locate(
             var entry = newLockEntry(spec.name.view(), git.view())?;
             entry.hasCommit = true;
             entry.commit = commit;
+            entry.hasDirectory = spec.hasDir;
+            entry.directory = copyBytes(spec.dir.view())?;
             return Ok(entry);
         }
         null => {
@@ -546,11 +634,48 @@ fn loadDependency(
         }
     } else {
         let url = if (spec.hasGit) spec.git.view() else entry.repository.view();
-        match (w.git.checkout(url, entry.commit.view(), w.offline)?) {
-            Some(checkout) => { directory = checkout; }
+        let checkout = match (w.git.checkout(url, entry.commit.view(), w.offline)?) {
+            Some(c) => c,
             null => {
                 let message = copyBytes(w.git.lastError.view())?;
                 w.error(report, 323, dependent, spec, message)?;
+                return Ok(null);
+            }
+        };
+        directory = joinPath(checkout.view(), entry.directory.view())?;
+        if (entry.hasDirectory) {
+            // A directory of the checkout (ADR 0152): it holds the manifest, and lies inside the checkout.
+            let manifestPath = joinPath(directory.view(), manifestName().bytes())?;
+            var inside = false;
+            match (realPath(checkout.view())?) {
+                Some(realCheckout) => {
+                    match (realPath(directory.view())?) {
+                        Some(real) => { inside = realPathWithin(real.view(), realCheckout.view()); }
+                        null => { inside = true; } // missing: said below
+                    }
+                }
+                null => {}
+            }
+            let present = inside && fileExists(manifestPath.view());
+            if (!present) {
+                var m = Words.create();
+                m.t("'")?;
+                m.b(spec.name.view())?;
+                m.t(if (inside) "': no ceesafe.toml in the directory '" else "': the directory '")?;
+                m.b(entry.directory.view())?;
+                m.t("' of ")?;
+                m.b(url)?;
+                m.t(" at ")?;
+                m.b(entry.commit[0..(if (entry.commit.length < 12) entry.commit.length else 12)])?;
+                if (spec.fromPath) {
+                    m.t(" (its path '")?;
+                    m.b(spec.path.view())?;
+                    m.t("')")?;
+                }
+                if (!inside) {
+                    m.t(" leads out of the checkout, through a symbolic link")?;
+                }
+                w.error(report, 322, dependent, spec, m.out)?;
                 return Ok(null);
             }
         }

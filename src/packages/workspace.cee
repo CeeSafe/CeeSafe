@@ -2,12 +2,15 @@
 // §4.2–§4.3): `fetch` resolves and writes `ceesafe.lock`; every other command resolves through the lock. Nothing
 // runs but `git` (through `env`, which sets GIT_TERMINAL_PROMPT=0; lib/std cannot set a child's environment).
 
-/// One dependency as the lock records it (LockEntry): a registry package has a version and a repository.
+/// One dependency as the lock records it (LockEntry): a registry package has a version and a repository; a git or
+/// registry package not at its checkout's root, its directory there (ADR 0152).
 struct LockEntry {
     name: Vector<u8>;
     source: Vector<u8>;
     hasCommit: bool;
     commit: Vector<u8>;
+    hasDirectory: bool;
+    directory: Vector<u8>; // `dir`, in normal form (checkoutDirectory); empty at the root
     hasHash: bool;
     hash: Vector<u8>;
     hasVersion: bool;
@@ -22,6 +25,8 @@ fn newLockEntry(name: Slice<u8>, source: Slice<u8>) -> Result<LockEntry, AllocEr
         source: copyBytes(source)?,
         hasCommit: false,
         commit: Vector<u8>.create(),
+        hasDirectory: false,
+        directory: Vector<u8>.create(),
         hasHash: false,
         hash: Vector<u8>.create(),
         hasVersion: false,
@@ -37,6 +42,8 @@ fn copyLockEntry(e: borrow LockEntry) -> Result<LockEntry, AllocError> => Ok(
         source: copyBytes(e.source.view())?,
         hasCommit: e.hasCommit,
         commit: copyBytes(e.commit.view())?,
+        hasDirectory: e.hasDirectory,
+        directory: copyBytes(e.directory.view())?,
         hasHash: e.hasHash,
         hash: copyBytes(e.hash.view())?,
         hasVersion: e.hasVersion,
@@ -237,6 +244,19 @@ fn readLock(file: u32, report: borrow mut PackageReport) -> Result<Vector<LockEn
         let sourceText = source!;
         var entry = newLockEntry(nameText.view(), sourceText.view())?;
         tableText(t, "commit", mut entry.hasCommit, mut entry.commit)?;
+        tableText(t, "dir", mut entry.hasDirectory, mut entry.directory)?;
+        if (entry.hasDirectory) {
+            var normal = Vector<u8>.create();
+            let problem = checkoutDirectory(entry.directory.view(), mut normal)?;
+            if (problem.length > 0) {
+                var message = copyBytes("the lock's 'dir' is a directory of a checkout, and it is not: ".bytes())?;
+                appendBytes(mut message, problem.view())?;
+                report.error(320, file, t.start, t.end, message)?;
+                return Ok(null);
+            }
+            entry.hasDirectory = normal.length > 0;
+            entry.directory = normal;
+        }
         tableText(t, "hash", mut entry.hasHash, mut entry.hash)?;
         tableText(t, "version", mut entry.hasVersion, mut entry.version)?;
         tableText(t, "repository", mut entry.hasRepository, mut entry.repository)?;
@@ -290,6 +310,9 @@ fn writeLockText(entries: borrow Vector<LockEntry>) -> Result<Vector<u8>, AllocE
         if (e.hasCommit) {
             appendLockLine(mut text, "commit", e.commit.view())?;
         }
+        if (e.hasDirectory) {
+            appendLockLine(mut text, "dir", e.directory.view())?;
+        }
         if (e.hasHash) {
             appendLockLine(mut text, "hash", e.hash.view())?;
         }
@@ -302,6 +325,11 @@ fn writeLockText(entries: borrow Vector<LockEntry>) -> Result<Vector<u8>, AllocE
 struct GitCache {
     home: Vector<u8>;
     lastError: Vector<u8>;
+    updated: Vector<Vector<u8>>; // the repositories fetched by this command: each once (ADR 0152 §2.2)
+
+    fn create() -> Result<GitCache, AllocError> => Ok(
+        GitCache { home: defaultHome()?, lastError: Vector<u8>.create(), updated: Vector<Vector<u8>>.create() },
+    );
 
     /// Runs git with `arguments` (in `directory` if not empty): its trimmed output, or null with `lastError` set.
     fn run(
@@ -397,9 +425,14 @@ struct GitCache {
             if (this.run("".bytes(), arguments)? == null) {
                 return Ok(null);
             }
+            this.updated.push(copyBytes(url)?)?;
             return Ok(database);
         }
-        if (update && !offline) {
+        var fetched = false;
+        for (u in this.updated.view()) {
+            fetched = fetched || sameBytes(u.view(), url);
+        }
+        if (update && !offline && !fetched) {
             var arguments = Vector<Vector<u8>>.create();
             for (w in 0..6) {
                 let word: StringView = match (w) {
@@ -415,6 +448,7 @@ struct GitCache {
             if (this.run(database.view(), arguments)? == null) {
                 return Ok(null);
             }
+            this.updated.push(copyBytes(url)?)?;
         }
         return Ok(database);
     }
@@ -502,12 +536,20 @@ struct GitCache {
         return Ok(this.run(database, arguments)? != null);
     }
 
+    /// Where the commit's checkout is, `$CEESAFE_HOME/git/checkouts/<repository>/<commit>`, made or not.
+    fn checkoutPath(borrow this, url: Slice<u8>, commit: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+        let key = GitCache.key(url)?;
+        let checkouts = joinPath(this.home.view(), "git/checkouts".bytes())?;
+        let byKey = joinPath(checkouts.view(), key.view())?;
+        return joinPath(byKey.view(), commit);
+    }
+
     /// A checkout of the commit, made from the bare clone if missing (GitCache.Checkout).
     fn checkout(borrow mut this, url: Slice<u8>, commit: Slice<u8>, offline: bool) -> Result<Vector<u8>?, AllocError> {
         let key = GitCache.key(url)?;
         let checkouts = joinPath(this.home.view(), "git/checkouts".bytes())?;
         let byKey = joinPath(checkouts.view(), key.view())?;
-        let checkout = joinPath(byKey.view(), commit)?;
+        let checkout = this.checkoutPath(url, commit)?;
         if (isDirectory(checkout.view())) {
             return Ok(checkout);
         }

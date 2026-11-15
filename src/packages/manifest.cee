@@ -30,7 +30,9 @@ struct PackageReport {
 }
 
 /// A dependency as a manifest writes it (DependencySpec): exactly one of a path, a git repository (with one of rev,
-/// tag and branch), or a registry version requirement (with its index, or the default one).
+/// tag and branch, and maybe a directory in it), or a registry version requirement (with its index, or the default
+/// one). A path dependency of a git package becomes, when it is resolved, that git package's (`fromPath`, ADR 0152):
+/// the same repository at the dependent's commit (`rev`), in the directory the path leads to.
 struct DependencySpec {
     name: Vector<u8>;
     hasPath: bool;
@@ -43,6 +45,9 @@ struct DependencySpec {
     tag: Vector<u8>;
     hasBranch: bool;
     branch: Vector<u8>;
+    hasDir: bool;
+    dir: Vector<u8>; // in normal form (checkoutDirectory); empty for the checkout's root
+    fromPath: bool;  // a path dependency of a git package, resolved in its checkout: `path` is as written
     isRegistry: bool;
     version: Vector<u8>; // the requirement as written
     hasIndex: bool;
@@ -64,6 +69,9 @@ fn newDependency(name: Slice<u8>, start: u32, end: u32) -> Result<DependencySpec
         tag: Vector<u8>.create(),
         hasBranch: false,
         branch: Vector<u8>.create(),
+        hasDir: false,
+        dir: Vector<u8>.create(),
+        fromPath: false,
         isRegistry: false,
         version: Vector<u8>.create(),
         hasIndex: false,
@@ -86,6 +94,9 @@ fn copyDependency(d: borrow DependencySpec) -> Result<DependencySpec, AllocError
         tag: copyBytes(d.tag.view())?,
         hasBranch: d.hasBranch,
         branch: copyBytes(d.branch.view())?,
+        hasDir: d.hasDir,
+        dir: copyBytes(d.dir.view())?,
+        fromPath: d.fromPath,
         isRegistry: d.isRegistry,
         version: copyBytes(d.version.view())?,
         hasIndex: d.hasIndex,
@@ -94,6 +105,62 @@ fn copyDependency(d: borrow DependencySpec) -> Result<DependencySpec, AllocError
         end: d.end,
     },
 );
+
+/// A directory inside a git checkout (ADR 0152, tooling.md §4.1) in normal form, into `out`: `/`-separated, without
+/// `.` or empty parts, each `..` taking away the part before it, and empty for the checkout's root. Returns what is
+/// wrong with `written`, or "" when nothing is: like an [embed] root, it is relative, with `/` separators, and nothing
+/// in it is expanded; and it may not leave the checkout. (A message, not a StringView: N0245.)
+fn checkoutDirectory(written: Slice<u8>, out: borrow mut Vector<u8>) -> Result<Vector<u8>, AllocError> {
+    out.clear();
+    if (written.length == 0) {
+        return copyBytes("it is empty (leave 'dir' out for the checkout's root)".bytes());
+    }
+    if (written[0] == '/' || written[0] == '\\' || hasDrive(written)) {
+        return copyBytes("it is absolute, and a directory of a checkout is relative to the checkout's root".bytes());
+    }
+    if (written[0] == '~') {
+        return copyBytes("it starts with '~', and nothing in it is expanded, the home directory included".bytes());
+    }
+    for (b in written) {
+        if (b == 0) {
+            return copyBytes("it holds a NUL byte".bytes());
+        }
+        if (b == '\\') {
+            return copyBytes("it holds '\\'; separate directories with '/', on every system".bytes());
+        }
+        if (b == ':') {
+            return copyBytes("it holds ':', a Windows drive or stream".bytes());
+        }
+        if (b == '$' || b == '%') {
+            return copyBytes(
+                "it holds '$' or '%', and nothing in it is expanded, environment variables included".bytes(),
+            );
+        }
+    }
+    var parts = Vector<Vector<u8>>.create();
+    var start: usize = 0;
+    for (k in 0..(written.length + 1)) {
+        if (k == written.length || written[k] == '/') {
+            let part = written[start..k];
+            if (part.length == 0 || sameText(part, ".")) {} else if (sameText(part, "..")) {
+                if (parts.length == 0) {
+                    return copyBytes("its '..' leads out of the checkout".bytes());
+                }
+                parts.truncate(parts.length - 1);
+            } else {
+                parts.push(copyBytes(part)?)?;
+            }
+            start = k + 1;
+        }
+    }
+    for (p in parts.view()) {
+        if (out.length > 0) {
+            out.push('/')?;
+        }
+        appendBytes(out, p.view())?;
+    }
+    return Ok(Vector<u8>.create());
+}
 
 /// 0 executable, 1 library, 2 object.
 fn packageKindText(kind: u32) -> StringView => match (kind) {
@@ -772,7 +839,7 @@ fn readDependency(
     for (k in 0..v.keys.length) {
         let n = v.keys[k].view();
         if (unknown == v.keys.length && !sameText(n, "path") && !sameText(n, "git") && !sameText(n, "rev") &&
-            !sameText(n, "tag") && !sameText(n, "branch")) {
+            !sameText(n, "tag") && !sameText(n, "branch") && !sameText(n, "dir")) {
             unknown = k;
         }
     }
@@ -800,6 +867,16 @@ fn readDependency(
         appendBytes(mut message, references[0].view())?;
         message.push('\'')?;
         return manifestError(report, file, v.start, v.end, message);
+    }
+    let dir = fieldCopy(v, "dir")?;
+    if (path != null && dir != null) {
+        return manifestError(
+            report,
+            file,
+            v.start,
+            v.end,
+            message2("the path dependency '", key, "' takes no 'dir': its path is the directory (ADR 0152)")?,
+        );
     }
     if (git != null && references.length != 1) {
         return manifestError(
@@ -843,6 +920,24 @@ fn readDependency(
         Some(b) => {
             d.hasBranch = true;
             d.branch = b;
+        }
+        null => {}
+    }
+    match (dir) {
+        Some(written) => {
+            // A directory of the checkout (ADR 0152): checked and put in normal form now; where it leads, when the
+            // package is loaded.
+            var normal = Vector<u8>.create();
+            let problem = checkoutDirectory(written.view(), mut normal)?;
+            if (problem.length > 0) {
+                var message = message2("the 'dir' of '", key, "' is a directory of the repository's checkout, and '")?;
+                appendBytes(mut message, written.view())?;
+                appendText(mut message, "' is not: ")?;
+                appendBytes(mut message, problem.view())?;
+                return manifestError(report, file, v.start, v.end, message);
+            }
+            d.hasDir = normal.length > 0;
+            d.dir = normal;
         }
         null => {}
     }

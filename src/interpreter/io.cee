@@ -976,7 +976,13 @@ fn appDataFolder(it: borrow mut Interp, arguments: borrow Vector<Value>, name: S
         made = path.length;
         path.push('\\')!;
     } else {
-        let given = if (system == 1) "" else Environment.variable("XDG_DATA_HOME") ?? "";
+        var given: StringView = "";
+        if (system != 1) {
+            match (Environment.variable("XDG_DATA_HOME")) {
+                Some(data) => { given = data; }
+                null => {}
+            }
+        }
         if (given.length > 0 && given.bytes()[0] == '/') {
             appendText(mut path, given)!;
             made = path.length;

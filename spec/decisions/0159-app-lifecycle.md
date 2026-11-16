@@ -158,9 +158,15 @@ let folder = Directory.appData("claywind-chat")!;                   // kept from
   - Not verified: a memory warning on either system (the simulator's is a menu item, Android's `onLowMemory` comes
     only when the whole system is short), the time iOS allows before it cuts the background task short, devices.
   - `tools/contract_tests.py` with `out/ceesafec` built from the branch after merging release 0.61.0 (2026-11-17):
-    every check ok but the interpreted corpus, where `run-pass/async-send-file-reset.cee` timed out (403 of 404;
-    `run-fail` 55 of 55). That program takes 24 s alone in the interpreter, with this branch's compiler and with
-    releases 0.60.0 and 0.61.0 alike, so a full parallel run on a loaded machine passes its 60 s limit; release
-    0.61.0's own compiler failed it in one of two such runs. Alone it passed five runs of five. Not this ADR's; an
-    open finding for the corpus. `signal_check.py`: 27 cases, 0 problems (an earlier run failed five because the
-    suite had been started as a shell's background job, which ignores SIGINT).
+    every check ok but the interpreted corpus, where `run-pass/async-send-file-reset.cee` timed out (403 of 404).
+    Its cause was lib/std's, not this ADR's: `AsyncTcpStream.copyFile`, the copy `sendFile` makes where there is no
+    sendfile (the interpreter always), filled each 64 KiB piece with one `push` for a byte, 65,536 interpreted calls
+    for a piece, so the program took 24 s alone (the same with releases 0.58.0 to 0.61.0; ADR 0051 wrote the loop
+    before ADR 0071 gave `resize`) and passed the corpus's 60 s on a loaded machine. It now makes one `resize`: 0.5 s.
+    After it the interpreted corpus is 404 of 404 and 55 of 55, and the compiled async programs 58 of 58.
+    `signal_check.py`: 27 cases, 0 problems (an earlier run failed five because the suite had been started as a
+    shell's background job, which ignores SIGINT).
+  - Still slow in the interpreter, and no regression: `run-pass/ordered-map.cee`, 31 s alone (0.33.0: 44 s, 0.45.0:
+    46 s, 0.58.0: 33 s), which is real work (tens of thousands of map operations) at the interpreter's cost for a
+    statement; about a third of a profile's samples are in allocation (a value is a vector of its own). It can pass
+    60 s on a loaded machine. An open finding for the interpreter.

@@ -508,15 +508,10 @@ public struct AsyncTcpStream {
     /// Safety: ceesafe_file_read_at writes at most the buffer's length, during the call only.
     async fn copyFile(borrow this, file: borrow File, offset: u64, length: u64) -> Result<u64, AsyncError> {
         let size: u64 = if (length > 65536) 65536 else length;
-        var buffer = match (Vector<u8>.withCapacity(size as usize)) {
-            Ok(v) => v,
+        var buffer = Vector<u8>.create();
+        match (buffer.resize(size as usize, 0)) { // one growth and one fill, not a push for each byte
+            Ok() => {}
             Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); }
-        };
-        for (k in 0..size) {
-            match (buffer.push(0)) {
-                Ok() => {}
-                Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); } // not reached: the room is there
-            }
         }
         let target = buffer.viewMut();
         let r = await Async.blocking(

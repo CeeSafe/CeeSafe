@@ -27,7 +27,11 @@
   generated `main` already calls `ceesafe_rt_windowed()` first. On Windows that call sets up the standard streams; on
   macOS, Linux and FreeBSD it does nothing, as before.
 - **iOS.** The first call starts the application: `UIApplicationMain(argc, argv, nil, CeeSafeAppDelegate)`, which never
-  returns. When the application has finished launching, the delegate's `application:didFinishLaunchingWithOptions:`
+  returns. The application uses the scene life cycle, which iOS 27's UIKit requires (it stops an app without it, in
+  `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`, when the system creates its scene): the delegate
+  configures each scene from code (`application:configurationForConnectingSceneSession:options:`, with
+  `CeeSafeSceneDelegate`), so an app's Info.plist needs no scene configuration, and the scene delegate records the
+  window scene when it connects. When the application has finished launching, the delegate's `application:didFinishLaunchingWithOptions:`
   returns at once and schedules (`performSelector:withObject:afterDelay:0`) a call of the program's `main` with the
   same arguments, on the main thread, from the run loop. That second call's `ceesafe_rt_windowed()` returns, and the
   program runs: it is on the program's first thread, as `Window` requires. When `main` returns, the process exits with
@@ -43,8 +47,9 @@
 
 ### 2.2 The window on iOS
 
-- **One window per program** (a phone app has one screen; iPad scenes are not covered): `Window.open`'s size is
-  ignored, and the window fills the screen. `size()` is the view's size in points and `scale()` the screen's scale.
+- **One window per program** (a phone app has one screen; iPad scenes are not covered), made in the application's
+  window scene (`initWithWindowScene:`), which `Window.open` waits for (ten seconds at most, else `NoDisplay`):
+  `open`'s size is ignored, and the window fills the screen. `size()` is the view's size in points and `scale()` the screen's scale.
   A rotation gives `Resized`.
 - **The view** is `CeeSafeTouchView`, a `UIView` subclass registered through the Objective-C runtime, as macOS's view
   is: its layer shows the frames (`present`, as a `CGImage` in the layer's contents), or is the program's own with
@@ -52,7 +57,8 @@
 - **Touches, until P4 step 3:** the first touch is the primary pointer: `PointerButton(Primary, true, …)` when it
   begins, `PointerMoved` while it moves, and `PointerButton(Primary, false, …)` when it ends or is cancelled. Other
   touches are ignored.
-- **Focus:** `Focus(false)` when the application resigns active, `Focus(true)` when it becomes active again.
+- **Focus:** `Focus(false)` when the window's scene leaves the foreground's active state, `Focus(true)` when it is
+  active again.
 - **Waking** (ADR 0142): the same run loop source as on macOS, whose callback ends a wait.
 - **The clipboard:** `UIPasteboard.generalPasteboard`'s string.
 - **Not on iOS:** a title, a cursor, menus and file dialogs (`Unsupported`, and the first two do nothing), text input

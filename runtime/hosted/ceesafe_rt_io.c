@@ -2605,7 +2605,39 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     unsigned long id = (unsigned long)GetCurrentProcessId();
 #else
     const char *tmp = getenv("TMPDIR");
+#if defined(__ANDROID__)
+    /* Android has no /tmp and sets no TMPDIR for an app: its temporary directory is the app's cache directory,
+       /data/data/<package>/cache, the package being the process's name (/proc/self/cmdline's first string). A
+       program run from a shell, which has no such directory, gets the shell's, /data/local/tmp. */
+    char android_cache[512];
+    if (tmp == NULL || tmp[0] == 0) {
+        tmp = "/data/local/tmp";
+        char package[256];
+        int command = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+        ssize_t read_count = command >= 0 ? read(command, package, sizeof package - 1u) : -1;
+        if (command >= 0) (void)close(command);
+        if (read_count > 0) {
+            package[read_count] = 0; /* the first string ends at its own zero byte */
+            size_t length = strlen(package);
+            int plain = length > 0u;
+            for (size_t k = 0; k < length; k++) {
+                char c = package[k];
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+                      c == '_')) {
+                    plain = 0; /* a path, or a process named by ':' for a service: not a package's own name */
+                }
+            }
+            if (plain) {
+                memcpy(android_cache, "/data/data/", 11u);
+                memcpy(android_cache + 11u, package, length);
+                memcpy(android_cache + 11u + length, "/cache", 7u);
+                if (access(android_cache, W_OK | X_OK) == 0) tmp = android_cache;
+            }
+        }
+    }
+#else
     if (tmp == NULL || tmp[0] == 0) tmp = "/tmp";
+#endif
     if (strlen(tmp) >= sizeof base - 64u) return -(int64_t)ENAMETOOLONG;
     (void)strcpy(base, tmp);
     unsigned long id = (unsigned long)getpid();
@@ -2614,14 +2646,14 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     if (n > 0u && base[n - 1u] != '/' && base[n - 1u] != '\\') base[n++] = '/';
     base[n] = 0;
     for (uint32_t attempt = 0; attempt < 10000u; attempt++) {
-        /* base, then "ceesafe-", the process id in decimal, '-' and 8 hex digits (built by hand: n < 4096 - 64). */
+        /* base, then "ceesafe-" (five of its bytes, "ceesa", until 0.60.0), the process id in decimal, '-' and 8 hex digits (built by hand: n < 4096 - 64). */
         char name[4096];
         uint32_t k = ceesafe_atomic_add_u32(&counter, 1u);
         uint64_t mix = ((uint64_t)id << 32) ^ ((uint64_t)k * 0x9E3779B97F4A7C15u) ^ (uint64_t)(uintptr_t)&counter;
         size_t at = n;
         memcpy(name, base, n);
-        memcpy(name + at, "ceesafe-", 5u);
-        at += 5u;
+        memcpy(name + at, "ceesafe-", 8u);
+        at += 8u;
         char digits[24];
         size_t count = 0;
         unsigned long rest = id;

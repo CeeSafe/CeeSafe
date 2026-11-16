@@ -136,5 +136,15 @@ let saved = FileDialog.exportFile(mut window, "Save As", draft, "notes.txt")!;  
   - The owner's iPhone 14 Plus, by his hands, after the fix above: the export saved; the picked file was a copy in
     the app's `tmp/…-Inbox` with the export's line; one file from the last picker likewise; `saveFile` was
     `Unsupported`; the program ended with code 0. The iOS simulator showed the export's picker.
+  - ClayWind's demo, whose Save writes its notes to a file in `Directory.temporary()` and exports it: on the
+    emulator, Save As gave "Saved notes.txt" and the file in Downloads, and Open of it "Opened notes.txt"; on both
+    of the owner's phones, by his hands: "On both Ios and Android, file operations were perfect."
+  - Met on the way, in `runtime/hosted/ceesafe_rt_io.c`, and fixed: `Directory.temporary()` failed on Android,
+    which sets no `TMPDIR` for an app and has no `/tmp` (an app's temporary directory there is now its cache folder,
+    `/data/data/<package>/cache`, the package read from `/proc/self/cmdline`; a program run from a shell gets
+    `/data/local/tmp`); and a temporary directory's name began "ceesa", five bytes of "ceesafe-" being copied.
+  - `tools/contract_tests.py` with `out/ceesafec` built from the branch: every check ok but `signal_check.py` (5
+    problems of 27 cases), which ran while the machine was building for the phones and running an emulator; alone it
+    passes, four runs of four.
   - Not verified: several files picked at once on the iPhone, a cloud provider's documents (iCloud Drive, Google
     Drive), a large document, the app's process ended behind a picker on Android, Android before API 30.

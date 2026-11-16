@@ -157,3 +157,10 @@ let folder = Directory.appData("claywind-chat")!;                   // kept from
     page with "kutty" typed in a field, sent Home and killed, it came back on that page with that text.
   - Not verified: a memory warning on either system (the simulator's is a menu item, Android's `onLowMemory` comes
     only when the whole system is short), the time iOS allows before it cuts the background task short, devices.
+  - `tools/contract_tests.py` with `out/ceesafec` built from the branch after merging release 0.61.0 (2026-11-17):
+    every check ok but the interpreted corpus, where `run-pass/async-send-file-reset.cee` timed out (403 of 404;
+    `run-fail` 55 of 55). That program takes 24 s alone in the interpreter, with this branch's compiler and with
+    releases 0.60.0 and 0.61.0 alike, so a full parallel run on a loaded machine passes its 60 s limit; release
+    0.61.0's own compiler failed it in one of two such runs. Alone it passed five runs of five. Not this ADR's; an
+    open finding for the corpus. `signal_check.py`: 27 cases, 0 problems (an earlier run failed five because the
+    suite had been started as a shell's background job, which ignores SIGINT).

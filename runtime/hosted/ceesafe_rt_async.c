@@ -342,6 +342,9 @@ static cee_task *cee_steal(void) {
 #define cee_cancel_root (cee_exec.root)
 #else
 static uint64_t cee_suspensions; /* every thread's executor counts here (ceesafe_atomic_*) */
+/* Whether to count them: only for the cancellation sweep or its report. One counter every worker's every park
+   increments is a cache line the workers pass around (cee-proxy's F24). Set before the run's workers start. */
+static uint32_t cee_counting; /* ceesafe_atomic_* */
 static _Thread_local cee_task *cee_cancel_root; /* the running Async.run's root, which the sweep cancels */
 static uint64_t cee_cancel_woken; /* tasks cancellations woke, every thread's (ceesafe_atomic_*): CEESAFE_CANCEL_REPORT */
 static uint64_t cee_cancel_visited; /* tasks cancellations looked at (ADR 0062), every thread's: CEESAFE_CANCEL_REPORT */
@@ -810,6 +813,17 @@ static uint64_t cee_wake_sequence; /* ceesafe_atomic_*: orders wakes, so woken t
 #endif
 
 static void cee_wake_task(cee_executor *exec, cee_task *t) {
+#if !defined(CEE_FREESTANDING)
+    /* A wake from the task's own thread, while it is parked waiting for one: readied at once, as cee_child_done readies
+       a waiter of its own executor. Marking it instead left it for cee_ready_woken's walk of every task waiting to be
+       woken, so each wait with a wake cost O(waiters): with a task per HTTP/2 stream waiting on its reset channel, 11 %
+       of a proxy's time (cee-proxy's F24). Only this thread changes its executor's lists, and no walk of them wakes. */
+    if (exec == &cee_exec && t != cee_exec.current && t->parked && t->on_wake) {
+        ceesafe_atomic_store_u64(&t->woken, 0u);
+        cee_unpark(t);
+        return;
+    }
+#endif
 #if defined(CEE_FREESTANDING)
     uint64_t sequence = ceesafe_atomic_add_u64(&exec->wake_sequence, 1u) + 1u;
 #else
@@ -2748,7 +2762,8 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
 #if defined(CEE_FREESTANDING)
             (void)cancel_at; /* the cancellation sweep is the hosted runtime's (testing.md §1) */
 #else
-            if (ceesafe_atomic_add_ord_u64(&cee_suspensions, 1u, 0) + 1u == cancel_at && cee_cancel_root != NULL) {
+            if (ceesafe_atomic_load_u32(&cee_counting) != 0u && ceesafe_atomic_add_ord_u64(&cee_suspensions, 1u, 0) + 1u == cancel_at &&
+                cee_cancel_root != NULL) {
                 ceesafe_atomic_store_u32(&cee_cancel_root->cancelled, 1u); /* the sweep's cancellation (testing.md §1) */
                 cee_wake_waiters();
                 if (cee_exec.run != NULL) {
@@ -2829,6 +2844,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_exec.pool = &pool;
     uint64_t cancel_at = ceesafe_test_reports ? ceesafe_test_cancel_at : ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_test_reports || ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
+    if (cancel_report || cancel_at != 0u) {
+        ceesafe_atomic_store_u32(&cee_counting, 1u); /* stays on once any run sweeps or reports: a later run's count goes on from there */
+    }
     cee_task root;
     cee_task_init(&root, frame, NULL, info);
     root.resume.root = resume;

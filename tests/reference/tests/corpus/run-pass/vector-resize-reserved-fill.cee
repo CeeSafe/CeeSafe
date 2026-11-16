@@ -1,0 +1,35 @@
+// `resize` into capacity already reserved fills through a local pointer, zero fills as one memset (cee-proxy's F23:
+// GCC kept a byte loop that reloaded `v->ptr`, since a byte store may alias the vector). Both fills, at both sizes.
+
+fn sum(v: borrow Vector<u8>) -> u64 {
+    var s: u64 = 0;
+    for (b in v) {
+        s += b as u64;
+    }
+    return s;
+}
+
+fn main() {
+    var zeroed = Vector<u8>.withCapacity(16384)!;
+    zeroed.push(7)!;
+    zeroed.resize(16384, 0)!;
+    Console.writeLine(zeroed.length);
+    Console.writeLine(sum(borrow zeroed));
+    var filled = Vector<u8>.withCapacity(100)!;
+    filled.resize(100, 3)!;
+    Console.writeLine(sum(borrow filled));
+    var words = Vector<u32>.withCapacity(8)!;
+    words.push(1)!;
+    words.resize(8, 0xFFFFFFFF)!;
+    words.resize(12, 0)!;
+    var t: u64 = 0;
+    for (w in words) {
+        t += w as u64;
+    }
+    Console.writeLine(t);
+}
+
+// expect-stdout: 16384
+// expect-stdout: 7
+// expect-stdout: 300
+// expect-stdout: 30064771066

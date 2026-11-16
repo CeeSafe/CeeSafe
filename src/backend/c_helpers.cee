@@ -2088,7 +2088,19 @@ fn emitVectorBulkHelpers(
     e.t("(v, n - v->len);")?;
     e.emit()?;
     e.line("    if (room.tag != 0) return room;")?;
-    e.line("    for (uint64_t i = v->len; i < n; i++) v->ptr[i] = fill;")?;
+    // The fill through a local pointer (F23, cee-proxy): a store through `v->ptr` may alias `v` itself when the
+    // element is a byte, so C compilers reload `v->ptr` every iteration and keep a byte loop (GCC did; 17 % of an
+    // HTTP/2 proxy's time). A fill of zero bytes is one ceesafe_mem_set.
+    e.t("    ")?;
+    e.b(element.view())?;
+    e.t(" *at = v->ptr;")?;
+    e.emit()?;
+    e.line("    uint64_t from = v->len;")?;
+    e.line("    if (cee_all_zero(&fill, sizeof fill)) {")?;
+    e.line("        ceesafe_mem_set(at + from, 0, (size_t)(n - from) * sizeof fill);")?;
+    e.line("    } else {")?;
+    e.line("        for (uint64_t i = from; i < n; i++) at[i] = fill;")?;
+    e.line("    }")?;
     e.line("    v->len = n;")?;
     e.line("    return room;")?;
     e.line("}")?;

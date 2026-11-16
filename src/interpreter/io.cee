@@ -976,13 +976,10 @@ fn appDataFolder(it: borrow mut Interp, arguments: borrow Vector<Value>, name: S
         made = path.length;
         path.push('\\')!;
     } else {
-        var given: StringView = "";
-        if (system != 1) {
-            match (Environment.variable("XDG_DATA_HOME")) {
-                Some(data) => { given = data; }
-                null => {}
-            }
-        }
+        let given = match (Environment.variable("XDG_DATA_HOME")) {
+            Some(data) => if (system == 1) "" else data,
+            null => "",
+        };
         if (given.length > 0 && given.bytes()[0] == '/') {
             appendText(mut path, given)!;
             made = path.length;
@@ -1002,7 +999,8 @@ fn appDataFolder(it: borrow mut Interp, arguments: borrow Vector<Value>, name: S
         if (k < path.length && path[k] != '/' && path[k] != '\\') {
             continue;
         }
-        let part = match (StringView.fromUtf8(path.view()[0..k])) {
+        let whole = path.view();
+        let part = match (StringView.fromUtf8(whole[0..k])) {
             Some(p) => p,
             null => { return Ok(hostFailure(22)); }
         };

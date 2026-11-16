@@ -119,6 +119,9 @@ public enum WindowHandle {
     Xlib(u64, u64),
     /// iOS (ADR 0154): the `UIWindow` and its view, whose layer is the content.
     UIKit(u64, u64),
+    /// Android (ADR 0154): the activity's `ANativeWindow` (0 while it has none, in the background) and the
+    /// `ANativeActivity`.
+    Android(u64, u64),
     /// A scripted window (`CEESAFE_WINDOW_SCRIPT`), which has no system window.
     Scripted,
 }
@@ -298,6 +301,7 @@ public struct Window {
             2 => WindowHandle.Win32(first, second),
             3 => WindowHandle.Xlib(first, second),
             4 => WindowHandle.UIKit(first, second),
+            5 => WindowHandle.Android(first, second),
             _ => WindowHandle.Scripted,
         };
     }

@@ -329,7 +329,7 @@ static void cee_window_focus(struct cee_window *w, int focused) {
     cee_window_push(w, CEE_EVENT_FOCUS, focused, 0, 0, 0, 0.0f, 0.0f);
 }
 
-#if !defined(CEE_WINDOW_UIKIT) /* iOS takes text through the input method (P4 step 5) */
+#if !defined(CEE_WINDOW_UIKIT) && !defined(__ANDROID__) /* mobile text comes with the input method (P4 step 5) */
 /* A typed character: control characters and the private-use function-key range are keys, not text. */
 static void cee_window_text(struct cee_window *w, uint32_t scalar) {
     if (scalar < 0x20u || scalar == 0x7fu || (scalar >= 0xf700u && scalar <= 0xf8ffu) || scalar > 0x10ffffu ||
@@ -523,7 +523,8 @@ static int cee_window_answer_split(struct cee_window *w, const char *text, size_
     return 1;
 }
 
-#if (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)) || defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
+#if (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)) || defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__)) || \
+    defined(__FreeBSD__)
 /* Calls f(extension, length, context) for each extension of a comma-separated list, trimmed, without a leading dot,
    skipping empty ones; the number of them (the backends' dialogs). */
 static size_t cee_dialog_extensions(const char *list, size_t length,
@@ -679,6 +680,14 @@ static double cee_window_now(void) {
 #if defined(__APPLE__)
 #include <pthread.h>
 static int cee_window_on_main_thread(void) { return pthread_main_np() != 0; }
+#elif defined(__ANDROID__)
+#include <sys/syscall.h>
+#include <unistd.h>
+/* Android (ADR 0154 §2.1): the program's first thread is the one the runtime's activity glue starts main on. */
+static pid_t cee_android_program_tid;
+static int cee_window_on_main_thread(void) {
+    return cee_android_program_tid != 0 && (pid_t)syscall(SYS_gettid) == cee_android_program_tid;
+}
 #elif defined(__linux__)
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -4819,6 +4828,448 @@ static void cee_win32_drop_close(struct cee_window *w) {
         cee_oledrop.revoke_target(n->hwnd);
         n->drop_registered = 0;
     }
+}
+
+#elif defined(__ANDROID__)
+/* Android (ADR 0154 §2.1, §4): the program is a NativeActivity's library. The runtime's own glue starts main on a
+   thread of its own, with a looper; the activity's callbacks, on the activity's thread, record what happened (the
+   window, the input queue, focus, the activity's end) under a lock and wake that looper, and the program's pump takes
+   it. One window: the activity's. Frames are copied into the ANativeWindow's buffer (RGBX_8888, the bytes in the
+   frames' order). The first touch is the primary pointer; the activity's end (Back, or the system's) is Closed.
+   Standard output and error go to logcat. */
+#include <android/configuration.h>
+#include <android/input.h>
+#include <android/log.h>
+#include <android/looper.h>
+#include <android/native_activity.h>
+#include <android/native_window.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#define CEE_HANDLE_ANDROID 5
+#define CEE_ANDROID_INPUT 1 /* the looper's identifier for the input queue */
+
+static struct {
+    pthread_mutex_t lock;
+    ANativeActivity *activity;
+    ANativeWindow *window;      /* the activity's window, while it has one */
+    AInputQueue *queue;         /* the queue the activity gave, to attach */
+    AInputQueue *attached;      /* the queue attached to the program's looper; used only under the lock */
+    int focused;
+    int destroyed;              /* the activity ended: Closed */
+    ALooper *looper;            /* the program thread's */
+    float scale;                /* pixels per point, from the density */
+} cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f};
+
+/* The one window, and its primary touch's pointer id (-1 for none). */
+struct cee_droid {
+    int32_t touch;
+};
+static struct cee_window *cee_android_shown;
+
+static void cee_android_wake_program(void) {
+    pthread_mutex_lock(&cee_android.lock);
+    if (cee_android.looper != NULL) {
+        ALooper_wake(cee_android.looper);
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+}
+
+/* ---- The activity's callbacks, on the activity's thread ---- */
+
+static void cee_android_window_created(ANativeActivity *activity, ANativeWindow *window) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.window = window;
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* The window goes when this returns: it is taken under the lock, which a present holds while it draws. */
+static void cee_android_window_destroyed(ANativeActivity *activity, ANativeWindow *window) {
+    (void)activity;
+    (void)window;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.window = NULL;
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+static void cee_android_queue_created(ANativeActivity *activity, AInputQueue *queue) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.queue = queue;
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* The queue goes when this returns: it is detached here, under the lock, which the program's pump holds while it
+   reads the queue (detaching from another thread is safe: it removes the queue's descriptor from the looper). */
+static void cee_android_drop_queue(AInputQueue *queue) {
+    if (cee_android.attached == queue && queue != NULL) {
+        AInputQueue_detachLooper(queue);
+        cee_android.attached = NULL;
+    }
+    if (cee_android.queue == queue) {
+        cee_android.queue = NULL;
+    }
+}
+
+static void cee_android_queue_destroyed(ANativeActivity *activity, AInputQueue *queue) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_drop_queue(queue);
+    pthread_mutex_unlock(&cee_android.lock);
+}
+
+static void cee_android_focus_changed(ANativeActivity *activity, int focused) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.focused = focused != 0;
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* The activity ends (Back, or the system): the program gets Closed, and nothing touches the activity again. */
+static void cee_android_destroy(ANativeActivity *activity) {
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.destroyed = 1;
+    if (cee_android.activity == activity) {
+        cee_android.activity = NULL;
+    }
+    cee_android_drop_queue(cee_android.attached); /* the activity may dispose of its queue without a callback */
+    cee_android_drop_queue(cee_android.queue);
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* Standard output and error, which Android sends nowhere, read from a pipe into logcat ("ceesafe"), line by line. */
+static int cee_android_output[2] = {-1, -1};
+static pthread_t cee_android_logger_thread;
+static int cee_android_logging;
+
+static void *cee_android_logger(void *argument) {
+    (void)argument;
+    char line[1024];
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(cee_android_output[0], line + used, sizeof line - 1u - used);
+        if (n <= 0) {
+            break;
+        }
+        used += (size_t)n;
+        size_t start = 0;
+        for (size_t k = 0; k < used; k++) {
+            if (line[k] == '\n') {
+                line[k] = '\0';
+                __android_log_write(ANDROID_LOG_INFO, "ceesafe", line + start);
+                start = k + 1;
+            }
+        }
+        memmove(line, line + start, used - start);
+        used -= start;
+        if (used == sizeof line - 1u) {
+            line[used] = '\0';
+            __android_log_write(ANDROID_LOG_INFO, "ceesafe", line);
+            used = 0;
+        }
+    }
+    return NULL;
+}
+
+int main(int argc, char **argv);
+
+/* The program's thread: its looper, then main; when main returns, the activity is finished and the process exits. */
+static void *cee_android_program(void *argument) {
+    (void)argument;
+    cee_android_program_tid = (pid_t)syscall(SYS_gettid);
+    cee_android.looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+    char name[] = "ceesafe";
+    char *argv[] = {name, NULL};
+    int code = main(1, argv);
+    fflush(stdout);
+    fflush(stderr);
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_drop_queue(cee_android.attached); /* detached while the looper still exists */
+    cee_android.looper = NULL; /* the thread's looper ends with it: the activity's callbacks must not wake it */
+    pthread_mutex_unlock(&cee_android.lock);
+    __android_log_print(ANDROID_LOG_INFO, "ceesafe", "main returned %d", code);
+    pthread_mutex_lock(&cee_android.lock);
+    if (cee_android.activity != NULL) {
+        ANativeActivity_finish(cee_android.activity); /* not after onDestroy, which cleared it */
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    /* As on every other system, the process ends with main. Not by the thread's own exit, which would run its
+       thread-local destructors after ceesafe_shutdown has ended the runtime, nor by exit(), whose static destructors
+       Android's own threads (hwui) still use: both abort in bionic (a destroyed mutex). The output pipe is closed and
+       the logger drained first, so the program's last lines reach logcat. */
+    if (cee_android_logging) {
+        close(1);
+        close(2);
+        close(cee_android_output[1]);
+        pthread_join(cee_android_logger_thread, NULL);
+    }
+    _exit(code);
+}
+
+/* The library's entry, which a NativeActivity calls on its thread (ADR 0154 §2.1). */
+__attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *activity, void *saved,
+                                                                     size_t saved_size) {
+    (void)saved;
+    (void)saved_size;
+    cee_android.activity = activity;
+    activity->callbacks->onNativeWindowCreated = cee_android_window_created;
+    activity->callbacks->onNativeWindowDestroyed = cee_android_window_destroyed;
+    activity->callbacks->onInputQueueCreated = cee_android_queue_created;
+    activity->callbacks->onInputQueueDestroyed = cee_android_queue_destroyed;
+    activity->callbacks->onWindowFocusChanged = cee_android_focus_changed;
+    activity->callbacks->onDestroy = cee_android_destroy;
+    AConfiguration *configuration = AConfiguration_new();
+    if (configuration != NULL) {
+        AConfiguration_fromAssetManager(configuration, activity->assetManager);
+        int32_t density = AConfiguration_getDensity(configuration);
+        if (density > 0 && density != ACONFIGURATION_DENSITY_ANY && density != ACONFIGURATION_DENSITY_NONE) {
+            cee_android.scale = (float)density / 160.0f;
+        }
+        AConfiguration_delete(configuration);
+    }
+    static int started;
+    if (started) {
+        return; /* the activity again, in the same process: the program is still running */
+    }
+    started = 1;
+    if (pipe(cee_android_output) == 0) {
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        dup2(cee_android_output[1], 1);
+        dup2(cee_android_output[1], 2);
+        cee_android_logging = pthread_create(&cee_android_logger_thread, NULL, cee_android_logger, NULL) == 0;
+    }
+    pthread_t program;
+    if (pthread_create(&program, NULL, cee_android_program, NULL) == 0) {
+        pthread_detach(program);
+    }
+}
+
+/* ---- The window, on the program's thread ---- */
+
+static int cee_native_open(struct cee_window *w, const char *title) {
+    (void)title;
+    pthread_mutex_lock(&cee_android.lock);
+    int started = cee_android.activity != NULL && cee_android.looper != NULL;
+    pthread_mutex_unlock(&cee_android.lock);
+    if (!started) {
+        return CEE_WINDOW_NO_DISPLAY; /* not started by an activity, or it has ended */
+    }
+    if (cee_android_shown != NULL) {
+        return CEE_WINDOW_RESOURCES; /* one window, the activity's */
+    }
+    /* The activity's window comes after the activity starts: wait for it, ten seconds at most. */
+    for (int k = 0; k < 100; k++) {
+        pthread_mutex_lock(&cee_android.lock);
+        ANativeWindow *window = cee_android.window;
+        pthread_mutex_unlock(&cee_android.lock);
+        if (window != NULL) {
+            break;
+        }
+        (void)ALooper_pollOnce(100, NULL, NULL, NULL);
+    }
+    pthread_mutex_lock(&cee_android.lock);
+    ANativeWindow *window = cee_android.window;
+    int32_t width = window != NULL ? ANativeWindow_getWidth(window) : 0;
+    int32_t height = window != NULL ? ANativeWindow_getHeight(window) : 0;
+    pthread_mutex_unlock(&cee_android.lock);
+    if (window == NULL || width <= 0 || height <= 0) {
+        return CEE_WINDOW_NO_DISPLAY;
+    }
+    struct cee_droid *m = (struct cee_droid *)ceesafe_platform_alloc_zeroed(sizeof *m);
+    if (m == NULL) {
+        return CEE_WINDOW_RESOURCES;
+    }
+    m->touch = -1;
+    w->native = m;
+    w->scale = cee_android.scale;
+    w->width = (uint32_t)((float)width / w->scale + 0.5f);
+    w->height = (uint32_t)((float)height / w->scale + 0.5f);
+    cee_android_shown = w;
+    return 0;
+}
+
+static void cee_native_close(struct cee_window *w) {
+    if (cee_android_shown == w) {
+        cee_android_shown = NULL;
+    }
+    ceesafe_platform_free(w->native);
+    w->native = NULL;
+}
+
+/* One input event: a touch; whether it was taken. */
+static int cee_android_event(struct cee_window *w, AInputEvent *event) {
+    struct cee_droid *m = (struct cee_droid *)w->native;
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
+        int32_t action = AMotionEvent_getAction(event);
+        int32_t kind = action & AMOTION_EVENT_ACTION_MASK;
+        size_t index = (size_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                                AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
+        if (kind == AMOTION_EVENT_ACTION_DOWN && m->touch < 0) {
+            m->touch = AMotionEvent_getPointerId(event, 0);
+            float x = AMotionEvent_getX(event, 0) / scale, y = AMotionEvent_getY(event, 0) / scale;
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 1, 0, 0, x, y);
+        } else if (kind == AMOTION_EVENT_ACTION_MOVE && m->touch >= 0) {
+            size_t count = AMotionEvent_getPointerCount(event);
+            for (size_t k = 0; k < count; k++) {
+                if (AMotionEvent_getPointerId(event, k) == m->touch) {
+                    cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, AMotionEvent_getX(event, k) / scale,
+                                    AMotionEvent_getY(event, k) / scale);
+                }
+            }
+        } else if ((kind == AMOTION_EVENT_ACTION_UP || kind == AMOTION_EVENT_ACTION_CANCEL ||
+                    (kind == AMOTION_EVENT_ACTION_POINTER_UP &&
+                     AMotionEvent_getPointerId(event, index) == m->touch)) &&
+                   m->touch >= 0) {
+            size_t at = kind == AMOTION_EVENT_ACTION_POINTER_UP ? index : 0;
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, AMotionEvent_getX(event, at) / scale,
+                            AMotionEvent_getY(event, at) / scale);
+            m->touch = -1;
+        }
+        return 1;
+    }
+    return 0; /* keys, Back among them, are the system's: Back ends the activity, which gives Closed (onDestroy) */
+}
+
+/* Takes what the activity recorded (the queue to attach or detach, focus, the end), then the input events, then the
+   window's size. */
+static void cee_native_pump(struct cee_window *w) {
+    (void)ALooper_pollOnce(0, NULL, NULL, NULL); /* the looper's own wake, taken without waiting */
+    pthread_mutex_lock(&cee_android.lock);
+    if (cee_android.queue != NULL && cee_android.attached != cee_android.queue && cee_android.looper != NULL) {
+        if (cee_android.attached != NULL) {
+            AInputQueue_detachLooper(cee_android.attached);
+        }
+        AInputQueue_attachLooper(cee_android.queue, cee_android.looper, CEE_ANDROID_INPUT, NULL, NULL);
+        cee_android.attached = cee_android.queue;
+    }
+    int focused = cee_android.focused, destroyed = cee_android.destroyed;
+    ANativeWindow *window = cee_android.window;
+    int32_t width = window != NULL ? ANativeWindow_getWidth(window) : 0;
+    int32_t height = window != NULL ? ANativeWindow_getHeight(window) : 0;
+    cee_android.destroyed = 0;
+    /* The queue is read under the lock: the activity's thread detaches and disposes of it under the same lock. */
+    AInputQueue *queue = cee_android.attached;
+    if (queue != NULL && w != NULL && w->native != NULL) {
+        AInputEvent *event = NULL;
+        for (int k = 0; k < 256 && AInputQueue_hasEvents(queue) > 0 && AInputQueue_getEvent(queue, &event) >= 0; k++) {
+            if (AInputQueue_preDispatchEvent(queue, event)) {
+                continue;
+            }
+            AInputQueue_finishEvent(queue, event, cee_android_event(w, event));
+        }
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    if (w == NULL || w->native == NULL) {
+        return;
+    }
+    if (focused != w->focused) {
+        cee_window_focus(w, focused);
+    }
+    if (width > 0 && height > 0) {
+        float scale = w->scale > 0.0f ? w->scale : 1.0f;
+        cee_window_resized(w, (uint32_t)((float)width / scale + 0.5f), (uint32_t)((float)height / scale + 0.5f));
+    }
+    if (destroyed) {
+        cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
+    }
+}
+
+static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
+    (void)w;
+    pthread_mutex_lock(&cee_android.lock);
+    *first = (uint64_t)(uintptr_t)cee_android.window;
+    *second = (uint64_t)(uintptr_t)cee_android.activity;
+    pthread_mutex_unlock(&cee_android.lock);
+    return CEE_HANDLE_ANDROID;
+}
+
+/* The frame into the window's buffer, scaled by the system to the window when its size differs (the buffer's
+   geometry is the frame's). Under the lock, so the activity's thread cannot take the window away meanwhile. */
+static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
+    (void)w;
+    pthread_mutex_lock(&cee_android.lock);
+    ANativeWindow *window = cee_android.window;
+    if (window == NULL) {
+        pthread_mutex_unlock(&cee_android.lock);
+        return 0; /* no window while the activity is in the background: nothing to show */
+    }
+    int32_t result = 0;
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_setBuffersGeometry(window, (int32_t)width, (int32_t)height, WINDOW_FORMAT_RGBX_8888) != 0 ||
+        ANativeWindow_lock(window, &buffer, NULL) != 0) {
+        result = -CEE_WINDOW_RESOURCES;
+    } else {
+        uint32_t rows = (uint32_t)buffer.height < height ? (uint32_t)buffer.height : height;
+        uint32_t columns = (uint32_t)buffer.width < width ? (uint32_t)buffer.width : width;
+        for (uint32_t y = 0; y < rows; y++) {
+            memcpy((uint32_t *)buffer.bits + (size_t)y * (size_t)buffer.stride, pixels + (size_t)y * width,
+                   (size_t)columns * 4u);
+        }
+        ANativeWindow_unlockAndPost(window);
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    return result;
+}
+
+static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                        const struct cee_window_box *boxes, size_t count) {
+    (void)boxes;
+    (void)count;
+    return cee_native_present(w, pixels, width, height);
+}
+
+static void cee_native_cursor(struct cee_window *w) { (void)w; }
+static void cee_native_title(struct cee_window *w, const char *title) { (void)w; (void)title; }
+static void cee_native_text_input(struct cee_window *w, int on) { (void)w; (void)on; } /* P4 step 5 */
+static void cee_native_text_area(struct cee_window *w) { (void)w; }
+
+/* Android's clipboard is a Java service (ClipboardManager): not covered yet (ADR 0154 §4). */
+static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    (void)text;
+    (void)length;
+    return -CEE_WINDOW_UNSUPPORTED;
+}
+
+static int cee_native_clipboard_get(struct cee_window *w) {
+    (void)w;
+    return 0;
+}
+
+static void cee_native_wake(void) { cee_android_wake_program(); }
+
+/* Until the looper is woken (an activity callback, a wake, input) or `seconds`. */
+static void cee_native_wait(struct cee_window *w, double seconds) {
+    (void)w;
+    double ms = seconds * 1000.0 + 0.999;
+    (void)ALooper_pollOnce(ms <= 0.0 ? 0 : ms >= 2147483647.0 ? 2147483647 : (int)ms, NULL, NULL, NULL);
+}
+
+static void cee_native_wait_any(double seconds) { cee_native_wait(NULL, seconds); }
+
+static int32_t cee_native_menu(struct cee_window *w) {
+    (void)w;
+    return -CEE_WINDOW_UNSUPPORTED;
+}
+
+static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                 const char *extensions, size_t extensions_length) {
+    (void)w;
+    (void)kind;
+    (void)title;
+    (void)name;
+    (void)extensions;
+    (void)extensions_length;
+    return -CEE_WINDOW_UNSUPPORTED;
 }
 
 #elif defined(__linux__) || defined(__FreeBSD__)

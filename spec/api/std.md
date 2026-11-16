@@ -3357,6 +3357,24 @@ public fn saveFile(
 Where the user chose to save a file, the dialog's field starting as `suggestedName`, or null when they
 cancelled. The system asks before an existing file is chosen; the program writes the file.
 
+### FileDialog.exportFile
+
+```ceesafe
+public fn exportFile(
+    window: borrow mut Window,
+    title: StringView,
+    file: StringView,
+    suggestedName: StringView,
+) -> Result<bool, WindowError>
+```
+
+Gives the existing file at `file` to the user to save where they choose, under `suggestedName` unless they
+change it (ADR 0158): true when it was saved, false when they cancelled. The file itself is left as it is. On
+iOS and Android the system's picker saves it (a program cannot write outside its own folders there, so
+`saveFile` is `Unsupported`); elsewhere it is the save dialog, then a copy to the chosen path, so a program
+that writes its document to a file of its own and exports it saves the same way on every system.
+`Resources` when the file cannot be read or the copy cannot be written.
+
 ### FileDialog.chooseFolder
 
 ```ceesafe

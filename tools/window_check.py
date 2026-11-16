@@ -65,6 +65,9 @@ that opened a window would open one on the developer's screen:
    shows in keyboardInset with a Resized at the content's size, the same one again gives nothing, one taller than the
    content is the content's height, and setTextInputKind is accepted; a keyboard of two numbers or a negative one is
    a malformed script. With --display, a real desktop window's keyboard inset is zero.
+13. exporting a file (ADR 0158): on a scripted window FileDialog.exportFile copies the program's file to the path its
+   script's `dialog` item answers and is true, leaves the file as it was, is false without an answer (a cancel), and
+   is Resources when the file to export does not exist.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1664,6 +1667,39 @@ fn main() -> i32 {
 }
 """
 
+# Exporting a file (ADR 0158): a draft written, exported to the script's answer, exported again with no answer, and a
+# file that does not exist. Its argument is the folder to work in.
+EXPORT = r"""
+fn verdict(what: StringView, r: Result<bool, WindowError>) {
+    Console.write(what);
+    match (r) {
+        Ok(saved) => { Console.writeLine(if (saved) " saved" else " cancelled"); }
+        Err(e) => {
+            Console.writeLine(match (e) {
+                WindowError.Resources => " Resources",
+                WindowError.Unsupported => " Unsupported",
+                _ => " another error",
+            });
+        }
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check export", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    {
+        var draft = File.create("draft.txt")!;
+        draft.write("the draft's text".bytes())!;
+    }
+    verdict("first", FileDialog.exportFile(mut window, "Save As", "draft.txt", "notes.txt"));
+    verdict("second", FileDialog.exportFile(mut window, "Save As", "draft.txt", "notes.txt"));
+    verdict("missing", FileDialog.exportFile(mut window, "Save As", "no-such-file.txt", "notes.txt"));
+    return 0;
+}
+"""
+
 # Its script, and what KEYBOARD prints for it: none at first; a keyboard (a Resized at the same size) and a typed
 # letter; the same again (nothing); one taller than the content is the content's height; none; the close.
 KEYBOARD_SCRIPT = "1:keyboard:12.5;1:type:a;2:keyboard:12.5;3:keyboard:99;4:keyboard:0;4:close"
@@ -3012,6 +3048,25 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        _, export = build(compiler, EXPORT, work, "window_check_export")
+        export_work = os.path.join(work, "export")
+        os.makedirs(export_work, exist_ok=True)
+        export_script = os.path.join(export_work, "script.txt")
+        with open(export_script, "w", encoding="utf-8") as f:
+            f.write("0:dialog:saved.txt;0:dialog;0:dialog:other.txt")
+        r = run([export], {"CEESAFE_WINDOW_SCRIPT": export_script}, export_work)
+        want = ["first saved", "second cancelled", "missing Resources"]
+
+        def content(name):
+            path = os.path.join(export_work, name)
+            return open(path, encoding="utf-8").read() if os.path.exists(path) else None
+
+        if (r.returncode != 0 or r.stdout.splitlines() != want or content("saved.txt") != "the draft's text" or
+                content("draft.txt") != "the draft's text"):
+            problems.append("exporting a file: expected\n  " + "\n  ".join(want) + " and saved.txt with the draft's "
+                            f"text\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) +
+                            f"\nsaved.txt: {content('saved.txt')!r}\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -3023,7 +3078,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + 1 + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1

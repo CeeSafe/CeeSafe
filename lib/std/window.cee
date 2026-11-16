@@ -999,6 +999,51 @@ public struct FileDialog {
         return Ok(paths.pop());
     }
 
+    /// Gives the existing file at `file` to the user to save where they choose, under `suggestedName` unless they
+    /// change it (ADR 0158): true when it was saved, false when they cancelled. The file itself is left as it is. On
+    /// iOS and Android the system's picker saves it (a program cannot write outside its own folders there, so
+    /// `saveFile` is `Unsupported`); elsewhere it is the save dialog, then a copy to the chosen path, so a program
+    /// that writes its document to a file of its own and exports it saves the same way on every system.
+    /// `Resources` when the file cannot be read or the copy cannot be written.
+    public fn exportFile(
+        window: borrow mut Window,
+        title: StringView,
+        file: StringView,
+        suggestedName: StringView,
+    ) -> Result<bool, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 4, title, suggestedName, file, mut paths)?;
+        let chosen = match (paths.pop()) {
+            Some(p) => p,
+            null => { return Ok(false); }
+        };
+        if (chosen.view().length == 0) {
+            return Ok(true); // the system saved it
+        }
+        var from = match (File.open(file)) {
+            Ok(f) => f,
+            Err(_) => { return Err(WindowError.Resources); }
+        };
+        var to = match (File.create(chosen.view())) {
+            Ok(f) => f,
+            Err(_) => { return Err(WindowError.Resources); }
+        };
+        var chunk = [0u8; 16384];
+        loop {
+            let count = match (from.read(mut chunk[..])) {
+                Ok(n) => n,
+                Err(_) => { return Err(WindowError.Resources); }
+            };
+            if (count == 0) {
+                return Ok(true);
+            }
+            match (to.write(chunk[0..count])) {
+                Ok() => {}
+                Err(_) => { return Err(WindowError.Resources); }
+            }
+        }
+    }
+
     /// One existing folder the user chose, or null when they cancelled.
     public fn chooseFolder(window: borrow mut Window, title: StringView) -> Result<String?, WindowError> {
         var paths = Vector<String>.create();
@@ -1006,7 +1051,8 @@ public struct FileDialog {
         return Ok(paths.pop());
     }
 
-    /// Runs the dialog of `kind` (0 a file, 1 files, 2 save, 3 a folder) and appends its paths to `out`.
+    /// Runs the dialog of `kind` (0 a file, 1 files, 2 save, 3 a folder, 4 an export of the file at `extensions`, whose
+    /// one path is empty when the system saved it) and appends its paths to `out`.
     /// Safety: the runtime reads the three texts during the call, and gives its copy of the answer, each path followed
     /// by a zero byte, which it keeps until the window's next dialog; the paths are copied before this returns.
     fn run(

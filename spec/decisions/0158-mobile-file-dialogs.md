@@ -1,7 +1,8 @@
 # ADR 0158 — File dialogs on iOS and Android
 
-- Status: **Proposed**, 2026-11-16. The owner, with ClayWind's demo on his iPhone 14 Plus and moto g35 5G: "I
-  noticed that file open and file save are not working on both ios and android". Not implemented.
+- Status: **Accepted** by the owner, 2026-11-16 ("Yes, I accept accept ADR 0158 as written."). The owner, with
+  ClayWind's demo on his iPhone 14 Plus and moto g35 5G: "I noticed that file open and file save are not working on
+  both ios and android". Implemented on branch `adr/0158-mobile-file-dialogs` (§5).
 - Scope: `lib/std/window.cee` (`FileDialog.openFile` and `openFiles` on iOS and Android; a new
   `FileDialog.exportFile` on every system), `runtime/hosted/ceesafe_rt_window.c`, `runtime/android` (the Java
   class), type-system.md §26.13, `spec/api/std.md` (generated), `tools/window_check.py`. No compiler change.
@@ -102,12 +103,38 @@ let saved = FileDialog.exportFile(mut window, "Save As", draft, "notes.txt")!;  
 - **Not covered**, each for a later ADR if a program needs it: documents edited in place (the handle above), folders,
   the photo library's picker, sharing sheets, files opened from another app ("Open in…").
 
-## 5. Plan of implementation and evidence
+## 5. Implementation and evidence (2026-11-16)
 
-1. `exportFile` in `lib/std/window.cee` and on the desktop systems and the scripted window; `tools/window_check.py`
-   cases; type-system.md §26.13.
-2. iOS: the picker, its delegate, the modal wait. Evidence: the simulator and the owner's iPhone, a text file opened
-   from Files and exported back.
-3. Android: the fragment, the copies, the modal wait. Evidence: the emulator and the owner's moto g35 5G.
-4. The window runtime under ceesafec's own warning flags for every target; the contract suite; ClayWind's demo's
-   Open and Save on both phones.
+- **The dialog's entry** (`ceesafe_window_dialog`) has a fifth kind, an export: `name` is the suggested name and
+  `extensions` carries the file. On iOS and Android the backend saves the file and the answer is one empty path;
+  elsewhere the answer is the save dialog's path, and `lib/std` copies the file to it.
+- **iOS**: the picker for opening (`initForOpeningContentTypes:asCopy:`) and for exporting
+  (`initForExportingURLs:asCopy:`, of a copy under the suggested name in the temporary folder), a delegate class,
+  `UTType`s from `UniformTypeIdentifiers`, loaded at the first dialog.
+  - **Found on the owner's iPhone**: after a save, the next dialog was answered "cancelled" at once while its picker
+    stayed on the screen, and the dialog after it never appeared, so the program waited for ever. A picker may tell
+    its delegate again, late, as it leaves; and UIKit does not present over a controller that is going away. Now a
+    dialog takes only its own picker's first answer, dismisses the picker if it has not begun to go, and returns
+    once it has left (five seconds at most).
+- **Android**: `runtime/android/org/ceesafe/window/Picker.java`, in the same dex as `InputView` (about 12 kilobytes
+  now; `tools/gen_android_dex.py` hashes both sources). The runtime's classes are looked for in the app's own class
+  loader first, then in the embedded dex, so an app whose APK holds them has a fragment the system can make again
+  after it ended the app's process behind a picker; without that, the activity that comes back then fails once. The
+  program's thread waits on its looper inside the call; the activity's end answers a cancel.
+- **`lib/std/window.cee`**: `FileDialog.exportFile`; `spec/type-system.md` §26.13.
+- **Evidence:**
+  - `tools/window_check.py`: 54 checks, 0 problems, on macOS arm64. Its new one: on a scripted window an export
+    copies the file to the script's answer and is true, leaves the file as it was, is false at a cancel, and is
+    `Resources` for a file that does not exist.
+  - Android 17 emulator (API 37; built for API 28, targeting 36), a test that writes a draft, exports it, opens one
+    text file and then several, with the picker driven by taps: the save screen came with the suggested name, and
+    the saved file in Downloads held the draft's line; the opened file was a copy under the app's
+    `cache/ceesafe-picked` with the document's name and text; two selected files came back as two copies; Back in
+    each picker gave a cancel (`false`, null, none); `saveFile` was `Unsupported`; `main` returned 0.
+  - The owner's moto g35 5G (Android 15), by his hands: the export saved; the file he then picked was that export,
+    read back with its line; one file selected in the last picker came back as one copy; `main` returned 0.
+  - The owner's iPhone 14 Plus, by his hands, after the fix above: the export saved; the picked file was a copy in
+    the app's `tmp/…-Inbox` with the export's line; one file from the last picker likewise; `saveFile` was
+    `Unsupported`; the program ended with code 0. The iOS simulator showed the export's picker.
+  - Not verified: several files picked at once on the iPhone, a cloud provider's documents (iCloud Drive, Google
+    Drive), a large document, the app's process ended behind a picker on Android, Android before API 30.

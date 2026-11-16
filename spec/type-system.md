@@ -3180,7 +3180,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157, ADR 0158)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3319,6 +3319,21 @@ Diagnostics: none new.
     where to save, the name field starting as `suggestedName`. The system asks before an existing file is chosen, and
     the program writes the file;
   - `FileDialog.chooseFolder(window, title)` is `Result<String?, WindowError>`: an existing folder.
+  - `FileDialog.exportFile(window, title, file: StringView, suggestedName)` (ADR 0158) is `Result<bool,
+    WindowError>`: the existing file at `file` is given to the user to save where they choose, under
+    `suggestedName` unless they change it; true when it was saved, false at a cancel. The file is left as it is. On
+    the desktop systems and for a scripted window it is `saveFile`'s dialog, then a copy to the chosen path; on iOS
+    and Android the system's picker saves it. `Resources` when the file cannot be read or the copy written.
+  - **On iOS and Android** (ADR 0158) a program has no paths outside its own folders. `openFile` and `openFiles`
+    show the system's document picker and return the paths of copies of the picked documents in the app's own
+    temporary folder (iOS: the picker asked for copies; Android: copied by the runtime into the cache folder), named
+    as the documents are: reading them is reading the documents, writing them does not change the documents.
+    `saveFile` and `chooseFolder` are `Unsupported`: a program saves with `exportFile`. The dialogs have no title
+    there. iOS: `UIDocumentPickerViewController`, presented by the window's view controller, the run loop running
+    inside the call until this dialog's picker has answered and left the screen; `extensions` become uniform types.
+    Android: the Storage Access Framework (`ACTION_OPEN_DOCUMENT`, `ACTION_CREATE_DOCUMENT`), started and answered
+    through `org.ceesafe.window.Picker`, a fragment without a view in the runtime's embedded dex (ADR 0157), the
+    program's thread waiting inside the call; `extensions` become MIME types; the activity's end is a cancel.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

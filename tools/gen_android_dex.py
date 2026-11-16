@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Writes the Android window's Java class into runtime/hosted/ceesafe_rt_window.c as an embedded dex (ADR 0157).
 
-runtime/android/org/ceesafe/window/InputView.java is the source. It is compiled with javac against the Android SDK's
+runtime/android/org/ceesafe/window/InputView.java (ADR 0157) and Picker.java (ADR 0158) are the sources. They are compiled with javac against the Android SDK's
 android.jar and turned into one classes.dex by the SDK's d8 (release mode, minimum API 28, ADR 0154's floor); the bytes
 replace the array between the two marker lines of the runtime's window file. The array is committed, so building a
 program needs neither a JDK nor the SDK: run this only when the Java source changes, then tools/gen_runtime.py.
 
-The array's first line records the SHA-256 of the Java source it was made from. --check needs no tool: it fails when
+The array's first line records the SHA-256 of the Java sources it was made from. --check needs no tool: it fails when
 that is not the source's hash now, which is how the contract suite knows the dex was made again after the source
 changed (the bytes themselves differ from one javac or d8 to the next, so they are not compared).
 
@@ -24,7 +24,8 @@ import sys
 import tempfile
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-SOURCE = os.path.join(ROOT, "runtime", "android", "org", "ceesafe", "window", "InputView.java")
+SOURCES = [os.path.join(ROOT, "runtime", "android", "org", "ceesafe", "window", name)
+           for name in ("InputView.java", "Picker.java")]
 TARGET = os.path.join(ROOT, "runtime", "hosted", "ceesafe_rt_window.c")
 BEGIN = "/* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */\n"
 END = "/* END android dex */\n"
@@ -56,7 +57,7 @@ def dex():
         classes = os.path.join(work, "classes")
         os.makedirs(classes)
         subprocess.run(["javac", "--release", "11", "-Xlint:-options", "-g:none", "-classpath", jar, "-d", classes,
-                        SOURCE], check=True)
+                        ] + SOURCES, check=True)
         found = sorted(glob.glob(os.path.join(classes, "**", "*.class"), recursive=True))
         subprocess.run([d8, "--release", "--min-api", "28", "--lib", jar, "--output", work] + found, check=True)
         with open(os.path.join(work, "classes.dex"), "rb") as f:
@@ -64,12 +65,15 @@ def dex():
 
 
 def source_hash():
-    with open(SOURCE, "rb") as f:
-        return hashlib.sha256(f.read().replace(b"\r\n", b"\n")).hexdigest()
+    digest = hashlib.sha256()
+    for source in SOURCES:
+        with open(source, "rb") as f:
+            digest.update(f.read().replace(b"\r\n", b"\n"))
+    return digest.hexdigest()
 
 
 def array(data):
-    lines = [BEGIN, f"/* InputView.java's SHA-256: {source_hash()} */\n",
+    lines = [BEGIN, f"/* the Java sources' SHA-256: {source_hash()} */\n",
              f"static uint8_t cee_android_dex[{len(data)}] = {{\n"]
     for k in range(0, len(data), 24):
         lines.append("    " + ",".join(str(b) for b in data[k:k + 24]) + ",\n")
@@ -87,10 +91,10 @@ def main():
     if start < 0 or end < start:
         sys.exit("gen_android_dex: runtime/hosted/ceesafe_rt_window.c has no android dex markers")
     if args.check:
-        if f"/* InputView.java's SHA-256: {source_hash()} */\n" not in text[start:end]:
-            sys.exit("gen_android_dex: the embedded dex was not made from runtime/android's InputView.java as it is "
+        if f"/* the Java sources' SHA-256: {source_hash()} */\n" not in text[start:end]:
+            sys.exit("gen_android_dex: the embedded dex was not made from runtime/android's Java sources as they are "
                      "now: run tools/gen_android_dex.py, then tools/gen_runtime.py")
-        print("gen_android_dex: the embedded dex was made from InputView.java as it is now; 0 problems")
+        print("gen_android_dex: the embedded dex was made from runtime/android's Java sources as they are now; 0 problems")
         return
     written = text[:start] + array(dex()) + text[end + len(END):]
     with open(TARGET, "w", encoding="utf-8", newline="") as f:

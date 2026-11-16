@@ -81,6 +81,18 @@
    queued as events, they change the window's drag and queue the drop. */
 #define CEE_SCRIPT_DRAG 104
 #define CEE_SCRIPT_DROP 105
+/* A scripted touch (`touch:ID,PHASE,X,Y`, ADR 0155): never queued as an event, it is a finger on the screen. */
+#define CEE_SCRIPT_TOUCH 106
+
+/* Touches (ADR 0155): WindowTouchPhase's numbers, the touches a window keeps that the program has not taken, the
+   fingers it follows at once, and a scripted touch's time: its frame's, at 60 frames a second. */
+#define CEE_TOUCH_BEGAN 0
+#define CEE_TOUCH_MOVED 1
+#define CEE_TOUCH_ENDED 2
+#define CEE_TOUCH_CANCELLED 3
+#define CEE_TOUCH_QUEUE 256u
+#define CEE_TOUCH_DOWN 32u
+#define CEE_TOUCH_FRAME_NS 16666667u
 
 /* Drops (ADR 0150): the drops a window keeps that the program has not taken. */
 #define CEE_DROP_QUEUE 64u
@@ -171,6 +183,22 @@ struct cee_window_paths {
     size_t length, capacity;
 };
 
+/* A touch the program has not taken (ADR 0155). */
+struct cee_window_touch {
+    uint32_t id;
+    int32_t phase;
+    float x, y;
+    uint64_t time;
+};
+
+/* A finger that is down (ADR 0155): the system's key for it (a UITouch's address, an Android pointer id + 1, a script's
+   ID + 1), the runtime's number for it, and where it was last. */
+struct cee_window_finger {
+    uintptr_t key;
+    uint32_t id;
+    float x, y;
+};
+
 /* A drop the program has not taken (ADR 0150): where, and its paths, which the queue owns. */
 struct cee_window_drop {
     float x, y;
@@ -250,6 +278,20 @@ struct cee_window {
     uint32_t drag_count;
     float drag_x, drag_y;
     int drag_changed;
+    /* Touches (ADR 0155): whether the program turned them on; the touches not yet taken (a ring); the fingers down,
+       which the touch queue follows while on and the pointer follows while off (the one finger that is the pointer,
+       `pointer_finger`, with its key and last place); the last number given and the last touch's time. Only the program's first
+       thread touches them. */
+    int touches_on;
+    struct cee_window_touch touches[CEE_TOUCH_QUEUE];
+    unsigned touch_head, touch_count;
+    struct cee_window_finger fingers[CEE_TOUCH_DOWN];
+    unsigned finger_count;
+    int pointer_finger;
+    uintptr_t pointer_key;
+    float pointer_x, pointer_y;
+    uint32_t touch_next;
+    uint64_t touch_time;
     /* The system's window. */
     void *native;
 };
@@ -283,10 +325,17 @@ int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, 
                               uint64_t extensions_length, const uint8_t **answer);
 int64_t ceesafe_window_drop(void *window, float *position, const uint8_t **paths);
 uint32_t ceesafe_window_drag_over(void *window, float *position);
+int32_t ceesafe_window_set_touches(void *window, int32_t on);
+int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *position, uint64_t *time);
+
+static void cee_touch_cancel_all(struct cee_window *w);
 
 /* Queues an event; the queued copy, which a backend may take back (CEE_EVENT_DROPPED) before the next poll, or NULL. */
 static struct cee_window_event *cee_window_push(struct cee_window *w, int32_t kind, int32_t a, int32_t b, int32_t c,
                                                 int32_t d, float x, float y) {
+    if (kind == CEE_EVENT_CLOSED) {
+        cee_touch_cancel_all(w); /* the user asked to close: no finger stays down (ADR 0155) */
+    }
     if (w->count == CEE_WINDOW_QUEUE) {
         return NULL; /* a program that never polls loses the newest events, not the memory */
     }
@@ -326,7 +375,179 @@ static void cee_window_focus(struct cee_window *w, int focused) {
         return;
     }
     w->focused = focused;
+    if (!focused) {
+        cee_touch_cancel_all(w); /* the system took the screen (ADR 0155) */
+    }
     cee_window_push(w, CEE_EVENT_FOCUS, focused, 0, 0, 0, 0.0f, 0.0f);
+}
+
+/* ---- Touches (ADR 0155) ------------------------------------------------------------------------------------------ */
+/* A backend gives each finger on a touch screen to cee_touch_began, cee_touch_moved and cee_touch_ended, under a key
+   of its own (never 0) and in points. With touches on they are queued for nextTouch; with them off, the first finger
+   down is the pointer (ADR 0154) and the others are ignored. */
+
+/* Takes the queued touch at ring offset k out, keeping the others' order. */
+static void cee_touch_remove(struct cee_window *w, unsigned k) {
+    for (unsigned j = k; j + 1u < w->touch_count; j++) {
+        w->touches[(w->touch_head + j) % CEE_TOUCH_QUEUE] = w->touches[(w->touch_head + j + 1u) % CEE_TOUCH_QUEUE];
+    }
+    w->touch_count--;
+}
+
+/* Makes room in a full queue (ADR 0155 §2.2): the oldest Moved goes, or failing that the oldest finger whose Began and
+   end are both queued goes whole, so no finger is left half given. Whether there is room. */
+static int cee_touch_room(struct cee_window *w) {
+    for (unsigned k = 0; k < w->touch_count; k++) {
+        if (w->touches[(w->touch_head + k) % CEE_TOUCH_QUEUE].phase == CEE_TOUCH_MOVED) {
+            cee_touch_remove(w, k);
+            return 1;
+        }
+    }
+    for (unsigned k = 0; k < w->touch_count; k++) {
+        struct cee_window_touch *t = &w->touches[(w->touch_head + k) % CEE_TOUCH_QUEUE];
+        if (t->phase != CEE_TOUCH_BEGAN) {
+            continue;
+        }
+        uint32_t id = t->id;
+        unsigned end = k + 1u;
+        while (end < w->touch_count) {
+            struct cee_window_touch *u = &w->touches[(w->touch_head + end) % CEE_TOUCH_QUEUE];
+            if (u->id == id && (u->phase == CEE_TOUCH_ENDED || u->phase == CEE_TOUCH_CANCELLED)) {
+                break;
+            }
+            end++;
+        }
+        if (end < w->touch_count) {
+            for (unsigned j = w->touch_count; j-- > k;) {
+                if (w->touches[(w->touch_head + j) % CEE_TOUCH_QUEUE].id == id) {
+                    cee_touch_remove(w, j);
+                }
+            }
+            return 1;
+        }
+    }
+    return 0; /* not reached: at most CEE_TOUCH_DOWN fingers are down, and as many were down at the last read */
+}
+
+static void cee_touch_queue(struct cee_window *w, uint32_t id, int32_t phase, float x, float y, uint64_t time) {
+    if (w->touch_count == CEE_TOUCH_QUEUE && phase == CEE_TOUCH_MOVED) {
+        for (unsigned k = w->touch_count; k-- > 0;) { /* the finger's last queued touch, if a Moved, takes the place */
+            struct cee_window_touch *t = &w->touches[(w->touch_head + k) % CEE_TOUCH_QUEUE];
+            if (t->id == id) {
+                if (t->phase == CEE_TOUCH_MOVED) {
+                    t->x = x;
+                    t->y = y;
+                    t->time = time;
+                    return;
+                }
+                break;
+            }
+        }
+    }
+    if (w->touch_count == CEE_TOUCH_QUEUE && !cee_touch_room(w)) {
+        return;
+    }
+    struct cee_window_touch *t = &w->touches[(w->touch_head + w->touch_count) % CEE_TOUCH_QUEUE];
+    t->id = id;
+    t->phase = phase;
+    t->x = x;
+    t->y = y;
+    t->time = time;
+    w->touch_count++;
+}
+
+static struct cee_window_finger *cee_touch_finger(struct cee_window *w, uintptr_t key) {
+    for (unsigned k = 0; k < w->finger_count; k++) {
+        if (w->fingers[k].key == key) {
+            return &w->fingers[k];
+        }
+    }
+    return NULL;
+}
+
+/* A finger's end: Ended or Cancelled queued, and the finger forgotten. */
+static void cee_touch_finish(struct cee_window *w, struct cee_window_finger *f, int32_t phase, uint64_t time) {
+    cee_touch_queue(w, f->id, phase, f->x, f->y, time);
+    *f = w->fingers[--w->finger_count];
+}
+
+static void cee_touch_began(struct cee_window *w, uintptr_t key, float x, float y, uint64_t time) {
+    w->touch_time = time;
+    if (!w->touches_on) {
+        if (!w->pointer_finger) {
+            w->pointer_finger = 1;
+            w->pointer_key = key;
+            w->pointer_x = x;
+            w->pointer_y = y;
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 1, 0, 0, x, y);
+        }
+        return;
+    }
+    struct cee_window_finger *f = cee_touch_finger(w, key);
+    if (f != NULL) {
+        cee_touch_finish(w, f, CEE_TOUCH_CANCELLED, time); /* the system began the key again without ending it */
+    }
+    if (w->finger_count == CEE_TOUCH_DOWN) {
+        return; /* more fingers than any screen has: the newest is not followed */
+    }
+    if (++w->touch_next == 0) {
+        w->touch_next = 1; /* after 2^32 fingers in one window */
+    }
+    f = &w->fingers[w->finger_count++];
+    f->key = key;
+    f->id = w->touch_next;
+    f->x = x;
+    f->y = y;
+    cee_touch_queue(w, f->id, CEE_TOUCH_BEGAN, x, y, time);
+}
+
+static void cee_touch_moved(struct cee_window *w, uintptr_t key, float x, float y, uint64_t time) {
+    w->touch_time = time;
+    if (!w->touches_on) {
+        if (w->pointer_finger && w->pointer_key == key) {
+            w->pointer_x = x;
+            w->pointer_y = y;
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
+        }
+        return;
+    }
+    struct cee_window_finger *f = cee_touch_finger(w, key);
+    if (f == NULL || (f->x == x && f->y == y)) {
+        return;
+    }
+    f->x = x;
+    f->y = y;
+    cee_touch_queue(w, f->id, CEE_TOUCH_MOVED, x, y, time);
+}
+
+/* A finger lifted (`cancelled` 0) at (x, y), or taken away by the system. */
+static void cee_touch_ended(struct cee_window *w, uintptr_t key, float x, float y, uint64_t time, int cancelled) {
+    w->touch_time = time;
+    if (!w->touches_on) {
+        if (w->pointer_finger && w->pointer_key == key) {
+            w->pointer_finger = 0;
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, x, y);
+        }
+        return;
+    }
+    struct cee_window_finger *f = cee_touch_finger(w, key);
+    if (f == NULL) {
+        return;
+    }
+    if (!cancelled && (f->x != x || f->y != y)) { /* a last move reported with the lift: a Moved, then the end */
+        f->x = x;
+        f->y = y;
+        cee_touch_queue(w, f->id, CEE_TOUCH_MOVED, x, y, time);
+    }
+    cee_touch_finish(w, f, cancelled ? CEE_TOUCH_CANCELLED : CEE_TOUCH_ENDED, time);
+}
+
+/* Every finger down is Cancelled, at its last place and the last touch's time. */
+static void cee_touch_cancel_all(struct cee_window *w) {
+    while (w->finger_count > 0) {
+        cee_touch_finish(w, &w->fingers[w->finger_count - 1u], CEE_TOUCH_CANCELLED, w->touch_time);
+    }
 }
 
 #if !defined(CEE_WINDOW_UIKIT) && !defined(__ANDROID__) /* mobile text comes with the input method (P4 step 5) */
@@ -1254,6 +1475,31 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         return offset >= 0 && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DROP, offset,
                                                     (int32_t)tail_length, 0, 0, v[0], v[1]);
     }
+    if (CEE_IS("touch")) { /* touch:ID,PHASE,X,Y (ADR 0155) */
+        static const char *const phases[4] = {"began", "moved", "ended", "cancelled"};
+        uint64_t id = 0;
+        size_t at = 0;
+        while (at < args_length && args[at] >= '0' && args[at] <= '9' && id <= 100000000u) {
+            id = id * 10u + (uint64_t)(args[at++] - '0');
+        }
+        if (at == 0 || at == args_length || args[at] != ',') {
+            return 0;
+        }
+        size_t start = ++at;
+        while (at < args_length && args[at] != ',') {
+            at++;
+        }
+        int32_t phase = -1;
+        for (int32_t k = 0; k < 4; k++) {
+            if (at - start == strlen(phases[k]) && memcmp(args + start, phases[k], at - start) == 0) {
+                phase = k;
+            }
+        }
+        if (phase < 0 || at == args_length || cee_window_numbers(args + at + 1, args_length - at - 1, v, 3) != 2) {
+            return 0;
+        }
+        return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_TOUCH, (int32_t)id, phase, 0, 0, v[0], v[1]);
+    }
     if (CEE_IS("dragleave")) {
         return name_length == rest && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DRAG, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -1371,6 +1617,16 @@ static void cee_window_script_pump(struct cee_window *w) {
                 }
             }
             cee_window_dropped(w, e.x, e.y, &p); /* out of memory: the paths kept so far */
+        } else if (e.kind == CEE_SCRIPT_TOUCH) {
+            uintptr_t key = (uintptr_t)e.fields[0] + 1u;
+            uint64_t time = w->frames * (uint64_t)CEE_TOUCH_FRAME_NS;
+            if (e.fields[1] == CEE_TOUCH_BEGAN) {
+                cee_touch_began(w, key, e.x, e.y, time);
+            } else if (e.fields[1] == CEE_TOUCH_MOVED) {
+                cee_touch_moved(w, key, e.x, e.y, time);
+            } else {
+                cee_touch_ended(w, key, e.x, e.y, time, e.fields[1] == CEE_TOUCH_CANCELLED);
+            }
         } else {
             cee_window_push(w, e.kind, e.fields[0], e.fields[1], e.fields[2], e.fields[3], e.x, e.y);
         }
@@ -1472,15 +1728,14 @@ static struct {
     void (*loop_wake_up)(void *);
     void *wake_source;
     void *main_loop;
-    const void *const *gravity_resize;
+    cee_id *gravity_resize;
     cee_id view_class;
 } cee_uikit;
 
-/* The one window, and its view's primary touch (a UITouch, compared by address only). */
+/* The one window and its view. */
 struct cee_ios {
     cee_id window;
     cee_id view;
-    cee_id touch;
 };
 static struct cee_window *cee_ios_shown;
 /* The application's window scene (iOS 13 onward; required from iOS 27, whose UIKit stops an app without one): the
@@ -1531,28 +1786,28 @@ static cee_id cee_ios_string(const char *text) {
                                                                      cee_ios_sel("stringWithUTF8String:"), text);
 }
 
-/* The view's touches: the first touch that begins is the primary pointer until it ends (ADR 0154 §2.2). */
+/* The view's touches, each a finger under its UITouch's address (a touch keeps its object from beginning to end), at
+   its place in the view in points and its time (seconds since the system started) in nanoseconds (ADR 0154 §2.2,
+   ADR 0155). Phase 0 began, 1 moved, 2 ended, 3 cancelled. */
 static void cee_ios_touches(cee_id view, cee_id touches, int phase) {
     struct cee_window *w = cee_ios_shown;
     if (w == NULL) {
         return;
     }
-    struct cee_ios *m = (struct cee_ios *)w->native;
     cee_id all = cee_ios_send(touches, "allObjects");
     unsigned long count = all != NULL ? cee_ios_send_ulong(all, "count") : 0ul;
     for (unsigned long k = 0; k < count; k++) {
         cee_id touch = ((cee_id(*)(cee_id, cee_sel, unsigned long))cee_uikit.send)(all, cee_ios_sel("objectAtIndex:"), k);
         cee_point p = cee_ios_location(touch, view);
-        float x = (float)p.x, y = (float)p.y;
-        if (phase == 0 && m->touch == NULL) {
-            m->touch = touch;
-            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
-            cee_window_push(w, CEE_EVENT_BUTTON, 0, 1, 0, 0, x, y);
-        } else if (touch == m->touch && phase == 1) {
-            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
-        } else if (touch == m->touch && phase == 2) {
-            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, x, y);
-            m->touch = NULL;
+        double seconds = cee_ios_send_double(touch, "timestamp");
+        uint64_t time = seconds > 0.0 ? (uint64_t)(seconds * 1e9) : 0u;
+        uintptr_t key = (uintptr_t)touch;
+        if (phase == 0) {
+            cee_touch_began(w, key, (float)p.x, (float)p.y, time);
+        } else if (phase == 1) {
+            cee_touch_moved(w, key, (float)p.x, (float)p.y, time);
+        } else {
+            cee_touch_ended(w, key, (float)p.x, (float)p.y, time, phase == 3);
         }
     }
 }
@@ -1571,6 +1826,11 @@ static void cee_ios_touches_ended(cee_id self, cee_sel cmd, cee_id touches, cee_
     (void)cmd;
     (void)event;
     cee_ios_touches(self, touches, 2);
+}
+static void cee_ios_touches_cancelled(cee_id self, cee_sel cmd, cee_id touches, cee_id event) {
+    (void)cmd;
+    (void)event;
+    cee_ios_touches(self, touches, 3);
 }
 
 /* The wake source's callback: nothing to do; that a source was handled ends the run loop's wait (ADR 0142). */
@@ -1616,7 +1876,7 @@ static int cee_uikit_load(void) {
     cee_uikit.default_mode = (const void *const *)dlsym(core, "kCFRunLoopDefaultMode");
     cee_uikit.source_signal = (void (*)(void *))cee_ios_symbol(core, "CFRunLoopSourceSignal");
     cee_uikit.loop_wake_up = (void (*)(void *))cee_ios_symbol(core, "CFRunLoopWakeUp");
-    cee_uikit.gravity_resize = (const void *const *)dlsym(quartz, "kCAGravityResize");
+    cee_uikit.gravity_resize = (cee_id *)dlsym(quartz, "kCAGravityResize");
     void *(*source_create)(void *, long, cee_ios_source_context *) =
         (void *(*)(void *, long, cee_ios_source_context *))cee_ios_symbol(core, "CFRunLoopSourceCreate");
     void *(*get_main)(void) = (void *(*)(void))cee_ios_symbol(core, "CFRunLoopGetMain");
@@ -1653,7 +1913,7 @@ static int cee_uikit_load(void) {
         cee_uikit.add_method(view, cee_ios_sel("touchesBegan:withEvent:"), (cee_fn)cee_ios_touches_began, "v@:@@");
         cee_uikit.add_method(view, cee_ios_sel("touchesMoved:withEvent:"), (cee_fn)cee_ios_touches_moved, "v@:@@");
         cee_uikit.add_method(view, cee_ios_sel("touchesEnded:withEvent:"), (cee_fn)cee_ios_touches_ended, "v@:@@");
-        cee_uikit.add_method(view, cee_ios_sel("touchesCancelled:withEvent:"), (cee_fn)cee_ios_touches_ended, "v@:@@");
+        cee_uikit.add_method(view, cee_ios_sel("touchesCancelled:withEvent:"), (cee_fn)cee_ios_touches_cancelled, "v@:@@");
         cee_uikit.register_class(view);
     }
     cee_uikit.view_class = view;
@@ -1796,11 +2056,12 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         return CEE_WINDOW_RESOURCES;
     }
     cee_ios_send_v_id(window, "setBackgroundColor:", cee_ios_send(cee_ios_cls("UIColor"), "blackColor"));
+    ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(view, cee_ios_sel("setMultipleTouchEnabled:"), 1);
     cee_ios_send_v_id(controller, "setView:", view);
     cee_ios_send_v(view, "release");
     cee_ios_send_v_id(window, "setRootViewController:", controller);
     cee_ios_send_v(controller, "release");
-    cee_ios_send_v_id(cee_ios_send(view, "layer"), "setContentsGravity:", (cee_id)*cee_uikit.gravity_resize);
+    cee_ios_send_v_id(cee_ios_send(view, "layer"), "setContentsGravity:", *cee_uikit.gravity_resize);
     cee_ios_send_v(window, "makeKeyAndVisible");
     m->window = window;
     m->view = view;
@@ -4933,9 +5194,10 @@ static struct {
     float scale;                /* pixels per point, from the density */
 } cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f};
 
-/* The one window, and its primary touch's pointer id (-1 for none). */
+/* The one window: the activity's state is cee_android's, and the window's touches are the shared layer's (ADR 0155);
+   this marks the window as the system's. */
 struct cee_droid {
-    int32_t touch;
+    int32_t opened;
 };
 static struct cee_window *cee_android_shown;
 
@@ -5158,7 +5420,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     if (m == NULL) {
         return CEE_WINDOW_RESOURCES;
     }
-    m->touch = -1;
+    m->opened = 1;
     w->native = m;
     w->scale = cee_android.scale;
     w->width = (uint32_t)((float)width / w->scale + 0.5f);
@@ -5175,37 +5437,57 @@ static void cee_native_close(struct cee_window *w) {
     w->native = NULL;
 }
 
-/* One input event: a touch; whether it was taken. */
+/* One input event: a motion's pointers, each a finger under its pointer id + 1, in points, at the event's time (the
+   monotonic clock's nanoseconds) (ADR 0155): a batched move's historical samples first, so a fling's velocity is not
+   undersampled. A mouse or a trackpad is the pointer whether touches are on or not. Whether it was taken. */
 static int cee_android_event(struct cee_window *w, AInputEvent *event) {
-    struct cee_droid *m = (struct cee_droid *)w->native;
     float scale = w->scale > 0.0f ? w->scale : 1.0f;
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
+        int touchscreen = (AInputEvent_getSource(event) & AINPUT_SOURCE_TOUCHSCREEN) == AINPUT_SOURCE_TOUCHSCREEN;
+        int on = w->touches_on;
+        if (!touchscreen) {
+            w->touches_on = 0; /* the pointer, for this event */
+        }
         int32_t action = AMotionEvent_getAction(event);
         int32_t kind = action & AMOTION_EVENT_ACTION_MASK;
         size_t index = (size_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
                                 AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
-        if (kind == AMOTION_EVENT_ACTION_DOWN && m->touch < 0) {
-            m->touch = AMotionEvent_getPointerId(event, 0);
-            float x = AMotionEvent_getX(event, 0) / scale, y = AMotionEvent_getY(event, 0) / scale;
-            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
-            cee_window_push(w, CEE_EVENT_BUTTON, 0, 1, 0, 0, x, y);
-        } else if (kind == AMOTION_EVENT_ACTION_MOVE && m->touch >= 0) {
-            size_t count = AMotionEvent_getPointerCount(event);
-            for (size_t k = 0; k < count; k++) {
-                if (AMotionEvent_getPointerId(event, k) == m->touch) {
-                    cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, AMotionEvent_getX(event, k) / scale,
-                                    AMotionEvent_getY(event, k) / scale);
+        size_t count = AMotionEvent_getPointerCount(event);
+        uint64_t time = (uint64_t)AMotionEvent_getEventTime(event);
+        if (kind == AMOTION_EVENT_ACTION_DOWN || kind == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+            size_t at = kind == AMOTION_EVENT_ACTION_DOWN ? 0 : index;
+            if (at < count) {
+                cee_touch_began(w, (uintptr_t)AMotionEvent_getPointerId(event, at) + 1u,
+                                AMotionEvent_getX(event, at) / scale, AMotionEvent_getY(event, at) / scale, time);
+            }
+        } else if (kind == AMOTION_EVENT_ACTION_MOVE) {
+            size_t history = AMotionEvent_getHistorySize(event);
+            for (size_t h = 0; h <= history; h++) {
+                for (size_t k = 0; k < count; k++) {
+                    uintptr_t key = (uintptr_t)AMotionEvent_getPointerId(event, k) + 1u;
+                    if (h < history) {
+                        cee_touch_moved(w, key, AMotionEvent_getHistoricalX(event, k, h) / scale,
+                                        AMotionEvent_getHistoricalY(event, k, h) / scale,
+                                        (uint64_t)AMotionEvent_getHistoricalEventTime(event, h));
+                    } else {
+                        cee_touch_moved(w, key, AMotionEvent_getX(event, k) / scale,
+                                        AMotionEvent_getY(event, k) / scale, time);
+                    }
                 }
             }
-        } else if ((kind == AMOTION_EVENT_ACTION_UP || kind == AMOTION_EVENT_ACTION_CANCEL ||
-                    (kind == AMOTION_EVENT_ACTION_POINTER_UP &&
-                     AMotionEvent_getPointerId(event, index) == m->touch)) &&
-                   m->touch >= 0) {
-            size_t at = kind == AMOTION_EVENT_ACTION_POINTER_UP ? index : 0;
-            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, AMotionEvent_getX(event, at) / scale,
-                            AMotionEvent_getY(event, at) / scale);
-            m->touch = -1;
+        } else if (kind == AMOTION_EVENT_ACTION_UP || kind == AMOTION_EVENT_ACTION_POINTER_UP) {
+            size_t at = kind == AMOTION_EVENT_ACTION_UP ? 0 : index;
+            if (at < count) {
+                cee_touch_ended(w, (uintptr_t)AMotionEvent_getPointerId(event, at) + 1u,
+                                AMotionEvent_getX(event, at) / scale, AMotionEvent_getY(event, at) / scale, time, 0);
+            }
+        } else if (kind == AMOTION_EVENT_ACTION_CANCEL) {
+            for (size_t k = 0; k < count; k++) {
+                cee_touch_ended(w, (uintptr_t)AMotionEvent_getPointerId(event, k) + 1u,
+                                AMotionEvent_getX(event, k) / scale, AMotionEvent_getY(event, k) / scale, time, 1);
+            }
         }
+        w->touches_on = on;
         return 1;
     }
     return 0; /* keys, Back among them, are the system's: Back ends the activity, which gives Closed (onDestroy) */
@@ -7052,7 +7334,7 @@ void ceesafe_window_wait(void *window) {
     struct cee_window *w = (struct cee_window *)window;
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
     if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || w->drop_count > 0 || w->drag_changed ||
-        cee_wake_pending(w)) {
+        w->touch_count > 0 || cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
         cee_wake_take(w);
         return;
@@ -7069,9 +7351,9 @@ void ceesafe_window_wait(void *window) {
 
 /* Whether nextEvent would return an event (one is queued that was not taken back), nextMenuChoice an id (ADR 0146:
    a scripted window's choice only of an enabled item of its menu), or nextDrop a drop, or whether the drag of files
-   over the window changed (ADR 0150). */
+   over the window changed (ADR 0150), or nextTouch a touch (ADR 0155). */
 static int cee_window_has_event(struct cee_window *w) {
-    if (w->drop_count > 0 || w->drag_changed) {
+    if (w->drop_count > 0 || w->drag_changed || w->touch_count > 0) {
         return 1;
     }
     for (unsigned k = 0; k < w->count; k++) {
@@ -7482,4 +7764,59 @@ uint32_t ceesafe_window_drag_over(void *window, float *position) {
     position[0] = w->drag_x;
     position[1] = w->drag_y;
     return w->drag_count;
+}
+
+/* ---- Touches (ADR 0155) ------------------------------------------------------------------------------------------ */
+
+/* Turns touches on or off; whether the system gives this window touches (a scripted window, iOS and Android). On, the
+   finger that is the pointer lifts it; off, every finger down is Cancelled, and the next finger down is the pointer. */
+int32_t ceesafe_window_set_touches(void *window, int32_t on) {
+    struct cee_window *w = (struct cee_window *)window;
+#if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
+    int capable = 1;
+#else
+    int capable = w->scripted;
+#endif
+    if (!capable) {
+        return 0;
+    }
+    if (on && !w->touches_on) {
+        if (w->pointer_finger) {
+            w->pointer_finger = 0;
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, w->pointer_x, w->pointer_y);
+        }
+        w->touches_on = 1;
+    } else if (!on && w->touches_on) {
+        cee_touch_cancel_all(w);
+        w->touches_on = 0;
+    }
+    return 1;
+}
+
+/* The next touch: 1 with its fields, or 0. With none queued, the window takes the system's (or its script's) events
+   first, as ceesafe_window_poll does. */
+int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *position, uint64_t *time) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (w->touch_count == 0) {
+        if (w->scripted) {
+            cee_window_script_pump(w);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+        }
+#endif
+    }
+    if (w->touch_count == 0) {
+        return 0;
+    }
+    struct cee_window_touch t = w->touches[w->touch_head];
+    w->touch_head = (w->touch_head + 1u) % CEE_TOUCH_QUEUE;
+    w->touch_count--;
+    *id = t.id;
+    *phase = t.phase;
+    position[0] = t.x;
+    position[1] = t.y;
+    *time = t.time;
+    return 1;
 }

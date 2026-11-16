@@ -1,7 +1,8 @@
 # ADR 0155 — Touches on a window
 
-- Status: **Proposed**, 2026-11-16, for ClayWind's roadmap phase P4 (mobile) step 3, "touch events and gestures" (the
-  owner: "Go ahead with 1-3", whose second item was to start that step with this ADR). Branch `adr/0155-touches`.
+- Status: **Accepted** by the owner, 2026-11-16 ("Continue", after this proposal), for ClayWind's roadmap phase P4
+  (mobile) step 3, "touch events and gestures" (the owner's "Go ahead with 1-3" started that step with this ADR).
+  Implemented on branch `adr/0155-touches`: iOS, Android and the scripted window (§5).
 - Scope: `lib/std/window.cee` (`WindowTouch`, `WindowTouchPhase`, `Window.setTouches`, `Window.nextTouch`),
   `runtime/hosted/ceesafe_rt_window.c` (iOS, Android, the scripted window), type-system.md §26.13, `spec/api/std.md`
   (generated), `tools/window_check.py`. No compiler change.
@@ -66,9 +67,11 @@ loop {
   are separate queues: a program that needs a key's order relative to a finger reads both after each wait, as for
   drops.
 - **A bounded queue.** A window keeps at most 256 touches not taken. When full, a new `Moved` replaces the last queued
-  `Moved` of the same finger (a program that reads late sees the latest position, which is what it draws), and failing
-  that the oldest queued `Moved` of any finger is dropped. `Began`, `Ended` and `Cancelled` are never dropped; the
-  fingers that can be down at once (ten on most screens) bound them.
+  touch of the same finger if that is a `Moved` (a program that reads late sees the latest position, which is what it
+  draws); failing that, the oldest queued `Moved` of any finger is dropped; failing that (a queue of taps only), the
+  oldest finger whose `Began` and end are both queued is dropped whole, so a program that reads late loses a tap it
+  never saw, never half a finger. One such finger is always there: the queue's other fingers are those down now or
+  down at the last read, and a window follows at most 32 fingers at once (a 33rd is not followed).
 
 ### 2.3 The systems
 
@@ -82,8 +85,10 @@ loop {
   `Ended`, `ACTION_CANCEL` `Cancelled` for every pointer down. Positions are divided by the density's scale, as ADR
   0154's are. Only `AINPUT_SOURCE_TOUCHSCREEN` gives touches; a mouse on Android stays the pointer.
 - **Scripted windows**: `touch:ID,PHASE,X,Y`, with PHASE `began`, `moved`, `ended` or `cancelled` and ID the script's
-  name for a finger (the runtime numbers it as above), delivered only while touches are on, so `tools/window_check.py`
-  checks the promises on every host.
+  name for a finger (the runtime numbers it as above), given as a system's finger would be: the pointer while touches
+  are off, a touch while they are on. Its time is its frame's at 60 frames a second. `tools/window_check.py` checks
+  the promises with them on every host.
+- **Desktop systems**: `setTouches` returns false and changes nothing (§4).
 
 ## 3. Alternatives considered
 
@@ -110,3 +115,40 @@ loop {
     `setTouches` returns false and the system's own emulation stays the pointer;
   - the trackpad's gestures on macOS (`magnifyWithEvent:`, `rotateWithEvent:`), which are not touches on the screen;
   - pressure, the touch's size, a stylus and hovering (Apple Pencil, S Pen).
+
+## 5. Implementation and evidence (2026-11-16)
+
+- **One touch layer for every backend** (`runtime/hosted/ceesafe_rt_window.c`): a backend gives each finger to
+  `cee_touch_began`, `cee_touch_moved` and `cee_touch_ended` under a key of its own (a `UITouch`'s address, an
+  Android pointer id + 1, a script's ID + 1). The layer keeps the fingers down, numbers them, queues touches, and,
+  with touches off, does ADR 0154's pointer emulation, which moved there from the two backends. Queuing `Closed`
+  (`cee_window_push`) and losing focus (`cee_window_focus`) cancel the fingers down.
+- **iOS**: the view's four touch methods (cancel now its own), `multipleTouchEnabled`, `UITouch.timestamp`.
+- **Android**: every motion action of a touch screen, with `AMotionEvent_getHistorical*` for batched moves; other
+  sources (a mouse) are the pointer for their event.
+- **`lib/std/window.cee`**: `WindowTouchPhase`, `WindowTouch`, `Window.setTouches`, `Window.nextTouch`;
+  `spec/type-system.md` §26.13 and its script grammar.
+- **Evidence:**
+  - `tools/window_check.py`: 45 checks, 0 problems, on macOS arm64. Its eight new ones cover a trace of touches off
+    and on (the pointer from one finger, a second ignored, the pointer lifted when touches turn on, numbers from 1
+    never reused, a move to the same place dropped, a move before an end that moved, cancels by the script, by focus
+    loss and by turning touches off), a full queue (300 moves of one finger merged to 254 and its end; 200 taps
+    keeping the newest 128 whole), a touch ending `waitEvent` and `waitAny` of 20 s, four malformed `touch` items,
+    and the interpreter's `Unsupported`. With `--display`, a real desktop window answers false; its program run alone
+    on macOS printed `touches false`.
+  - Android 16 emulator (arm64, API 28 build), touches injected through the emulator's console
+    (`adb emu event send`, multi-touch protocol B; `sendevent` is refused by SELinux): with touches off, a tap is the
+    pointer at 205.7, 457.1 (540, 1200 pixels at 2.625) and of two fingers only the first is; on, a pinch gives
+    touch 1 at 152.4 and touch 2 at 259.0, 20 moves, touch 2's end at 335.2 and touch 1's at 72.4, 460.9, in order,
+    at increasing times; a finger held while Home is pressed is `Cancelled` (touch 3); Back gives `Closed` and the
+    program returns 0.
+  - iOS 27 simulator (iPhone 18 Pro), launched headless: the window opens at 402×874, gets its focus, and
+    `setTouches(true)` is true; the app runs on.
+  - The window runtime and the hosted runtime compile with ceesafec's own warning flags (`-Wall -Wextra -Wpedantic`
+    … `-Wcast-qual -Wmissing-prototypes`, `-Werror`) for macOS, the iOS simulator and devices, Android (API 28), Linux
+    (gcc 13, X11) and Windows (MinGW-w64). This found two warnings in ADR 0154's iOS code, released in 0.56.0, that
+    every iOS build printed: `ceesafe_window_app_start` had no prototype (now declared in `ceesafe/rt.h`), and the
+    layer's gravity constant was cast from `const` (now held as `cee_id *`, as on macOS). Fixed here.
+  - Not verified: touches on iOS (the Simulator app was not open and is not driven here; a person's touches in the
+    simulator or on the iPhone are to come), Android's historical samples (the emulator's console sends one sample
+    per event), and a stylus.

@@ -70,6 +70,8 @@
 - [enum WindowEvent](#enum-windowevent)
 - [struct WindowDrop](#struct-windowdrop)
 - [struct WindowDragOver](#struct-windowdragover)
+- [enum WindowTouchPhase](#enum-windowtouchphase)
+- [struct WindowTouch](#struct-windowtouch)
 - [struct WindowWaker](#struct-windowwaker)
 - [struct Window](#struct-window)
 - [struct MenuShortcut](#struct-menushortcut)
@@ -2812,6 +2814,34 @@ public struct WindowDragOver {
 A drag of files over a window (§26.13, ADR 0150): where the pointer is, in points from the content's top left, and
 how many files the drag holds.
 
+## enum WindowTouchPhase
+
+```ceesafe
+public enum WindowTouchPhase {
+    Began,
+    Moved,
+    Ended,
+    Cancelled,
+}
+```
+
+Where a touch is in its finger's life (§26.13, ADR 0155).
+
+## struct WindowTouch
+
+```ceesafe
+public struct WindowTouch {
+    public id: u32;
+    public phase: WindowTouchPhase;
+    public x: f32;
+    public y: f32;
+    public time: u64;
+}
+```
+
+A finger on a touch screen (§26.13, ADR 0155): `Window.nextTouch`. Each finger gives one `Began`, then `Moved`s,
+then exactly one `Ended` or `Cancelled`.
+
 ## struct WindowWaker
 
 ```ceesafe
@@ -3095,6 +3125,30 @@ is the window's state as of the last event the window took from the system: a ch
 moving or leaving) ends `waitEvent`, `waitFrame` and `Window.waitAny` as a wake does, so a program redraws its
 drop highlight after each wait. A drop ends the drag: the window then has none.
 Safety: the runtime only writes the position and returns the count, 0 for no drag.
+
+### Window.setTouches
+
+```ceesafe
+public fn setTouches(borrow mut this, on: bool) -> bool
+```
+
+Turns touches on or off (ADR 0155); whether the system gives this window touches: true on iOS and Android and
+for a scripted window, false elsewhere, where nothing changes. On, every finger is queued for `nextTouch` and no
+finger is the pointer any more (a finger that was, lifts it); off, the default, the first finger down is the
+pointer, as ADR 0154 has it, and every finger down when they are turned off is `Cancelled`.
+Safety: the runtime reads the flag.
+
+### Window.nextTouch
+
+```ceesafe
+public fn nextTouch(borrow mut this) -> WindowTouch?
+```
+
+The next touch on this window, or null; it never blocks (ADR 0155). Touches are queued beside the events, in
+order, while touches are on, and a queued touch ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event
+does. A window keeps at most 256 touches not taken: when full, a finger's newest move replaces its last queued
+one, or else the oldest move goes, or else the oldest finger whose whole life is queued goes.
+Safety: the runtime writes the touch's fields.
 
 ### Window.clipboardText
 

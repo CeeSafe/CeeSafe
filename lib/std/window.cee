@@ -83,6 +83,10 @@ extern "C" {
     fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
     @effects()
     fn ceesafe_window_drag_over(window: *mut void, position: *mut f32) -> u32;
+    @effects()
+    fn ceesafe_window_set_touches(window: *mut void, on: i32) -> i32;
+    @effects()
+    fn ceesafe_window_touch(window: *mut void, id: *mut u32, phase: *mut i32, position: *mut f32, time: *mut u64) -> i32;
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -227,6 +231,33 @@ public struct WindowDragOver {
     public x: f32;
     public y: f32;
     public count: u32;
+}
+
+/// Where a touch is in its finger's life (§26.13, ADR 0155).
+public enum WindowTouchPhase {
+    /// The finger came down.
+    Began,
+    /// The finger moved; only when its position changed.
+    Moved,
+    /// The finger lifted.
+    Ended,
+    /// The system took the finger away (a system gesture, the window losing focus or closing, touches turned off):
+    /// whatever it began should be undone.
+    Cancelled,
+}
+
+/// A finger on a touch screen (§26.13, ADR 0155): `Window.nextTouch`. Each finger gives one `Began`, then `Moved`s,
+/// then exactly one `Ended` or `Cancelled`.
+public struct WindowTouch {
+    /// The finger, from its `Began` to its end: numbered by the runtime from 1, never reused in a window's life.
+    public id: u32;
+    public phase: WindowTouchPhase;
+    /// Points from the content's top left, as pointer events are.
+    public x: f32;
+    public y: f32;
+    /// Nanoseconds on the system's clock of input events, for velocities: only differences between one window's
+    /// touches mean anything.
+    public time: u64;
 }
 
 /// Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker()`. It is a plain value, Copy and
@@ -583,6 +614,44 @@ public struct Window {
             return null;
         }
         return WindowDragOver { x: position[0], y: position[1], count: count };
+    }
+
+    /// Turns touches on or off (ADR 0155); whether the system gives this window touches: true on iOS and Android and
+    /// for a scripted window, false elsewhere, where nothing changes. On, every finger is queued for `nextTouch` and no
+    /// finger is the pointer any more (a finger that was, lifts it); off, the default, the first finger down is the
+    /// pointer, as ADR 0154 has it, and every finger down when they are turned off is `Cancelled`.
+    /// Safety: the runtime reads the flag.
+    public fn setTouches(borrow mut this, on: bool) -> bool {
+        return unsafe { ceesafe_window_set_touches(this.raw, if (on) 1 else 0) } != 0;
+    }
+
+    /// The next touch on this window, or null; it never blocks (ADR 0155). Touches are queued beside the events, in
+    /// order, while touches are on, and a queued touch ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event
+    /// does. A window keeps at most 256 touches not taken: when full, a finger's newest move replaces its last queued
+    /// one, or else the oldest move goes, or else the oldest finger whose whole life is queued goes.
+    /// Safety: the runtime writes the touch's fields.
+    public fn nextTouch(borrow mut this) -> WindowTouch? {
+        var id: u32 = 0;
+        var phase: i32 = 0;
+        var position = [0.0f32; 2];
+        var time: u64 = 0;
+        let found = unsafe { ceesafe_window_touch(
+            this.raw,
+            borrow mut id as *mut u32,
+            borrow mut phase as *mut i32,
+            borrow mut position[0] as *mut f32,
+            borrow mut time as *mut u64,
+        ) };
+        if (found == 0) {
+            return null;
+        }
+        let which = match (phase) {
+            0 => WindowTouchPhase.Began,
+            1 => WindowTouchPhase.Moved,
+            2 => WindowTouchPhase.Ended,
+            _ => WindowTouchPhase.Cancelled,
+        };
+        return WindowTouch { id: id, phase: which, x: position[0], y: position[1], time: time };
     }
 
     /// Appends the clipboard's text to `out`; false when the clipboard holds no text, its text is not valid UTF-8, or

@@ -3180,7 +3180,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3361,13 +3361,38 @@ Diagnostics: none new.
     version 5 (`XdndAware`). The files are the source's `text/uri-list`, whose `file:` URIs of this host are
     percent-decoded; the window converts it while the drag hovers, so a drag shows in `dragOver` only once the source
     answered, and again at the drop. A list larger than one X11 request (an `INCR` transfer) gives no files.
+- **Touches** (ADR 0155). On a touch screen each finger can be followed, for gestures that the program recognizes
+  itself:
+  - **`w.setTouches(on: bool) -> bool`** (`borrow mut`) turns touches on or off and returns whether the system gives
+    this window touches: true on iOS and Android and for a scripted window, false on the desktop systems, where it
+    changes nothing. While touches are off, the default, the first finger down is the primary pointer
+    (`PointerMoved`, `PointerButton`) until it lifts, and other fingers are ignored. While they are on, no finger is
+    the pointer: turning them on lifts the pointer (`PointerButton` up) of a finger that was it, and that finger gives
+    no touch; turning them off cancels every finger down. A mouse on Android is the pointer either way.
+  - **`w.nextTouch()`** is `WindowTouch?`: the next touch, in order, or null. It never blocks. `WindowTouch` is
+    `{ id: u32, phase: WindowTouchPhase, x: f32, y: f32, time: u64 }`, `WindowTouchPhase` being `Began`, `Moved`,
+    `Ended` or `Cancelled`. `id` is the runtime's number for the finger, from 1, never reused in the window's life;
+    `x`, `y` are points from the content's top left; `time` is nanoseconds on the system's clock of input events, of
+    which only differences between one window's touches mean anything.
+  - **Promises.** Each finger gives one `Began`, then a `Moved` for each change of its place (a move reported with the
+    lift comes first, as a `Moved` at the lift's place), then exactly one `Ended` or `Cancelled`. Fingers that are
+    down are `Cancelled` at their last place when the system cancels them, the window loses focus, `Closed` is
+    queued, or touches are turned off. A window follows at most 32 fingers at once. Touches are queued beside the
+    events, so no `WindowEvent` variant is added; a queued touch ends `waitFrame`, `waitEvent` and `Window.waitAny`
+    as an event does. A window keeps at most 256 touches not taken: when full, a finger's new `Moved` replaces its
+    last queued one if that is a `Moved`, or else the oldest queued `Moved` is dropped, or else the oldest finger whose
+    `Began` and end are both queued is dropped whole, so a program never sees half a finger.
+  - **Backends.** iOS: the view's `touchesBegan`, `touchesMoved`, `touchesEnded` and `touchesCancelled`, with
+    `multipleTouchEnabled`; a finger is its `UITouch`, its time `UITouch.timestamp`. Android: the input queue's
+    motion events from a touch screen, each pointer a finger, a batched move's historical samples first; the time is
+    the event's (`CLOCK_MONOTONIC`).
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
   - `w.setTitle(title)` sets the title.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
-    arrives or the window is woken, so an idle loop does not spin. A queued menu choice (ADR 0146) or drop (ADR 0150)
-    counts as an event in it and in the two waits below, and a change of the drag over the window as a wake.
+    arrives or the window is woken, so an idle loop does not spin. A queued menu choice (ADR 0146), drop (ADR 0150)
+    or touch (ADR 0155) counts as an event in it and in the two waits below, and a change of the drag over the window as a wake.
   - `w.waitEvent(timeoutMs: u32)` (ADR 0142) returns when an event is queued (`nextEvent` would return one), when the
     window was woken since a `waitEvent` or `waitFrame` last returned, or after `timeoutMs` milliseconds, whichever is
     first; 0 returns at once. It does not tick, so an idle window that waits uses no CPU. While it waits the window
@@ -3403,7 +3428,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -3418,8 +3443,9 @@ Diagnostics: none new.
     most, else `NoDisplay`). The run loop runs while the program polls or waits (`CFRunLoopRunInMode`). One window, which
     fills the screen whatever size `open` asks: `size()` is the view's size in points and `scale()` the screen's; a
     rotation gives `Resized`, the window's scene becoming inactive and active again `Focus`. Frames are `CGImage`s in
-    the view's layer. Until touches have their own events, the first touch is the primary pointer
-    (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled). The clipboard is
+    the view's layer. While touches are off, the first touch is the primary pointer
+    (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled); on, every finger is a
+    touch (ADR 0155). The clipboard is
     `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),
     no text input yet, and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
   - **Android** (ADR 0154): a NativeActivity's library (built with the NDK's clang, `--cflag -shared --cflag -fPIC
@@ -3428,7 +3454,7 @@ Diagnostics: none new.
     activity is finished and the process ends with its code. Standard output and error go to logcat (tag `ceesafe`).
     One window, the activity's, waited for by `open` (ten seconds at most, else `NoDisplay`): its size in points is
     its pixels over the density's scale (`dpi / 160`). Frames are copied into the `ANativeWindow`'s buffer
-    (`RGBX_8888`). The first touch is the primary pointer, as on iOS; the window's focus gives `Focus`; the
+    (`RGBX_8888`). Touches are as on iOS (ADR 0155); the window's focus gives `Focus`; the
     activity's end (Back, or the system's) gives `Closed`, after which `present` shows nothing. The activity's input
     queue and window are used under one lock that its callbacks take too. There is no clipboard yet
     (`setClipboardText` is `Unsupported`, `clipboardText` false), title, cursor, menu, file dialog or text input.
@@ -3461,7 +3487,11 @@ Diagnostics: none new.
     - `dragover:X,Y:N` (ADR 0150), N a decimal count of at least 1: a drag of N files is over the window at X,Y;
       `dragleave` (no colon): it left;
     - `drop:X,Y:PATH|PATH…` (ADR 0150): files are dropped at X,Y, which ends the drag. The paths are the script's
-      bytes, so one that is not UTF-8 tests that it is left out.
+      bytes, so one that is not UTF-8 tests that it is left out;
+    - `touch:ID,PHASE,X,Y` (ADR 0155), ID a decimal number naming a finger in the script and PHASE `began`, `moved`,
+      `ended` or `cancelled`: that finger on the window's touch screen, given as a system's would be (the pointer
+      while touches are off; numbered by the runtime while they are on). Its time is its frame's at 60 frames a
+      second.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
     `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line

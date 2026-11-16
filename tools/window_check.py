@@ -49,7 +49,14 @@ that opened a window would open one on the developer's screen:
    or $CC): on macOS the system's mouse events from a small Objective-C program whose window starts a dragging
    session, on Windows the same from a C program whose window starts an OLE drag (DoDragDrop), moved by SendInput, on
    X11 an XDND source in C: a drag of text is refused, a drag of two files that enters and leaves shows in dragOver
-   and then not, and a dropped one arrives with both paths at the point of release.
+   and then not, and a dropped one arrives with both paths at the point of release;
+10. touches (ADR 0155): with touches off, a scripted window's first finger is the pointer and the others are ignored;
+   turned on, the pointer's finger lifts it, and every finger gets the runtime's numbers from 1, never reused, its
+   moves only for a change of place, a move before an end that moved, and an end: Ended, or Cancelled when the script
+   cancels it, focus is lost, touches are turned off or the window closes; a full queue merges a finger's moves, then
+   drops the oldest move, then the oldest whole finger; a touch ends a waitEvent and a waitAny of 20 s; a touch
+   without its place, its number or a known phase is a malformed script, and the interpreter answers Unsupported.
+   With --display, a real desktop window has no touches (setTouches is false).
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1326,6 +1333,253 @@ fn main() -> i32 {
 }
 """
 
+# Touches (ADR 0155): with "trace", the script's fingers frame by frame, touches turned on before frame 2 and off
+# before frame 6; with "full", 300 moves of one finger and then 200 taps at once; with "wait", a touch ending a wait
+# alone; with "real", a real window's answer to setTouches.
+TOUCH = r"""
+fn say(text: StringView) {
+    Console.writeLine(text);
+    Console.flush();
+}
+
+fn verdict(what: StringView, ok: bool) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " FAILED");
+}
+
+fn phaseName(p: WindowTouchPhase) -> StringView => match (p) {
+    WindowTouchPhase.Began => "began",
+    WindowTouchPhase.Moved => "moved",
+    WindowTouchPhase.Ended => "ended",
+    WindowTouchPhase.Cancelled => "cancelled",
+};
+
+fn events(window: borrow mut Window) {
+    loop {
+        match (window.nextEvent()) {
+            Some(e) => {
+                match (e) {
+                    WindowEvent.PointerMoved(x, y) => {
+                        Console.write("pointer ");
+                        Console.write(x);
+                        Console.write(" ");
+                        Console.writeLine(y);
+                    }
+                    WindowEvent.PointerButton(_, down, x, y) => {
+                        Console.write(if (down) "down " else "up ");
+                        Console.write(x);
+                        Console.write(" ");
+                        Console.writeLine(y);
+                    }
+                    WindowEvent.Focus(f) => { Console.writeLine(if (f) "focus" else "no focus"); }
+                    WindowEvent.Closed => { Console.writeLine("closed"); }
+                    _ => { Console.writeLine("other"); }
+                }
+            }
+            null => { break; }
+        }
+    }
+}
+
+fn touches(window: borrow mut Window) {
+    loop {
+        match (window.nextTouch()) {
+            Some(t) => {
+                Console.write("touch ");
+                Console.write(t.id);
+                Console.write(" ");
+                Console.write(phaseName(t.phase));
+                Console.write(" ");
+                Console.write(t.x);
+                Console.write(" ");
+                Console.write(t.y);
+                Console.write(" ");
+                Console.writeLine(t.time / 16666667);
+            }
+            null => { break; }
+        }
+    }
+}
+
+fn drain(window: borrow mut Window) {
+    loop {
+        match (window.nextEvent()) {
+            Some(_) => {}
+            null => { break; }
+        }
+    }
+}
+
+fn timed(window: borrow mut Window, ms: u32) -> u64 {
+    let start = Timer.now();
+    window.waitEvent(ms);
+    return Timer.now() - start;
+}
+
+fn timedAny(ms: u32) -> u64 {
+    let start = Timer.now();
+    Window.waitAny(ms);
+    return Timer.now() - start;
+}
+
+/// The script's frames 0 to 7: before frame 2 touches are turned on, before frame 6 off; each frame's events, then its
+/// touches.
+fn trace(window: borrow mut Window) -> i32 {
+    let pixels = [0u32; 1200];
+    for (frame in 0..8) {
+        if (frame == 2) {
+            Console.write("on ");
+            Console.writeLine(window.setTouches(true));
+        }
+        if (frame == 6) {
+            Console.write("off ");
+            Console.writeLine(window.setTouches(false));
+        }
+        events(window);
+        touches(window);
+        Console.write("frame ");
+        Console.writeLine(frame);
+        window.present(pixels[..], 40, 30)!;
+    }
+    return 0;
+}
+
+/// Frame 1's touches (one finger's 300 moves), then frame 2's (200 taps), summed up.
+fn full(window: borrow mut Window) -> i32 {
+    let pixels = [0u32; 1200];
+    let _ = window.setTouches(true);
+    for (frame in 0..3) {
+        drain(window);
+        var counts = [0u32; 4];
+        var first: f32 = -1.0;
+        var last: f32 = -1.0;
+        var low: u32 = 0;
+        var high: u32 = 0;
+        loop {
+            match (window.nextTouch()) {
+                Some(t) => {
+                    let k: usize = match (t.phase) {
+                        WindowTouchPhase.Began => 0,
+                        WindowTouchPhase.Moved => 1,
+                        WindowTouchPhase.Ended => 2,
+                        WindowTouchPhase.Cancelled => 3,
+                    };
+                    counts[k] += 1;
+                    if (k == 1) {
+                        if (first < 0.0) {
+                            first = t.x;
+                        }
+                        last = t.x;
+                    }
+                    if (low == 0 || t.id < low) {
+                        low = t.id;
+                    }
+                    if (t.id > high) {
+                        high = t.id;
+                    }
+                }
+                null => { break; }
+            }
+        }
+        Console.write("frame ");
+        Console.write(frame);
+        Console.write(": ");
+        Console.write(counts[0]);
+        Console.write(" began, ");
+        Console.write(counts[1]);
+        Console.write(" moved, ");
+        Console.write(counts[2]);
+        Console.write(" ended, ");
+        Console.write(counts[3]);
+        Console.write(" cancelled");
+        if (counts[1] > 0) {
+            Console.write(", moves from ");
+            Console.write(first);
+            Console.write(" to ");
+            Console.write(last);
+        }
+        if (high > 0) {
+            Console.write(", ids ");
+            Console.write(low);
+            Console.write(" to ");
+            Console.write(high);
+        }
+        Console.writeLine("");
+        window.present(pixels[..], 40, 30)!;
+    }
+    return 0;
+}
+
+/// The script's one touch, at frame 1, ends a waitEvent of 20 s, and in a second window a waitAny of 20 s.
+fn waits(a: borrow mut Window) -> i32 {
+    let pixels = [0u32; 1200];
+    let _ = a.setTouches(true);
+    a.present(pixels[..], 40, 30)!;
+    verdict("ends waitEvent", timed(a, 20000) < 5000);
+    touches(a);
+    verdict("then waitEvent waits", timed(a, 100) >= 90);
+    var b = Window.open("window_check touch b", 40, 30)!;
+    let _ = b.setTouches(true);
+    drain(mut b);
+    b.present(pixels[..], 40, 30)!;
+    verdict("ends waitAny", timedAny(20000) < 5000);
+    touches(mut b);
+    verdict("then waitAny waits", timedAny(100) >= 90);
+    return 0;
+}
+
+fn main() -> i32 {
+    let mode = match (Process.argument(1)) {
+        Some(m) => m,
+        null => "trace",
+    };
+    var a = match (Window.open("window_check touch", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { say("open failed"); return 1; }
+    };
+    if (mode == "real") {
+        Console.write("touches ");
+        Console.writeLine(a.setTouches(true));
+        return 0;
+    }
+    if (mode == "full") {
+        return full(mut a);
+    }
+    if (mode == "wait") {
+        return waits(mut a);
+    }
+    return trace(mut a);
+}
+"""
+
+# The trace's script, and what TOUCH prints for it. Touches off: finger 1 is the pointer, finger 2 is ignored, and
+# finger 3 is the pointer next. On (frame 2): finger 3 lifts the pointer and is no touch; finger 4 is touch 1, finger 5
+# touch 2 (a move to the same place is none, a move before an end that moved); the script's finger 4 again is touch 3;
+# a cancel at the last place; focus lost cancels touch 3; touch 4 is cancelled by turning touches off; finger 7 is the
+# pointer again; closing ends nothing more.
+TOUCH_SCRIPT = ("0:touch:1,began,10,10;0:touch:1,moved,12,10;1:touch:2,began,20,20;1:touch:1,ended,12,11;"
+                "1:touch:2,ended,20,20;1:touch:3,began,5,5;2:touch:3,moved,6,6;2:touch:3,ended,6,6;"
+                "2:touch:4,began,20,20;3:touch:5,began,30,30;3:touch:4,moved,21,22;3:touch:4,moved,21,22;"
+                "4:touch:4,ended,25,26;4:touch:4,began,40,40;4:touch:5,cancelled,99,99;5:focus:0;"
+                "5:touch:6,began,1,1;6:touch:7,began,2,2;6:touch:7,moved,3,2;7:close")
+TOUCH_EXPECTED = ["pointer 10 10", "down 10 10", "pointer 12 10", "frame 0",
+                  "up 12 11", "pointer 5 5", "down 5 5", "frame 1",
+                  "on true", "up 5 5", "touch 1 began 20 20 2", "frame 2",
+                  "touch 2 began 30 30 3", "touch 1 moved 21 22 3", "frame 3",
+                  "touch 1 moved 25 26 4", "touch 1 ended 25 26 4", "touch 3 began 40 40 4",
+                  "touch 2 cancelled 30 30 4", "frame 4",
+                  "no focus", "touch 3 cancelled 40 40 4", "touch 4 began 1 1 5", "frame 5",
+                  "off true", "pointer 2 2", "down 2 2", "pointer 3 2", "touch 4 cancelled 1 1 5", "frame 6",
+                  "closed", "frame 7"]
+TOUCH_FULL_SCRIPT = (";".join(["1:touch:1,began,0,0"] + [f"1:touch:1,moved,{k},0" for k in range(1, 301)] +
+                              ["1:touch:1,ended,300,0"]) + ";" +
+                     ";".join(f"2:touch:{k},began,{k},1;2:touch:{k},ended,{k},1" for k in range(10, 210)))
+TOUCH_FULL_EXPECTED = ["frame 0: 0 began, 0 moved, 0 ended, 0 cancelled",
+                       "frame 1: 1 began, 254 moved, 1 ended, 0 cancelled, moves from 2 to 300, ids 1 to 1",
+                       "frame 2: 128 began, 0 moved, 128 ended, 0 cancelled, ids 74 to 201"]
+TOUCH_WAIT = ["ends waitEvent ok", "touch 1 began 2 3 1", "then waitEvent waits ok", "ends waitAny ok",
+              "touch 1 began 2 3 1", "then waitAny waits ok"]
+
 # The trace's script (bytes: two paths are not UTF-8), and what DROP prints for it: a drag at frame 0; a drag that
 # moves and leaves in frame 1; one that is dropped in frame 2 (the drop ends it); a drop with a path that is not UTF-8
 # (left out) and one with only such a path (skipped); a drag at frame 5, which stays.
@@ -2563,6 +2817,31 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        touch_source, touch = build(compiler, TOUCH, work, "window_check_touch")
+        touch_scripts = {}
+        for name, content in (("trace", TOUCH_SCRIPT), ("full", TOUCH_FULL_SCRIPT), ("wait", "1:touch:1,began,2,3"),
+                              ("noplace", "0:touch:1,began,2"), ("noid", "0:touch:,began,1,2"),
+                              ("lifted", "0:touch:1,lifted,1,2"), ("nophase", "0:touch:1")):
+            touch_scripts[name] = os.path.join(work, "touch-" + name + ".txt")
+            with open(touch_scripts[name], "w", encoding="utf-8") as f:
+                f.write(content)
+        touch_cases = [
+            ("touches", [touch], "trace", TOUCH_EXPECTED, 0),
+            ("a full queue of touches", [touch, "full"], "full", TOUCH_FULL_EXPECTED, 0),
+            ("a touch ends a wait", [touch, "wait"], "wait", TOUCH_WAIT, 0),
+            ("touches in the interpreter", [compiler, "run", "--interp", touch_source], "trace", ["open failed"], 1),
+            ("a touch without its place", [errors], "noplace", ["4"], 0),
+            ("a touch without its number", [errors], "noid", ["4"], 0),
+            ("a touch of an unknown phase", [errors], "lifted", ["4"], 0),
+            ("a touch without a phase", [errors], "nophase", ["4"], 0),
+        ]
+        for what, command, name, want, status in touch_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": touch_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -2574,7 +2853,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -2591,6 +2870,11 @@ def main():
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake ok":
                 problems.append(f"a real window's wake: expected 'real wake ok', got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
+            r = run([touch, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "touches false":
+                problems.append(f"a real desktop window's touches: expected 'touches false', got {r.stdout.strip()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
             r = run([any_program, "real"], {}, work)
             checks += 1

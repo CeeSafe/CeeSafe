@@ -902,8 +902,12 @@ extern uint32_t ceesafe_rt_allocated;
 int32_t ceesafe_rt_init_main(const ceesafe_config *config);
 /* The generated `main` of a windowed build calls this first (ADR 0151, type-system.md §26.3): on Windows each standard
    stream without a handle is opened on the parent's console, when attaching to it succeeds, or on NUL; a stream with
-   a handle (redirected, a pipe) is kept. Elsewhere it does nothing. It never fails. */
+   a handle (redirected, a pipe) is kept. On iOS it runs the application (ceesafe_window_app_start, ADR 0154).
+   Elsewhere it does nothing. It never fails. */
 void ceesafe_rt_windowed(void);
+/* iOS (ADR 0154): runs UIApplicationMain, whose launched application calls `main` again; the window runtime defines it,
+   and the hosted runtime's weak default, for a program without windows, does nothing. */
+void ceesafe_window_app_start(void);
 /* Installs the host's allocator hook in the platform functions (NULL: the C library's again), from ceesafe_init only,
    before it publishes STARTED (ADR 0088 §2.5). */
 void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator);

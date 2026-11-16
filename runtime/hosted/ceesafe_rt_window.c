@@ -1453,6 +1453,8 @@ static struct {
     cee_id (*allocate_class)(cee_id, const char *, size_t);
     signed char (*add_method)(cee_id, cee_sel, cee_fn, const char *);
     void (*register_class)(cee_id);
+    void *(*get_protocol)(const char *);
+    signed char (*add_protocol)(cee_id, void *);
     void *(*pool_push)(void);
     void (*pool_pop)(void *);
     int (*application_main)(int, char **, cee_id, cee_id);
@@ -1481,6 +1483,9 @@ struct cee_ios {
     cee_id touch;
 };
 static struct cee_window *cee_ios_shown;
+/* The application's window scene (iOS 13 onward; required from iOS 27, whose UIKit stops an app without one): the
+   scene delegate records it when it connects, and the window is made in it. */
+static cee_id cee_ios_scene;
 
 static cee_fn cee_ios_symbol(void *handle, const char *name) {
     void *p = dlsym(handle, name);
@@ -1514,6 +1519,9 @@ static cee_rect cee_ios_send_rect(cee_id o, const char *s) {
 #else
     return ((cee_rect(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
 #endif
+}
+static cee_id cee_ios_send_id_window(cee_id window, cee_id scene) {
+    return ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(window, cee_ios_sel("initWithWindowScene:"), scene);
 }
 static cee_point cee_ios_location(cee_id touch, cee_id view) {
     return ((cee_point(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(touch, cee_ios_sel("locationInView:"), view);
@@ -1591,6 +1599,8 @@ static int cee_uikit_load(void) {
     cee_uikit.add_method = (signed char (*)(cee_id, cee_sel, cee_fn, const char *))cee_ios_symbol(objc,
                                                                                                   "class_addMethod");
     cee_uikit.register_class = (void (*)(cee_id))cee_ios_symbol(objc, "objc_registerClassPair");
+    cee_uikit.get_protocol = (void *(*)(const char *))cee_ios_symbol(objc, "objc_getProtocol");
+    cee_uikit.add_protocol = (signed char (*)(cee_id, void *))cee_ios_symbol(objc, "class_addProtocol");
     cee_uikit.pool_push = (void *(*)(void))cee_ios_symbol(objc, "objc_autoreleasePoolPush");
     cee_uikit.pool_pop = (void (*)(void *))cee_ios_symbol(objc, "objc_autoreleasePoolPop");
     cee_uikit.application_main = (int (*)(int, char **, cee_id, cee_id))cee_ios_symbol(uikit, "UIApplicationMain");
@@ -1663,6 +1673,41 @@ static void cee_ios_run(cee_id self, cee_sel cmd, cee_id argument) {
     exit(main(*_NSGetArgc(), *_NSGetArgv()));
 }
 
+/* The scene life cycle (ADR 0154 §2.1): the application's scenes are configured from code, so an app's Info.plist
+   needs no scene configuration, with CeeSafeSceneDelegate as their delegate. */
+static cee_id cee_ios_configuration(cee_id self, cee_sel cmd, cee_id application, cee_id session, cee_id options) {
+    (void)self;
+    (void)cmd;
+    (void)application;
+    (void)options;
+    cee_id configuration = ((cee_id(*)(cee_id, cee_sel, cee_id, cee_id))cee_uikit.send)(
+        cee_ios_cls("UISceneConfiguration"), cee_ios_sel("configurationWithName:sessionRole:"),
+        cee_ios_string("CeeSafe"), cee_ios_send(session, "role"));
+    if (configuration != NULL) {
+        cee_ios_send_v_id(configuration, "setDelegateClass:", cee_ios_cls("CeeSafeSceneDelegate"));
+    }
+    return configuration; /* autoreleased, as the method's result is not owned */
+}
+
+static void cee_ios_scene_connect(cee_id self, cee_sel cmd, cee_id scene, cee_id session, cee_id options) {
+    (void)self;
+    (void)cmd;
+    (void)session;
+    (void)options;
+    if (cee_ios_scene == NULL) {
+        cee_ios_scene = cee_ios_send(scene, "retain");
+    }
+}
+
+static void cee_ios_scene_disconnect(cee_id self, cee_sel cmd, cee_id scene) {
+    (void)self;
+    (void)cmd;
+    if (scene == cee_ios_scene) {
+        cee_ios_scene = NULL;
+        cee_ios_send_v(scene, "release");
+    }
+}
+
 static signed char cee_ios_did_finish(cee_id self, cee_sel cmd, cee_id application, cee_id options) {
     (void)cmd;
     (void)application;
@@ -1686,7 +1731,26 @@ void ceesafe_window_app_start(void) {
         cee_uikit.add_method(delegate, cee_ios_sel("application:didFinishLaunchingWithOptions:"),
                              (cee_fn)cee_ios_did_finish, "c@:@@");
         cee_uikit.add_method(delegate, cee_ios_sel("ceesafeRun:"), (cee_fn)cee_ios_run, "v@:@");
+        cee_uikit.add_method(delegate, cee_ios_sel("application:configurationForConnectingSceneSession:options:"),
+                             (cee_fn)cee_ios_configuration, "@@:@@@");
+        void *app_protocol = cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIApplicationDelegate") : NULL;
+        if (app_protocol != NULL && cee_uikit.add_protocol != NULL) {
+            cee_uikit.add_protocol(delegate, app_protocol);
+        }
         cee_uikit.register_class(delegate);
+    }
+    cee_id scene_delegate = cee_uikit.allocate_class(cee_ios_cls("UIResponder"), "CeeSafeSceneDelegate", 0);
+    if (scene_delegate != NULL) {
+        cee_uikit.add_method(scene_delegate, cee_ios_sel("scene:willConnectToSession:options:"),
+                             (cee_fn)cee_ios_scene_connect, "v@:@@@");
+        cee_uikit.add_method(scene_delegate, cee_ios_sel("sceneDidDisconnect:"), (cee_fn)cee_ios_scene_disconnect,
+                             "v@:@");
+        void *scene_protocol =
+            cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIWindowSceneDelegate") : NULL;
+        if (scene_protocol != NULL && cee_uikit.add_protocol != NULL) {
+            cee_uikit.add_protocol(scene_delegate, scene_protocol);
+        }
+        cee_uikit.register_class(scene_delegate);
     }
     void *pool = cee_uikit.pool_push();
     cee_id name = cee_ios_string("CeeSafeAppDelegate");
@@ -1694,10 +1758,9 @@ void ceesafe_window_app_start(void) {
     cee_uikit.pool_pop(pool); /* not reached */
 }
 
-/* The application's state: 0 active, else inactive or in the background. */
+/* Whether the window's scene is in the foreground and active (UISceneActivationStateForegroundActive, 0). */
 static int cee_ios_active(void) {
-    cee_id app = cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication");
-    return app != NULL && cee_ios_send_long(app, "applicationState") == 0;
+    return cee_ios_scene != NULL && cee_ios_send_long(cee_ios_scene, "activationState") == 0;
 }
 
 static int cee_native_open(struct cee_window *w, const char *title) {
@@ -1712,11 +1775,18 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     if (m == NULL) {
         return CEE_WINDOW_RESOURCES;
     }
+    /* The scene connects after the application has launched: wait for it, ten seconds at most. */
+    for (int k = 0; k < 100 && cee_ios_scene == NULL; k++) {
+        (void)cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.1, 1);
+    }
+    if (cee_ios_scene == NULL) {
+        ceesafe_platform_free(m);
+        return CEE_WINDOW_NO_DISPLAY;
+    }
     void *pool = cee_uikit.pool_push();
-    cee_id screen = cee_ios_send(cee_ios_cls("UIScreen"), "mainScreen");
+    cee_id screen = cee_ios_send(cee_ios_scene, "screen");
     cee_rect bounds = cee_ios_send_rect(screen, "bounds");
-    cee_id window = ((cee_id(*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(cee_ios_send(cee_ios_cls("UIWindow"), "alloc"),
-                                                                           cee_ios_sel("initWithFrame:"), bounds);
+    cee_id window = cee_ios_send_id_window(cee_ios_send(cee_ios_cls("UIWindow"), "alloc"), cee_ios_scene);
     cee_id controller = cee_ios_send(cee_ios_send(cee_ios_cls("UIViewController"), "alloc"), "init");
     cee_id view = ((cee_id(*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(cee_ios_send(cee_uikit.view_class, "alloc"),
                                                                          cee_ios_sel("initWithFrame:"), bounds);
@@ -1773,7 +1843,9 @@ static void cee_native_pump(struct cee_window *w) {
         if (bounds.size.width >= 1.0 && bounds.size.height >= 1.0) {
             cee_window_resized(w, (uint32_t)bounds.size.width, (uint32_t)bounds.size.height);
         }
-        cee_window_rescaled(w, (float)cee_ios_send_double(cee_ios_send(cee_ios_cls("UIScreen"), "mainScreen"), "scale"));
+        if (cee_ios_scene != NULL) {
+            cee_window_rescaled(w, (float)cee_ios_send_double(cee_ios_send(cee_ios_scene, "screen"), "scale"));
+        }
         int active = cee_ios_active();
         if (active != w->focused) {
             cee_window_focus(w, active);

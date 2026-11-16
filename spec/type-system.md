@@ -3411,11 +3411,13 @@ Diagnostics: none new.
   - **Windows:** Win32 and GDI;
   - **Linux:** X11, `libX11.so.6` loaded with `dlopen`;
   - **iOS** (ADR 0154): UIKit through the Objective-C runtime, loaded with `dlopen`, for a windowed build
-    (`windowed = true` or `--windowed`, ADR 0151). The build's start runs `UIApplicationMain`; once the application
+    (`windowed = true` or `--windowed`, ADR 0151). The build's start runs `UIApplicationMain`, with the scene life
+    cycle (configured from code, so Info.plist needs no scene manifest; iOS 27 requires it); once the application
     has launched, it calls the program's `main` again, on the main thread from the run loop, and the process exits
-    with `main`'s code. The run loop runs while the program polls or waits (`CFRunLoopRunInMode`). One window, which
+    with `main`'s code. `open` makes the window in the application's window scene, waiting for it (ten seconds at
+    most, else `NoDisplay`). The run loop runs while the program polls or waits (`CFRunLoopRunInMode`). One window, which
     fills the screen whatever size `open` asks: `size()` is the view's size in points and `scale()` the screen's; a
-    rotation gives `Resized`, the application becoming inactive and active again `Focus`. Frames are `CGImage`s in
+    rotation gives `Resized`, the window's scene becoming inactive and active again `Focus`. Frames are `CGImage`s in
     the view's layer. Until touches have their own events, the first touch is the primary pointer
     (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled). The clipboard is
     `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),

@@ -327,7 +327,11 @@ same layout the generated C asserts. Pointers are 8-byte addresses, and null is 
 
 `StorageDead` ends a local's allocation. The next write to that local (a whole assignment, or a
 write or borrow through one of its fields) gives it a *new* allocation, so an old reference to it
-stays dead.
+stays dead. A local whose address the function never takes (no `Ref` or `Slice` names it as its
+base) can have no reference, old or new: its new incarnation, and a later call's frame of the same
+function, may take the ended allocation back instead (zero-filled again). The faults are the same;
+an interpreted loop or a function called many times then keeps no allocation per iteration or call
+for the rest of the run.
 
 **Interpreter faults.** Each of the following stops the program with
 `ceesafe interp: fault: <what> at <file>:<line>:<column>` on standard error and exit status 70:

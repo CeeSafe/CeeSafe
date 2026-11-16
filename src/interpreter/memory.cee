@@ -185,8 +185,36 @@ struct Memory {
             this.live -= truncate<i64>(this.allocations[id].data.length);
         }
         this.allocations[id].live = false;
-        this.allocations[id].data.clear();
-        this.allocations[id].init.clear();
+        // The buffers themselves are given back, not only emptied: a record outlives its allocation (its id is never
+        // reused, so a dangling address is still caught), and clear() kept their capacity with it for the whole run.
+        this.allocations[id].data = Vector<u8>.create();
+        this.allocations[id].init = Vector<bool>.create();
+    }
+
+    /// Brings an ended local allocation at `address` (its base) back to life with `size` initialised zero bytes, for a
+    /// new incarnation of a local no reference can name (interpreter.cee, `reincarnate`): true if it was, false if
+    /// it is not such an allocation or the sandbox's limit would be passed (then a new allocation reports it).
+    fn revive(borrow mut this, address: u64, size: usize) -> bool {
+        let id = address >> 32;
+        if (id == 0 || (id - 1) >= (this.allocations.length as u64) || (address & 0xFFFFFFFF) != 0) {
+            return false;
+        }
+        let index = (id - 1) as usize;
+        if (this.allocations[index].live || this.allocations[index].kind != allocationLocal() ||
+            this.wouldExceed(size as u64)) {
+            return false;
+        }
+        this.live += truncate<i64>(size);
+        var data = Vector<u8>.create();
+        var init = Vector<bool>.create();
+        for (i in 0..size) {
+            data.push(0)!;
+            init.push(true)!;
+        }
+        this.allocations[index].data = data;
+        this.allocations[index].init = init;
+        this.allocations[index].live = true;
+        return true;
     }
 
     fn isLive(borrow this, address: u64) -> bool {

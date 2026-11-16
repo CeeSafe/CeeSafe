@@ -42,8 +42,10 @@ struct Interp {
     blockIndex: Vector<Vector<u32>>; // by NIR function, by block id: the block's index
     literalTexts: Vector<Vector<u8>>;
     literalAddresses: Vector<u64>;
-    statics: Vector<u64>;   // by HIR static: its memory
-    addressed: Vector<u32>; // HIR functions whose address was taken
+    statics: Vector<u64>;           // by HIR static: its memory
+    addressed: Vector<u32>;         // HIR functions whose address was taken
+    escaping: Vector<Vector<bool>>; // by NIR function, by local: whether a Ref or Slice takes its address (empty: not yet asked)
+    framePool: Vector<Vector<u64>>; // by NIR function: ended frames' locals, a frame's in local order (0: one that escapes)
     hasPosition: bool;
     positionFile: u32;
     positionStart: u32;
@@ -590,6 +592,68 @@ fn newFrameLocal(
     return it.memory.allocate(allocationLocal(), size, true, what.view());
 }
 
+/// Whether local `local` of NIR function `f` can have its address taken: it is the base of a place that one of the
+/// function's Ref or Slice rvalues names. Those are the only rvalues that make an address of a local; a call's borrow
+/// is a Ref into a temporary first. Worked out once per function (workOutEscaping).
+fn localEscapes(it: borrow mut Interp, n: borrow NirProgram, f: u32, local: u32) -> bool {
+    workOutEscaping(it, n, f);
+    return it.escaping[f as usize][local as usize];
+}
+
+/// it.escaping[f], the marks localEscapes reads, unless they are there already.
+fn workOutEscaping(it: borrow mut Interp, n: borrow NirProgram, f: u32) {
+    while (it.escaping.length <= (f as usize)) {
+        it.escaping.push(Vector<bool>.create())!;
+    }
+    let count = n.functions[f as usize].locals.length;
+    if (it.escaping[f as usize].length != count) {
+        var marks = Vector<bool>.create();
+        for (k in 0..count) {
+            marks.push(false)!;
+        }
+        for (b in n.functions[f as usize].blocks.view()) {
+            for (s in b.statements.view()) {
+                var r = none();
+                match (n.statements[s as usize]) {
+                    NirStatement.Assign(_, value) => { r = value; }
+                    NirStatement.Eval(value) => { r = value; }
+                    _ => {}
+                }
+                if (r == none()) {
+                    continue;
+                }
+                match (n.rvalues[r as usize]) {
+                    NirRvalue.Ref(_, place) => { marks[n.places[place as usize].local as usize] = true; }
+                    NirRvalue.Slice(_, place, _, _) => { marks[n.places[place as usize].local as usize] = true; }
+                    _ => {}
+                }
+            }
+        }
+        it.escaping[f as usize] = marks;
+    }
+}
+
+/// A new incarnation of local `local`, whose previous one at `old` has ended (StorageDead, §5.2). References to the
+/// old one must stay dead, so it is a new allocation, unless no reference to the local can exist (localEscapes):
+/// then the old allocation is revived, so a loop's temporaries do not each leave a record for the rest of the run
+/// (CeeSafe.Web's U24: web_ws's SHA-1 test grew past 11 GB on FreeBSD, 2 GB on macOS).
+fn reincarnate(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    local: u32,
+    old: u64,
+) -> Result<u64, Stop> {
+    if (!localEscapes(it, n, f, local)) {
+        let size = typeSize(c, n.functions[f as usize].locals[local as usize].typ)?;
+        if (it.memory.revive(old, size)) {
+            return Ok(old);
+        }
+    }
+    return newFrameLocal(it, c, n, f, local);
+}
+
 fn endFrame(it: borrow mut Interp, frame: borrow Frame) {
     for (address in frame.locals.view()) {
         if (it.memory.isLive(address)) {
@@ -601,6 +665,41 @@ fn endFrame(it: borrow mut Interp, frame: borrow Frame) {
             it.memory.end(address);
         }
     }
+    // The locals no reference can name (localEscapes, worked out by newFrame) go to the function's pool, for its next
+    // frame to revive (`frameLocals`): a function called a million times then leaves no million records behind.
+    let f = frame.function as usize;
+    if (f < it.escaping.length && it.escaping[f].length == frame.locals.length && frame.locals.length > 0) {
+        while (it.framePool.length <= f) {
+            it.framePool.push(Vector<u64>.create())!;
+        }
+        if (it.framePool[f].length < framePoolLimit() * frame.locals.length) {
+            for (k in 0..frame.locals.length) {
+                let pooled = if (it.escaping[f][k]) 0u64 else frame.locals[k];
+                it.framePool[f].push(pooled)!;
+            }
+        }
+    }
+}
+
+/// The ended frames a function's pool keeps, at most.
+fn framePoolLimit() -> usize => 256;
+
+/// Local `k` of a new frame of `f`: a pooled allocation of an ended frame revived (endFrame), or a new one.
+fn frameLocal(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    k: u32,
+    pooled: u64,
+) -> Result<u64, Stop> {
+    if (pooled != 0) {
+        let size = typeSize(c, n.functions[f as usize].locals[k as usize].typ)?;
+        if (it.memory.revive(pooled, size)) {
+            return Ok(pooled);
+        }
+    }
+    return newFrameLocal(it, c, n, f, k);
 }
 
 /// Counts one statement or terminator against the sandbox's step limit.
@@ -655,8 +754,22 @@ fn newFrame(
         slotNumbers: Vector<u32>.create(),
         slots: Vector<u64>.create(),
     };
-    for (k in 0..n.functions[f as usize].locals.length) {
-        match (newFrameLocal(it, c, n, f, truncate<u32>(k))) {
+    let count = n.functions[f as usize].locals.length;
+    // A pooled frame's locals, if the function has one (endFrame), taken from the end of its pool.
+    var pooled = Vector<u64>.create();
+    if (count > 0) {
+        workOutEscaping(it, n, f); // which locals escape, for endFrame
+        if ((f as usize) < it.framePool.length && it.framePool[f as usize].length >= count) {
+            let start = it.framePool[f as usize].length - count;
+            for (k in 0..count) {
+                pooled.push(it.framePool[f as usize][start + k])!;
+            }
+            it.framePool[f as usize].truncate(start);
+        }
+    }
+    for (k in 0..count) {
+        let reuse = if (pooled.length == count) pooled[k] else 0u64;
+        match (frameLocal(it, c, n, f, truncate<u32>(k), reuse)) {
             Ok(address) => { frame.locals.push(address)!; }
             Err(stop) => {
                 endFrame(it, frame);
@@ -1052,7 +1165,7 @@ fn address(
             return Err(faultBytes(m.view()));
         }
         // A new incarnation: references to the old one stay dead (§5.2).
-        base = newFrameLocal(it, c, n, frame.function, p.local)?;
+        base = reincarnate(it, c, n, frame.function, p.local, base)?;
         frame.locals[p.local as usize] = base;
     }
     var addr = base;
@@ -1722,7 +1835,7 @@ fn execute(
                 let value = it.memory.load(base + (field.offset as u64), typeSize(c, field.typ)?)?;
                 var targetAddress = frame.locals[target as usize];
                 if (!it.memory.isLive(targetAddress)) {
-                    targetAddress = newFrameLocal(it, c, n, frame.function, target)?;
+                    targetAddress = reincarnate(it, c, n, frame.function, target, targetAddress)?;
                     frame.locals[target as usize] = targetAddress;
                 }
                 it.memory.store(targetAddress, value)?;
@@ -1977,6 +2090,8 @@ fn newInterp(
         literalAddresses: Vector<u64>.create(),
         statics: Vector<u64>.create(),
         addressed: Vector<u32>.create(),
+        escaping: Vector<Vector<bool>>.create(),
+        framePool: Vector<Vector<u64>>.create(),
         hasPosition: false,
         positionFile: 0,
         positionStart: 0,

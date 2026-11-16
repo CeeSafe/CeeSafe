@@ -126,6 +126,21 @@ def dialogue(argv, problems, name):
         p.wait()
 
 
+def open_gate(fifo, p):
+    """The FIFO's writing end, without blocking. The program writes 'ready' before it opens the FIFO, so the open
+    may come first and find no reader yet (ENXIO): it is tried again until the program has opened it or has ended."""
+    import errno
+
+    end = time.monotonic() + DEADLINE
+    while True:
+        try:
+            return os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as e:
+            if e.errno != errno.ENXIO or p.poll() is not None or time.monotonic() >= end:
+                raise
+            time.sleep(0.01)
+
+
 def waiting(argv, problems, name, work, flush, terminal):
     """The program's 'ready' is read while it still waits for the FIFO."""
     import pty
@@ -149,7 +164,7 @@ def waiting(argv, problems, name, work, flush, terminal):
         early = out.until(b"ready")
         still = p.poll() is None
         # Lets the program go on (also after a failure, so that it ends): its open of the FIFO has a writer now.
-        gate = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK) if still else None
+        gate = open_gate(fifo, p) if still else None
         if early is None or not still:
             problems.append(f"{name}: 'ready' was not written while the program waited (seen {out.seen!r}, "
                             f"running: {still})")

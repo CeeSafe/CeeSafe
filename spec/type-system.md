@@ -3205,6 +3205,8 @@ Diagnostics: none new.
   - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;
   - `Xlib(display, window)`: X11's `Display *` and the `Window` XID;
   - `UIKit(window, view)` (ADR 0154): iOS's `UIWindow` and its view, whose layer is the content;
+  - `Android(window, activity)` (ADR 0154): the activity's `ANativeWindow` (0 while it has none, in the background)
+    and the `ANativeActivity`;
   - `Scripted`: a scripted window, which has no system window.
 
   Each handle is a `u64`, which only `unsafe` code can turn back into a pointer. It is valid until the `Window` is
@@ -3417,7 +3419,17 @@ Diagnostics: none new.
     the view's layer. Until touches have their own events, the first touch is the primary pointer
     (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled). The clipboard is
     `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),
-    no text input yet, and no `Closed`. Without a windowed build, `open` is `NoDisplay`.
+    no text input yet, and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
+  - **Android** (ADR 0154): a NativeActivity's library (built with the NDK's clang, `--cflag -shared --cflag -fPIC
+    --cflag -landroid --cflag -llog`, `--windowed`, API level 28 or later). The runtime's `ANativeActivity_onCreate`
+    starts `main` on a thread of its own, which is the program's first thread for `Window`; when `main` returns, the
+    activity is finished and the process ends with its code. Standard output and error go to logcat (tag `ceesafe`).
+    One window, the activity's, waited for by `open` (ten seconds at most, else `NoDisplay`): its size in points is
+    its pixels over the density's scale (`dpi / 160`). Frames are copied into the `ANativeWindow`'s buffer
+    (`RGBX_8888`). The first touch is the primary pointer, as on iOS; the window's focus gives `Focus`; the
+    activity's end (Back, or the system's) gives `Closed`, after which `present` shows nothing. The activity's input
+    queue and window are used under one lock that its callbacks take too. There is no clipboard yet
+    (`setClipboardText` is `Unsupported`, `clipboardText` false), title, cursor, menu, file dialog or text input.
 
   The runtime file is part of a build only when the program calls a window function.
 - **Scripted windows** (for tests, ADR 0069 §2.3). When the environment variable `CEESAFE_WINDOW_SCRIPT` names a

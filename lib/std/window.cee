@@ -117,6 +117,8 @@ public enum WindowHandle {
     Win32(u64, u64),
     /// Linux: the X11 `Display *` and the `Window` XID.
     Xlib(u64, u64),
+    /// iOS (ADR 0154): the `UIWindow` and its view, whose layer is the content.
+    UIKit(u64, u64),
     /// A scripted window (`CEESAFE_WINDOW_SCRIPT`), which has no system window.
     Scripted,
 }
@@ -295,6 +297,7 @@ public struct Window {
             1 => WindowHandle.AppKit(first, second),
             2 => WindowHandle.Win32(first, second),
             3 => WindowHandle.Xlib(first, second),
+            4 => WindowHandle.UIKit(first, second),
             _ => WindowHandle.Scripted,
         };
     }

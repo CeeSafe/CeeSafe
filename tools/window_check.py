@@ -559,6 +559,7 @@ fn click(window: borrow Window) -> bool {
         WindowHandle.AppKit(p, q) => { kind = 1; x = p; y = q; }
         WindowHandle.Win32(p, q) => { kind = 2; x = p; y = q; }
         WindowHandle.Xlib(p, q) => { kind = 3; x = p; y = q; }
+        WindowHandle.UIKit(p, q) => { kind = 4; x = p; y = q; }
         WindowHandle.Scripted => {}
     }
     return unsafe { window_check_post_click(kind, x, y) } != 0;
@@ -2103,6 +2104,7 @@ fn kind(h: WindowHandle) -> u32 => match (h) {
     WindowHandle.AppKit(a, b) => if (a != 0 && b != 0) 1 else 9,
     WindowHandle.Win32(a, b) => if (a != 0 && b != 0) 2 else 9,
     WindowHandle.Xlib(a, b) => if (a != 0 && b != 0) 3 else 9,
+    WindowHandle.UIKit(a, b) => if (a != 0 && b != 0) 4 else 9,
 };
 
 fn code(r: Result<void, WindowError>) -> u32 => match (r) {

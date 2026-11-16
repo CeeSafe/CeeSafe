@@ -18,6 +18,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 /* Windows translates "\n" to "\r\n" in text mode: CeeSafe's output is bytes, so both streams become binary. Several
    threads may write at once (ceesafe_atomic_*): the first switches the streams, and the others wait until it has. */
@@ -68,7 +71,17 @@ static void cee_reopen_std(DWORD id, int fd, FILE *stream, const char *device, c
 }
 #endif
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/* iOS (ADR 0154 §2.1): a windowed program starts the application, whose launch calls `main` again. The window runtime
+   (ceesafe_rt_window.c), linked when the program opens windows, defines it; without it there is nothing to start, and
+   this empty default is linked instead. */
+__attribute__((weak)) void ceesafe_window_app_start(void) {}
+#endif
+
 void ceesafe_rt_windowed(void) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    ceesafe_window_app_start(); /* the first call does not return; the second, from the launched application, does */
+#endif
 #ifdef _WIN32
     static const DWORD ids[3] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
     HANDLE kept[3];

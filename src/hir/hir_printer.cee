@@ -684,8 +684,16 @@ struct HirPrinter {
             }
             HirExpr.Closure(function, captures) => {
                 let f = borrow hir.functions[function as usize];
+                // The closure's number among the program's own functions: the libraries' are not counted, so a dump
+                // does not change when a library gains a function.
+                var number: u64 = 0;
+                for (k in 0..function as usize) {
+                    if (!hir.functions[k].library) {
+                        number += 1;
+                    }
+                }
                 this.text("(closure ")?;
-                appendDecimal(mut this.out, f.id as u64)?;
+                appendDecimal(mut this.out, number)?;
                 this.text(" (")?;
                 for (k in 0..captures.count) {
                     if (k > 0) {

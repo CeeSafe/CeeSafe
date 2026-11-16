@@ -83,6 +83,9 @@
 #define CEE_SCRIPT_DROP 105
 /* A scripted touch (`touch:ID,PHASE,X,Y`, ADR 0155): never queued as an event, it is a finger on the screen. */
 #define CEE_SCRIPT_TOUCH 106
+/* A scripted safe area (`safe:LEFT,TOP,RIGHT,BOTTOM`, ADR 0156): never queued, it updates the window's insets (its
+   fields are thousandths of a point) and queues RESIZED. */
+#define CEE_SCRIPT_SAFE 107
 
 /* Touches (ADR 0155): WindowTouchPhase's numbers, the touches a window keeps that the program has not taken, the
    fingers it follows at once, and a scripted touch's time: its frame's, at 60 frames a second. */
@@ -292,6 +295,9 @@ struct cee_window {
     float pointer_x, pointer_y;
     uint32_t touch_next;
     uint64_t touch_time;
+    /* The safe area (ADR 0156): how far the system covers the content from its left, top, right and bottom edges, in
+       points; zero where the system covers nothing. */
+    float safe[4];
     /* The system's window. */
     void *native;
 };
@@ -327,6 +333,7 @@ int64_t ceesafe_window_drop(void *window, float *position, const uint8_t **paths
 uint32_t ceesafe_window_drag_over(void *window, float *position);
 int32_t ceesafe_window_set_touches(void *window, int32_t on);
 int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *position, uint64_t *time);
+void ceesafe_window_safe_area(void *window, float *insets);
 
 static void cee_touch_cancel_all(struct cee_window *w);
 
@@ -367,6 +374,27 @@ static void cee_window_rescaled(struct cee_window *w, float scale) {
         return;
     }
     w->scale = scale;
+    cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+}
+
+/* A new safe area (ADR 0156), in points from the left, top, right and bottom edges: where the program may draw what
+   must be seen changed, so RESIZED with the size in points, even when that did not change, as for a scale. An inset
+   is never negative, and never a number that is none. */
+static void cee_window_safe_area(struct cee_window *w, float left, float top, float right, float bottom) {
+    float next[4] = {left, top, right, bottom};
+    int changed = 0;
+    for (int k = 0; k < 4; k++) {
+        if (!(next[k] > 0.0f)) {
+            next[k] = 0.0f;
+        }
+        if (next[k] != w->safe[k]) {
+            changed = 1;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    memcpy(w->safe, next, sizeof next);
     cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
 }
 
@@ -1400,6 +1428,20 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         }
         return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_SCALE, 0, 0, 0, 0, v[0], 0.0);
     }
+    if (CEE_IS("safe")) { /* safe:LEFT,TOP,RIGHT,BOTTOM, in points (ADR 0156) */
+        double insets[5];
+        if (cee_window_numbers(args, args_length, insets, 5) != 4) {
+            return 0;
+        }
+        for (int k = 0; k < 4; k++) {
+            if (!(insets[k] >= 0.0) || insets[k] > CEE_WINDOW_MAX_SIDE) {
+                return 0;
+            }
+        }
+        return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_SAFE, (int32_t)(insets[0] * 1000.0 + 0.5),
+                                     (int32_t)(insets[1] * 1000.0 + 0.5), (int32_t)(insets[2] * 1000.0 + 0.5),
+                                     (int32_t)(insets[3] * 1000.0 + 0.5), 0.0, 0.0);
+    }
     if (CEE_IS("close")) {
         return args_length == 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -1576,6 +1618,9 @@ static void cee_window_script_pump(struct cee_window *w) {
             cee_window_resized(w, (uint32_t)e.fields[0], (uint32_t)e.fields[1]);
         } else if (e.kind == CEE_SCRIPT_SCALE) {
             cee_window_rescaled(w, e.x);
+        } else if (e.kind == CEE_SCRIPT_SAFE) {
+            cee_window_safe_area(w, (float)e.fields[0] / 1000.0f, (float)e.fields[1] / 1000.0f,
+                                 (float)e.fields[2] / 1000.0f, (float)e.fields[3] / 1000.0f);
         } else if (e.kind == CEE_EVENT_FOCUS) {
             cee_window_focus(w, e.fields[0]);
         } else if (e.kind == CEE_EVENT_COMPOSITION) {
@@ -1773,6 +1818,19 @@ static cee_rect cee_ios_send_rect(cee_id o, const char *s) {
     return r;
 #else
     return ((cee_rect(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
+#endif
+}
+/* A view's safeAreaInsets, a UIEdgeInsets: top, left, bottom, right (four doubles, returned as a CGRect is). */
+typedef struct {
+    double top, left, bottom, right;
+} cee_insets;
+static cee_insets cee_ios_send_insets(cee_id o, const char *s) {
+#if defined(__x86_64__)
+    cee_insets r;
+    ((void (*)(cee_insets *, cee_id, cee_sel))cee_uikit.send_stret)(&r, o, cee_ios_sel(s));
+    return r;
+#else
+    return ((cee_insets(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
 #endif
 }
 static cee_id cee_ios_send_id_window(cee_id window, cee_id scene) {
@@ -2069,6 +2127,12 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     w->width = (uint32_t)bounds.size.width;
     w->height = (uint32_t)bounds.size.height;
     w->scale = (float)cee_ios_send_double(screen, "scale");
+    cee_ios_send_v(window, "layoutIfNeeded"); /* the view's safe area is known once it is laid out (ADR 0156) */
+    cee_insets safe = cee_ios_send_insets(view, "safeAreaInsets");
+    w->safe[0] = safe.left > 0.0 ? (float)safe.left : 0.0f;
+    w->safe[1] = safe.top > 0.0 ? (float)safe.top : 0.0f;
+    w->safe[2] = safe.right > 0.0 ? (float)safe.right : 0.0f;
+    w->safe[3] = safe.bottom > 0.0 ? (float)safe.bottom : 0.0f;
     cee_ios_shown = w;
     cee_uikit.pool_pop(pool);
     return 0;
@@ -2091,8 +2155,8 @@ static void cee_native_close(struct cee_window *w) {
     w->native = NULL;
 }
 
-/* Runs the run loop's pending sources (touches among them), then reads the size, the scale and the application's
-   state, which give Resized and Focus when they change. */
+/* Runs the run loop's pending sources (touches among them), then reads the size, the scale, the safe area and the
+   application's state, which give Resized and Focus when they change. */
 static void cee_native_pump(struct cee_window *w) {
     void *pool = cee_uikit.pool_push();
     for (int k = 0; k < 256 && cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.0, 1) == 4; k++) {
@@ -2107,6 +2171,10 @@ static void cee_native_pump(struct cee_window *w) {
         if (cee_ios_scene != NULL) {
             cee_window_rescaled(w, (float)cee_ios_send_double(cee_ios_send(cee_ios_scene, "screen"), "scale"));
         }
+        /* The safe area (ADR 0156): what the status bar, the sensor housing, the home indicator and the screen's
+           rounded corners leave of the view. */
+        cee_insets safe = cee_ios_send_insets(m->view, "safeAreaInsets");
+        cee_window_safe_area(w, (float)safe.left, (float)safe.top, (float)safe.right, (float)safe.bottom);
         int active = cee_ios_active();
         if (active != w->focused) {
             cee_window_focus(w, active);
@@ -5176,6 +5244,7 @@ static void cee_win32_drop_close(struct cee_window *w) {
 #include <android/looper.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
+#include <jni.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -5192,7 +5261,8 @@ static struct {
     int destroyed;              /* the activity ended: Closed */
     ALooper *looper;            /* the program thread's */
     float scale;                /* pixels per point, from the density */
-} cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f};
+    int32_t safe[4];            /* the window's insets, left, top, right and bottom, in pixels (ADR 0156) */
+} cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f, {0, 0, 0, 0}};
 
 /* The one window: the activity's state is cee_android's, and the window's touches are the shared layer's (ADR 0155);
    this marks the window as the system's. */
@@ -5211,8 +5281,146 @@ static void cee_android_wake_program(void) {
 
 /* ---- The activity's callbacks, on the activity's thread ---- */
 
+/* The safe area (ADR 0156) is the window's insets, which only the Java side knows: the activity's
+   getWindow().getDecorView().getRootWindowInsets(). From Android 11 (API 30) they are
+   getInsets(systemBars() | displayCutout()), an android.graphics.Insets; before, the system window insets and the
+   display cutout's safe insets, the larger of the two on each side. Called on the activity's thread, whose JNIEnv
+   the activity holds; every failure (a view not attached yet, a method an old system lacks) keeps the insets as they
+   were, and no Java exception is left pending. */
+static jobject cee_android_object(JNIEnv *env, jobject target, const char *name, const char *signature) {
+    if (target == NULL) {
+        return NULL;
+    }
+    jclass type = (*env)->GetObjectClass(env, target);
+    jmethodID method = type != NULL ? (*env)->GetMethodID(env, type, name, signature) : NULL;
+    jobject result = method != NULL ? (*env)->CallObjectMethod(env, target, method) : NULL;
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    return result;
+}
+
+static int cee_android_int(JNIEnv *env, jobject target, const char *name, int32_t *out) {
+    jclass type = (*env)->GetObjectClass(env, target);
+    jmethodID method = type != NULL ? (*env)->GetMethodID(env, type, name, "()I") : NULL;
+    jint value = method != NULL ? (*env)->CallIntMethod(env, target, method) : 0;
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    *out = (int32_t)value;
+    return method != NULL;
+}
+
+static int cee_android_field(JNIEnv *env, jobject target, const char *name, int32_t *out) {
+    jclass type = (*env)->GetObjectClass(env, target);
+    jfieldID field = type != NULL ? (*env)->GetFieldID(env, type, name, "I") : NULL;
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    if (field == NULL) {
+        return 0;
+    }
+    *out = (int32_t)(*env)->GetIntField(env, target, field);
+    return 1;
+}
+
+static void cee_android_read_insets(ANativeActivity *activity) {
+    JNIEnv *env = activity != NULL ? activity->env : NULL;
+    if (env == NULL || activity->clazz == NULL) {
+        return;
+    }
+    if ((*env)->PushLocalFrame(env, 24) != 0) {
+        (*env)->ExceptionClear(env);
+        return;
+    }
+    int32_t safe[4] = {0, 0, 0, 0};
+    int found = 0;
+    jobject window = cee_android_object(env, activity->clazz, "getWindow", "()Landroid/view/Window;");
+    jobject decor = cee_android_object(env, window, "getDecorView", "()Landroid/view/View;");
+    jobject insets = cee_android_object(env, decor, "getRootWindowInsets", "()Landroid/view/WindowInsets;");
+    if (insets != NULL) {
+        jclass type = (*env)->GetObjectClass(env, insets);
+        jmethodID get = type != NULL ? (*env)->GetMethodID(env, type, "getInsets", "(I)Landroid/graphics/Insets;") : NULL;
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env); /* before Android 11 */
+            get = NULL;
+        }
+        if (get != NULL) {
+            /* WindowInsets.Type: statusBars 1, navigationBars 2, captionBar 4 (systemBars), displayCutout 128. */
+            jobject both = (*env)->CallObjectMethod(env, insets, get, (jint)(1 | 2 | 4 | 128));
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                both = NULL;
+            }
+            found = both != NULL && cee_android_field(env, both, "left", &safe[0]) &&
+                    cee_android_field(env, both, "top", &safe[1]) && cee_android_field(env, both, "right", &safe[2]) &&
+                    cee_android_field(env, both, "bottom", &safe[3]);
+        } else {
+            found = cee_android_int(env, insets, "getSystemWindowInsetLeft", &safe[0]) &&
+                    cee_android_int(env, insets, "getSystemWindowInsetTop", &safe[1]) &&
+                    cee_android_int(env, insets, "getSystemWindowInsetRight", &safe[2]) &&
+                    cee_android_int(env, insets, "getSystemWindowInsetBottom", &safe[3]);
+            jobject cutout = cee_android_object(env, insets, "getDisplayCutout", "()Landroid/view/DisplayCutout;");
+            static const char *const sides[4] = {"getSafeInsetLeft", "getSafeInsetTop", "getSafeInsetRight",
+                                                 "getSafeInsetBottom"};
+            for (int k = 0; found && cutout != NULL && k < 4; k++) {
+                int32_t cut = 0;
+                if (cee_android_int(env, cutout, sides[k], &cut) && cut > safe[k]) {
+                    safe[k] = cut;
+                }
+            }
+        }
+    }
+    (void)(*env)->PopLocalFrame(env, NULL);
+    if (found) {
+        pthread_mutex_lock(&cee_android.lock);
+        for (int k = 0; k < 4; k++) {
+            cee_android.safe[k] = safe[k] > 0 ? safe[k] : 0;
+        }
+        pthread_mutex_unlock(&cee_android.lock);
+    }
+}
+
+/* The density's scale, pixels per point, from the activity's configuration. */
+static void cee_android_read_scale(ANativeActivity *activity) {
+    AConfiguration *configuration = AConfiguration_new();
+    if (configuration != NULL) {
+        AConfiguration_fromAssetManager(configuration, activity->assetManager);
+        int32_t density = AConfiguration_getDensity(configuration);
+        if (density > 0 && density != ACONFIGURATION_DENSITY_ANY && density != ACONFIGURATION_DENSITY_NONE) {
+            pthread_mutex_lock(&cee_android.lock);
+            cee_android.scale = (float)density / 160.0f;
+            pthread_mutex_unlock(&cee_android.lock);
+        }
+        AConfiguration_delete(configuration);
+    }
+}
+
+/* The window's geometry may have changed (its size after a rotation, its insets, the display's density): the insets
+   and the scale are read again, and the program's pump, woken, takes them with the window's size (ADR 0156). */
+static void cee_android_window_resized(ANativeActivity *activity, ANativeWindow *window) {
+    (void)window;
+    cee_android_read_insets(activity);
+    cee_android_wake_program();
+}
+
+static void cee_android_content_rect(ANativeActivity *activity, const ARect *rect) {
+    (void)rect;
+    cee_android_read_insets(activity);
+    cee_android_wake_program();
+}
+
+static void cee_android_configuration(ANativeActivity *activity) {
+    cee_android_read_scale(activity);
+    cee_android_read_insets(activity);
+    cee_android_wake_program();
+}
+
 static void cee_android_window_created(ANativeActivity *activity, ANativeWindow *window) {
-    (void)activity;
+    cee_android_read_insets(activity);
     pthread_mutex_lock(&cee_android.lock);
     cee_android.window = window;
     pthread_mutex_unlock(&cee_android.lock);
@@ -5257,7 +5465,7 @@ static void cee_android_queue_destroyed(ANativeActivity *activity, AInputQueue *
 }
 
 static void cee_android_focus_changed(ANativeActivity *activity, int focused) {
-    (void)activity;
+    cee_android_read_insets(activity); /* the window's views are attached by now, when they were not at its creation */
     pthread_mutex_lock(&cee_android.lock);
     cee_android.focused = focused != 0;
     pthread_mutex_unlock(&cee_android.lock);
@@ -5358,15 +5566,11 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     activity->callbacks->onInputQueueDestroyed = cee_android_queue_destroyed;
     activity->callbacks->onWindowFocusChanged = cee_android_focus_changed;
     activity->callbacks->onDestroy = cee_android_destroy;
-    AConfiguration *configuration = AConfiguration_new();
-    if (configuration != NULL) {
-        AConfiguration_fromAssetManager(configuration, activity->assetManager);
-        int32_t density = AConfiguration_getDensity(configuration);
-        if (density > 0 && density != ACONFIGURATION_DENSITY_ANY && density != ACONFIGURATION_DENSITY_NONE) {
-            cee_android.scale = (float)density / 160.0f;
-        }
-        AConfiguration_delete(configuration);
-    }
+    activity->callbacks->onNativeWindowResized = cee_android_window_resized;
+    activity->callbacks->onNativeWindowRedrawNeeded = cee_android_window_resized;
+    activity->callbacks->onContentRectChanged = cee_android_content_rect;
+    activity->callbacks->onConfigurationChanged = cee_android_configuration;
+    cee_android_read_scale(activity);
     static int started;
     if (started) {
         return; /* the activity again, in the same process: the program is still running */
@@ -5412,6 +5616,9 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     ANativeWindow *window = cee_android.window;
     int32_t width = window != NULL ? ANativeWindow_getWidth(window) : 0;
     int32_t height = window != NULL ? ANativeWindow_getHeight(window) : 0;
+    float density = cee_android.scale;
+    int32_t safe[4];
+    memcpy(safe, cee_android.safe, sizeof safe);
     pthread_mutex_unlock(&cee_android.lock);
     if (window == NULL || width <= 0 || height <= 0) {
         return CEE_WINDOW_NO_DISPLAY;
@@ -5422,9 +5629,12 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     }
     m->opened = 1;
     w->native = m;
-    w->scale = cee_android.scale;
+    w->scale = density > 0.0f ? density : 1.0f;
     w->width = (uint32_t)((float)width / w->scale + 0.5f);
     w->height = (uint32_t)((float)height / w->scale + 0.5f);
+    for (int k = 0; k < 4; k++) {
+        w->safe[k] = (float)safe[k] / w->scale;
+    }
     cee_android_shown = w;
     return 0;
 }
@@ -5494,7 +5704,7 @@ static int cee_android_event(struct cee_window *w, AInputEvent *event) {
 }
 
 /* Takes what the activity recorded (the queue to attach or detach, focus, the end), then the input events, then the
-   window's size. */
+   window's scale, size and safe area. */
 static void cee_native_pump(struct cee_window *w) {
     (void)ALooper_pollOnce(0, NULL, NULL, NULL); /* the looper's own wake, taken without waiting */
     pthread_mutex_lock(&cee_android.lock);
@@ -5509,6 +5719,9 @@ static void cee_native_pump(struct cee_window *w) {
     ANativeWindow *window = cee_android.window;
     int32_t width = window != NULL ? ANativeWindow_getWidth(window) : 0;
     int32_t height = window != NULL ? ANativeWindow_getHeight(window) : 0;
+    float density = cee_android.scale;
+    int32_t safe[4];
+    memcpy(safe, cee_android.safe, sizeof safe);
     cee_android.destroyed = 0;
     /* The queue is read under the lock: the activity's thread detaches and disposes of it under the same lock. */
     AInputQueue *queue = cee_android.attached;
@@ -5528,10 +5741,13 @@ static void cee_native_pump(struct cee_window *w) {
     if (focused != w->focused) {
         cee_window_focus(w, focused);
     }
+    cee_window_rescaled(w, density); /* the display's density changed (ADR 0156) */
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
     if (width > 0 && height > 0) {
-        float scale = w->scale > 0.0f ? w->scale : 1.0f;
         cee_window_resized(w, (uint32_t)((float)width / scale + 0.5f), (uint32_t)((float)height / scale + 0.5f));
     }
+    cee_window_safe_area(w, (float)safe[0] / scale, (float)safe[1] / scale, (float)safe[2] / scale,
+                         (float)safe[3] / scale);
     if (destroyed) {
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
     }
@@ -7300,6 +7516,11 @@ void ceesafe_window_size(void *window, uint32_t *width, uint32_t *height) {
 }
 
 void ceesafe_window_scale(void *window, float *scale) { *scale = ((struct cee_window *)window)->scale; }
+
+/* The safe area's four insets, left, top, right and bottom, in points (ADR 0156). */
+void ceesafe_window_safe_area(void *window, float *insets) {
+    memcpy(insets, ((struct cee_window *)window)->safe, 4u * sizeof(float));
+}
 
 void ceesafe_window_set_cursor(void *window, int32_t cursor) {
     struct cee_window *w = (struct cee_window *)window;

@@ -62,6 +62,7 @@
 - [enum WindowSurface](#enum-windowsurface)
 - [enum WindowHandle](#enum-windowhandle)
 - [struct WindowSize](#struct-windowsize)
+- [struct WindowInsets](#struct-windowinsets)
 - [struct WindowBox](#struct-windowbox)
 - [enum WindowButton](#enum-windowbutton)
 - [struct WindowModifiers](#struct-windowmodifiers)
@@ -2689,6 +2690,19 @@ public struct WindowSize {
 
 A window's content size in points.
 
+## struct WindowInsets
+
+```ceesafe
+public struct WindowInsets {
+    public left: f32;
+    public top: f32;
+    public right: f32;
+    public bottom: f32;
+}
+```
+
+How far the system covers a window's content from each of its edges, in points (`Window.safeArea`, ADR 0156).
+
 ## struct WindowBox
 
 ```ceesafe
@@ -2964,6 +2978,19 @@ public fn scale(borrow this) -> f32
 
 Pixels per point: 2.0 on a Retina display.
 Safety: the runtime writes the scale.
+
+### Window.safeArea
+
+```ceesafe
+public fn safeArea(borrow this) -> WindowInsets
+```
+
+The safe area (ADR 0156): how far the system covers the content from its left, top, right and bottom edges, in
+points: the status bar, a sensor housing or display cutout, the home indicator or the navigation bar, a
+screen's rounded corners. A program draws its background over the whole content and keeps what must be seen or
+touched inside the insets. All zero where the system covers nothing: on desktop systems, and for a scripted
+window until its script says otherwise. A change gives `Resized`, as a change of scale does.
+Safety: the runtime writes the four insets.
 
 ### Window.setCursor
 

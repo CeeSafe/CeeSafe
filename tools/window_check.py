@@ -57,6 +57,10 @@ that opened a window would open one on the developer's screen:
    drops the oldest move, then the oldest whole finger; a touch ends a waitEvent and a waitAny of 20 s; a touch
    without its place, its number or a known phase is a malformed script, and the interpreter answers Unsupported.
    With --display, a real desktop window has no touches (setTouches is false).
+11. the safe area (ADR 0156): a scripted window's safe area is zero until its script gives one; a new one shows in
+   safeArea with a Resized at the content's size, the same one again gives nothing, and one given with a resize comes
+   after it; a safe area of three or five numbers or with a negative one is a malformed script, and the interpreter
+   answers Unsupported. With --display, a real desktop window's safe area is zero.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1552,6 +1556,69 @@ fn main() -> i32 {
 }
 """
 
+# The safe area (ADR 0156): the script's frames 0 to 5, each frame's events, then the safe area; with "real", a real
+# window's safe area.
+SAFE = r"""
+fn insets(window: borrow Window) {
+    let safe = window.safeArea();
+    Console.write("safe ");
+    Console.write(safe.left);
+    Console.write(" ");
+    Console.write(safe.top);
+    Console.write(" ");
+    Console.write(safe.right);
+    Console.write(" ");
+    Console.writeLine(safe.bottom);
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check safe", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    if (Process.argument(1) == Some("real")) {
+        insets(window);
+        return 0;
+    }
+    let pixels = [0u32; 1800];
+    for (frame in 0..6) {
+        loop {
+            match (window.nextEvent()) {
+                Some(e) => {
+                    match (e) {
+                        WindowEvent.Resized(size) => {
+                            Console.write("resized ");
+                            Console.write(size.width);
+                            Console.write(" ");
+                            Console.writeLine(size.height);
+                        }
+                        WindowEvent.Closed => { Console.writeLine("closed"); }
+                        _ => { Console.writeLine("other"); }
+                    }
+                }
+                null => { break; }
+            }
+        }
+        insets(window);
+        Console.write("frame ");
+        Console.writeLine(frame);
+        let size = window.size();
+        window.present(pixels[..(size.width * size.height) as usize], size.width, size.height)!;
+    }
+    return 0;
+}
+"""
+
+# Its script, and what SAFE prints for it: none at first; a phone's portrait insets (a Resized at the same size); the
+# same again (nothing); a rotation with new insets (the resize's Resized, then the safe area's); none again; the close.
+SAFE_SCRIPT = "1:safe:0,47,0,34;2:safe:0,47,0,34;3:resize:60,30;3:safe:47.5,0,47.5,21;4:safe:0,0,0,0;5:close"
+SAFE_EXPECTED = ["safe 0 0 0 0", "frame 0",
+                 "resized 40 30", "safe 0 47 0 34", "frame 1",
+                 "safe 0 47 0 34", "frame 2",
+                 "resized 60 30", "resized 60 30", "safe 47.5 0 47.5 21", "frame 3",
+                 "resized 60 30", "safe 0 0 0 0", "frame 4",
+                 "closed", "safe 0 0 0 0", "frame 5"]
+
 # The trace's script, and what TOUCH prints for it. Touches off: finger 1 is the pointer, finger 2 is ignored, and
 # finger 3 is the pointer next. On (frame 2): finger 3 lifts the pointer and is no touch; finger 4 is touch 1, finger 5
 # touch 2 (a move to the same place is none, a move before an end that moved); the script's finger 4 again is touch 3;
@@ -2842,6 +2909,27 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        safe_source, safe = build(compiler, SAFE, work, "window_check_safe")
+        safe_scripts = {}
+        for name, content in (("trace", SAFE_SCRIPT), ("three", "0:safe:1,2,3"), ("five", "0:safe:1,2,3,4,5"),
+                              ("negative", "0:safe:1,2,3,-4")):
+            safe_scripts[name] = os.path.join(work, "safe-" + name + ".txt")
+            with open(safe_scripts[name], "w", encoding="utf-8") as f:
+                f.write(content)
+        safe_cases = [
+            ("the safe area", [safe], "trace", SAFE_EXPECTED, 0),
+            ("the safe area in the interpreter", [compiler, "run", "--interp", safe_source], "trace", ["open failed"], 1),
+            ("a safe area of three numbers", [errors], "three", ["4"], 0),
+            ("a safe area of five numbers", [errors], "five", ["4"], 0),
+            ("a safe area with a negative inset", [errors], "negative", ["4"], 0),
+        ]
+        for what, command, name, want, status in safe_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": safe_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -2853,7 +2941,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -2876,6 +2964,11 @@ def main():
             if r.returncode != 0 or r.stdout.strip() != "touches false":
                 problems.append(f"a real desktop window's touches: expected 'touches false', got {r.stdout.strip()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
+            r = run([safe, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "safe 0 0 0 0":
+                problems.append(f"a real desktop window's safe area: expected 'safe 0 0 0 0', got "
+                                f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             r = run([any_program, "real"], {}, work)
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake of the second ok":

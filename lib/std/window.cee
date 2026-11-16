@@ -87,6 +87,8 @@ extern "C" {
     fn ceesafe_window_set_touches(window: *mut void, on: i32) -> i32;
     @effects()
     fn ceesafe_window_touch(window: *mut void, id: *mut u32, phase: *mut i32, position: *mut f32, time: *mut u64) -> i32;
+    @effects()
+    fn ceesafe_window_safe_area(window: *mut void, insets: *mut f32);
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -134,6 +136,14 @@ public enum WindowHandle {
 public struct WindowSize {
     public width: u32;
     public height: u32;
+}
+
+/// How far the system covers a window's content from each of its edges, in points (`Window.safeArea`, ADR 0156).
+public struct WindowInsets {
+    public left: f32;
+    public top: f32;
+    public right: f32;
+    public bottom: f32;
 }
 
 /// A part of an image that changed (`Window.presentChanged`), in the image's pixels; or the text input area
@@ -199,7 +209,8 @@ public enum WindowCursor {
 public enum WindowEvent {
     /// The user asked to close the window; it stays open until the `Window` is dropped.
     Closed,
-    /// The content's size in points; also when only the scale changed, so the size in pixels did (ADR 0137).
+    /// The content's size in points; also when only the scale changed, so the size in pixels did (ADR 0137), and
+    /// when only the safe area did (ADR 0156).
     Resized(WindowSize),
     Focus(bool),
     /// x, y.
@@ -430,6 +441,18 @@ public struct Window {
         var scale: f32 = 1.0;
         unsafe { ceesafe_window_scale(this.raw, borrow mut scale as *mut f32); }
         return scale;
+    }
+
+    /// The safe area (ADR 0156): how far the system covers the content from its left, top, right and bottom edges, in
+    /// points: the status bar, a sensor housing or display cutout, the home indicator or the navigation bar, a
+    /// screen's rounded corners. A program draws its background over the whole content and keeps what must be seen or
+    /// touched inside the insets. All zero where the system covers nothing: on desktop systems, and for a scripted
+    /// window until its script says otherwise. A change gives `Resized`, as a change of scale does.
+    /// Safety: the runtime writes the four insets.
+    public fn safeArea(borrow this) -> WindowInsets {
+        var insets = [0.0f32; 4];
+        unsafe { ceesafe_window_safe_area(this.raw, borrow mut insets[0] as *mut f32); }
+        return WindowInsets { left: insets[0], top: insets[1], right: insets[2], bottom: insets[3] };
     }
 
     /// The pointer's shape while it is over the content.

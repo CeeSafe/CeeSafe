@@ -3180,7 +3180,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3216,7 +3216,7 @@ Diagnostics: none new.
   one window come in order. `WindowEvent`:
   - `Closed`: the user asked to close the window, which stays open until it is dropped;
   - `Resized(WindowSize)`, in points. It is also reported when only the scale changes, with the same size, since the
-    content's size in pixels changed (ADR 0137);
+    content's size in pixels changed (ADR 0137), and when only the safe area changes (ADR 0156);
   - `Focus(bool)`;
   - `PointerMoved(x, y)` and `PointerButton(WindowButton, down, x, y)`. `WindowButton` is `Primary`, `Secondary`
     or `Middle`. Positions are `f32` points from the content's top left; a pointer outside the window during a
@@ -3386,6 +3386,24 @@ Diagnostics: none new.
     `multipleTouchEnabled`; a finger is its `UITouch`, its time `UITouch.timestamp`. Android: the input queue's
     motion events from a touch screen, each pointer a finger, a batched move's historical samples first; the time is
     the event's (`CLOCK_MONOTONIC`).
+- **The safe area** (ADR 0156). **`w.safeArea()`** is `WindowInsets { left, top, right, bottom: f32 }`: how far the
+  system covers the content from each of its edges, in points. On a phone that is the status bar, a sensor housing
+  or display cutout, the home indicator or the navigation bar, and a screen's rounded corners; the soft keyboard is
+  not part of it. The content is still the whole window: a program draws its background to the edges and keeps what
+  must be seen or touched inside the insets.
+  - **Values.** No inset is negative. All four are zero where the system covers nothing: on the desktop systems,
+    and for a scripted window until its script gives a safe area.
+  - **Changes.** A new safe area gives `Resized` with the content's size, even when the size is the same (a phone
+    turned from one landscape to the other), as a new scale does. A program that lays out again at `Resized`, reading
+    `size()`, `scale()` and `safeArea()`, needs nothing else. A rotation is a `Resized` with the new size.
+  - **Backends.** iOS: the view's `safeAreaInsets`, read with the size at each poll and wait. Android: the
+    activity's root window insets, through JNI on the activity's thread: from Android 11
+    `getInsets(systemBars() | displayCutout())`, before it the system window insets and the display cutout's safe
+    insets, the larger on each side; they are read again when the window is created, resized, redrawn or focused,
+    when its content rectangle changes and when the configuration does, which also reads the density's scale again.
+    On Android an activity is destroyed at a rotation, which gives `Closed`, unless its manifest declares
+    `android:configChanges` with at least `orientation|screenSize|screenLayout|density`; an app that rotates
+    declares it.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
@@ -3428,7 +3446,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -3442,8 +3460,8 @@ Diagnostics: none new.
     with `main`'s code. `open` makes the window in the application's window scene, waiting for it (ten seconds at
     most, else `NoDisplay`). The run loop runs while the program polls or waits (`CFRunLoopRunInMode`). One window, which
     fills the screen whatever size `open` asks: `size()` is the view's size in points and `scale()` the screen's; a
-    rotation gives `Resized`, the window's scene becoming inactive and active again `Focus`. Frames are `CGImage`s in
-    the view's layer. While touches are off, the first touch is the primary pointer
+    rotation gives `Resized`, the window's scene becoming inactive and active again `Focus`. `safeArea()` is the
+    view's (ADR 0156). Frames are `CGImage`s in the view's layer. While touches are off, the first touch is the primary pointer
     (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled); on, every finger is a
     touch (ADR 0155). The clipboard is
     `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),
@@ -3453,7 +3471,7 @@ Diagnostics: none new.
     starts `main` on a thread of its own, which is the program's first thread for `Window`; when `main` returns, the
     activity is finished and the process ends with its code. Standard output and error go to logcat (tag `ceesafe`).
     One window, the activity's, waited for by `open` (ten seconds at most, else `NoDisplay`): its size in points is
-    its pixels over the density's scale (`dpi / 160`). Frames are copied into the `ANativeWindow`'s buffer
+    its pixels over the density's scale (`dpi / 160`), and `safeArea()` its insets (ADR 0156). Frames are copied into the `ANativeWindow`'s buffer
     (`RGBX_8888`). Touches are as on iOS (ADR 0155); the window's focus gives `Focus`; the
     activity's end (Back, or the system's) gives `Closed`, after which `present` shows nothing. The activity's input
     queue and window are used under one lock that its callbacks take too. There is no clipboard yet
@@ -3474,6 +3492,8 @@ Diagnostics: none new.
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
     - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
+    - `safe:LEFT,TOP,RIGHT,BOTTOM` (ADR 0156), four numbers of points, none negative: the window's safe area, with
+      a `Resized` at the current size when it is a new one;
     - `compose:C:TEXT` (ADR 0141): the composition becomes TEXT, with the caret at byte C. It is delivered only while
       text input is on. C must be at most TEXT's length and at a character's start;
     - `clipboard:TEXT` puts TEXT on the window's scripted clipboard, which `setClipboardText` and `clipboardText` also

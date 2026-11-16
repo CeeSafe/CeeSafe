@@ -42,7 +42,9 @@ else
     base="https://github.com/$repo/releases/download/$version"
 fi
 
-fetch() {
+# Named apart from the commands they call: 0.53.0's script named these fetch() and sha256(), the names of FreeBSD's
+# own commands, so on FreeBSD each called itself until the shell overflowed its stack.
+download() {
     if command -v curl > /dev/null 2>&1; then
         curl -fsSL "$1" -o "$2" || fail "cannot download $1"
     elif command -v wget > /dev/null 2>&1; then
@@ -54,13 +56,15 @@ fetch() {
     fi
 }
 
-sha256() {
+checksum() {
     if command -v sha256sum > /dev/null 2>&1; then
         sha256sum "$1" | cut -d ' ' -f 1
     elif command -v shasum > /dev/null 2>&1; then
         shasum -a 256 "$1" | cut -d ' ' -f 1
-    else
+    elif command -v sha256 > /dev/null 2>&1; then
         sha256 -q "$1" # FreeBSD's base system
+    else
+        fail "needs sha256sum, shasum or sha256"
     fi
 }
 
@@ -68,11 +72,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 
 echo "ceesafec install: downloading $asset ($version)"
-fetch "$base/$asset" "$work/$asset"
-fetch "$base/SHA256SUMS" "$work/SHA256SUMS"
+download "$base/$asset" "$work/$asset"
+download "$base/SHA256SUMS" "$work/SHA256SUMS"
 expected=$(grep "  $asset\$" "$work/SHA256SUMS" | cut -d ' ' -f 1)
 [ -n "$expected" ] || fail "SHA256SUMS has no line for $asset"
-[ "$(sha256 "$work/$asset")" = "$expected" ] || fail "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
+[ "$(checksum "$work/$asset")" = "$expected" ] || fail "$asset does not match its SHA-256 in SHA256SUMS; nothing was installed"
 
 mkdir -p "$work/unpacked"
 tar -xzf "$work/$asset" -C "$work/unpacked"

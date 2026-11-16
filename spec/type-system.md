@@ -3180,7 +3180,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3204,6 +3204,7 @@ Diagnostics: none new.
   - `AppKit(window, view)`: macOS's `NSWindow` and its content `NSView`, which is layer-backed;
   - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;
   - `Xlib(display, window)`: X11's `Display *` and the `Window` XID;
+  - `UIKit(window, view)` (ADR 0154): iOS's `UIWindow` and its view, whose layer is the content;
   - `Scripted`: a scripted window, which has no system window.
 
   Each handle is a `u64`, which only `unsafe` code can turn back into a pointer. It is valid until the `Window` is
@@ -3406,7 +3407,17 @@ Diagnostics: none new.
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
   - **Windows:** Win32 and GDI;
-  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`.
+  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`;
+  - **iOS** (ADR 0154): UIKit through the Objective-C runtime, loaded with `dlopen`, for a windowed build
+    (`windowed = true` or `--windowed`, ADR 0151). The build's start runs `UIApplicationMain`; once the application
+    has launched, it calls the program's `main` again, on the main thread from the run loop, and the process exits
+    with `main`'s code. The run loop runs while the program polls or waits (`CFRunLoopRunInMode`). One window, which
+    fills the screen whatever size `open` asks: `size()` is the view's size in points and `scale()` the screen's; a
+    rotation gives `Resized`, the application becoming inactive and active again `Focus`. Frames are `CGImage`s in
+    the view's layer. Until touches have their own events, the first touch is the primary pointer
+    (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled). The clipboard is
+    `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),
+    no text input yet, and no `Closed`. Without a windowed build, `open` is `NoDisplay`.
 
   The runtime file is part of a build only when the program calls a window function.
 - **Scripted windows** (for tests, ADR 0069 §2.3). When the environment variable `CEESAFE_WINDOW_SCRIPT` names a

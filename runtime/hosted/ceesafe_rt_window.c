@@ -40,6 +40,12 @@
 #define _CRT_SECURE_NO_WARNINGS /* fopen, getenv */
 #endif
 #include "ceesafe/rt.h"
+#if defined(__APPLE__)
+#include <TargetConditionals.h> /* TARGET_OS_IPHONE: UIKit rather than AppKit (ADR 0154) */
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#define CEE_WINDOW_UIKIT 1
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -323,6 +329,7 @@ static void cee_window_focus(struct cee_window *w, int focused) {
     cee_window_push(w, CEE_EVENT_FOCUS, focused, 0, 0, 0, 0.0f, 0.0f);
 }
 
+#if !defined(CEE_WINDOW_UIKIT) /* iOS takes text through the input method (P4 step 5) */
 /* A typed character: control characters and the private-use function-key range are keys, not text. */
 static void cee_window_text(struct cee_window *w, uint32_t scalar) {
     if (scalar < 0x20u || scalar == 0x7fu || (scalar >= 0xf700u && scalar <= 0xf8ffu) || scalar > 0x10ffffu ||
@@ -331,6 +338,7 @@ static void cee_window_text(struct cee_window *w, uint32_t scalar) {
     }
     cee_window_push(w, CEE_EVENT_TEXT, (int32_t)scalar, 0, 0, 0, 0.0f, 0.0f);
 }
+#endif
 
 /* Grows a byte buffer to hold `length` bytes; 0 when memory ran out (the buffer is then unchanged). */
 static int cee_window_reserve(char **buffer, size_t *capacity, size_t length) {
@@ -515,7 +523,7 @@ static int cee_window_answer_split(struct cee_window *w, const char *text, size_
     return 1;
 }
 
-#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
+#if (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)) || defined(_WIN32) || defined(__linux__) || defined(__FreeBSD__)
 /* Calls f(extension, length, context) for each extension of a comma-separated list, trimmed, without a leading dot,
    skipping empty ones; the number of them (the backends' dialogs). */
 static size_t cee_dialog_extensions(const char *list, size_t length,
@@ -636,7 +644,7 @@ static uint32_t cee_window_utf8(const unsigned char *s, size_t n, size_t *i) {
     return c;
 }
 
-#if defined(__APPLE__) || defined(_WIN32)
+#if (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)) || defined(_WIN32)
 /* An RGBA pixel (bytes R, G, B, A) as BGRA with an opaque alpha (bytes B, G, R, 255): GDI's and the IOSurface's. */
 static uint32_t cee_window_bgra(uint32_t p) {
     return ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu) | 0xff000000u;
@@ -1388,7 +1396,502 @@ static int32_t cee_window_dump(struct cee_window *w, const uint32_t *pixels, uin
    with cee_window_answer_add: 0, none added for a cancel, or minus an error) (ADR 0146). With `w->external` set
    before cee_native_open, the backend never paints the content: cee_native_present is not called. */
 
-#if defined(__APPLE__)
+#if defined(CEE_WINDOW_UIKIT)
+/* UIKit (ADR 0154) through the Objective-C runtime, loaded with dlopen as macOS's AppKit is, so no program links a
+   framework. The program runs inside UIApplicationMain (ceesafe_window_app_start, called by a windowed build's start):
+   on the main thread, from the run loop, which runs only while the program polls or waits (CFRunLoopRunInMode). One
+   window, which fills the screen; the first touch is the primary pointer (until P4 step 3). On x86_64 (the simulator
+   on Intel Macs) a method that returns a CGRect goes through objc_msgSend_stret. */
+#include <crt_externs.h>
+#include <dlfcn.h>
+
+#define CEE_HANDLE_UIKIT 4
+
+typedef void *cee_id;
+typedef void *cee_sel;
+typedef void (*cee_fn)(void);
+typedef struct {
+    double x, y;
+} cee_point;
+typedef struct {
+    double width, height;
+} cee_size;
+typedef struct {
+    cee_point origin;
+    cee_size size;
+} cee_rect;
+
+/* CFRunLoopSourceContext, version 0 (CoreFoundation's CFRunLoop.h). */
+typedef struct {
+    long version;
+    void *info;
+    const void *(*retain)(const void *);
+    void (*release)(const void *);
+    void *(*copy_description)(const void *);
+    unsigned char (*equal)(const void *, const void *);
+    unsigned long (*hash)(const void *);
+    void (*schedule)(void *, void *, void *);
+    void (*cancel)(void *, void *, void *);
+    void (*perform)(void *);
+} cee_ios_source_context;
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    cee_id (*get_class)(const char *);
+    cee_sel (*sel)(const char *);
+    cee_fn send;
+    cee_fn send_stret;
+    cee_id (*allocate_class)(cee_id, const char *, size_t);
+    signed char (*add_method)(cee_id, cee_sel, cee_fn, const char *);
+    void (*register_class)(cee_id);
+    void *(*pool_push)(void);
+    void (*pool_pop)(void *);
+    int (*application_main)(int, char **, cee_id, cee_id);
+    void *(*color_space_named)(const void *);
+    const void *const *srgb_name;
+    void *(*provider_create)(void *, const void *, size_t, void (*)(void *, const void *, size_t));
+    void *(*image_create)(size_t, size_t, size_t, size_t, size_t, void *, uint32_t, void *, const double *, bool,
+                          int32_t);
+    void (*image_release)(void *);
+    void (*provider_release)(void *);
+    void *rgb;
+    int32_t (*run_in_mode)(const void *, double, unsigned char);
+    const void *const *default_mode;
+    void (*source_signal)(void *);
+    void (*loop_wake_up)(void *);
+    void *wake_source;
+    void *main_loop;
+    const void *const *gravity_resize;
+    cee_id view_class;
+} cee_uikit;
+
+/* The one window, and its view's primary touch (a UITouch, compared by address only). */
+struct cee_ios {
+    cee_id window;
+    cee_id view;
+    cee_id touch;
+};
+static struct cee_window *cee_ios_shown;
+
+static cee_fn cee_ios_symbol(void *handle, const char *name) {
+    void *p = dlsym(handle, name);
+    cee_fn f;
+    memcpy(&f, &p, sizeof f); /* ISO C has no object-to-function pointer conversion; POSIX guarantees this one */
+    return f;
+}
+
+static cee_id cee_ios_cls(const char *name) { return cee_uikit.get_class(name); }
+static cee_sel cee_ios_sel(const char *name) { return cee_uikit.sel(name); }
+static cee_id cee_ios_send(cee_id o, const char *s) { return ((cee_id(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s)); }
+static void cee_ios_send_v(cee_id o, const char *s) { ((void (*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s)); }
+static void cee_ios_send_v_id(cee_id o, const char *s, cee_id a) {
+    ((void (*)(cee_id, cee_sel, cee_id))cee_uikit.send)(o, cee_ios_sel(s), a);
+}
+static long cee_ios_send_long(cee_id o, const char *s) { return ((long (*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s)); }
+static unsigned long cee_ios_send_ulong(cee_id o, const char *s) {
+    return ((unsigned long (*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
+}
+static double cee_ios_send_double(cee_id o, const char *s) {
+    return ((double (*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
+}
+static const char *cee_ios_send_cstr(cee_id o, const char *s) {
+    return ((const char *(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
+}
+static cee_rect cee_ios_send_rect(cee_id o, const char *s) {
+#if defined(__x86_64__)
+    cee_rect r;
+    ((void (*)(cee_rect *, cee_id, cee_sel))cee_uikit.send_stret)(&r, o, cee_ios_sel(s));
+    return r;
+#else
+    return ((cee_rect(*)(cee_id, cee_sel))cee_uikit.send)(o, cee_ios_sel(s));
+#endif
+}
+static cee_point cee_ios_location(cee_id touch, cee_id view) {
+    return ((cee_point(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(touch, cee_ios_sel("locationInView:"), view);
+}
+static cee_id cee_ios_string(const char *text) {
+    return ((cee_id(*)(cee_id, cee_sel, const char *))cee_uikit.send)(cee_ios_cls("NSString"),
+                                                                     cee_ios_sel("stringWithUTF8String:"), text);
+}
+
+/* The view's touches: the first touch that begins is the primary pointer until it ends (ADR 0154 §2.2). */
+static void cee_ios_touches(cee_id view, cee_id touches, int phase) {
+    struct cee_window *w = cee_ios_shown;
+    if (w == NULL) {
+        return;
+    }
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    cee_id all = cee_ios_send(touches, "allObjects");
+    unsigned long count = all != NULL ? cee_ios_send_ulong(all, "count") : 0ul;
+    for (unsigned long k = 0; k < count; k++) {
+        cee_id touch = ((cee_id(*)(cee_id, cee_sel, unsigned long))cee_uikit.send)(all, cee_ios_sel("objectAtIndex:"), k);
+        cee_point p = cee_ios_location(touch, view);
+        float x = (float)p.x, y = (float)p.y;
+        if (phase == 0 && m->touch == NULL) {
+            m->touch = touch;
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 1, 0, 0, x, y);
+        } else if (touch == m->touch && phase == 1) {
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y);
+        } else if (touch == m->touch && phase == 2) {
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, 0, 0, 0, x, y);
+            m->touch = NULL;
+        }
+    }
+}
+
+static void cee_ios_touches_began(cee_id self, cee_sel cmd, cee_id touches, cee_id event) {
+    (void)cmd;
+    (void)event;
+    cee_ios_touches(self, touches, 0);
+}
+static void cee_ios_touches_moved(cee_id self, cee_sel cmd, cee_id touches, cee_id event) {
+    (void)cmd;
+    (void)event;
+    cee_ios_touches(self, touches, 1);
+}
+static void cee_ios_touches_ended(cee_id self, cee_sel cmd, cee_id touches, cee_id event) {
+    (void)cmd;
+    (void)event;
+    cee_ios_touches(self, touches, 2);
+}
+
+/* The wake source's callback: nothing to do; that a source was handled ends the run loop's wait (ADR 0142). */
+static void cee_ios_wake_perform(void *info) { (void)info; }
+
+static int cee_uikit_load(void) {
+    if (cee_uikit.state != 0) {
+        return cee_uikit.state == 1;
+    }
+    cee_uikit.state = -1;
+    void *objc = dlopen("/usr/lib/libobjc.A.dylib", RTLD_NOW | RTLD_GLOBAL);
+    void *uikit = dlopen("/System/Library/Frameworks/UIKit.framework/UIKit", RTLD_NOW | RTLD_GLOBAL);
+    void *graphics = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW | RTLD_GLOBAL);
+    void *quartz = dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_NOW | RTLD_GLOBAL);
+    void *core = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_GLOBAL);
+    if (objc == NULL || uikit == NULL || graphics == NULL || quartz == NULL || core == NULL) {
+        return 0;
+    }
+    cee_uikit.get_class = (cee_id(*)(const char *))cee_ios_symbol(objc, "objc_getClass");
+    cee_uikit.sel = (cee_sel(*)(const char *))cee_ios_symbol(objc, "sel_registerName");
+    cee_uikit.send = cee_ios_symbol(objc, "objc_msgSend");
+#if defined(__x86_64__)
+    cee_uikit.send_stret = cee_ios_symbol(objc, "objc_msgSend_stret");
+#endif
+    cee_uikit.allocate_class = (cee_id(*)(cee_id, const char *, size_t))cee_ios_symbol(objc, "objc_allocateClassPair");
+    cee_uikit.add_method = (signed char (*)(cee_id, cee_sel, cee_fn, const char *))cee_ios_symbol(objc,
+                                                                                                  "class_addMethod");
+    cee_uikit.register_class = (void (*)(cee_id))cee_ios_symbol(objc, "objc_registerClassPair");
+    cee_uikit.pool_push = (void *(*)(void))cee_ios_symbol(objc, "objc_autoreleasePoolPush");
+    cee_uikit.pool_pop = (void (*)(void *))cee_ios_symbol(objc, "objc_autoreleasePoolPop");
+    cee_uikit.application_main = (int (*)(int, char **, cee_id, cee_id))cee_ios_symbol(uikit, "UIApplicationMain");
+    cee_uikit.color_space_named = (void *(*)(const void *))cee_ios_symbol(graphics, "CGColorSpaceCreateWithName");
+    cee_uikit.srgb_name = (const void *const *)dlsym(graphics, "kCGColorSpaceSRGB");
+    cee_uikit.provider_create = (void *(*)(void *, const void *, size_t, void (*)(void *, const void *, size_t)))
+        cee_ios_symbol(graphics, "CGDataProviderCreateWithData");
+    cee_uikit.image_create = (void *(*)(size_t, size_t, size_t, size_t, size_t, void *, uint32_t, void *,
+                                        const double *, bool, int32_t))cee_ios_symbol(graphics, "CGImageCreate");
+    cee_uikit.image_release = (void (*)(void *))cee_ios_symbol(graphics, "CGImageRelease");
+    cee_uikit.provider_release = (void (*)(void *))cee_ios_symbol(graphics, "CGDataProviderRelease");
+    cee_uikit.run_in_mode = (int32_t(*)(const void *, double, unsigned char))cee_ios_symbol(core, "CFRunLoopRunInMode");
+    cee_uikit.default_mode = (const void *const *)dlsym(core, "kCFRunLoopDefaultMode");
+    cee_uikit.source_signal = (void (*)(void *))cee_ios_symbol(core, "CFRunLoopSourceSignal");
+    cee_uikit.loop_wake_up = (void (*)(void *))cee_ios_symbol(core, "CFRunLoopWakeUp");
+    cee_uikit.gravity_resize = (const void *const *)dlsym(quartz, "kCAGravityResize");
+    void *(*source_create)(void *, long, cee_ios_source_context *) =
+        (void *(*)(void *, long, cee_ios_source_context *))cee_ios_symbol(core, "CFRunLoopSourceCreate");
+    void *(*get_main)(void) = (void *(*)(void))cee_ios_symbol(core, "CFRunLoopGetMain");
+    void (*add_source)(void *, void *, const void *) =
+        (void (*)(void *, void *, const void *))cee_ios_symbol(core, "CFRunLoopAddSource");
+    const void *const *common = (const void *const *)dlsym(core, "kCFRunLoopCommonModes");
+    if (cee_uikit.get_class == NULL || cee_uikit.sel == NULL || cee_uikit.send == NULL ||
+        cee_uikit.allocate_class == NULL || cee_uikit.add_method == NULL || cee_uikit.register_class == NULL ||
+        cee_uikit.pool_push == NULL || cee_uikit.pool_pop == NULL || cee_uikit.application_main == NULL ||
+        cee_uikit.color_space_named == NULL || cee_uikit.srgb_name == NULL || cee_uikit.provider_create == NULL ||
+        cee_uikit.image_create == NULL || cee_uikit.image_release == NULL || cee_uikit.provider_release == NULL ||
+        cee_uikit.run_in_mode == NULL || cee_uikit.default_mode == NULL || cee_uikit.source_signal == NULL ||
+        cee_uikit.loop_wake_up == NULL || cee_uikit.gravity_resize == NULL || source_create == NULL ||
+        get_main == NULL || add_source == NULL || common == NULL
+#if defined(__x86_64__)
+        || cee_uikit.send_stret == NULL
+#endif
+    ) {
+        return 0;
+    }
+    cee_uikit.rgb = cee_uikit.color_space_named(*cee_uikit.srgb_name);
+    cee_ios_source_context context; /* copied by CFRunLoopSourceCreate */
+    memset(&context, 0, sizeof context);
+    context.perform = cee_ios_wake_perform;
+    cee_uikit.main_loop = get_main();
+    cee_uikit.wake_source = cee_uikit.main_loop != NULL ? source_create(NULL, 0, &context) : NULL;
+    if (cee_uikit.wake_source != NULL) {
+        add_source(cee_uikit.main_loop, cee_uikit.wake_source, *common);
+    }
+    cee_id view = cee_uikit.allocate_class(cee_ios_cls("UIView"), "CeeSafeTouchView", 0);
+    if (view == NULL) {
+        view = cee_ios_cls("CeeSafeTouchView"); /* a second runtime in the process registered it */
+    } else {
+        cee_uikit.add_method(view, cee_ios_sel("touchesBegan:withEvent:"), (cee_fn)cee_ios_touches_began, "v@:@@");
+        cee_uikit.add_method(view, cee_ios_sel("touchesMoved:withEvent:"), (cee_fn)cee_ios_touches_moved, "v@:@@");
+        cee_uikit.add_method(view, cee_ios_sel("touchesEnded:withEvent:"), (cee_fn)cee_ios_touches_ended, "v@:@@");
+        cee_uikit.add_method(view, cee_ios_sel("touchesCancelled:withEvent:"), (cee_fn)cee_ios_touches_ended, "v@:@@");
+        cee_uikit.register_class(view);
+    }
+    cee_uikit.view_class = view;
+    cee_uikit.state = cee_uikit.rgb != NULL && view != NULL ? 1 : -1;
+    return cee_uikit.state == 1;
+}
+
+/* The application's start (ADR 0154 §2.1): a windowed build's ceesafe_rt_windowed calls this first. UIApplicationMain
+   never returns; once the application has launched, the delegate calls the program's `main` again from the run loop,
+   and that call's ceesafe_rt_windowed returns at once. When `main` returns, the process exits with its code. */
+int main(int argc, char **argv);
+
+static void cee_ios_run(cee_id self, cee_sel cmd, cee_id argument) {
+    (void)self;
+    (void)cmd;
+    (void)argument;
+    exit(main(*_NSGetArgc(), *_NSGetArgv()));
+}
+
+static signed char cee_ios_did_finish(cee_id self, cee_sel cmd, cee_id application, cee_id options) {
+    (void)cmd;
+    (void)application;
+    (void)options;
+    ((void (*)(cee_id, cee_sel, cee_sel, cee_id, double))cee_uikit.send)(
+        self, cee_ios_sel("performSelector:withObject:afterDelay:"), cee_ios_sel("ceesafeRun:"), NULL, 0.0);
+    return 1;
+}
+
+void ceesafe_window_app_start(void) {
+    static int started;
+    if (started) {
+        return;
+    }
+    started = 1;
+    if (!cee_uikit_load()) {
+        return; /* no UIKit: the program runs, and Window.open is NoDisplay */
+    }
+    cee_id delegate = cee_uikit.allocate_class(cee_ios_cls("UIResponder"), "CeeSafeAppDelegate", 0);
+    if (delegate != NULL) {
+        cee_uikit.add_method(delegate, cee_ios_sel("application:didFinishLaunchingWithOptions:"),
+                             (cee_fn)cee_ios_did_finish, "c@:@@");
+        cee_uikit.add_method(delegate, cee_ios_sel("ceesafeRun:"), (cee_fn)cee_ios_run, "v@:@");
+        cee_uikit.register_class(delegate);
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_id name = cee_ios_string("CeeSafeAppDelegate");
+    (void)cee_uikit.application_main(*_NSGetArgc(), *_NSGetArgv(), NULL, name);
+    cee_uikit.pool_pop(pool); /* not reached */
+}
+
+/* The application's state: 0 active, else inactive or in the background. */
+static int cee_ios_active(void) {
+    cee_id app = cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication");
+    return app != NULL && cee_ios_send_long(app, "applicationState") == 0;
+}
+
+static int cee_native_open(struct cee_window *w, const char *title) {
+    (void)title; /* an iOS window has no title */
+    if (cee_uikit.state != 1 || cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication") == NULL) {
+        return CEE_WINDOW_NO_DISPLAY; /* not a windowed build, so no application (ADR 0154 §2.1) */
+    }
+    if (cee_ios_shown != NULL) {
+        return CEE_WINDOW_RESOURCES; /* one window per program on iOS */
+    }
+    struct cee_ios *m = (struct cee_ios *)ceesafe_platform_alloc_zeroed(sizeof *m);
+    if (m == NULL) {
+        return CEE_WINDOW_RESOURCES;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_id screen = cee_ios_send(cee_ios_cls("UIScreen"), "mainScreen");
+    cee_rect bounds = cee_ios_send_rect(screen, "bounds");
+    cee_id window = ((cee_id(*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(cee_ios_send(cee_ios_cls("UIWindow"), "alloc"),
+                                                                           cee_ios_sel("initWithFrame:"), bounds);
+    cee_id controller = cee_ios_send(cee_ios_send(cee_ios_cls("UIViewController"), "alloc"), "init");
+    cee_id view = ((cee_id(*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(cee_ios_send(cee_uikit.view_class, "alloc"),
+                                                                         cee_ios_sel("initWithFrame:"), bounds);
+    if (window == NULL || controller == NULL || view == NULL) {
+        cee_uikit.pool_pop(pool);
+        ceesafe_platform_free(m);
+        return CEE_WINDOW_RESOURCES;
+    }
+    cee_ios_send_v_id(window, "setBackgroundColor:", cee_ios_send(cee_ios_cls("UIColor"), "blackColor"));
+    cee_ios_send_v_id(controller, "setView:", view);
+    cee_ios_send_v(view, "release");
+    cee_ios_send_v_id(window, "setRootViewController:", controller);
+    cee_ios_send_v(controller, "release");
+    cee_ios_send_v_id(cee_ios_send(view, "layer"), "setContentsGravity:", (cee_id)*cee_uikit.gravity_resize);
+    cee_ios_send_v(window, "makeKeyAndVisible");
+    m->window = window;
+    m->view = view;
+    w->native = m;
+    w->width = (uint32_t)bounds.size.width;
+    w->height = (uint32_t)bounds.size.height;
+    w->scale = (float)cee_ios_send_double(screen, "scale");
+    cee_ios_shown = w;
+    cee_uikit.pool_pop(pool);
+    return 0;
+}
+
+static void cee_native_close(struct cee_window *w) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_ios_send_v_id(m->window, "setRootViewController:", NULL);
+    ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(m->window, cee_ios_sel("setHidden:"), 1);
+    cee_ios_send_v(m->window, "release");
+    cee_uikit.pool_pop(pool);
+    if (cee_ios_shown == w) {
+        cee_ios_shown = NULL;
+    }
+    ceesafe_platform_free(m);
+    w->native = NULL;
+}
+
+/* Runs the run loop's pending sources (touches among them), then reads the size, the scale and the application's
+   state, which give Resized and Focus when they change. */
+static void cee_native_pump(struct cee_window *w) {
+    void *pool = cee_uikit.pool_push();
+    for (int k = 0; k < 256 && cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.0, 1) == 4; k++) {
+        /* kCFRunLoopRunHandledSource: another may be pending */
+    }
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m != NULL) {
+        cee_rect bounds = cee_ios_send_rect(m->view, "bounds");
+        if (bounds.size.width >= 1.0 && bounds.size.height >= 1.0) {
+            cee_window_resized(w, (uint32_t)bounds.size.width, (uint32_t)bounds.size.height);
+        }
+        cee_window_rescaled(w, (float)cee_ios_send_double(cee_ios_send(cee_ios_cls("UIScreen"), "mainScreen"), "scale"));
+        int active = cee_ios_active();
+        if (active != w->focused) {
+            cee_window_focus(w, active);
+        }
+    }
+    cee_uikit.pool_pop(pool);
+}
+
+static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    *first = (uint64_t)(uintptr_t)m->window;
+    *second = (uint64_t)(uintptr_t)m->view;
+    return CEE_HANDLE_UIKIT;
+}
+
+static void cee_ios_release_pixels(void *info, const void *data, size_t size) {
+    (void)data;
+    (void)size;
+    ceesafe_platform_free(info);
+}
+
+/* The frame as a CGImage in the view's layer: the pixels are copied, premultiplied RGBA shown as opaque sRGB. */
+static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    uint32_t *copy = (uint32_t *)ceesafe_platform_alloc(bytes);
+    if (copy == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    memcpy(copy, pixels, bytes);
+    void *pool = cee_uikit.pool_push();
+    void *provider = cee_uikit.provider_create(copy, copy, bytes, cee_ios_release_pixels);
+    if (provider == NULL) {
+        ceesafe_platform_free(copy);
+        cee_uikit.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    /* kCGImageAlphaNoneSkipLast: bytes R, G, B and an alpha that is not shown, as the window is opaque. */
+    void *image = cee_uikit.image_create(width, height, 8, 32, (size_t)width * 4u, cee_uikit.rgb, 5u, provider, NULL,
+                                         false, 0);
+    cee_uikit.provider_release(provider);
+    if (image == NULL) {
+        cee_uikit.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    cee_ios_send_v_id(cee_ios_send(m->view, "layer"), "setContents:", (cee_id)image);
+    cee_uikit.image_release(image);
+    cee_uikit.pool_pop(pool);
+    return 0;
+}
+
+static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                        const struct cee_window_box *boxes, size_t count) {
+    (void)boxes;
+    (void)count;
+    return cee_native_present(w, pixels, width, height); /* the layer takes whole images */
+}
+
+static void cee_native_cursor(struct cee_window *w) { (void)w; }               /* no pointer on a touch screen */
+static void cee_native_title(struct cee_window *w, const char *title) { (void)w; (void)title; } /* no title bar */
+static void cee_native_text_input(struct cee_window *w, int on) { (void)w; (void)on; } /* P4 step 5 */
+static void cee_native_text_area(struct cee_window *w) { (void)w; }
+
+static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    memcpy(copy, text, length);
+    copy[length] = '\0';
+    void *pool = cee_uikit.pool_push();
+    cee_id string = cee_ios_string(copy);
+    ceesafe_platform_free(copy);
+    if (string == NULL) {
+        cee_uikit.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    cee_ios_send_v_id(cee_ios_send(cee_ios_cls("UIPasteboard"), "generalPasteboard"), "setString:", string);
+    cee_uikit.pool_pop(pool);
+    return 0;
+}
+
+static int cee_native_clipboard_get(struct cee_window *w) {
+    void *pool = cee_uikit.pool_push();
+    cee_id string = cee_ios_send(cee_ios_send(cee_ios_cls("UIPasteboard"), "generalPasteboard"), "string");
+    const char *utf8 = string != NULL ? cee_ios_send_cstr(string, "UTF8String") : NULL;
+    int found = utf8 != NULL && cee_window_paste(w, utf8, strlen(utf8));
+    cee_uikit.pool_pop(pool);
+    return found;
+}
+
+/* A wake from another thread (ADR 0142): the wake source ends the run loop's wait. */
+static void cee_native_wake(void) {
+    if (cee_uikit.wake_source != NULL) {
+        cee_uikit.source_signal(cee_uikit.wake_source);
+        cee_uikit.loop_wake_up(cee_uikit.main_loop);
+    }
+}
+
+/* Until a source is handled (a touch, a wake, UIKit's own) or `seconds`. */
+static void cee_native_wait(struct cee_window *w, double seconds) {
+    (void)w;
+    void *pool = cee_uikit.pool_push();
+    (void)cee_uikit.run_in_mode(*cee_uikit.default_mode, seconds > 0.0 ? seconds : 0.0, 1);
+    cee_uikit.pool_pop(pool);
+}
+
+static void cee_native_wait_any(double seconds) { cee_native_wait(NULL, seconds); }
+
+static int32_t cee_native_menu(struct cee_window *w) {
+    (void)w;
+    return -CEE_WINDOW_UNSUPPORTED; /* no menu bar on iOS */
+}
+
+static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *title, const char *name,
+                                 const char *extensions, size_t extensions_length) {
+    (void)w;
+    (void)kind;
+    (void)title;
+    (void)name;
+    (void)extensions;
+    (void)extensions_length;
+    return -CEE_WINDOW_UNSUPPORTED; /* file dialogs on iOS are not covered (ADR 0154 §2.2) */
+}
+
+#elif defined(__APPLE__)
 /* AppKit through the Objective-C runtime. Every call goes through objc_msgSend cast to the method's C type; on x86_64,
    a method that returns an NSRect goes through objc_msgSend_stret. */
 #include <dlfcn.h>

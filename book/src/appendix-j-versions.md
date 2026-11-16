@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.57.0
+## Releases 0.25.0 to 0.57.1
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.57.1 | 2026-11-16 | Fixes and no new feature. `ceesafec run --interp` and `ceesafec test --interp` no longer grow with every loop iteration and call: a loop's temporaries and a function called many times each left a record of their memory for the rest of the run, so a long interpreted program could use gigabytes (a test hashing a million bytes, 2 GB). A local whose address is never taken now reuses its memory; a dangling pointer is still caught. Programs built natively are unchanged. | — |
 | 0.57.0 | 2026-11-16 | Touches on a window. `Window.setTouches(true)` gives every finger on a touch screen through `Window.nextTouch`: a `WindowTouch` with the runtime's number for the finger (from 1, never reused), its `WindowTouchPhase` (`Began`, `Moved`, `Ended`, `Cancelled`), its place in points and its time, from a queue beside the events, so `WindowEvent` is unchanged. Fingers down are cancelled when the window loses focus or closes. iOS, Android and scripted windows (`touch:ID,PHASE,X,Y`); desktop windows answer false. With touches off, the first finger is still the pointer. iOS builds no longer print two warnings (ADR 0155). | [Appendix C](./appendix-c-built-in-types) |
 | 0.56.0 | 2026-11-16 | Windows on iOS and Android. A windowed build (`--windowed`) built for iOS runs inside `UIApplicationMain` with the scene life cycle, and its `Window` fills the screen; built for Android as a NativeActivity's library (API level 28 and later), it runs on a thread of its own and its `Window` is the activity's. The first touch is the pointer on both. `WindowHandle` gains `UIKit` and `Android`, so a `match` over every handle needs their arms (ADR 0154). | [Appendix C](./appendix-c-built-in-types) |
 | 0.55.1 | 2026-11-16 | Fixes and no new feature, both for speed. `resize` into capacity already reserved fills as one `memset` when the fill is zero, and through a local pointer otherwise: GCC kept a byte loop. A task woken from its own thread while it waits, as by a channel, is readied at once, without a walk of every waiting task, so a server with many waiting tasks no longer pays for each in every wait; the count of suspensions is kept only for `ceesafec test --sweep cancel`. | — |

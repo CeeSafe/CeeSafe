@@ -153,6 +153,10 @@ struct Borrows {
     readOnly: Vector<bool>;
     /// By loan: a mutable placeholder's shared twin, or none (readOnly).
     sharedTwins: Vector<u32>;
+    /// By block position and statement: is it the end of a local's storage where the local is certainly not
+    /// initialised (never assigned on the way, moved out, or its storage already ended)? No drop runs there, so it
+    /// reads no loan (§25.7 rule 6). Empty when no local of the function has a drop that reads loans.
+    deadUninit: Vector<Vector<bool>>;
 }
 
 /// A scope's children hold what their environments captured until the scope returns (type-system.md §40.5, ADR 0033
@@ -1494,12 +1498,15 @@ fn spanAt(n: borrow NirProgram, b: borrow Borrows, position: usize, i: usize) ->
 
 // ---- §5 Liveness ----
 
-/// The reference locals a list of accesses reads (Uses): its root, if it is a reference.
+/// The reference locals a list of accesses reads (Uses): its root, if it is a reference. The accesses are those at
+/// position (`position`, `index`).
 fn accessUses(
     c: borrow Checker,
     n: borrow NirProgram,
     b: borrow Borrows,
     accesses: borrow Vector<Access>,
+    position: usize,
+    index: usize,
     out: borrow mut Vector<u32>,
 ) -> Result<void, AllocError> {
     for (a in accesses.view()) {
@@ -1510,6 +1517,11 @@ fn accessUses(
         if (a.kind == accessDead()) {
             var visiting = Vector<u32>.create();
             if (!c.types.dropReadsLoans(localType(n, b, local), mut visiting)?) { // §25.7 rule 6
+                continue;
+            }
+            // The end of the storage of a local that holds nothing runs no drop: it reads no loan.
+            if (position < b.deadUninit.length && index < b.deadUninit[position].length &&
+                b.deadUninit[position][index]) {
                 continue;
             }
         }
@@ -1584,7 +1596,7 @@ fn computeLiveness(
             var accesses = Vector<Access>.create();
             accessesAt(n, b, position, statementCount, mut accesses)?;
             var uses = Vector<u32>.create();
-            accessUses(c, n, b, accesses, mut uses)?;
+            accessUses(c, n, b, accesses, position, statementCount, mut uses)?;
             for (local in uses.view()) {
                 live.add(local)?;
             }
@@ -1608,7 +1620,7 @@ fn computeLiveness(
                 var statementAccesses = Vector<Access>.create();
                 accessesAt(n, b, position, i, mut statementAccesses)?;
                 var used = Vector<u32>.create();
-                accessUses(c, n, b, statementAccesses, mut used)?;
+                accessUses(c, n, b, statementAccesses, position, i, mut used)?;
                 holdersUsedBy(n, b, s, mut used)?;
                 for (local in used.view()) {
                     live.add(local)?;
@@ -1937,7 +1949,7 @@ fn findLaterUse(
             var accesses = Vector<Access>.create();
             accessesAt(n, b, block, i, mut accesses)?;
             var uses = Vector<u32>.create();
-            accessUses(c, n, b, accesses, mut uses)?;
+            accessUses(c, n, b, accesses, block, i, mut uses)?;
             for (local in uses.view()) {
                 if (loansContain(b, local, loan)) {
                     let found = spanAt(n, b, block, i);
@@ -2162,6 +2174,50 @@ fn copyU32s(values: Slice<u32>) -> Result<Vector<u32>, AllocError> {
     return Ok(out);
 }
 
+/// Fills `deadUninit` (§25.7 rule 6): for each `StorageDead` of a local whose drop would read loans, whether the
+/// local is certainly not initialised there, by the move analysis's init states (ownership.md §4). A function with
+/// no such local needs none of it and pays nothing.
+fn noteDeadUninit(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) -> Result<void, AllocError> {
+    let function = borrow n.functions[b.function as usize];
+    var wanted = false;
+    for (position in 0..function.blocks.length) {
+        for (s in function.blocks[position].statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.StorageDead(local) => {
+                    if (holdsLoans(c, n, b, local)) {
+                        var visiting = Vector<u32>.create();
+                        if (c.types.dropReadsLoans(localType(n, b, local), mut visiting)?) {
+                            wanted = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if (!wanted) {
+        return Ok();
+    }
+    let d = analyzeMoves(c, n, function)?;
+    for (position in 0..function.blocks.length) {
+        var flags = Vector<bool>.create();
+        for (i in 0..function.blocks[position].statements.length) {
+            var uninit = false;
+            match (n.statements[function.blocks[position].statements[i] as usize]) {
+                NirStatement.StorageDead(local) => {
+                    if (tracksLocal(d, local)) {
+                        uninit = definitelyUninit(d, d.before[position][i], d.roots[local as usize])?;
+                    }
+                }
+                _ => {}
+            }
+            flags.push(uninit)?;
+        }
+        b.deadUninit.push(flags)?;
+    }
+    return Ok();
+}
+
 fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> Result<void, AllocError> {
     let localCount = n.functions[function as usize].locals.length;
     let blockCount = n.functions[function as usize].blocks.length;
@@ -2179,6 +2235,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         holders: Vector<u64>.create(),
         readOnly: Vector<bool>.create(),
         sharedTwins: Vector<u32>.create(),
+        deadUninit: Vector<Vector<bool>>.create(),
     };
     for (k in 0..localCount) {
         b.pointsTo.push(Vector<u32>.create())?;
@@ -2212,6 +2269,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
     }
     checkParameterWrites(c, n, b)?;
     checkStaticWrites(c, n, b)?;
+    noteDeadUninit(c, n, mut b)?;
     checkConflicts(c, n, mut b)?;
     return checkReturns(c, n, b);
 }

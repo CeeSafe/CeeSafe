@@ -1,0 +1,15 @@
+// ADR 0160 §2: what the receiver rule does not cover is still N0245.
+struct Table {
+    count: u32;
+
+    // A `borrow mut` result cannot come from a shared receiver.
+    fn shared(borrow this, other: borrow mut u32) -> borrow mut u32 => other; // error[N0245]
+
+    // A receiver that holds no loan is no source: the two views are still ambiguous.
+    fn byValue(this, a: StringView, b: StringView) -> StringView => a; // error[N0245]
+}
+
+// A static function has no receiver.
+fn pick(a: borrow Table, b: borrow Table) -> borrow u32 => borrow a.count; // error[N0245]
+
+fn main() {}

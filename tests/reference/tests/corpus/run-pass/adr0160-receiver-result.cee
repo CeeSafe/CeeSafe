@@ -1,0 +1,58 @@
+// ADR 0160 §2: in a method with several scoped parameters, a result with no source written borrows from the
+// receiver.
+struct Lease<region t> {
+    table: borrow(t) Table;
+}
+
+struct Table {
+    bytes: Vector<u8>;
+    count: u32;
+
+    // A view, an optional of one, a reference, a mutable reference, and a struct with a region.
+    fn prefix(borrow this, name: StringView) -> Slice<u8> => this.bytes[0..name.length];
+
+    fn find(borrow this, name: StringView) -> Slice<u8>? {
+        if (name.length > this.bytes.length) {
+            return null;
+        }
+        return Some(this.bytes[0..name.length]);
+    }
+
+    fn counter(borrow this, other: borrow Table) -> borrow u32 => borrow this.count;
+
+    fn slot(borrow mut this, key: StringView) -> borrow mut u32 => borrow mut this.count;
+
+    fn lease(borrow this, name: StringView) -> Lease => Lease { table: this };
+
+    fn checked(borrow this, name: StringView) -> Result<Lease, u32> =>
+        if (name.length == 0) Err(1) else Ok(Lease { table: this });
+}
+
+fn main() {
+    var t = Table { bytes: Vector<u8>.create(), count: 7 };
+    t.bytes.extend("hello".bytes())!;
+    Console.writeLine(t.prefix("ab").length);
+    Console.writeLine(t.find("abc")!.length);
+    Console.writeLine(t.find("longer than the table") == null);
+    let other = Table { bytes: Vector<u8>.create(), count: 9 };
+    Console.writeLine(t.counter(other));
+    {
+        let s = t.slot("k");
+        s += 1;
+    }
+    Console.writeLine(t.lease("n").table.count);
+    match (t.checked("n")) {
+        Ok(l) => { Console.writeLine(l.table.count + 1); }
+        Err(_) => { Console.writeLine("no lease"); }
+    }
+    // The result's borrow of `t` ends with the result: `t` can be changed afterwards.
+    t.bytes.clear();
+    Console.writeLine(t.bytes.length);
+}
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 9
+// expect-stdout: 0

@@ -1,0 +1,37 @@
+// ADR 0160 §3 changes nothing for a local that is, or may be, initialised where its storage ends: its drop reads
+// its loans there (type-system.md §25.7 rule 6).
+struct Owner {
+    count: Cell<u32>;
+}
+
+struct Lease<region c> {
+    owner: borrow(c) Owner;
+
+    drop {
+        this.owner.count.set(this.owner.count.get() + 1);
+    }
+}
+
+fn lease<region c>(owner: borrow(c) Owner) -> Result<Lease<c>, u32> => Ok(Lease { owner: owner });
+
+fn initialised() -> Result<void, u32> {
+    var owner = Owner { count: Cell<u32>.create(0) };
+    let held = lease(owner)?;
+    owner = Owner { count: Cell<u32>.create(1) }; // error[N0240]
+    return Ok();
+}
+
+fn perhapsInitialised(flag: bool) -> Result<void, u32> {
+    var owner = Owner { count: Cell<u32>.create(0) };
+    var kept: Lease? = null;
+    if (flag) {
+        kept = Some(lease(owner)?);
+    }
+    owner = Owner { count: Cell<u32>.create(1) }; // error[N0240]
+    return Ok();
+}
+
+fn main() {
+    let a = initialised();
+    let b = perhapsInitialised(true);
+}

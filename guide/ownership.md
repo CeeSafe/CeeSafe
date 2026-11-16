@@ -267,6 +267,39 @@ main.cee:3:5: error[N0244]: cannot return a reference to 'copy', which is local 
   = note: borrowed here (3:12)
 ```
 
+### What a method lends
+
+A method's result is borrowed from its receiver, also when the method takes other borrows or views: a lookup takes a
+key and lends what it finds, and needs no list of sources.
+
+```ceesafe
+struct Settings {
+    text: String;
+
+    /// The text after `key`, a view of these settings' own text.
+    fn after(borrow this, key: StringView) -> StringView {
+        let all = this.text.view();
+        match (all.indexOf(key)) {
+            Some(i) => { return all[i + key.length..]; }
+            null => { return ""; }
+        }
+    }
+}
+
+fn main() {
+    let settings = Settings { text: String.from("port=8080")! };
+    Console.writeLine(settings.after("port="));
+}
+```
+
+```text
+8080
+```
+
+The result may not be made from `key`: that would be a borrow the signature does not show. A method that does lend
+from another parameter says so, with `-> borrow(other) T` or a region (`fn first<region a>(borrow this, other:
+Slice<a, u8>) -> Slice<a, u8>`), and a function that is not a method names its sources whenever it has several.
+
 ### Two exclusive borrows
 
 Two exclusive borrows of one value can never be live together, even as two arguments of one call:

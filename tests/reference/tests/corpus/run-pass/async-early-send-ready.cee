@@ -1,0 +1,95 @@
+// A wait must not block for events an early send of the reactor's changes already took. With kqueue, 64 descriptors
+// armed at once fill the change queue; the wake pipe's own registration, made in the wait, is the 65th change and
+// sends the 64 early. That send takes the events of the connects that have finished and readies their tasks; the
+// wait that followed blocked all the same, until the next deadline, here three seconds away. The shape is a client's
+// connection attempts: each connect in a task set's child that reports on a channel, raced against the receive.
+const DIALS: u32 = 63;
+
+enum Bad {
+    Failed,
+    NoMemory,
+    @from Async(AsyncError),
+    @from Io(IoError),
+}
+
+async fn attempt(report: borrow Channel<u32>, port: u16) -> Result<void, Bad> {
+    match (await AsyncTcpStream.connectTo(SocketAddresses.v4Loopback(port))) {
+        Ok(stream) => { let sent = report.trySend(1); }
+        Err(_) => { let sent = report.trySend(0); }
+    }
+    return Ok();
+}
+
+async fn spawnAttempt(set: borrow TaskSet<Bad>, outcomes: borrow Channel<u32>, port: u16) -> Result<void, Bad> {
+    let report = outcomes.clone();
+    await set.spawn(async move () => await attempt(report, port))?;
+    return Ok();
+}
+
+async fn startThenSleep(outcomes: borrow Channel<u32>, port: u16) -> Result<u32, Bad> {
+    await Async.tasks(1, Bad.NoMemory, async (set) => await spawnAttempt(set, outcomes, port))?;
+    await Timer.sleep(3600000)?;
+    return Ok(0);
+}
+
+async fn firstReport(outcomes: borrow Channel<u32>) -> Result<u32, Bad> =>
+    match (await outcomes.recvAsync()?) {
+        Some(v) => Ok(v),
+        null => Err(Bad.Failed),
+    };
+
+async fn raced(outcomes: borrow Channel<u32>, port: u16) -> Result<u32, Bad> {
+    let r: Result<Raced<u32>, Bad> =
+        await Async.race(async () => await startThenSleep(outcomes, port), async () => await firstReport(outcomes));
+    let done = r?;
+    return Ok(done.value);
+}
+
+async fn dial(port: u16, connected: borrow Cell<u32>) -> Result<void, Bad> {
+    let outcomes = Channel<u32>.create(1)!;
+    match (await Async.timeout(3000, Bad.Failed, async () => await raced(outcomes, port))) {
+        Ok(v) => { connected.set(connected.get() + v); }
+        Err(_) => {}
+    }
+    return Ok();
+}
+
+async fn dialAll(port: u16, count: u32) -> Result<u32, Bad> {
+    let connected = Cell<u32>.create(0);
+    await Async.scope(Bad.NoMemory, (s) => {
+        for (k in 0..count) {
+            s.spawn(async () => await dial(port, connected));
+        }
+    })?;
+    return Ok(connected.get());
+}
+
+async fn acceptAll(listener: borrow AsyncTcpListener) -> Result<u32, Bad> {
+    var kept = Vector<AsyncTcpStream>.create();
+    loop {
+        let stream = await listener.accept()?;
+        kept.push(stream)!;
+    }
+}
+
+async fn run() -> Result<void, Bad> {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
+    let port = listener.port()?;
+    let started = Timer.now();
+    // The listener's own descriptor and 63 connects make the 64 changes that fill the queue.
+    let r: Result<Raced<u32>, Bad> =
+        await Async.race(async () => await acceptAll(listener), async () => await dialAll(port, DIALS));
+    let done = r?;
+    await AsyncConsole.writeLine(if (done.value == DIALS) "every dial connected" else "some dials failed")?;
+    await AsyncConsole.writeLine(if (Timer.now() - started < 2500) "without waiting for a deadline" else "after a deadline")?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: every dial connected
+// expect-stdout: without waiting for a deadline

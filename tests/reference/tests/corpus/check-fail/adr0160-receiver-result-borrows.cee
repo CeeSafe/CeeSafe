@@ -1,0 +1,16 @@
+// ADR 0160 §2: the result borrows from the receiver, for the method's body and for its caller.
+struct Table {
+    bytes: Vector<u8>;
+
+    // The body may return only what comes from the receiver.
+    fn wrong(borrow this, name: StringView) -> StringView => name; // error[N0245]
+
+    fn prefix(borrow this, name: StringView) -> Slice<u8> => this.bytes[0..name.length];
+}
+
+fn main() {
+    var t = Table { bytes: Vector<u8>.create() };
+    let p = t.prefix("ab");
+    t.bytes.clear(); // error[N0241]
+    Console.writeLine(p.length);
+}

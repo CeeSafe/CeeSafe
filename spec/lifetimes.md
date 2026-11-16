@@ -197,7 +197,8 @@ once the view is used after it.
   through references add the written loans to the holder and to what its mutable loans point to
   (iterated to a fixpoint); calls apply their signature flows; and a loan conflicts only at points
   reachable from where it was created (holders such as a vector receive loans after their own
-  definition). Destroying a value whose `drop` may read its loans is a use of them.
+  definition). Destroying a value whose `drop` may read its loans is a use of them; a `StorageDead` of a local
+  that is certainly not initialised there destroys nothing, and is none (ADR 0160 §3).
   A bound on a region parameter (`region b: a`, `type-system.md` §25.8, ADR 0134) is such a signature flow and
   nothing more: the checker compares no two regions at a call.
 - Index-sensitive disjointness (`a[i]` versus `a[j]`) came in 2d with arrays, conservatively: all elements

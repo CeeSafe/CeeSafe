@@ -207,6 +207,7 @@ typedef struct {
     struct kevent changes[64]; /* kqueue: arming and disarming not yet sent, sent with the next wait */
     int change_count;
     bool pipe_drained;   /* a full change queue's early send drained the wake pipe: the next wait must not block (B16) */
+    bool early_ready;    /* a full change queue's early send readied a task: the next wait must not block either */
 #endif
 #if defined(CEE_URING)
     struct cee_uring *uring;   /* io_uring for socket operations (CEESAFE_REACTOR_URING=1, ADR 0035), or NULL */
@@ -560,7 +561,12 @@ static bool cee_kqueue_call(const struct timespec *limit) {
 static void cee_kqueue_change(int32_t fd, int16_t filter, uint16_t flags) {
     if (cee_exec.change_count == 64) {
         static const struct timespec now = {0, 0};
-        (void)cee_kqueue_call(&now); /* full: send them, taking what is ready (those tasks run after the wait) */
+        /* Full: send them, taking what is ready. The tasks that readies are on the ready list, and the events that
+           readied them are consumed: a wait that follows without running them (the wake pipe's own registration, in
+           cee_wait_reactor, is the 65th change of 64 connects) must not block for events that will not come again. */
+        if (cee_kqueue_call(&now)) {
+            cee_exec.early_ready = true;
+        }
     }
     EV_SET(&cee_exec.changes[cee_exec.change_count], (uintptr_t)fd, filter, flags, 0, 0, NULL);
     cee_exec.change_count += 1;
@@ -2279,7 +2285,15 @@ static bool cee_wait_reactor(int timeout) {
     bool any = false;
 #if defined(CEE_KQUEUE)
     struct timespec limit = {timeout / 1000, (long)(timeout % 1000) * 1000000L};
-    any = cee_kqueue_call(timeout < 0 ? NULL : &limit);
+    /* An early send (cee_kqueue_change, above or while a task parked) took events already: their tasks are ready, or
+       a wake's byte is drained (B16). Either way this call only collects what else there is. */
+    bool early = cee_exec.early_ready || cee_exec.pipe_drained;
+    cee_exec.early_ready = false;
+    if (early) {
+        limit.tv_sec = 0;
+        limit.tv_nsec = 0;
+    }
+    any = cee_kqueue_call(timeout < 0 && !early ? NULL : &limit) || early;
 #elif defined(CEE_EPOLL)
     struct epoll_event events[64];
     int n = epoll_wait(cee_exec.reactor, events, 64, timeout);
@@ -2612,6 +2626,7 @@ static void cee_exec_begin(cee_run *run) {
 #if defined(CEE_KQUEUE)
     cee_exec.change_count = 0;
     cee_exec.pipe_drained = false;
+    cee_exec.early_ready = false;
 #endif
 #if defined(CEE_URING)
     cee_exec.uring = NULL;

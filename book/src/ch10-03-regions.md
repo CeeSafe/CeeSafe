@@ -132,8 +132,10 @@ A function that returns a borrow, a view, or a struct with a region returns some
 parameters. The caller needs to know from which, to know how long the result is good for.
 
 - With **one** borrowed parameter (a `borrow this` counts), the result borrows from it. Nothing is written.
-- With **several**, the result names them: `borrow(a, b) T` for a borrow, and a shared region for views and
-  structs.
+- In a **method** with several, the result borrows from the receiver, and again nothing is written: a lookup such
+  as `fn find(borrow this, name: StringView) -> Slice<u8>?` lends what `this` holds, not its key.
+- Otherwise, with **several**, the result names them: `borrow(a, b) T` for a borrow, and a shared region for views
+  and structs.
 
 <span class="listing-caption"><strong>Listing 10-17</strong>, <code>main.cee</code>: Three functions that return a borrow, with the source implied, named by parameter, and named by region.</span>
 
@@ -176,12 +178,13 @@ apple
 
 ::: tip Rule
 A function with several borrowed parameters names the ones its result borrows from: `borrow(a, b) T`, or one
-region shared by the parameters and the result. With one borrowed parameter, it is implied.
+region shared by the parameters and the result. With one borrowed parameter, it is implied; so is a method's
+receiver among several.
 
-*Specification: `lifetimes.md` §7; `type-system.md` §25.6.*
+*Specification: `lifetimes.md` §7; `type-system.md` §13.5 and §25.6.*
 :::
 
-Leaving the source out where there is one borrowed parameter is the **elision rule**. Each "the result may borrow
+Leaving the source out where there is one borrowed parameter, or in a method, is the **elision rule**. Each "the result may borrow
 from this parameter" is a **flow** of the function. The compiler holds the body to the function's flows, and each
 caller keeps the arguments they name borrowed while it uses the result.
 

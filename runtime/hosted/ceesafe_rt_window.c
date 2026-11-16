@@ -86,6 +86,9 @@
 /* A scripted safe area (`safe:LEFT,TOP,RIGHT,BOTTOM`, ADR 0156): never queued, it updates the window's insets (its
    fields are thousandths of a point) and queues RESIZED. */
 #define CEE_SCRIPT_SAFE 107
+/* A scripted soft keyboard (`keyboard:H`, ADR 0157): never queued, it updates the keyboard's inset and queues
+   RESIZED. */
+#define CEE_SCRIPT_KEYBOARD 108
 
 /* Touches (ADR 0155): WindowTouchPhase's numbers, the touches a window keeps that the program has not taken, the
    fingers it follows at once, and a scripted touch's time: its frame's, at 60 frames a second. */
@@ -298,6 +301,10 @@ struct cee_window {
     /* The safe area (ADR 0156): how far the system covers the content from its left, top, right and bottom edges, in
        points; zero where the system covers nothing. */
     float safe[4];
+    /* The soft keyboard (ADR 0157): how much of the content's bottom it covers, in points, 0 without one; and the
+       kind of keyboard the program asked for (WindowTextKind's number). */
+    float keyboard;
+    int32_t text_kind;
     /* The system's window. */
     void *native;
 };
@@ -334,6 +341,8 @@ uint32_t ceesafe_window_drag_over(void *window, float *position);
 int32_t ceesafe_window_set_touches(void *window, int32_t on);
 int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *position, uint64_t *time);
 void ceesafe_window_safe_area(void *window, float *insets);
+void ceesafe_window_keyboard_inset(void *window, float *inset);
+void ceesafe_window_set_text_kind(void *window, int32_t kind);
 
 static void cee_touch_cancel_all(struct cee_window *w);
 
@@ -395,6 +404,22 @@ static void cee_window_safe_area(struct cee_window *w, float left, float top, fl
         return;
     }
     memcpy(w->safe, next, sizeof next);
+    cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+}
+
+/* The soft keyboard now covers `inset` points of the content's bottom (ADR 0157), never more than the content's
+   height: RESIZED with the size in points, as for a safe area. */
+static void cee_window_keyboard(struct cee_window *w, float inset) {
+    if (!(inset > 0.0f)) {
+        inset = 0.0f;
+    }
+    if (inset > (float)w->height) {
+        inset = (float)w->height; /* a system's number while it turns the screen may be for the other orientation */
+    }
+    if (inset == w->keyboard) {
+        return;
+    }
+    w->keyboard = inset;
     cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
 }
 
@@ -578,7 +603,6 @@ static void cee_touch_cancel_all(struct cee_window *w) {
     }
 }
 
-#if !defined(CEE_WINDOW_UIKIT) && !defined(__ANDROID__) /* mobile text comes with the input method (P4 step 5) */
 /* A typed character: control characters and the private-use function-key range are keys, not text. */
 static void cee_window_text(struct cee_window *w, uint32_t scalar) {
     if (scalar < 0x20u || scalar == 0x7fu || (scalar >= 0xf700u && scalar <= 0xf8ffu) || scalar > 0x10ffffu ||
@@ -587,7 +611,6 @@ static void cee_window_text(struct cee_window *w, uint32_t scalar) {
     }
     cee_window_push(w, CEE_EVENT_TEXT, (int32_t)scalar, 0, 0, 0, 0.0f, 0.0f);
 }
-#endif
 
 /* Grows a byte buffer to hold `length` bytes; 0 when memory ran out (the buffer is then unchanged). */
 static int cee_window_reserve(char **buffer, size_t *capacity, size_t length) {
@@ -648,6 +671,26 @@ static void cee_window_show_composition(struct cee_window *w) {
     w->composition_length = length;
     w->composition_caret = w->composing_caret;
 }
+
+#if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
+static uint32_t cee_window_utf8(const unsigned char *s, size_t n, size_t *i);
+
+/* Text the soft keyboard's input method committed (ADR 0157): TEXT for each scalar of its UTF-8, then no composition,
+   as on the desktop (ADR 0141). */
+static void cee_window_commit(struct cee_window *w, const char *text, size_t length) {
+    size_t i = 0;
+    while (i < length) {
+        cee_window_text(w, cee_window_utf8((const unsigned char *)text, length, &i));
+    }
+    cee_window_compose(w, "", 0, 0);
+}
+
+/* A key of the soft keyboard that is no text (Backspace, Enter): down, then up. */
+static void cee_window_key_tap(struct cee_window *w, int32_t key) {
+    cee_window_push(w, CEE_EVENT_KEY, key, 1, 0, 0, 0.0f, 0.0f);
+    cee_window_push(w, CEE_EVENT_KEY, key, 0, 0, 0, 0.0f, 0.0f);
+}
+#endif
 
 /* Keeps a copy of clipboard text for lib/std to read; 0 when memory ran out. */
 static int cee_window_paste(struct cee_window *w, const char *text, size_t length) {
@@ -1442,6 +1485,12 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
                                      (int32_t)(insets[1] * 1000.0 + 0.5), (int32_t)(insets[2] * 1000.0 + 0.5),
                                      (int32_t)(insets[3] * 1000.0 + 0.5), 0.0, 0.0);
     }
+    if (CEE_IS("keyboard")) { /* keyboard:H, the points of the bottom a soft keyboard covers (ADR 0157) */
+        if (cee_window_numbers(args, args_length, v, 3) != 1 || !(v[0] >= 0.0) || v[0] > CEE_WINDOW_MAX_SIDE) {
+            return 0;
+        }
+        return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_KEYBOARD, 0, 0, 0, 0, v[0], 0.0);
+    }
     if (CEE_IS("close")) {
         return args_length == 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -1618,6 +1667,8 @@ static void cee_window_script_pump(struct cee_window *w) {
             cee_window_resized(w, (uint32_t)e.fields[0], (uint32_t)e.fields[1]);
         } else if (e.kind == CEE_SCRIPT_SCALE) {
             cee_window_rescaled(w, e.x);
+        } else if (e.kind == CEE_SCRIPT_KEYBOARD) {
+            cee_window_keyboard(w, e.x);
         } else if (e.kind == CEE_SCRIPT_SAFE) {
             cee_window_safe_area(w, (float)e.fields[0] / 1000.0f, (float)e.fields[1] / 1000.0f,
                                  (float)e.fields[2] / 1000.0f, (float)e.fields[3] / 1000.0f);
@@ -1775,13 +1826,22 @@ static struct {
     void *main_loop;
     cee_id *gravity_resize;
     cee_id view_class;
+    cee_fn send_super;
+    cee_id field_class;       /* CeeSafeTextField (ADR 0157) */
+    cee_id *keyboard_changed; /* UIKeyboardWillChangeFrameNotification */
+    cee_id *keyboard_end;     /* UIKeyboardFrameEndUserInfoKey */
 } cee_uikit;
 
-/* The one window and its view. */
+/* The one window, its view, and the hidden text field that is its editor while text input is on (ADR 0157), with
+   how many UTF-16 units of the field's text were already given as TEXT. */
 struct cee_ios {
     cee_id window;
     cee_id view;
+    cee_id field;
+    unsigned long sent;
 };
+/* How much of the screen's bottom the soft keyboard covers, in points, as its last notification said. */
+static float cee_ios_keyboard;
 static struct cee_window *cee_ios_shown;
 /* The application's window scene (iOS 13 onward; required from iOS 27, whose UIKit stops an app without one): the
    scene delegate records it when it connects, and the window is made in it. */
@@ -1891,6 +1951,165 @@ static void cee_ios_touches_cancelled(cee_id self, cee_sel cmd, cee_id touches, 
     cee_ios_touches(self, touches, 3);
 }
 
+/* ---- Text input (ADR 0157): a hidden UITextField, CeeSafeTextField, is the editor the keyboard's input method
+   types into. It holds only what is being composed: text without a marked range is committed (TEXT) and taken out of
+   the field at once, the marked text is the composition, Backspace in an empty field and Return are keys. The input
+   method therefore sees no text around the caret, so automatic capitals, correction and spell checking are off. ---- */
+
+typedef struct {
+    unsigned long location, length;
+} cee_ios_range;
+
+static void cee_ios_utf8_range(struct cee_window *w, cee_id text, unsigned long from, unsigned long to, int commit) {
+    if (to <= from) {
+        if (!commit) {
+            cee_window_compose(w, "", 0, 0);
+        }
+        return;
+    }
+    cee_ios_range range = {from, to - from};
+    cee_id part = ((cee_id(*)(cee_id, cee_sel, cee_ios_range))cee_uikit.send)(text, cee_ios_sel("substringWithRange:"),
+                                                                             range);
+    const char *utf8 = part != NULL ? cee_ios_send_cstr(part, "UTF8String") : NULL;
+    if (utf8 == NULL) {
+        return;
+    }
+    if (commit) {
+        cee_window_commit(w, utf8, strlen(utf8));
+    } else {
+        cee_window_compose(w, utf8, strlen(utf8), strlen(utf8));
+    }
+}
+
+/* The field's text changed (UIControlEventEditingChanged). */
+static void cee_ios_field_changed(cee_id self, cee_sel cmd, cee_id sender) {
+    (void)cmd;
+    (void)sender;
+    struct cee_window *w = cee_ios_shown;
+    struct cee_ios *m = w != NULL ? (struct cee_ios *)w->native : NULL;
+    if (m == NULL || m->field != self) {
+        return;
+    }
+    cee_id text = cee_ios_send(self, "text");
+    unsigned long length = text != NULL ? cee_ios_send_ulong(text, "length") : 0ul;
+    cee_id marked = cee_ios_send(self, "markedTextRange");
+    if (marked != NULL) {
+        /* Text before the marked range was committed with it; the marked text is the composition. */
+        long start = ((long (*)(cee_id, cee_sel, cee_id, cee_id))cee_uikit.send)(
+            self, cee_ios_sel("offsetFromPosition:toPosition:"), cee_ios_send(self, "beginningOfDocument"),
+            cee_ios_send(marked, "start"));
+        long end = ((long (*)(cee_id, cee_sel, cee_id, cee_id))cee_uikit.send)(
+            self, cee_ios_sel("offsetFromPosition:toPosition:"), cee_ios_send(self, "beginningOfDocument"),
+            cee_ios_send(marked, "end"));
+        unsigned long from = start > 0 ? (unsigned long)start : 0ul;
+        unsigned long to = end > 0 ? (unsigned long)end : 0ul;
+        if (from > length) {
+            from = length;
+        }
+        if (to > length) {
+            to = length;
+        }
+        if (from > m->sent) {
+            cee_ios_utf8_range(w, text, m->sent, from, 1);
+            m->sent = from;
+        }
+        cee_ios_utf8_range(w, text, from, to, 0);
+        return;
+    }
+    if (length > m->sent) {
+        cee_ios_utf8_range(w, text, m->sent, length, 1);
+    } else {
+        cee_window_compose(w, "", 0, 0); /* the composition was deleted away */
+    }
+    m->sent = 0;
+    if (length > 0) {
+        cee_ios_send_v_id(self, "setText:", cee_ios_string(""));
+    }
+}
+
+/* Backspace: in an empty field it is the program's key; otherwise it edits the composition, which the change tells. */
+static void cee_ios_field_delete(cee_id self, cee_sel cmd) {
+    struct cee_window *w = cee_ios_shown;
+    cee_id text = cee_ios_send(self, "text");
+    if (w != NULL && (text == NULL || cee_ios_send_ulong(text, "length") == 0ul)) {
+        cee_window_key_tap(w, CEE_KEY_BACKSPACE);
+    }
+    struct {
+        cee_id receiver;
+        cee_id super_class;
+    } super = {self, cee_ios_cls("UITextField")};
+    ((void (*)(void *, cee_sel))cee_uikit.send_super)(&super, cmd);
+}
+
+/* Return: the program's Enter key; the field keeps its focus. */
+static signed char cee_ios_field_return(cee_id self, cee_sel cmd, cee_id field) {
+    (void)self;
+    (void)cmd;
+    (void)field;
+    if (cee_ios_shown != NULL) {
+        cee_window_key_tap(cee_ios_shown, CEE_KEY_ENTER);
+    }
+    return 0;
+}
+
+/* The keyboard's frame will change (shown, hidden, another keyboard): its end frame's top against the screen's
+   bottom is how much it covers. The pump gives it to the window. */
+static void cee_ios_field_keyboard(cee_id self, cee_sel cmd, cee_id notification) {
+    (void)self;
+    (void)cmd;
+    cee_id info = cee_ios_send(notification, "userInfo");
+    cee_id value = info != NULL && cee_uikit.keyboard_end != NULL
+                       ? ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(info, cee_ios_sel("objectForKey:"),
+                                                                              *cee_uikit.keyboard_end)
+                       : NULL;
+    if (value == NULL || cee_ios_scene == NULL) {
+        return;
+    }
+    cee_rect frame = cee_ios_send_rect(value, "CGRectValue");
+    cee_rect screen = cee_ios_send_rect(cee_ios_send(cee_ios_scene, "screen"), "bounds");
+    double covered = screen.size.height - frame.origin.y;
+    cee_ios_keyboard = covered > 0.0 && frame.size.height > 0.0 ? (float)covered : 0.0f;
+}
+
+/* The traits of the window's kind of text (WindowTextKind's numbers): UIKeyboardType's default 0, number pad 4,
+   decimal pad 8, email address 7, URL 3; a password is secure text. */
+static void cee_ios_field_traits(struct cee_window *w, cee_id field) {
+    static const long types[6] = {0, 4, 8, 7, 3, 0};
+    int kind = w->text_kind >= 0 && w->text_kind <= 5 ? w->text_kind : 0;
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(field, cee_ios_sel("setKeyboardType:"), types[kind]);
+    ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(field, cee_ios_sel("setSecureTextEntry:"), kind == 5);
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(field, cee_ios_sel("setAutocorrectionType:"), 1);     /* no */
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(field, cee_ios_sel("setAutocapitalizationType:"), 0); /* none */
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(field, cee_ios_sel("setSpellCheckingType:"), 1);      /* no */
+}
+
+/* The window's field, made at the first use: hidden in the view, its own target, delegate and observer. */
+static cee_id cee_ios_field(struct cee_window *w) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m->field != NULL || cee_uikit.field_class == NULL) {
+        return m->field;
+    }
+    cee_id field = cee_ios_send(cee_ios_send(cee_uikit.field_class, "alloc"), "init");
+    if (field == NULL) {
+        return NULL;
+    }
+    ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(field, cee_ios_sel("setHidden:"), 1);
+    cee_ios_send_v_id(field, "setDelegate:", field);
+    ((void (*)(cee_id, cee_sel, cee_id, cee_sel, unsigned long))cee_uikit.send)(
+        field, cee_ios_sel("addTarget:action:forControlEvents:"), field, cee_ios_sel("ceesafeChanged:"),
+        1ul << 17); /* UIControlEventEditingChanged */
+    if (cee_uikit.keyboard_changed != NULL) {
+        ((void (*)(cee_id, cee_sel, cee_id, cee_sel, cee_id, cee_id))cee_uikit.send)(
+            cee_ios_send(cee_ios_cls("NSNotificationCenter"), "defaultCenter"),
+            cee_ios_sel("addObserver:selector:name:object:"), field, cee_ios_sel("ceesafeKeyboard:"),
+            *cee_uikit.keyboard_changed, NULL);
+    }
+    cee_ios_send_v_id(m->view, "addSubview:", field);
+    cee_ios_send_v(field, "release"); /* the view keeps it */
+    m->field = field;
+    return field;
+}
+
 /* The wake source's callback: nothing to do; that a source was handled ends the run loop's wait (ADR 0142). */
 static void cee_ios_wake_perform(void *info) { (void)info; }
 
@@ -1975,6 +2194,22 @@ static int cee_uikit_load(void) {
         cee_uikit.register_class(view);
     }
     cee_uikit.view_class = view;
+    cee_uikit.send_super = cee_ios_symbol(objc, "objc_msgSendSuper");
+    cee_uikit.keyboard_changed = (cee_id *)dlsym(uikit, "UIKeyboardWillChangeFrameNotification");
+    cee_uikit.keyboard_end = (cee_id *)dlsym(uikit, "UIKeyboardFrameEndUserInfoKey");
+    cee_id field = cee_uikit.send_super != NULL
+                       ? cee_uikit.allocate_class(cee_ios_cls("UITextField"), "CeeSafeTextField", 0)
+                       : NULL;
+    if (field != NULL) {
+        cee_uikit.add_method(field, cee_ios_sel("ceesafeChanged:"), (cee_fn)cee_ios_field_changed, "v@:@");
+        cee_uikit.add_method(field, cee_ios_sel("ceesafeKeyboard:"), (cee_fn)cee_ios_field_keyboard, "v@:@");
+        cee_uikit.add_method(field, cee_ios_sel("deleteBackward"), (cee_fn)cee_ios_field_delete, "v@:");
+        cee_uikit.add_method(field, cee_ios_sel("textFieldShouldReturn:"), (cee_fn)cee_ios_field_return, "c@:@");
+        cee_uikit.register_class(field);
+    } else if (cee_uikit.send_super != NULL) {
+        field = cee_ios_cls("CeeSafeTextField"); /* a second runtime in the process registered it */
+    }
+    cee_uikit.field_class = field; /* NULL: no text input, the window still works */
     cee_uikit.state = cee_uikit.rgb != NULL && view != NULL ? 1 : -1;
     return cee_uikit.state == 1;
 }
@@ -2144,6 +2379,15 @@ static void cee_native_close(struct cee_window *w) {
         return;
     }
     void *pool = cee_uikit.pool_push();
+    if (m->field != NULL) {
+        ((void (*)(cee_id, cee_sel, cee_id))cee_uikit.send)(
+            cee_ios_send(cee_ios_cls("NSNotificationCenter"), "defaultCenter"), cee_ios_sel("removeObserver:"),
+            m->field);
+        cee_ios_send_v_id(m->field, "setDelegate:", NULL);
+        cee_ios_send_v(m->field, "removeFromSuperview");
+        m->field = NULL;
+        cee_ios_keyboard = 0.0f;
+    }
     cee_ios_send_v_id(m->window, "setRootViewController:", NULL);
     ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(m->window, cee_ios_sel("setHidden:"), 1);
     cee_ios_send_v(m->window, "release");
@@ -2175,6 +2419,7 @@ static void cee_native_pump(struct cee_window *w) {
            rounded corners leave of the view. */
         cee_insets safe = cee_ios_send_insets(m->view, "safeAreaInsets");
         cee_window_safe_area(w, (float)safe.left, (float)safe.top, (float)safe.right, (float)safe.bottom);
+        cee_window_keyboard(w, cee_ios_keyboard); /* the soft keyboard's inset (ADR 0157) */
         int active = cee_ios_active();
         if (active != w->focused) {
             cee_window_focus(w, active);
@@ -2235,8 +2480,43 @@ static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pi
 
 static void cee_native_cursor(struct cee_window *w) { (void)w; }               /* no pointer on a touch screen */
 static void cee_native_title(struct cee_window *w, const char *title) { (void)w; (void)title; } /* no title bar */
-static void cee_native_text_input(struct cee_window *w, int on) { (void)w; (void)on; } /* P4 step 5 */
-static void cee_native_text_area(struct cee_window *w) { (void)w; }
+/* Text input on makes the field the first responder, which shows the soft keyboard (none with a hardware keyboard);
+   off resigns it, which hides it (ADR 0157). */
+static void cee_native_text_input(struct cee_window *w, int on) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_id field = on ? cee_ios_field(w) : m->field;
+    if (field != NULL) {
+        if (on) {
+            cee_ios_field_traits(w, field);
+            cee_ios_send_v_id(field, "setText:", cee_ios_string(""));
+            m->sent = 0;
+            (void)((signed char (*)(cee_id, cee_sel))cee_uikit.send)(field, cee_ios_sel("becomeFirstResponder"));
+        } else {
+            (void)((signed char (*)(cee_id, cee_sel))cee_uikit.send)(field, cee_ios_sel("resignFirstResponder"));
+            cee_ios_send_v_id(field, "setText:", cee_ios_string(""));
+            m->sent = 0;
+        }
+    }
+    cee_uikit.pool_pop(pool);
+}
+
+static void cee_native_text_area(struct cee_window *w) { (void)w; } /* the field is hidden: nothing follows the caret */
+
+/* A new kind of text: the field's traits, and the keyboard shown again for them. */
+static void cee_native_text_kind(struct cee_window *w) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m == NULL || m->field == NULL) {
+        return; /* the traits are set when text input is turned on */
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_ios_field_traits(w, m->field);
+    cee_ios_send_v(m->field, "reloadInputViews");
+    cee_uikit.pool_pop(pool);
+}
 
 static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
     (void)w;
@@ -5244,6 +5524,7 @@ static void cee_win32_drop_close(struct cee_window *w) {
 #include <android/looper.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
+#include <fcntl.h>
 #include <jni.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -5262,7 +5543,250 @@ static struct {
     ALooper *looper;            /* the program thread's */
     float scale;                /* pixels per point, from the density */
     int32_t safe[4];            /* the window's insets, left, top, right and bottom, in pixels (ADR 0156) */
-} cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f, {0, 0, 0, 0}};
+    /* Text input (ADR 0157). What the program wants (text input on, the kind of text), which the activity's thread
+       applies when a byte arrives on `ui_pipe` (a view may be used only there); the soft keyboard's inset in pixels;
+       and what the input method typed, queued for the program as records: a type (0 committed text, 1 the
+       composition, 2 a key), a length, the bytes. All under the lock. */
+    int want_input, want_kind;
+    int ui_pipe[2];
+    int32_t keyboard;
+    char *typed;
+    size_t typed_length, typed_capacity;
+    /* The input view, an org.ceesafe.window.InputView, with its class and its `apply`: the activity's thread's. */
+    jobject input_view;
+    jclass input_class;
+    jmethodID input_apply;
+    int input_failed;
+} cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f, {0, 0, 0, 0}, 0, 0, {-1, -1}, 0,
+                 NULL, 0, 0, NULL, NULL, NULL, 0};
+
+/* The input view's class as a dex file (ADR 0157), loaded from memory at the first text input. */
+/* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */
+/* InputView.java's SHA-256: e5521628bc571f2301a1e988ebc47a55a16342d0d833455fb5870c2ade6bdd80 */
+static uint8_t cee_android_dex[5300] = {
+    100,101,120,10,48,51,57,0,201,110,206,23,121,192,93,220,23,120,118,25,255,41,1,28,
+    111,198,125,114,245,205,73,95,180,20,0,0,112,0,0,0,120,86,52,18,0,0,0,0,
+    0,0,0,0,240,19,0,0,111,0,0,0,112,0,0,0,28,0,0,0,44,2,0,0,
+    33,0,0,0,156,2,0,0,14,0,0,0,40,4,0,0,51,0,0,0,152,4,0,0,
+    2,0,0,0,48,6,0,0,68,14,0,0,112,6,0,0,2,12,0,0,4,12,0,0,
+    27,12,0,0,50,12,0,0,67,12,0,0,81,12,0,0,102,12,0,0,124,12,0,0,
+    134,12,0,0,142,12,0,0,153,12,0,0,161,12,0,0,170,12,0,0,182,12,0,0,
+    189,12,0,0,192,12,0,0,197,12,0,0,200,12,0,0,204,12,0,0,209,12,0,0,
+    213,12,0,0,237,12,0,0,8,13,0,0,30,13,0,0,55,13,0,0,76,13,0,0,
+    99,13,0,0,128,13,0,0,176,13,0,0,215,13,0,0,3,14,0,0,50,14,0,0,
+    86,14,0,0,118,14,0,0,153,14,0,0,179,14,0,0,202,14,0,0,222,14,0,0,
+    242,14,0,0,14,15,0,0,51,15,0,0,94,15,0,0,126,15,0,0,133,15,0,0,
+    140,15,0,0,143,15,0,0,147,15,0,0,152,15,0,0,156,15,0,0,161,15,0,0,
+    166,15,0,0,170,15,0,0,175,15,0,0,178,15,0,0,182,15,0,0,187,15,0,0,
+    192,15,0,0,196,15,0,0,201,15,0,0,206,15,0,0,210,15,0,0,214,15,0,0,
+    218,15,0,0,231,15,0,0,238,15,0,0,250,15,0,0,5,16,0,0,28,16,0,0,
+    36,16,0,0,57,16,0,0,68,16,0,0,78,16,0,0,90,16,0,0,102,16,0,0,
+    120,16,0,0,136,16,0,0,147,16,0,0,163,16,0,0,188,16,0,0,200,16,0,0,
+    215,16,0,0,232,16,0,0,243,16,0,0,1,17,0,0,10,17,0,0,15,17,0,0,
+    23,17,0,0,29,17,0,0,43,17,0,0,54,17,0,0,66,17,0,0,86,17,0,0,
+    107,17,0,0,128,17,0,0,153,17,0,0,164,17,0,0,185,17,0,0,199,17,0,0,
+    213,17,0,0,227,17,0,0,245,17,0,0,3,18,0,0,28,18,0,0,46,18,0,0,
+    61,18,0,0,68,18,0,0,79,18,0,0,88,18,0,0,98,18,0,0,105,18,0,0,
+    111,18,0,0,14,0,0,0,20,0,0,0,21,0,0,0,22,0,0,0,23,0,0,0,
+    24,0,0,0,25,0,0,0,26,0,0,0,27,0,0,0,28,0,0,0,29,0,0,0,
+    30,0,0,0,31,0,0,0,32,0,0,0,33,0,0,0,34,0,0,0,35,0,0,0,
+    36,0,0,0,37,0,0,0,38,0,0,0,39,0,0,0,40,0,0,0,41,0,0,0,
+    44,0,0,0,52,0,0,0,59,0,0,0,60,0,0,0,61,0,0,0,14,0,0,0,
+    0,0,0,0,0,0,0,0,15,0,0,0,0,0,0,0,92,11,0,0,16,0,0,0,
+    2,0,0,0,0,0,0,0,16,0,0,0,3,0,0,0,0,0,0,0,16,0,0,0,
+    6,0,0,0,0,0,0,0,19,0,0,0,7,0,0,0,100,11,0,0,19,0,0,0,
+    10,0,0,0,108,11,0,0,19,0,0,0,17,0,0,0,116,11,0,0,16,0,0,0,
+    18,0,0,0,0,0,0,0,18,0,0,0,18,0,0,0,92,11,0,0,19,0,0,0,
+    18,0,0,0,124,11,0,0,44,0,0,0,23,0,0,0,0,0,0,0,45,0,0,0,
+    23,0,0,0,132,11,0,0,46,0,0,0,23,0,0,0,140,11,0,0,47,0,0,0,
+    23,0,0,0,148,11,0,0,47,0,0,0,23,0,0,0,156,11,0,0,49,0,0,0,
+    23,0,0,0,164,11,0,0,47,0,0,0,23,0,0,0,124,11,0,0,48,0,0,0,
+    23,0,0,0,172,11,0,0,50,0,0,0,23,0,0,0,180,11,0,0,51,0,0,0,
+    23,0,0,0,188,11,0,0,47,0,0,0,23,0,0,0,196,11,0,0,52,0,0,0,
+    24,0,0,0,0,0,0,0,53,0,0,0,24,0,0,0,132,11,0,0,54,0,0,0,
+    24,0,0,0,92,11,0,0,55,0,0,0,24,0,0,0,204,11,0,0,57,0,0,0,
+    24,0,0,0,212,11,0,0,56,0,0,0,24,0,0,0,220,11,0,0,57,0,0,0,
+    24,0,0,0,228,11,0,0,57,0,0,0,24,0,0,0,236,11,0,0,58,0,0,0,
+    24,0,0,0,244,11,0,0,19,0,0,0,25,0,0,0,252,11,0,0,17,0,0,0,
+    26,0,0,0,132,11,0,0,9,0,0,0,78,0,0,0,9,0,0,0,79,0,0,0,
+    9,0,0,0,80,0,0,0,9,0,0,0,81,0,0,0,20,0,19,0,43,0,0,0,
+    21,0,22,0,109,0,0,0,22,0,0,0,9,0,0,0,22,0,0,0,10,0,0,0,
+    22,0,0,0,11,0,0,0,22,0,0,0,13,0,0,0,22,0,27,0,42,0,0,0,
+    22,0,18,0,65,0,0,0,22,0,0,0,81,0,0,0,22,0,24,0,104,0,0,0,
+    1,0,4,0,75,0,0,0,2,0,7,0,73,0,0,0,4,0,0,0,69,0,0,0,
+    4,0,0,0,72,0,0,0,4,0,0,0,74,0,0,0,5,0,14,0,8,0,0,0,
+    5,0,5,0,91,0,0,0,5,0,25,0,94,0,0,0,6,0,12,0,102,0,0,0,
+    8,0,16,0,8,0,0,0,11,0,26,0,77,0,0,0,11,0,15,0,97,0,0,0,
+    11,0,28,0,103,0,0,0,15,0,8,0,107,0,0,0,16,0,32,0,106,0,0,0,
+    18,0,21,0,8,0,0,0,18,0,31,0,70,0,0,0,18,0,22,0,83,0,0,0,
+    18,0,0,0,85,0,0,0,18,0,1,0,90,0,0,0,18,0,9,0,105,0,0,0,
+    21,0,17,0,8,0,0,0,21,0,29,0,64,0,0,0,21,0,24,0,66,0,0,0,
+    21,0,22,0,68,0,0,0,21,0,23,0,95,0,0,0,21,0,27,0,98,0,0,0,
+    21,0,29,0,99,0,0,0,22,0,10,0,1,0,0,0,22,0,18,0,2,0,0,0,
+    22,0,17,0,3,0,0,0,22,0,30,0,4,0,0,0,22,0,12,0,5,0,0,0,
+    22,0,13,0,6,0,0,0,22,0,11,0,7,0,0,0,22,0,14,0,8,0,0,0,
+    22,0,20,0,63,0,0,0,22,0,11,0,67,0,0,0,22,0,2,0,71,0,0,0,
+    22,0,3,0,76,0,0,0,22,0,27,0,84,0,0,0,22,0,11,0,87,0,0,0,
+    22,0,12,0,88,0,0,0,22,0,13,0,89,0,0,0,22,0,5,0,91,0,0,0,
+    22,0,22,0,92,0,0,0,22,0,6,0,93,0,0,0,22,0,25,0,94,0,0,0,
+    22,0,22,0,96,0,0,0,22,0,19,0,100,0,0,0,22,0,19,0,101,0,0,0,
+    21,0,0,0,16,0,0,0,8,0,0,0,0,0,0,0,255,255,255,255,208,19,0,0,
+    39,19,0,0,0,0,0,0,22,0,0,0,17,0,0,0,5,0,0,0,0,0,0,0,
+    255,255,255,255,224,19,0,0,75,19,0,0,177,19,0,0,3,0,3,0,2,0,0,0,
+    0,0,0,0,23,0,0,0,84,0,5,0,26,2,0,0,113,32,29,0,32,0,114,16,
+    13,0,1,0,12,0,98,1,4,0,110,32,16,0,16,0,12,0,18,1,113,32,33,0,
+    1,0,18,16,15,0,0,0,3,0,3,0,1,0,0,0,0,0,0,0,12,0,0,0,
+    18,0,1,2,53,18,8,0,113,16,32,0,0,0,216,2,2,1,40,249,18,16,15,0,
+    1,0,1,0,1,0,0,0,0,0,0,0,7,0,0,0,84,0,5,0,113,16,30,0,
+    0,0,18,16,15,0,0,0,2,0,2,0,1,0,0,0,0,0,0,0,10,0,0,0,
+    84,0,5,0,113,16,30,0,0,0,18,16,113,16,32,0,0,0,15,0,2,0,2,0,
+    2,0,0,0,0,0,0,0,7,0,0,0,84,0,5,0,113,32,31,0,16,0,18,16,
+    15,0,0,0,3,0,3,0,2,0,0,0,0,0,0,0,26,0,0,0,84,2,5,0,
+    114,16,13,0,1,0,12,1,113,32,29,0,18,0,84,0,5,0,113,16,28,0,0,0,
+    12,0,98,1,4,0,110,32,16,0,16,0,12,0,18,17,113,32,33,0,1,0,15,1,
+    3,0,2,0,3,0,0,0,0,0,0,0,7,0,0,0,18,0,112,48,9,0,33,0,
+    91,18,5,0,14,0,0,0,2,0,2,0,2,0,0,0,0,0,0,0,8,0,0,0,
+    113,0,41,0,0,0,111,32,6,0,16,0,12,0,17,0,3,0,2,0,2,0,0,0,
+    0,0,0,0,24,0,0,0,82,16,12,0,89,32,3,0,20,0,1,0,0,18,89,32,
+    0,0,18,0,89,32,2,0,89,32,1,0,26,2,0,0,91,18,11,0,34,2,21,0,
+    112,32,21,0,18,0,17,2,2,0,2,0,2,0,0,0,0,0,0,0,5,0,0,0,
+    112,32,40,0,16,0,10,0,15,0,0,0,7,0,2,0,3,0,0,0,0,0,0,0,
+    112,0,0,0,110,16,3,0,6,0,10,0,110,16,2,0,6,0,10,1,18,2,18,19,
+    57,1,4,0,1,49,40,2,1,33,19,4,67,0,51,64,44,0,57,1,3,0,15,3,
+    84,86,11,0,110,16,17,0,6,0,10,6,56,6,6,0,113,16,42,0,2,0,40,27,
+    84,86,11,0,110,16,18,0,6,0,10,0,18,241,110,48,19,0,6,1,10,0,110,48,
+    20,0,38,0,12,6,91,86,11,0,98,5,4,0,110,32,16,0,86,0,12,5,113,32,
+    43,0,83,0,15,3,19,4,66,0,50,64,40,0,19,4,160,0,51,64,3,0,40,34,
+    110,16,4,0,6,0,10,6,19,0,32,0,53,6,3,0,15,2,56,1,23,0,112,16,
+    37,0,5,0,34,5,18,0,113,16,14,0,6,0,12,6,112,32,15,0,101,0,98,6,
+    4,0,110,32,16,0,101,0,12,5,113,32,43,0,82,0,15,3,56,1,8,0,112,16,
+    37,0,5,0,113,16,42,0,3,0,15,3,1,0,1,0,0,0,0,0,0,0,0,0,
+    2,0,0,0,18,16,15,0,4,0,3,0,3,0,0,0,0,0,0,0,20,0,0,0,
+    85,16,13,0,56,0,8,0,112,32,40,0,49,0,10,0,57,0,8,0,111,48,7,0,
+    33,3,10,1,56,1,4,0,18,17,15,1,18,1,15,1,1,0,1,0,0,0,0,0,
+    0,0,0,0,3,0,0,0,84,0,11,0,17,0,0,0,2,0,2,0,0,0,0,0,
+    0,0,0,0,3,0,0,0,91,1,11,0,14,0,0,0,1,0,1,0,1,0,0,0,
+    0,0,0,0,4,0,0,0,112,16,37,0,0,0,14,0,1,0,1,0,1,0,0,0,
+    0,0,0,0,4,0,0,0,113,16,42,0,0,0,14,0,2,0,2,0,2,0,0,0,
+    0,0,0,0,4,0,0,0,113,32,43,0,16,0,14,0,1,0,0,0,0,0,0,0,
+    0,0,0,0,26,0,0,0,18,96,35,0,27,0,38,0,7,0,0,0,105,0,10,0,
+    14,0,0,0,0,3,4,0,6,0,0,0,1,0,0,0,2,0,0,0,2,32,0,0,
+    33,0,0,0,17,0,0,0,129,0,0,0,4,0,2,0,2,0,0,0,0,0,0,0,
+    37,0,0,0,112,32,5,0,50,0,98,0,10,0,18,1,68,0,0,1,89,32,12,0,
+    26,0,0,0,91,32,11,0,18,16,110,32,49,0,2,0,110,32,50,0,2,0,32,50,
+    1,0,56,2,13,0,31,3,1,0,110,16,0,0,3,0,12,2,19,3,48,0,110,32,
+    8,0,50,0,14,0,0,0,7,0,3,0,3,0,0,0,0,0,0,0,75,0,0,0,
+    110,16,38,0,4,0,12,0,26,1,82,0,110,32,1,0,16,0,12,0,31,0,11,0,
+    98,1,10,0,18,2,58,6,6,0,33,19,53,54,3,0,40,2,1,38,68,6,1,6,
+    82,65,12,0,50,22,14,0,89,70,12,0,85,70,13,0,56,6,8,0,112,16,37,0,
+    4,0,110,32,11,0,64,0,85,70,13,0,56,5,17,0,57,6,11,0,18,21,92,69,
+    13,0,110,16,48,0,4,0,110,32,11,0,64,0,110,48,12,0,64,2,14,0,56,6,
+    15,0,92,66,13,0,26,5,0,0,91,69,11,0,110,16,39,0,4,0,12,4,110,48,
+    10,0,64,2,14,0,0,0,3,0,1,0,2,0,0,0,0,0,0,0,25,0,0,0,
+    84,32,11,0,110,16,17,0,0,0,10,0,57,0,18,0,84,32,11,0,26,1,0,0,
+    91,33,11,0,98,2,4,0,110,32,16,0,32,0,12,2,18,0,113,32,43,0,32,0,
+    14,0,0,0,2,0,0,0,0,0,0,0,1,0,0,0,7,0,0,0,1,0,0,0,
+    9,0,0,0,1,0,0,0,18,0,0,0,1,0,0,0,22,0,0,0,1,0,0,0,
+    0,0,0,0,2,0,0,0,0,0,25,0,1,0,0,0,2,0,0,0,1,0,0,0,
+    5,0,0,0,2,0,0,0,5,0,24,0,2,0,0,0,22,0,18,0,1,0,0,0,
+    24,0,0,0,2,0,0,0,24,0,0,0,1,0,0,0,26,0,0,0,2,0,0,0,
+    0,0,4,0,2,0,0,0,3,0,0,0,1,0,0,0,4,0,0,0,2,0,0,0,
+    5,0,0,0,2,0,0,0,15,0,0,0,2,0,0,0,22,0,4,0,1,0,0,0,
+    19,0,0,0,21,45,36,36,78,101,115,116,36,102,103,101,116,99,111,109,112,111,115,105,
+    110,103,0,21,45,36,36,78,101,115,116,36,102,112,117,116,99,111,109,112,111,115,105,110,
+    103,0,15,45,36,36,78,101,115,116,36,109,102,105,110,105,115,104,0,12,45,36,36,78,
+    101,115,116,36,109,107,101,121,0,19,45,36,36,78,101,115,116,36,115,109,110,97,116,105,
+    118,101,75,101,121,0,20,45,36,36,78,101,115,116,36,115,109,110,97,116,105,118,101,84,
+    101,120,116,0,8,60,99,108,105,110,105,116,62,0,6,60,105,110,105,116,62,0,9,66,
+    65,67,75,83,80,65,67,69,0,6,67,79,77,77,73,84,0,7,67,79,77,80,79,83,
+    69,0,10,67,111,110,110,101,99,116,105,111,110,0,5,69,78,84,69,82,0,1,73,0,
+    3,73,73,73,0,1,76,0,2,76,73,0,3,76,73,73,0,2,76,76,0,22,76,97,
+    110,100,114,111,105,100,47,97,112,112,47,65,99,116,105,118,105,116,121,59,0,25,76,97,
+    110,100,114,111,105,100,47,99,111,110,116,101,110,116,47,67,111,110,116,101,120,116,59,0,
+    20,76,97,110,100,114,111,105,100,47,111,115,47,73,66,105,110,100,101,114,59,0,23,76,
+    97,110,100,114,111,105,100,47,118,105,101,119,47,75,101,121,69,118,101,110,116,59,0,19,
+    76,97,110,100,114,111,105,100,47,118,105,101,119,47,86,105,101,119,59,0,21,76,97,110,
+    100,114,111,105,100,47,118,105,101,119,47,87,105,110,100,111,119,59,0,27,76,97,110,100,
+    114,111,105,100,47,118,105,101,119,47,87,105,110,100,111,119,73,110,115,101,116,115,59,0,
+    46,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,
+    111,100,47,66,97,115,101,73,110,112,117,116,67,111,110,110,101,99,116,105,111,110,59,0,
+    37,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,
+    111,100,47,69,100,105,116,111,114,73,110,102,111,59,0,42,76,97,110,100,114,111,105,100,
+    47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,111,100,47,73,110,112,117,116,67,
+    111,110,110,101,99,116,105,111,110,59,0,45,76,97,110,100,114,111,105,100,47,118,105,101,
+    119,47,105,110,112,117,116,109,101,116,104,111,100,47,73,110,112,117,116,77,101,116,104,111,
+    100,77,97,110,97,103,101,114,59,0,34,76,100,97,108,118,105,107,47,97,110,110,111,116,
+    97,116,105,111,110,47,69,110,99,108,111,115,105,110,103,67,108,97,115,115,59,0,30,76,
+    100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,73,110,110,101,114,67,
+    108,97,115,115,59,0,33,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,
+    110,47,77,101,109,98,101,114,67,108,97,115,115,101,115,59,0,24,76,106,97,118,97,47,
+    108,97,110,103,47,67,104,97,114,83,101,113,117,101,110,99,101,59,0,21,76,106,97,118,
+    97,47,108,97,110,103,47,67,104,97,114,97,99,116,101,114,59,0,18,76,106,97,118,97,
+    47,108,97,110,103,47,79,98,106,101,99,116,59,0,18,76,106,97,118,97,47,108,97,110,
+    103,47,83,116,114,105,110,103,59,0,26,76,106,97,118,97,47,110,105,111,47,99,104,97,
+    114,115,101,116,47,67,104,97,114,115,101,116,59,0,35,76,106,97,118,97,47,110,105,111,
+    47,99,104,97,114,115,101,116,47,83,116,97,110,100,97,114,100,67,104,97,114,115,101,116,
+    115,59,0,41,76,111,114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,111,119,47,
+    73,110,112,117,116,86,105,101,119,36,67,111,110,110,101,99,116,105,111,110,59,0,30,76,
+    111,114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,111,119,47,73,110,112,117,116,
+    86,105,101,119,59,0,5,84,89,80,69,83,0,5,85,84,70,95,56,0,1,86,0,2,
+    86,73,0,3,86,73,76,0,2,86,76,0,3,86,76,76,0,3,86,76,90,0,2,86,
+    90,0,3,86,90,73,0,1,90,0,2,90,73,0,3,90,73,73,0,3,90,73,76,0,
+    2,90,76,0,3,90,76,73,0,3,90,76,76,0,2,91,66,0,2,91,67,0,2,91,
+    73,0,11,97,99,99,101,115,115,70,108,97,103,115,0,5,97,112,112,108,121,0,10,99,
+    111,109,109,105,116,84,101,120,116,0,9,99,111,109,112,111,115,105,110,103,0,21,100,101,
+    108,101,116,101,83,117,114,114,111,117,110,100,105,110,103,84,101,120,116,0,6,102,105,110,
+    105,115,104,0,19,102,105,110,105,115,104,67,111,109,112,111,115,105,110,103,84,101,120,116,
+    0,9,103,101,116,65,99,116,105,111,110,0,8,103,101,116,66,121,116,101,115,0,10,103,
+    101,116,67,111,110,116,101,120,116,0,10,103,101,116,75,101,121,67,111,100,101,0,16,103,
+    101,116,83,121,115,116,101,109,83,101,114,118,105,99,101,0,14,103,101,116,85,110,105,99,
+    111,100,101,67,104,97,114,0,9,103,101,116,87,105,110,100,111,119,0,14,103,101,116,87,
+    105,110,100,111,119,84,111,107,101,110,0,23,104,105,100,101,83,111,102,116,73,110,112,117,
+    116,70,114,111,109,87,105,110,100,111,119,0,10,105,109,101,79,112,116,105,111,110,115,0,
+    13,105,110,105,116,105,97,108,83,101,108,69,110,100,0,15,105,110,105,116,105,97,108,83,
+    101,108,83,116,97,114,116,0,9,105,110,112,117,116,84,121,112,101,0,12,105,110,112,117,
+    116,95,109,101,116,104,111,100,0,7,105,115,69,109,112,116,121,0,3,107,101,121,0,6,
+    108,101,110,103,116,104,0,4,110,97,109,101,0,12,110,97,116,105,118,101,73,110,115,101,
+    116,115,0,9,110,97,116,105,118,101,75,101,121,0,10,110,97,116,105,118,101,84,101,120,
+    116,0,18,111,102,102,115,101,116,66,121,67,111,100,101,80,111,105,110,116,115,0,19,111,
+    110,65,112,112,108,121,87,105,110,100,111,119,73,110,115,101,116,115,0,19,111,110,67,104,
+    101,99,107,73,115,84,101,120,116,69,100,105,116,111,114,0,23,111,110,67,114,101,97,116,
+    101,73,110,112,117,116,67,111,110,110,101,99,116,105,111,110,0,9,111,110,75,101,121,68,
+    111,119,110,0,19,112,101,114,102,111,114,109,69,100,105,116,111,114,65,99,116,105,111,110,
+    0,12,114,101,113,117,101,115,116,70,111,99,117,115,0,12,114,101,115,116,97,114,116,73,
+    110,112,117,116,0,12,115,101,110,100,75,101,121,69,118,101,110,116,0,16,115,101,116,67,
+    111,109,112,111,115,105,110,103,84,101,120,116,0,12,115,101,116,70,111,99,117,115,97,98,
+    108,101,0,23,115,101,116,70,111,99,117,115,97,98,108,101,73,110,84,111,117,99,104,77,
+    111,100,101,0,16,115,101,116,83,111,102,116,73,110,112,117,116,77,111,100,101,0,13,115,
+    104,111,119,83,111,102,116,73,110,112,117,116,0,5,115,104,111,119,110,0,9,115,117,98,
+    115,116,114,105,110,103,0,7,116,111,67,104,97,114,115,0,8,116,111,83,116,114,105,110,
+    103,0,5,118,97,108,117,101,0,4,118,105,101,119,0,158,1,126,126,68,56,123,34,98,
+    97,99,107,101,110,100,34,58,34,100,101,120,34,44,34,99,111,109,112,105,108,97,116,105,
+    111,110,45,109,111,100,101,34,58,34,114,101,108,101,97,115,101,34,44,34,104,97,115,45,
+    99,104,101,99,107,115,117,109,115,34,58,102,97,108,115,101,44,34,109,105,110,45,97,112,
+    105,34,58,50,56,44,34,115,104,97,45,49,34,58,34,48,56,52,97,56,57,49,50,54,
+    97,101,48,53,57,54,99,53,57,57,49,52,51,100,102,53,55,97,54,53,52,54,52,54,
+    97,102,50,56,51,49,51,34,44,34,118,101,114,115,105,111,110,34,58,34,57,46,50,46,
+    52,45,100,101,118,34,125,0,2,13,2,62,4,26,86,23,12,2,12,1,108,24,22,2,
+    14,1,108,28,1,24,21,0,1,1,6,5,18,21,128,128,4,128,15,22,1,240,12,1,
+    1,176,13,1,1,216,13,1,1,248,13,1,1,156,14,1,1,188,14,5,3,13,5,6,
+    26,1,26,1,26,1,26,1,26,11,2,1,2,1,2,28,200,32,216,18,1,200,32,240,
+    18,1,200,32,136,19,1,200,32,128,16,1,200,32,160,19,1,200,32,184,19,1,136,128,
+    4,208,19,1,129,128,4,148,20,2,2,152,22,3,2,156,16,1,138,2,0,1,138,2,
+    0,1,138,2,0,36,1,240,20,8,1,160,15,1,1,140,18,1,1,192,15,1,1,160,
+    18,4,4,0,4,0,4,1,4,1,0,0,2,0,0,0,25,19,0,0,16,19,0,0,
+    1,0,0,0,31,19,0,0,188,19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    200,19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16,0,0,0,0,0,0,0,
+    1,0,0,0,0,0,0,0,1,0,0,0,111,0,0,0,112,0,0,0,2,0,0,0,
+    28,0,0,0,44,2,0,0,3,0,0,0,33,0,0,0,156,2,0,0,4,0,0,0,
+    14,0,0,0,40,4,0,0,5,0,0,0,51,0,0,0,152,4,0,0,6,0,0,0,
+    2,0,0,0,48,6,0,0,1,32,0,0,22,0,0,0,112,6,0,0,1,16,0,0,
+    21,0,0,0,92,11,0,0,2,32,0,0,111,0,0,0,2,12,0,0,4,32,0,0,
+    3,0,0,0,16,19,0,0,0,32,0,0,2,0,0,0,39,19,0,0,5,32,0,0,
+    1,0,0,0,177,19,0,0,3,16,0,0,2,0,0,0,188,19,0,0,6,32,0,0,
+    2,0,0,0,208,19,0,0,0,16,0,0,1,0,0,0,240,19,0,0,
+};
+/* END android dex */
 
 /* The one window: the activity's state is cee_android's, and the window's touches are the shared layer's (ADR 0155);
    this marks the window as the system's. */
@@ -5337,6 +5861,7 @@ static void cee_android_read_insets(ANativeActivity *activity) {
         return;
     }
     int32_t safe[4] = {0, 0, 0, 0};
+    int32_t keyboard = 0;
     int found = 0;
     jobject window = cee_android_object(env, activity->clazz, "getWindow", "()Landroid/view/Window;");
     jobject decor = cee_android_object(env, window, "getDecorView", "()Landroid/view/View;");
@@ -5358,6 +5883,15 @@ static void cee_android_read_insets(ANativeActivity *activity) {
             found = both != NULL && cee_android_field(env, both, "left", &safe[0]) &&
                     cee_android_field(env, both, "top", &safe[1]) && cee_android_field(env, both, "right", &safe[2]) &&
                     cee_android_field(env, both, "bottom", &safe[3]);
+            /* The soft keyboard (ADR 0157): WindowInsets.Type.ime(), 8. */
+            jobject ime = (*env)->CallObjectMethod(env, insets, get, (jint)8);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                ime = NULL;
+            }
+            if (ime == NULL || !cee_android_field(env, ime, "bottom", &keyboard)) {
+                keyboard = 0;
+            }
         } else {
             found = cee_android_int(env, insets, "getSystemWindowInsetLeft", &safe[0]) &&
                     cee_android_int(env, insets, "getSystemWindowInsetTop", &safe[1]) &&
@@ -5380,7 +5914,201 @@ static void cee_android_read_insets(ANativeActivity *activity) {
         for (int k = 0; k < 4; k++) {
             cee_android.safe[k] = safe[k] > 0 ? safe[k] : 0;
         }
+        cee_android.keyboard = keyboard > 0 ? keyboard : 0;
         pthread_mutex_unlock(&cee_android.lock);
+    }
+}
+
+/* ---- Text input (ADR 0157), on the activity's thread ---- */
+
+/* What the input method typed, queued for the program: a record of a type, a length and the bytes. */
+static void cee_android_typed(int type, const char *bytes, size_t length) {
+    if (length > 65535u) {
+        length = 0; /* no input method sends such a text at once */
+    }
+    pthread_mutex_lock(&cee_android.lock);
+    size_t needed = cee_android.typed_length + 3u + length;
+    if (needed > cee_android.typed_capacity) {
+        size_t next = cee_android.typed_capacity < 256u ? 256u : cee_android.typed_capacity;
+        while (next < needed) {
+            next *= 2u;
+        }
+        char *grown = (char *)ceesafe_platform_realloc(cee_android.typed, next);
+        if (grown != NULL) {
+            cee_android.typed = grown;
+            cee_android.typed_capacity = next;
+        }
+    }
+    if (needed <= cee_android.typed_capacity) {
+        char *at = cee_android.typed + cee_android.typed_length;
+        at[0] = (char)type;
+        at[1] = (char)(length & 0xffu);
+        at[2] = (char)(length >> 8);
+        if (length > 0) {
+            memcpy(at + 3, bytes, length);
+        }
+        cee_android.typed_length = needed;
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* InputView.nativeText: text committed (kind 0) or being composed (kind 1), as UTF-8 bytes. */
+static void JNICALL cee_android_native_text(JNIEnv *env, jclass type, jint kind, jbyteArray utf8) {
+    (void)type;
+    jsize length = utf8 != NULL ? (*env)->GetArrayLength(env, utf8) : 0;
+    jbyte *bytes = length > 0 ? (*env)->GetByteArrayElements(env, utf8, NULL) : NULL;
+    cee_android_typed(kind == 1 ? 1 : 0, (const char *)bytes, bytes != NULL ? (size_t)length : 0u);
+    if (bytes != NULL) {
+        (*env)->ReleaseByteArrayElements(env, utf8, bytes, JNI_ABORT);
+    }
+}
+
+/* InputView.nativeKey: the keyboard's Backspace (0) or Enter (1). */
+static void JNICALL cee_android_native_key(JNIEnv *env, jclass type, jint key) {
+    (void)env;
+    (void)type;
+    char which = key == 1 ? 1 : 0;
+    cee_android_typed(2, &which, 1);
+}
+
+/* InputView.nativeInsets: the window's insets were applied again, the keyboard's among them. */
+static void JNICALL cee_android_native_insets(JNIEnv *env, jclass type) {
+    (void)env;
+    (void)type;
+    pthread_mutex_lock(&cee_android.lock);
+    ANativeActivity *activity = cee_android.activity;
+    pthread_mutex_unlock(&cee_android.lock);
+    if (activity != NULL) {
+        cee_android_read_insets(activity);
+        cee_android_wake_program();
+    }
+}
+
+static int cee_android_failed(JNIEnv *env) {
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 1;
+    }
+    return 0;
+}
+
+/* The input view, made at the first use: its class loaded from the embedded dex (InMemoryDexClassLoader, with the
+   activity's class loader as its parent), its natives registered, one view added to the activity's window, 1 by 1.
+   A failure is final: text input then does nothing, and the window still works. */
+static int cee_android_input_load(ANativeActivity *activity) {
+    JNIEnv *env = activity->env;
+    if (cee_android.input_view != NULL) {
+        return 1;
+    }
+    if (cee_android.input_failed || (*env)->PushLocalFrame(env, 32) != 0) {
+        (void)cee_android_failed(env);
+        return 0;
+    }
+    cee_android.input_failed = 1;
+    jobject buffer = (*env)->NewDirectByteBuffer(env, cee_android_dex, (jlong)sizeof cee_android_dex);
+    jobject parent = cee_android_object(env, activity->clazz, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jclass loader_class = (*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader");
+    jmethodID make = loader_class != NULL ? (*env)->GetMethodID(env, loader_class, "<init>",
+                                                                "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V")
+                                          : NULL;
+    jobject loader = make != NULL && buffer != NULL && parent != NULL
+                         ? (*env)->NewObject(env, loader_class, make, buffer, parent)
+                         : NULL;
+    jclass view_class = NULL;
+    if (!cee_android_failed(env) && loader != NULL) {
+        jmethodID load = (*env)->GetMethodID(env, (*env)->GetObjectClass(env, loader), "loadClass",
+                                             "(Ljava/lang/String;)Ljava/lang/Class;");
+        jstring name = (*env)->NewStringUTF(env, "org.ceesafe.window.InputView");
+        view_class = load != NULL && name != NULL ? (jclass)(*env)->CallObjectMethod(env, loader, load, name) : NULL;
+    }
+    if (!cee_android_failed(env) && view_class != NULL) {
+        /* ISO C has no function-to-object pointer conversion; a JNINativeMethod's fnPtr is a void *. */
+        void (JNICALL *text)(JNIEnv *, jclass, jint, jbyteArray) = cee_android_native_text;
+        void (JNICALL *key)(JNIEnv *, jclass, jint) = cee_android_native_key;
+        void (JNICALL *applied)(JNIEnv *, jclass) = cee_android_native_insets;
+        JNINativeMethod natives[3] = {{"nativeText", "(I[B)V", NULL}, {"nativeKey", "(I)V", NULL},
+                                      {"nativeInsets", "()V", NULL}};
+        memcpy(&natives[0].fnPtr, &text, sizeof text);
+        memcpy(&natives[1].fnPtr, &key, sizeof key);
+        memcpy(&natives[2].fnPtr, &applied, sizeof applied);
+        jmethodID create = (*env)->GetMethodID(env, view_class, "<init>", "(Landroid/content/Context;)V");
+        jmethodID apply = (*env)->GetMethodID(env, view_class, "apply", "(ZI)V");
+        jclass params_class = (*env)->FindClass(env, "android/view/ViewGroup$LayoutParams");
+        jmethodID params_make = params_class != NULL ? (*env)->GetMethodID(env, params_class, "<init>", "(II)V") : NULL;
+        jmethodID add = (*env)->GetMethodID(env, (*env)->GetObjectClass(env, activity->clazz), "addContentView",
+                                            "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
+        if (!cee_android_failed(env) && create != NULL && apply != NULL && params_make != NULL && add != NULL &&
+            (*env)->RegisterNatives(env, view_class, natives, 3) == 0) {
+            jobject view = (*env)->NewObject(env, view_class, create, activity->clazz);
+            jobject params = (*env)->NewObject(env, params_class, params_make, (jint)1, (jint)1);
+            if (!cee_android_failed(env) && view != NULL && params != NULL) {
+                (*env)->CallVoidMethod(env, activity->clazz, add, view, params);
+                if (!cee_android_failed(env)) {
+                    cee_android.input_view = (*env)->NewGlobalRef(env, view);
+                    cee_android.input_class = (jclass)(*env)->NewGlobalRef(env, view_class);
+                    cee_android.input_apply = apply;
+                    cee_android.input_failed = cee_android.input_view == NULL;
+                }
+            }
+        }
+    }
+    (void)cee_android_failed(env);
+    (void)(*env)->PopLocalFrame(env, NULL);
+    if (cee_android.input_failed) {
+        __android_log_write(ANDROID_LOG_WARN, "ceesafe", "text input: the input view could not be made");
+    }
+    return cee_android.input_view != NULL;
+}
+
+/* The activity's looper's callback for `ui_pipe`: applies what the program wants of text input. */
+static int cee_android_ui(int fd, int events, void *data) {
+    (void)events;
+    (void)data;
+    char drained[16];
+    while (read(fd, drained, sizeof drained) == (ssize_t)sizeof drained) {
+        /* every byte asks for the same thing: the latest wish */
+    }
+    pthread_mutex_lock(&cee_android.lock);
+    ANativeActivity *activity = cee_android.activity;
+    int on = cee_android.want_input, kind = cee_android.want_kind;
+    pthread_mutex_unlock(&cee_android.lock);
+    if (activity == NULL || activity->env == NULL || (!on && cee_android.input_view == NULL)) {
+        return 1;
+    }
+    if (cee_android_input_load(activity)) {
+        JNIEnv *env = activity->env;
+        (*env)->CallVoidMethod(env, cee_android.input_view, cee_android.input_apply, (jboolean)(on != 0), (jint)kind);
+        (void)cee_android_failed(env);
+    }
+    return 1; /* stay registered */
+}
+
+/* The activity ends: its view goes with it, and a new activity makes a new one. */
+static void cee_android_input_drop(ANativeActivity *activity) {
+    JNIEnv *env = activity->env;
+    if (env != NULL && cee_android.input_view != NULL) {
+        (*env)->DeleteGlobalRef(env, cee_android.input_view);
+        (*env)->DeleteGlobalRef(env, cee_android.input_class);
+    }
+    cee_android.input_view = NULL;
+    cee_android.input_class = NULL;
+    cee_android.input_apply = NULL;
+    cee_android.input_failed = 0;
+}
+
+/* From the program's thread: the wish recorded, and the activity's thread asked to apply it. */
+static void cee_android_wish(int on, int kind) {
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.want_input = on;
+    cee_android.want_kind = kind;
+    int fd = cee_android.ui_pipe[1];
+    pthread_mutex_unlock(&cee_android.lock);
+    if (fd >= 0) {
+        char byte = 1;
+        if (write(fd, &byte, 1) < 0) {
+            /* the pipe is full of wishes already: the activity's thread will read the latest */
+        }
     }
 }
 
@@ -5474,6 +6202,7 @@ static void cee_android_focus_changed(ANativeActivity *activity, int focused) {
 
 /* The activity ends (Back, or the system): the program gets Closed, and nothing touches the activity again. */
 static void cee_android_destroy(ANativeActivity *activity) {
+    cee_android_input_drop(activity);
     pthread_mutex_lock(&cee_android.lock);
     cee_android.destroyed = 1;
     if (cee_android.activity == activity) {
@@ -5571,6 +6300,13 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     activity->callbacks->onContentRectChanged = cee_android_content_rect;
     activity->callbacks->onConfigurationChanged = cee_android_configuration;
     cee_android_read_scale(activity);
+    /* The activity's thread's looper takes what the program asks of text input (ADR 0157). */
+    ALooper *ui = ALooper_forThread();
+    if (ui != NULL && cee_android.ui_pipe[0] < 0 && pipe(cee_android.ui_pipe) == 0) {
+        (void)fcntl(cee_android.ui_pipe[0], F_SETFL, O_NONBLOCK);
+        (void)fcntl(cee_android.ui_pipe[1], F_SETFL, O_NONBLOCK);
+        ALooper_addFd(ui, cee_android.ui_pipe[0], ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, cee_android_ui, NULL);
+    }
     static int started;
     if (started) {
         return; /* the activity again, in the same process: the program is still running */
@@ -5647,6 +6383,9 @@ static void cee_native_close(struct cee_window *w) {
     w->native = NULL;
 }
 
+/* Set while the input events are read, under the lock: the keyboard is to be asked for again once it is released. */
+static int cee_android_again;
+
 /* One input event: a motion's pointers, each a finger under its pointer id + 1, in points, at the event's time (the
    monotonic clock's nanoseconds) (ADR 0155): a batched move's historical samples first, so a fling's velocity is not
    undersampled. A mouse or a trackpad is the pointer whether touches are on or not. Whether it was taken. */
@@ -5691,6 +6430,11 @@ static int cee_android_event(struct cee_window *w, AInputEvent *event) {
                 cee_touch_ended(w, (uintptr_t)AMotionEvent_getPointerId(event, at) + 1u,
                                 AMotionEvent_getX(event, at) / scale, AMotionEvent_getY(event, at) / scale, time, 0);
             }
+            if (w->text_input == 1 && w->keyboard == 0.0f) {
+                /* Text input is on and no keyboard shows: the user hid it (Back), and a tap asks for it again
+                   (ADR 0157). With a hardware keyboard this shows nothing. */
+                cee_android_again = 1;
+            }
         } else if (kind == AMOTION_EVENT_ACTION_CANCEL) {
             for (size_t k = 0; k < count; k++) {
                 cee_touch_ended(w, (uintptr_t)AMotionEvent_getPointerId(event, k) + 1u,
@@ -5722,6 +6466,12 @@ static void cee_native_pump(struct cee_window *w) {
     float density = cee_android.scale;
     int32_t safe[4];
     memcpy(safe, cee_android.safe, sizeof safe);
+    int32_t keyboard = cee_android.keyboard;
+    char *typed = cee_android.typed;
+    size_t typed_length = cee_android.typed_length;
+    cee_android.typed = NULL; /* taken: the activity's thread starts a new queue */
+    cee_android.typed_length = 0;
+    cee_android.typed_capacity = 0;
     cee_android.destroyed = 0;
     /* The queue is read under the lock: the activity's thread detaches and disposes of it under the same lock. */
     AInputQueue *queue = cee_android.attached;
@@ -5736,8 +6486,31 @@ static void cee_native_pump(struct cee_window *w) {
     }
     pthread_mutex_unlock(&cee_android.lock);
     if (w == NULL || w->native == NULL) {
+        ceesafe_platform_free(typed);
         return;
     }
+    if (cee_android_again) {
+        cee_android_again = 0;
+        cee_android_wish(1, w->text_kind);
+    }
+    /* What the input method typed (ADR 0157): committed text, the composition, Backspace and Enter. */
+    for (size_t at = 0; at + 3u <= typed_length;) {
+        int type = typed[at];
+        size_t length = (size_t)(unsigned char)typed[at + 1] | ((size_t)(unsigned char)typed[at + 2] << 8);
+        const char *bytes = typed + at + 3;
+        if (at + 3u + length > typed_length) {
+            break;
+        }
+        if (type == 0) {
+            cee_window_commit(w, bytes, length);
+        } else if (type == 1) {
+            cee_window_compose(w, bytes, length, length);
+        } else if (length == 1) {
+            cee_window_key_tap(w, bytes[0] == 1 ? CEE_KEY_ENTER : CEE_KEY_BACKSPACE);
+        }
+        at += 3u + length;
+    }
+    ceesafe_platform_free(typed);
     if (focused != w->focused) {
         cee_window_focus(w, focused);
     }
@@ -5748,6 +6521,7 @@ static void cee_native_pump(struct cee_window *w) {
     }
     cee_window_safe_area(w, (float)safe[0] / scale, (float)safe[1] / scale, (float)safe[2] / scale,
                          (float)safe[3] / scale);
+    cee_window_keyboard(w, (float)keyboard / scale);
     if (destroyed) {
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
     }
@@ -5799,8 +6573,11 @@ static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pi
 
 static void cee_native_cursor(struct cee_window *w) { (void)w; }
 static void cee_native_title(struct cee_window *w, const char *title) { (void)w; (void)title; }
-static void cee_native_text_input(struct cee_window *w, int on) { (void)w; (void)on; } /* P4 step 5 */
-static void cee_native_text_area(struct cee_window *w) { (void)w; }
+/* Text input on shows the soft keyboard on the window's input view, off hides it; a new kind of text shows the
+   keyboard for it (ADR 0157). */
+static void cee_native_text_input(struct cee_window *w, int on) { cee_android_wish(on, w->text_kind); }
+static void cee_native_text_kind(struct cee_window *w) { cee_android_wish(w->text_input == 1, w->text_kind); }
+static void cee_native_text_area(struct cee_window *w) { (void)w; } /* the input view has no place of its own */
 
 /* Android's clipboard is a Java service (ClipboardManager): not covered yet (ADR 0154 §4). */
 static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
@@ -7737,6 +8514,23 @@ void ceesafe_window_set_text_input(void *window, int32_t on) {
 #if !defined(CEE_WINDOW_NO_NATIVE)
     if (!w->scripted) {
         cee_native_text_input(w, value);
+    }
+#endif
+}
+
+/* The soft keyboard's inset, in points (ADR 0157). */
+void ceesafe_window_keyboard_inset(void *window, float *inset) { *inset = ((struct cee_window *)window)->keyboard; }
+
+/* The kind of keyboard text input shows (ADR 0157): WindowTextKind's number, 0 to 5. Only iOS and Android have one. */
+void ceesafe_window_set_text_kind(void *window, int32_t kind) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (kind < 0 || kind > 5 || kind == w->text_kind) {
+        return;
+    }
+    w->text_kind = kind;
+#if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
+    if (!w->scripted) {
+        cee_native_text_kind(w);
     }
 #endif
 }

@@ -63,6 +63,7 @@
 - [enum WindowHandle](#enum-windowhandle)
 - [struct WindowSize](#struct-windowsize)
 - [struct WindowInsets](#struct-windowinsets)
+- [enum WindowTextKind](#enum-windowtextkind)
 - [struct WindowBox](#struct-windowbox)
 - [enum WindowButton](#enum-windowbutton)
 - [struct WindowModifiers](#struct-windowmodifiers)
@@ -2703,6 +2704,22 @@ public struct WindowInsets {
 
 How far the system covers a window's content from each of its edges, in points (`Window.safeArea`, ADR 0156).
 
+## enum WindowTextKind
+
+```ceesafe
+public enum WindowTextKind {
+    Text,
+    Number,
+    Decimal,
+    Email,
+    Url,
+    Password,
+}
+```
+
+The kind of text a text field takes, which chooses the soft keyboard a phone shows for it
+(`Window.setTextInputKind`, ADR 0157).
+
 ## struct WindowBox
 
 ```ceesafe
@@ -2992,6 +3009,29 @@ touched inside the insets. All zero where the system covers nothing: on desktop 
 window until its script says otherwise. A change gives `Resized`, as a change of scale does.
 Safety: the runtime writes the four insets.
 
+### Window.keyboardInset
+
+```ceesafe
+public fn keyboardInset(borrow this) -> f32
+```
+
+How much of the content's bottom the soft keyboard covers, in points (ADR 0157): 0 when none shows, with a
+hardware keyboard, and on desktop systems. It is not part of `safeArea()`, and it includes the part of the safe
+area's bottom inset that the keyboard covers: a program keeps clear of the larger of the two. A change gives
+`Resized`, as a new safe area does.
+Safety: the runtime writes the inset.
+
+### Window.setTextInputKind
+
+```ceesafe
+public fn setTextInputKind(borrow mut this, kind: WindowTextKind)
+```
+
+The kind of text the focused field takes (ADR 0157): which soft keyboard `setTextInput(true)` shows on iOS and
+Android, at once when it is already shown; for `Password`, the input method neither learns nor suggests.
+Desktop systems ignore it.
+Safety: the runtime only reads the number.
+
 ### Window.setCursor
 
 ```ceesafe
@@ -3064,7 +3104,8 @@ public fn setTextInput(borrow mut this, on: bool)
 Turns the system's input method on for this window, when a text field has focus, or off (ADR 0141). While it is
 on, the input method may take keys: it composes text (`Composition` events, `composition()`) and commits it as
 `Text` events, and a key it takes gives no `Key` event. Turning it off ends a composition. Until the first call,
-the window takes text as it always did.
+the window takes text as it always did. On iOS and Android, on also shows the soft keyboard and off hides it
+(ADR 0157); its Backspace and Enter are `Key` events.
 Safety: the runtime only reads the flag.
 
 ### Window.setTextInputArea

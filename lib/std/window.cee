@@ -89,6 +89,10 @@ extern "C" {
     fn ceesafe_window_touch(window: *mut void, id: *mut u32, phase: *mut i32, position: *mut f32, time: *mut u64) -> i32;
     @effects()
     fn ceesafe_window_safe_area(window: *mut void, insets: *mut f32);
+    @effects()
+    fn ceesafe_window_keyboard_inset(window: *mut void, inset: *mut f32);
+    @effects()
+    fn ceesafe_window_set_text_kind(window: *mut void, kind: i32);
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -144,6 +148,23 @@ public struct WindowInsets {
     public top: f32;
     public right: f32;
     public bottom: f32;
+}
+
+/// The kind of text a text field takes, which chooses the soft keyboard a phone shows for it
+/// (`Window.setTextInputKind`, ADR 0157).
+public enum WindowTextKind {
+    /// Any text: the system's usual keyboard.
+    Text,
+    /// Whole numbers: digits.
+    Number,
+    /// Numbers with a decimal separator.
+    Decimal,
+    /// An email address.
+    Email,
+    /// A web address.
+    Url,
+    /// A password: the input method neither learns nor suggests what is typed.
+    Password,
 }
 
 /// A part of an image that changed (`Window.presentChanged`), in the image's pixels; or the text input area
@@ -455,6 +476,33 @@ public struct Window {
         return WindowInsets { left: insets[0], top: insets[1], right: insets[2], bottom: insets[3] };
     }
 
+    /// How much of the content's bottom the soft keyboard covers, in points (ADR 0157): 0 when none shows, with a
+    /// hardware keyboard, and on desktop systems. It is not part of `safeArea()`, and it includes the part of the safe
+    /// area's bottom inset that the keyboard covers: a program keeps clear of the larger of the two. A change gives
+    /// `Resized`, as a new safe area does.
+    /// Safety: the runtime writes the inset.
+    public fn keyboardInset(borrow this) -> f32 {
+        var inset: f32 = 0.0;
+        unsafe { ceesafe_window_keyboard_inset(this.raw, borrow mut inset as *mut f32); }
+        return inset;
+    }
+
+    /// The kind of text the focused field takes (ADR 0157): which soft keyboard `setTextInput(true)` shows on iOS and
+    /// Android, at once when it is already shown; for `Password`, the input method neither learns nor suggests.
+    /// Desktop systems ignore it.
+    /// Safety: the runtime only reads the number.
+    public fn setTextInputKind(borrow mut this, kind: WindowTextKind) {
+        let number = match (kind) {
+            WindowTextKind.Text => 0,
+            WindowTextKind.Number => 1,
+            WindowTextKind.Decimal => 2,
+            WindowTextKind.Email => 3,
+            WindowTextKind.Url => 4,
+            WindowTextKind.Password => 5,
+        };
+        unsafe { ceesafe_window_set_text_kind(this.raw, number); }
+    }
+
     /// The pointer's shape while it is over the content.
     /// Safety: the runtime only reads the cursor's number.
     public fn setCursor(borrow mut this, cursor: WindowCursor) {
@@ -512,7 +560,8 @@ public struct Window {
     /// Turns the system's input method on for this window, when a text field has focus, or off (ADR 0141). While it is
     /// on, the input method may take keys: it composes text (`Composition` events, `composition()`) and commits it as
     /// `Text` events, and a key it takes gives no `Key` event. Turning it off ends a composition. Until the first call,
-    /// the window takes text as it always did.
+    /// the window takes text as it always did. On iOS and Android, on also shows the soft keyboard and off hides it
+    /// (ADR 0157); its Backspace and Enter are `Key` events.
     /// Safety: the runtime only reads the flag.
     public fn setTextInput(borrow mut this, on: bool) {
         unsafe { ceesafe_window_set_text_input(this.raw, if (on) 1 else 0); }

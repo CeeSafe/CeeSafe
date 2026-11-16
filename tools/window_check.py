@@ -61,6 +61,10 @@ that opened a window would open one on the developer's screen:
    safeArea with a Resized at the content's size, the same one again gives nothing, and one given with a resize comes
    after it; a safe area of three or five numbers or with a negative one is a malformed script, and the interpreter
    answers Unsupported. With --display, a real desktop window's safe area is zero.
+12. the soft keyboard (ADR 0157): a scripted window's keyboard inset is zero until its script gives one; a new one
+   shows in keyboardInset with a Resized at the content's size, the same one again gives nothing, one taller than the
+   content is the content's height, and setTextInputKind is accepted; a keyboard of two numbers or a negative one is
+   a malformed script. With --display, a real desktop window's keyboard inset is zero.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1609,6 +1613,66 @@ fn main() -> i32 {
 }
 """
 
+# The soft keyboard (ADR 0157): the script's frames 0 to 4, each frame's events, then the keyboard's inset; with "real",
+# a real window's inset.
+KEYBOARD = r"""
+fn inset(window: borrow Window) {
+    Console.write("keyboard ");
+    Console.writeLine(window.keyboardInset());
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check keyboard", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    window.setTextInputKind(WindowTextKind.Email);
+    window.setTextInput(true);
+    if (Process.argument(1) == Some("real")) {
+        inset(window);
+        return 0;
+    }
+    let pixels = [0u32; 1200];
+    for (frame in 0..5) {
+        loop {
+            match (window.nextEvent()) {
+                Some(e) => {
+                    match (e) {
+                        WindowEvent.Resized(size) => {
+                            Console.write("resized ");
+                            Console.write(size.width);
+                            Console.write(" ");
+                            Console.writeLine(size.height);
+                        }
+                        WindowEvent.Text(c) => {
+                            Console.write("text ");
+                            Console.writeLine(c);
+                        }
+                        WindowEvent.Closed => { Console.writeLine("closed"); }
+                        _ => { Console.writeLine("other"); }
+                    }
+                }
+                null => { break; }
+            }
+        }
+        inset(window);
+        Console.write("frame ");
+        Console.writeLine(frame);
+        window.present(pixels[..], 40, 30)!;
+    }
+    return 0;
+}
+"""
+
+# Its script, and what KEYBOARD prints for it: none at first; a keyboard (a Resized at the same size) and a typed
+# letter; the same again (nothing); one taller than the content is the content's height; none; the close.
+KEYBOARD_SCRIPT = "1:keyboard:12.5;1:type:a;2:keyboard:12.5;3:keyboard:99;4:keyboard:0;4:close"
+KEYBOARD_EXPECTED = ["keyboard 0", "frame 0",
+                     "resized 40 30", "text 97", "keyboard 12.5", "frame 1",
+                     "keyboard 12.5", "frame 2",
+                     "resized 40 30", "keyboard 30", "frame 3",
+                     "resized 40 30", "closed", "keyboard 0", "frame 4"]
+
 # Its script, and what SAFE prints for it: none at first; a phone's portrait insets (a Resized at the same size); the
 # same again (nothing); a rotation with new insets (the resize's Resized, then the safe area's); none again; the close.
 SAFE_SCRIPT = "1:safe:0,47,0,34;2:safe:0,47,0,34;3:resize:60,30;3:safe:47.5,0,47.5,21;4:safe:0,0,0,0;5:close"
@@ -2930,6 +2994,24 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        _, keyboard = build(compiler, KEYBOARD, work, "window_check_keyboard")
+        keyboard_scripts = {}
+        for name, content in (("trace", KEYBOARD_SCRIPT), ("two", "0:keyboard:1,2"), ("negative", "0:keyboard:-1")):
+            keyboard_scripts[name] = os.path.join(work, "keyboard-" + name + ".txt")
+            with open(keyboard_scripts[name], "w", encoding="utf-8") as f:
+                f.write(content)
+        keyboard_cases = [
+            ("the soft keyboard", [keyboard], "trace", KEYBOARD_EXPECTED, 0),
+            ("a keyboard of two numbers", [errors], "two", ["4"], 0),
+            ("a negative keyboard", [errors], "negative", ["4"], 0),
+        ]
+        for what, command, name, want, status in keyboard_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": keyboard_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -2941,7 +3023,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -2968,6 +3050,11 @@ def main():
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "safe 0 0 0 0":
                 problems.append(f"a real desktop window's safe area: expected 'safe 0 0 0 0', got "
+                                f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            r = run([keyboard, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "keyboard 0":
+                problems.append(f"a real desktop window's keyboard inset: expected 'keyboard 0', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             r = run([any_program, "real"], {}, work)
             checks += 1

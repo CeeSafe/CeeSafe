@@ -3180,7 +3180,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3216,7 +3216,8 @@ Diagnostics: none new.
   one window come in order. `WindowEvent`:
   - `Closed`: the user asked to close the window, which stays open until it is dropped;
   - `Resized(WindowSize)`, in points. It is also reported when only the scale changes, with the same size, since the
-    content's size in pixels changed (ADR 0137), and when only the safe area changes (ADR 0156);
+    content's size in pixels changed (ADR 0137), and when only the safe area (ADR 0156) or the soft keyboard's inset
+    (ADR 0157) changes;
   - `Focus(bool)`;
   - `PointerMoved(x, y)` and `PointerButton(WindowButton, down, x, y)`. `WindowButton` is `Primary`, `Secondary`
     or `Middle`. Positions are `f32` points from the content's top left; a pointer outside the window during a
@@ -3404,6 +3405,31 @@ Diagnostics: none new.
     On Android an activity is destroyed at a rotation, which gives `Closed`, unless its manifest declares
     `android:configChanges` with at least `orientation|screenSize|screenLayout|density`; an app that rotates
     declares it.
+- **The soft keyboard** (ADR 0157). On iOS and Android, `setTextInput(true)` also shows the soft keyboard and
+  `setTextInput(false)` hides it; the calls and events are ADR 0141's. The window's editor holds only the text being
+  composed, so the input method sees no text around the caret: it commits text (`Text`), composes it
+  (`Composition`), and its Backspace and Enter are `Key` events, down then up, unless they edit a composition. A
+  hardware keyboard types the same way, with no soft keyboard shown.
+  - **`w.keyboardInset()`** is `f32`: how much of the content's bottom the soft keyboard covers, in points, never
+    more than the content's height; 0 when none shows, with a hardware keyboard, on the desktop systems, and for a
+    scripted window until its script gives one. It is not part of `safeArea()` and includes the part of the safe
+    area's bottom that the keyboard covers, so a program keeps clear of the larger of the two. A new inset gives
+    `Resized` at the content's size. While a screen turns, a system may give insets in passing that it then
+    corrects, each with its `Resized`.
+  - **`w.setTextInputKind(WindowTextKind)`** (`borrow mut`) takes `Text` (the default), `Number`, `Decimal`,
+    `Email`, `Url` or `Password`: the keyboard that text input shows, at once when one is shown; for `Password`,
+    the input method neither learns nor suggests. The desktop systems ignore it.
+  - **Backends.** iOS: a hidden `UITextField` in the window's view (`CeeSafeTextField`), first responder while text
+    input is on, with automatic capitals, correction and spell checking off since it never holds more than the
+    composition: text without a marked range is committed and taken out of the field, the marked text is the
+    composition, `deleteBackward` in an empty field is Backspace, Return is Enter; the inset is from
+    `UIKeyboardWillChangeFrameNotification`. Android: one Java class, `org.ceesafe.window.InputView`, embedded in
+    the runtime as a dex file (`runtime/android`, `tools/gen_android_dex.py`) and loaded from memory
+    (`InMemoryDexClassLoader`) at the first `setTextInput(true)`, so an app has no Java of its own. Its
+    `InputConnection` gives committed text, the composing text and the keys to the runtime; a hardware keyboard's
+    keys that no one took are typed through it too. The program's calls reach the activity's thread through a pipe
+    on its looper. The inset is `WindowInsets.getInsets(ime())`, from Android 11 (0 before it). The user's Back
+    hides the keyboard without ending text input; a tap on the window then shows it again.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
@@ -3446,7 +3472,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -3464,8 +3490,8 @@ Diagnostics: none new.
     view's (ADR 0156). Frames are `CGImage`s in the view's layer. While touches are off, the first touch is the primary pointer
     (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled); on, every finger is a
     touch (ADR 0155). The clipboard is
-    `UIPasteboard`'s. There is no title, cursor, menu or file dialog (`setMenu` and the dialogs are `Unsupported`),
-    no text input yet, and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
+    `UIPasteboard`'s. Text input is the soft keyboard's (ADR 0157). There is no title, cursor, menu or file dialog
+    (`setMenu` and the dialogs are `Unsupported`), and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
   - **Android** (ADR 0154): a NativeActivity's library (built with the NDK's clang, `--cflag -shared --cflag -fPIC
     --cflag -landroid --cflag -llog`, `--windowed`, API level 28 or later). The runtime's `ANativeActivity_onCreate`
     starts `main` on a thread of its own, which is the program's first thread for `Window`; when `main` returns, the
@@ -3475,7 +3501,8 @@ Diagnostics: none new.
     (`RGBX_8888`). Touches are as on iOS (ADR 0155); the window's focus gives `Focus`; the
     activity's end (Back, or the system's) gives `Closed`, after which `present` shows nothing. The activity's input
     queue and window are used under one lock that its callbacks take too. There is no clipboard yet
-    (`setClipboardText` is `Unsupported`, `clipboardText` false), title, cursor, menu, file dialog or text input.
+    (`setClipboardText` is `Unsupported`, `clipboardText` false), title, cursor, menu or file dialog. Text input is
+    the soft keyboard's (ADR 0157).
 
   The runtime file is part of a build only when the program calls a window function.
 - **Scripted windows** (for tests, ADR 0069 §2.3). When the environment variable `CEESAFE_WINDOW_SCRIPT` names a
@@ -3492,6 +3519,8 @@ Diagnostics: none new.
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
     - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
+    - `keyboard:H` (ADR 0157), a number of points, not negative: the soft keyboard's inset, at most the content's
+      height, with a `Resized` at the current size when it is a new one;
     - `safe:LEFT,TOP,RIGHT,BOTTOM` (ADR 0156), four numbers of points, none negative: the window's safe area, with
       a `Resized` at the current size when it is a new one;
     - `compose:C:TEXT` (ADR 0141): the composition becomes TEXT, with the caret at byte C. It is delivered only while

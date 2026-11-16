@@ -22,6 +22,8 @@
 - `extern "C"` blocks generated from C headers, by `ceesafec cbind` and by its oracle tools/cbind.py
   (tools/cbind_check.py; ADR 0095, ADR 0127).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
+- The Android window's embedded dex made from its Java source as it is now (tools/gen_android_dex.py --check;
+  ADR 0157).
 - The command line (tools/cli_check.py; tooling.md §4.4 and §12): usage errors' status, the help texts, which command
   accepts which option, and the allocation variables under `run --interp`.
 - `fix` and `fmt` write each file where they read it (tools/fix_paths_check.py; tooling.md §4.4 and §5.3): absolute
@@ -179,6 +181,7 @@ def main():
             ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),
             ("const statics", py + [f"{HERE}/const_statics_check.py", "--ceesafec", cee]),
+            ("android dex", py + [f"{HERE}/gen_android_dex.py", "--check"]),
         ]
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":

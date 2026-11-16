@@ -68,6 +68,10 @@ that opened a window would open one on the developer's screen:
 13. exporting a file (ADR 0158): on a scripted window FileDialog.exportFile copies the program's file to the path its
    script's `dialog` item answers and is true, leaves the file as it was, is false without an answer (a cancel), and
    is Resources when the file to export does not exist.
+14. the app's life (ADR 0159): a scripted window's app events come from nextAppEvent in order, Background and
+   Foreground alternating (one that says what the last said is not given), with memory warnings in either state;
+   an app event ends a waitEvent of 20 s; an unknown app event is a malformed script. With --display, a real desktop
+   window has none.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1667,6 +1671,61 @@ fn main() -> i32 {
 }
 """
 
+# The app's life (ADR 0159): the script's frames 0 to 4, each frame's app events; with "wait", an app event ending a
+# wait; with "real", a real window's.
+APP = r"""
+fn events(window: borrow mut Window) {
+    loop {
+        match (window.nextAppEvent()) {
+            Some(e) => {
+                Console.writeLine(match (e) {
+                    WindowAppEvent.Background => "background",
+                    WindowAppEvent.Foreground => "foreground",
+                    WindowAppEvent.MemoryWarning => "memory warning",
+                });
+            }
+            null => { break; }
+        }
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check app", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let mode = Process.argument(1) ?? "trace";
+    if (mode == "real") {
+        events(mut window);
+        Console.writeLine("no more");
+        return 0;
+    }
+    let pixels = [0u32; 1200];
+    if (mode == "wait") {
+        window.present(pixels[..], 40, 30)!;
+        let start = Timer.now();
+        window.waitEvent(20000);
+        Console.writeLine(if (Timer.now() - start < 5000) "ends waitEvent ok" else "ends waitEvent FAILED");
+        events(mut window);
+        return 0;
+    }
+    for (frame in 0..5) {
+        events(mut window);
+        Console.write("frame ");
+        Console.writeLine(frame);
+        window.present(pixels[..], 40, 30)!;
+    }
+    return 0;
+}
+"""
+
+# Its script, and what APP prints for it: a foreground at first is none (a window opens there); a memory warning; the
+# background, once; a warning there; the foreground; and the background again.
+APP_SCRIPT = ("0:app:foreground;1:app:memory;2:app:background;2:app:background;2:app:memory;3:app:foreground;"
+              "3:app:foreground;4:app:background")
+APP_EXPECTED = ["frame 0", "memory warning", "frame 1", "background", "memory warning", "frame 2", "foreground",
+                "frame 3", "background", "frame 4"]
+
 # Exporting a file (ADR 0158): a draft written, exported to the script's answer, exported again with no answer, and a
 # file that does not exist. Its argument is the folder to work in.
 EXPORT = r"""
@@ -3048,6 +3107,26 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        _, app = build(compiler, APP, work, "window_check_app")
+        app_scripts = {}
+        for name, content in (("trace", APP_SCRIPT), ("wait", "1:app:memory"), ("unknown", "0:app:sleeping"),
+                              ("none", "0:app")):
+            app_scripts[name] = os.path.join(work, "app-" + name + ".txt")
+            with open(app_scripts[name], "w", encoding="utf-8") as f:
+                f.write(content)
+        app_cases = [
+            ("the app's life", [app], "trace", APP_EXPECTED, 0),
+            ("an app event ends a wait", [app, "wait"], "wait", ["ends waitEvent ok", "memory warning"], 0),
+            ("an unknown app event", [errors], "unknown", ["4"], 0),
+            ("an app event without a name", [errors], "none", ["4"], 0),
+        ]
+        for what, command, name, want, status in app_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": app_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
         _, export = build(compiler, EXPORT, work, "window_check_export")
         export_work = os.path.join(work, "export")
         os.makedirs(export_work, exist_ok=True)
@@ -3078,7 +3157,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + 1 + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + 1 + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -3106,6 +3185,11 @@ def main():
             if r.returncode != 0 or r.stdout.strip() != "safe 0 0 0 0":
                 problems.append(f"a real desktop window's safe area: expected 'safe 0 0 0 0', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            r = run([app, "real"], {}, work)
+            checks += 1
+            if r.returncode != 0 or r.stdout.strip() != "no more":
+                problems.append(f"a real desktop window's app events: expected 'no more', got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
             r = run([keyboard, "real"], {}, work)
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "keyboard 0":

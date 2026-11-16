@@ -952,6 +952,67 @@ fn hostOut(
     return Ok(hostResult(truncate<i64>(text.length)));
 }
 
+/// `Directory.appData(name)` (ADR 0159) on the interpreter's host, as the runtime does it: the folder's name
+/// checked, the system's folder for apps' data found (`%APPDATA%`; `~/Library/Application Support`; `$XDG_DATA_HOME`
+/// or `~/.local/share`), and `name` made under it with the folders above it that are missing. It is written with
+/// what the release's stage 0 knows of lib/std, which has no `Directory.appData` of its own.
+fn appDataFolder(it: borrow mut Interp, arguments: borrow Vector<Value>, name: Slice<u8>) -> Result<Value, Stop> {
+    var bad = name.length == 0 || name.length > 255;
+    for (b in name) {
+        bad = bad || b == '/' || b == '\\' || b == 0;
+    }
+    bad = bad || (name.length == 1 && name[0] == '.') || (name.length == 2 && name[0] == '.' && name[1] == '.');
+    if (bad) {
+        return Ok(hostFailure(22));
+    }
+    let system = hostErrnos();
+    var path = Vector<u8>.create();
+    var made: usize = 0; // how much of the path is the system's own folder, which is there
+    if (system == 2) {
+        match (Environment.variable("APPDATA")) {
+            Some(base) => { appendText(mut path, base)!; }
+            null => { return Ok(hostFailure(2)); }
+        }
+        made = path.length;
+        path.push('\\')!;
+    } else {
+        let given = if (system == 1) "" else Environment.variable("XDG_DATA_HOME") ?? "";
+        if (given.length > 0 && given.bytes()[0] == '/') {
+            appendText(mut path, given)!;
+            made = path.length;
+        } else {
+            match (Environment.variable("HOME")) {
+                Some(home) => { appendText(mut path, home)!; }
+                null => { return Ok(hostFailure(2)); }
+            }
+            made = path.length;
+            appendText(mut path, if (system == 1) "/Library/Application Support" else "/.local/share")!;
+        }
+        path.push('/')!;
+    }
+    appendBytes(mut path, name)!;
+    // Each folder below the system's own, in turn; one that is there already is passed.
+    for (k in made + 1..path.length + 1) {
+        if (k < path.length && path[k] != '/' && path[k] != '\\') {
+            continue;
+        }
+        let part = match (StringView.fromUtf8(path.view()[0..k])) {
+            Some(p) => p,
+            null => { return Ok(hostFailure(22)); }
+        };
+        match (Directory.create(part)) {
+            Ok() => {}
+            Err(IoError.AlreadyExists) => {}
+            Err(e) => {
+                if (k == path.length) {
+                    return Ok(hostFailure(errnoOf(e)));
+                }
+            }
+        }
+    }
+    return hostOut(it, arguments, path.view(), 2, 3);
+}
+
 fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
     requireHostIo(it)?;
     if (sameText(name, "ceesafe_host_env")) {
@@ -1143,6 +1204,10 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
             Ok(path) => hostOut(it, arguments, path.view().bytes(), 0, 1),
             Err(e) => Ok(hostFailure(errnoOf(e))),
         };
+    }
+    if (sameText(name, "ceesafe_host_app_data")) {
+        let wanted = hostBytes(it, arguments, 0, 1)?;
+        return appDataFolder(it, arguments, wanted.view());
     }
     if (sameText(name, "ceesafe_host_current")) {
         if (it.options.workingDirectory.length > 0) {
@@ -1449,6 +1514,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_temporary")) {
         return "Ps:l";
+    }
+    if (sameText(name, "ceesafe_host_app_data")) {
+        return "PsPs:l";
     }
     if (sameText(name, "ceesafe_host_current")) {
         return "Ps:l";

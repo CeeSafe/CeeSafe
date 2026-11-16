@@ -3121,8 +3121,18 @@ Diagnostics: none new.
 - `Directory.temporary()`: `Result<String, IoError>`, the path of a new, empty directory that only this user can
   enter.
   - It is created under the platform's temporary directory (`TMPDIR` or `/tmp` on POSIX, `GetTempPath` on
-    Windows) by trying names until `mkdir` makes one, which is atomic.
+    Windows; on Android, where an app has neither, the app's cache folder, `/data/data/<package>/cache`, and
+    `/data/local/tmp` for a program that is not an app's) by trying names until `mkdir` makes one, which is atomic.
   - The caller removes it.
+- `Directory.appData(name: StringView)` (ADR 0159): `Result<String, IoError>`, the folder for this app's own data,
+  kept from one run to the next, made if it is missing (with the folders above it), for this user alone.
+  - `name` is the app's folder name: `InvalidInput` when it is empty, longer than 255 bytes, holds `/`, `\` or a
+    zero byte, or is `.` or `..`.
+  - macOS and iOS: `Library/Application Support/<name>` under `HOME` (on iOS the app's container); Windows:
+    `%APPDATA%\<name>`; Android: `<name>` in the app's files folder, `/data/data/<package>/files`; elsewhere
+    `$XDG_DATA_HOME/<name>` when that is an absolute path, else `$HOME/.local/share/<name>`. `NotFound` when the
+    system names no such place (no `HOME`; on Android, a process that is not an app's).
+  - A phone's system may empty `Directory.temporary()`'s folder; this one it keeps.
 - `Directory.current()`: `Result<String, IoError>`, the working directory.
 - `Directory.space(path)` (ADR 0077): `Result<VolumeSpace, IoError>`, the bytes of the volume that holds `path`:
   `total`, `free`, and `available` to this process, which is at most `free` where the system keeps a reserve
@@ -3180,7 +3190,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157, ADR 0158)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157, ADR 0158, ADR 0159)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3445,6 +3455,23 @@ Diagnostics: none new.
     keys that no one took are typed through it too. The program's calls reach the activity's thread through a pipe
     on its looper. The inset is `WindowInsets.getInsets(ime())`, from Android 11 (0 before it). The user's Back
     hides the keyboard without ending text input; a tap on the window then shows it again.
+- **The app's life** (ADR 0159). A phone's system takes an app off the screen when the user leaves it, may stop it
+  soon after, and may end its process at any time without another word. **`w.nextAppEvent()`** (`borrow mut`) is
+  `WindowAppEvent?`: the next of `Background`, `Foreground` and `MemoryWarning`, in order, or null; it never blocks.
+  - **`Background`**: the app is off the screen (not merely covered or without focus, which is `Focus(false)`).
+    **`Foreground`**: it is on the screen again. They alternate, a window being in the foreground when it opens.
+    **`MemoryWarning`**: memory is short; it may come in either state, more than once.
+  - **Queue.** App events are queued beside the events, so no `WindowEvent` variant is added; a queued one ends
+    `waitFrame`, `waitEvent` and `Window.waitAny`. A window keeps at most 16 not taken, and drops the oldest.
+  - **Time to save.** After a program takes `Background`, the system is held off until the program next waits or
+    polls (`waitEvent`, `waitFrame`, `waitAny`, `nextEvent`): iOS, a background task, some seconds, which the system
+    may cut short; Android, the activity's `onStop` not returning, two seconds at most, and only for a program that
+    has called `nextAppEvent`. What the program saves before then is saved; a program saves at `Background`, since
+    the process's end is not an event.
+  - **In the background** `present` and `presentChanged` show nothing and are `Ok`; waits work as ever.
+  - **Backends.** iOS: the scene delegate's `sceneDidEnterBackground:` and `sceneWillEnterForeground:`, the
+    application delegate's `applicationDidReceiveMemoryWarning:`, `beginBackgroundTaskWithExpirationHandler:`.
+    Android: the activity's `onStop`, `onStart` and `onLowMemory`. Desktop systems give no app events.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
@@ -3487,7 +3514,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `nextAppEvent`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -3534,6 +3561,7 @@ Diagnostics: none new.
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
     - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
+    - `app:background`, `app:foreground` and `app:memory` (ADR 0159): the app event, for `nextAppEvent`;
     - `keyboard:H` (ADR 0157), a number of points, not negative: the soft keyboard's inset, at most the content's
       height, with a `Resized` at the current size when it is a new one;
     - `safe:LEFT,TOP,RIGHT,BOTTOM` (ADR 0156), four numbers of points, none negative: the window's safe area, with

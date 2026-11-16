@@ -64,6 +64,7 @@
 - [struct WindowSize](#struct-windowsize)
 - [struct WindowInsets](#struct-windowinsets)
 - [enum WindowTextKind](#enum-windowtextkind)
+- [enum WindowAppEvent](#enum-windowappevent)
 - [struct WindowBox](#struct-windowbox)
 - [enum WindowButton](#enum-windowbutton)
 - [struct WindowModifiers](#struct-windowmodifiers)
@@ -1619,6 +1620,19 @@ A new, empty directory that only this user can enter, under the platform's tempo
 removes it.
 Safety: the runtime writes at most the buffer's length.
 
+### Directory.appData
+
+```ceesafe
+public fn appData(name: StringView) -> Result<String, IoError>
+```
+
+The folder for this app's own data, kept from one run to the next, made if it is missing (ADR 0159). `name` is
+the app's folder name: `InvalidInput` when it is empty, holds a separator, or is "." or "..". macOS and iOS:
+`Library/Application Support/<name>` in the user's home (on iOS, the app's container); Windows:
+`%APPDATA%\<name>`; Android: `<name>` in the app's files folder; elsewhere `$XDG_DATA_HOME/<name>`, or
+`~/.local/share/<name>`. A phone's system may empty `Directory.temporary()`'s folder; this one it keeps.
+Safety: the runtime reads the name's bytes during the call only, and writes at most the buffer's length.
+
 ### Directory.current
 
 ```ceesafe
@@ -2720,6 +2734,18 @@ public enum WindowTextKind {
 The kind of text a text field takes, which chooses the soft keyboard a phone shows for it
 (`Window.setTextInputKind`, ADR 0157).
 
+## enum WindowAppEvent
+
+```ceesafe
+public enum WindowAppEvent {
+    Background,
+    Foreground,
+    MemoryWarning,
+}
+```
+
+What the system tells a phone's app of its life (`Window.nextAppEvent`, ADR 0159).
+
 ## struct WindowBox
 
 ```ceesafe
@@ -3031,6 +3057,20 @@ The kind of text the focused field takes (ADR 0157): which soft keyboard `setTex
 Android, at once when it is already shown; for `Password`, the input method neither learns nor suggests.
 Desktop systems ignore it.
 Safety: the runtime only reads the number.
+
+### Window.nextAppEvent
+
+```ceesafe
+public fn nextAppEvent(borrow mut this) -> WindowAppEvent?
+```
+
+The next thing the system told this app of its life, in order, or null; it never blocks (ADR 0159). iOS and
+Android give them; desktop systems give none. `Background` and `Foreground` alternate, a window being in the
+foreground when it opens. They are queued beside the events, and a queued one ends `waitEvent`, `waitFrame`
+and `Window.waitAny`. After a `Background` is taken, the system is held off until the program waits or polls
+again (some seconds on iOS, two on Android): what a program saves before that is saved. In the background
+`present` shows nothing and is `Ok`.
+Safety: the runtime returns the event's number, or -1.
 
 ### Window.setCursor
 

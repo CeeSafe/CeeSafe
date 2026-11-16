@@ -1380,6 +1380,7 @@ void *ceesafe_host_dir_open(uint8_t const *path, uint64_t length, int32_t *error
 int64_t ceesafe_host_dir_next(void *dir, uint8_t const **name, uint64_t *length);
 void ceesafe_host_dir_close(void *dir);
 int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity);
+int64_t ceesafe_host_app_data(const uint8_t *name, uint64_t name_length, uint8_t *buffer, uint64_t capacity);
 int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity);
 int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const *input, uint64_t input_length,
                         uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length);

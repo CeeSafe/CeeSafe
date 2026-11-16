@@ -56,6 +56,8 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_host_temporary(buffer: *mut u8, capacity: u64) -> i64;
     @effects(sleep)
+    fn ceesafe_host_app_data(name: *u8, length: u64, buffer: *mut u8, capacity: u64) -> i64;
+    @effects(sleep)
     fn ceesafe_host_current(buffer: *mut u8, capacity: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_spawn(
@@ -341,6 +343,18 @@ public struct Directory {
     public fn temporary() -> Result<String, IoError> {
         var buffer = [0u8; 4096];
         let length = unsafe { ceesafe_host_temporary(borrow mut buffer[0] as *mut u8, 4096) };
+        return HostServices.textOf(buffer, length);
+    }
+
+    /// The folder for this app's own data, kept from one run to the next, made if it is missing (ADR 0159). `name` is
+    /// the app's folder name: `InvalidInput` when it is empty, holds a separator, or is "." or "..". macOS and iOS:
+    /// `Library/Application Support/<name>` in the user's home (on iOS, the app's container); Windows:
+    /// `%APPDATA%\<name>`; Android: `<name>` in the app's files folder; elsewhere `$XDG_DATA_HOME/<name>`, or
+    /// `~/.local/share/<name>`. A phone's system may empty `Directory.temporary()`'s folder; this one it keeps.
+    /// Safety: the runtime reads the name's bytes during the call only, and writes at most the buffer's length.
+    public fn appData(name: StringView) -> Result<String, IoError> {
+        var buffer = [0u8; 4096];
+        let length = unsafe { ceesafe_host_app_data(name.ptr, name.length as u64, borrow mut buffer[0] as *mut u8, 4096) };
         return HostServices.textOf(buffer, length);
     }
 

@@ -93,6 +93,8 @@ extern "C" {
     fn ceesafe_window_keyboard_inset(window: *mut void, inset: *mut f32);
     @effects()
     fn ceesafe_window_set_text_kind(window: *mut void, kind: i32);
+    @effects()
+    fn ceesafe_window_app_event(window: *mut void) -> i32;
 }
 
 /// Why a window could not be opened or drawn (§26.13).
@@ -165,6 +167,17 @@ public enum WindowTextKind {
     Url,
     /// A password: the input method neither learns nor suggests what is typed.
     Password,
+}
+
+/// What the system tells a phone's app of its life (`Window.nextAppEvent`, ADR 0159).
+public enum WindowAppEvent {
+    /// The app is off the screen. The system may stop it soon and end it without another word: a program saves
+    /// what it must keep now, and is given time for it until it next waits or polls.
+    Background,
+    /// The app is on the screen again.
+    Foreground,
+    /// Memory is short: a program lets go of what it can make again (caches).
+    MemoryWarning,
 }
 
 /// A part of an image that changed (`Window.presentChanged`), in the image's pixels; or the text input area
@@ -501,6 +514,22 @@ public struct Window {
             WindowTextKind.Password => 5,
         };
         unsafe { ceesafe_window_set_text_kind(this.raw, number); }
+    }
+
+    /// The next thing the system told this app of its life, in order, or null; it never blocks (ADR 0159). iOS and
+    /// Android give them; desktop systems give none. `Background` and `Foreground` alternate, a window being in the
+    /// foreground when it opens. They are queued beside the events, and a queued one ends `waitEvent`, `waitFrame`
+    /// and `Window.waitAny`. After a `Background` is taken, the system is held off until the program waits or polls
+    /// again (some seconds on iOS, two on Android): what a program saves before that is saved. In the background
+    /// `present` shows nothing and is `Ok`.
+    /// Safety: the runtime returns the event's number, or -1.
+    public fn nextAppEvent(borrow mut this) -> WindowAppEvent? {
+        return match (unsafe { ceesafe_window_app_event(this.raw) }) {
+            0 => WindowAppEvent.Background,
+            1 => WindowAppEvent.Foreground,
+            2 => WindowAppEvent.MemoryWarning,
+            _ => null,
+        };
     }
 
     /// The pointer's shape while it is over the content.

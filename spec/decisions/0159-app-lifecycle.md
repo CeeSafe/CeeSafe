@@ -1,8 +1,8 @@
 # ADR 0159 — An app's life on iOS and Android: background, foreground, memory, and where its data lives
 
-- Status: **Proposed**, 2026-11-16, for ClayWind's roadmap phase P4 (mobile) step 6, "the app lifecycle: background
-  and foreground, memory warnings, and state saved on the way out" (the owner's standing "continue"). Not
-  implemented.
+- Status: **Accepted** by the owner, 2026-11-16 ("Yes, I do."), for ClayWind's roadmap phase P4 (mobile) step 6,
+  "the app lifecycle: background and foreground, memory warnings, and state saved on the way out". Implemented on
+  branch `adr/0159-app-lifecycle` (§5).
 - Scope: `lib/std/window.cee` (`WindowAppEvent`, `Window.nextAppEvent`), `lib/std/host.cee` (`Directory.appData`),
   `runtime/hosted/ceesafe_rt_window.c` (iOS, Android, the scripted window), `runtime/hosted/ceesafe_rt_io.c`,
   type-system.md §26.13 and the section of `Directory`, `spec/api/std.md` (generated), `tools/window_check.py`. No
@@ -110,14 +110,50 @@ let folder = Directory.appData("claywind-chat")!;                   // kept from
   audio, location), notifications, a URL or file that launches the app, several scenes or windows on an iPad, and
   the split-screen and picture-in-picture states between foreground and background.
 
-## 5. Plan of implementation and evidence
+## 5. Implementation and evidence (2026-11-16)
 
-1. `Directory.appData` on every system; `nextAppEvent`, the queue and the scripted `app:` items;
-   `tools/window_check.py` cases; type-system.md.
-2. iOS: the scene delegate's two methods, the memory notification, the background task. Evidence: the simulator
-   (`simctl` can send an app to the background by launching another, and a memory warning through its menu's
-   private call if reachable) and the owner's iPhone: Home and back, with the saved file's time.
-3. Android: `onStop`, `onStart`, `onLowMemory`, the held callback. Evidence: the emulator (`input keyevent HOME`,
-   `am start`, `am send-trim-memory`) and the owner's moto g35 5G.
-4. The window runtime under ceesafec's own warning flags for every target; the contract suite; ClayWind's demo and
-   chat client coming back as they were left, after `am kill` and after iOS ends the app in the background.
+- **The shared layer** (`runtime/hosted/ceesafe_rt_window.c`): `cee_window_app` queues an app event (a ring of 16,
+  the oldest dropped; a `Background` or `Foreground` that says what the last said is not queued);
+  `ceesafe_window_app_event` hands one out, and a `Background` handed out begins the program's time to save, which
+  `cee_window_saved` ends at the program's next poll or wait (`nextEvent`, `waitEvent`, `waitFrame`, `waitAny`);
+  `present` and `presentChanged` return at once in the background; the waits count a queued app event.
+- **iOS**: the scene delegate's `sceneDidEnterBackground:` and `sceneWillEnterForeground:` and the application
+  delegate's `applicationDidReceiveMemoryWarning:` queue their event at once (they run on the program's thread,
+  inside its poll or wait) and signal the wake source, so the wait ends. The background task's expiration handler is
+  a block built by hand (a constant: `_NSConcreteGlobalBlock`, no captures), since the runtime is C.
+  - **Found in the simulator and fixed**: the first version kept only "in the background or not" and looked at it
+    at each poll, so a background and a foreground that came between two polls (the system delivers them together
+    when the app comes back before it was told it had left) gave no event at all. Each word is now queued as it
+    comes; Android's are kept in order in the same way.
+- **Android**: `onStop`, `onStart` and `onLowMemory`. `onStop` waits, 5 ms at a time and two seconds at most, for
+  the program to take `Background` and poll or wait again; only for a program that has called `nextAppEvent`, and
+  not while the program waits in a file dialog, whose picker is what stopped the activity (ADR 0158).
+  - `onLowMemory` is the one memory call a NativeActivity gives without Java. The levels of `onTrimMemory`, which
+    come more often, would need the runtime's Java class and are not given.
+- **`Directory.appData`**: `ceesafe_host_app_data` (`runtime/hosted/ceesafe_rt_io.c`), which makes the folder and
+  those above it; Android's app folders (`/cache`, `/files`) now come from one function. The interpreter does the
+  same on its host with what lib/std had before this ADR (`src/interpreter/io.cee`), since the release's stage 0
+  builds the compiler's own sources.
+- **`lib/std`**: `WindowAppEvent`, `Window.nextAppEvent`, `Directory.appData`; `spec/type-system.md` §26.10 and
+  §26.13, and the script grammar (`app:background`, `app:foreground`, `app:memory`).
+- **Evidence:**
+  - `tools/window_check.py`: 58 checks, 0 problems, on macOS arm64; with `--display`, 70. Its four new ones: a
+    trace (a foreground at first is none; memory warnings in either state; a repeated background or foreground
+    given once), an app event ending a `waitEvent` of 20 s, and an unknown app event and one without a name as
+    malformed scripts. With `--display`, a real macOS window has none.
+  - The corpus's `run-pass/host-services`: `Directory.appData` makes a directory, gives the same path again, and
+    refuses an empty name, one with a separator and `..` (`InvalidInput`), compiled and interpreted. On macOS the
+    path is `~/Library/Application Support/<name>`.
+  - Android 17 emulator (API 37), a test that prints each app event and, at `Background`, adds one to a counter
+    saved in `Directory.appData`: Home gave `Focus(false)`, then `Background` and the save, about 0.9 s after; the
+    app brought back gave `Foreground`; Home again saved 2; `am kill` ended the process in the background, and the
+    next start read 2.
+  - iOS 27 simulator (iPhone 18 Pro), the same test, sent to the background by launching Settings: four rounds
+    each gave `Background` with its save and `Foreground`, none lost; terminated in the background, the next start
+    read 4. With a `waitEvent` of 20 s, `Background` came about 1.0 s after `Focus(false)`: the event ends the wait.
+    (The first round of each run gave `Background` only as the app came back, six to eight seconds later: the
+    simulator had not told the app it had left while Settings was starting.)
+  - ClayWind's demo on the emulator, which saves its snapshot at `Background` and starts from it: on its Controls
+    page with "kutty" typed in a field, sent Home and killed, it came back on that page with that text.
+  - Not verified: a memory warning on either system (the simulator's is a menu item, Android's `onLowMemory` comes
+    only when the whole system is short), the time iOS allows before it cuts the background task short, devices.

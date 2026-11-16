@@ -10,6 +10,8 @@
 // expect-stdout: not empty: removed after emptying
 // expect-stdout: gone: null
 // expect-stdout: working directory: present
+// expect-stdout: app data: a directory, the same again, removed
+// expect-stdout: app data's names: InvalidInput InvalidInput InvalidInput
 
 fn join(directory: borrow String, name: StringView) -> String {
     var path = String.create();
@@ -30,6 +32,7 @@ fn kindName(kind: Result<PathKind?, IoError>) -> StringView => match (kind) {
 fn errorName(e: IoError) -> StringView => match (e) {
     IoError.NotFound => "NotFound",
     IoError.AlreadyExists => "AlreadyExists",
+    IoError.InvalidInput => "InvalidInput",
     _ => "another error",
 };
 
@@ -98,4 +101,25 @@ fn main() {
 
     Console.write("working directory: ");
     Console.writeLine(if (Directory.current()!.length > 0) "present" else "empty");
+
+    // ADR 0159: the folder for an app's own data, made at the first call and the same at the next.
+    let data = Directory.appData("ceesafe-corpus-host-services")!;
+    let again = Directory.appData("ceesafe-corpus-host-services")!;
+    Console.write("app data: ");
+    Console.write(match (File.kind(data.view())) {
+        Ok(Some(PathKind.Directory)) => "a directory",
+        _ => "not a directory",
+    });
+    Console.write(if (data.view() == again.view()) ", the same again" else ", another");
+    Console.writeLine(if (Directory.remove(data.view()).isOk()) ", removed" else ", not removed");
+    Console.write("app data's names:");
+    let badNames: [StringView; 3] = ["", "a/b", ".."];
+    for (badName in badNames) {
+        Console.write(" ");
+        Console.write(match (Directory.appData(badName)) {
+            Ok(_) => "accepted",
+            Err(e) => errorName(e),
+        });
+    }
+    Console.writeLine("");
 }

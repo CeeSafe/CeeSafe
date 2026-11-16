@@ -89,6 +89,15 @@
 /* A scripted soft keyboard (`keyboard:H`, ADR 0157): never queued, it updates the keyboard's inset and queues
    RESIZED. */
 #define CEE_SCRIPT_KEYBOARD 108
+/* A scripted app event (`app:background`, `app:foreground`, `app:memory`, ADR 0159): never queued as a window event,
+   it is queued for nextAppEvent. */
+#define CEE_SCRIPT_APP 109
+
+/* App events (ADR 0159): WindowAppEvent's numbers, and how many a window keeps that the program has not taken. */
+#define CEE_APP_BACKGROUND 0
+#define CEE_APP_FOREGROUND 1
+#define CEE_APP_MEMORY 2
+#define CEE_APP_QUEUE 16u
 
 /* Touches (ADR 0155): WindowTouchPhase's numbers, the touches a window keeps that the program has not taken, the
    fingers it follows at once, and a scripted touch's time: its frame's, at 60 frames a second. */
@@ -309,6 +318,13 @@ struct cee_window {
        kind of keyboard the program asked for (WindowTextKind's number). */
     float keyboard;
     int32_t text_kind;
+    /* The app's life (ADR 0159): whether the app is in the background, as the last app event queued says; the app
+       events not yet taken (a ring); and whether the program took a BACKGROUND and has not waited or polled since,
+       which is the time it is given to save. */
+    int background;
+    uint8_t app_events[CEE_APP_QUEUE];
+    unsigned app_head, app_count;
+    int saving;
     /* The system's window. */
     void *native;
 };
@@ -347,6 +363,7 @@ int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *
 void ceesafe_window_safe_area(void *window, float *insets);
 void ceesafe_window_keyboard_inset(void *window, float *inset);
 void ceesafe_window_set_text_kind(void *window, int32_t kind);
+int32_t ceesafe_window_app_event(void *window);
 
 static void cee_touch_cancel_all(struct cee_window *w);
 
@@ -425,6 +442,25 @@ static void cee_window_keyboard(struct cee_window *w, float inset) {
     }
     w->keyboard = inset;
     cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+}
+
+/* An app event for nextAppEvent (ADR 0159). BACKGROUND and FOREGROUND alternate, a window being in the foreground
+   when it opens: one that says what the last said is not queued. A full queue (a program that never asks) drops its
+   oldest event. */
+static void cee_window_app(struct cee_window *w, int kind) {
+    if (kind == CEE_APP_BACKGROUND || kind == CEE_APP_FOREGROUND) {
+        int background = kind == CEE_APP_BACKGROUND;
+        if (background == w->background) {
+            return;
+        }
+        w->background = background;
+    }
+    if (w->app_count == CEE_APP_QUEUE) {
+        w->app_head = (w->app_head + 1u) % CEE_APP_QUEUE;
+        w->app_count--;
+    }
+    w->app_events[(w->app_head + w->app_count) % CEE_APP_QUEUE] = (uint8_t)kind;
+    w->app_count++;
 }
 
 static void cee_window_focus(struct cee_window *w, int focused) {
@@ -1495,6 +1531,15 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         }
         return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_KEYBOARD, 0, 0, 0, 0, v[0], 0.0);
     }
+    if (CEE_IS("app")) { /* app:background, app:foreground, app:memory (ADR 0159) */
+        static const char *const kinds[3] = {"background", "foreground", "memory"};
+        for (int32_t k = 0; k < 3; k++) {
+            if (args_length == strlen(kinds[k]) && memcmp(args, kinds[k], args_length) == 0) {
+                return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_APP, k, 0, 0, 0, 0.0, 0.0);
+            }
+        }
+        return 0;
+    }
     if (CEE_IS("close")) {
         return args_length == 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -1671,6 +1716,8 @@ static void cee_window_script_pump(struct cee_window *w) {
             cee_window_resized(w, (uint32_t)e.fields[0], (uint32_t)e.fields[1]);
         } else if (e.kind == CEE_SCRIPT_SCALE) {
             cee_window_rescaled(w, e.x);
+        } else if (e.kind == CEE_SCRIPT_APP) {
+            cee_window_app(w, e.fields[0]);
         } else if (e.kind == CEE_SCRIPT_KEYBOARD) {
             cee_window_keyboard(w, e.x);
         } else if (e.kind == CEE_SCRIPT_SAFE) {
@@ -2256,6 +2303,83 @@ static void cee_ios_scene_connect(cee_id self, cee_sel cmd, cee_id scene, cee_id
     }
 }
 
+/* The app's life (ADR 0159). The scene's delegate and the application's are told it on the program's own thread,
+   inside its poll or wait, so each word goes straight into the window's queue, in order (a background and a
+   foreground that come together are both given), and ends the wait. `cee_ios_task` is the background task that keeps
+   the app running while the program saves: 0 for none (UIBackgroundTaskInvalid). */
+static unsigned long cee_ios_task;
+static void cee_native_wake(void);
+
+static void cee_ios_task_end(void) {
+    if (cee_ios_task != 0ul) {
+        unsigned long task = cee_ios_task;
+        cee_ios_task = 0ul;
+        ((void (*)(cee_id, cee_sel, unsigned long))cee_uikit.send)(
+            cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication"), cee_ios_sel("endBackgroundTask:"), task);
+    }
+}
+
+/* The background task's expiration handler, a block: the system's patience is over, and the task must end now or
+   the app is ended. A block without captures is a constant: its class (_NSConcreteGlobalBlock), the flag that says
+   so (1 << 28), and the function, which gets the block itself. */
+struct cee_ios_block_descriptor {
+    unsigned long reserved, size;
+};
+struct cee_ios_block {
+    void *isa;
+    int flags, reserved;
+    void (*invoke)(void *);
+    const struct cee_ios_block_descriptor *descriptor;
+};
+static void cee_ios_task_expired(void *block) {
+    (void)block;
+    cee_ios_task_end();
+}
+static const struct cee_ios_block_descriptor cee_ios_expired_descriptor = {0ul, sizeof(struct cee_ios_block)};
+static struct cee_ios_block cee_ios_expired = {NULL, 1 << 28, 0, cee_ios_task_expired, &cee_ios_expired_descriptor};
+
+static void cee_ios_app_event(int kind) {
+    if (cee_ios_shown != NULL) {
+        cee_window_app(cee_ios_shown, kind);
+        cee_native_wake(); /* the wait this came in ends, as for an event */
+    }
+}
+
+/* Off the screen: the system is asked for time, so that the program can take BACKGROUND and save before the app is
+   suspended. The task ends when the program waits again after taking it (cee_native_saved), when the app comes back,
+   or when the system says its time is up. */
+static void cee_ios_scene_background(cee_id self, cee_sel cmd, cee_id scene) {
+    (void)self;
+    (void)cmd;
+    (void)scene;
+    if (cee_ios_shown != NULL && cee_ios_task == 0ul) {
+        if (cee_ios_expired.isa == NULL) {
+            cee_ios_expired.isa = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
+        }
+        if (cee_ios_expired.isa != NULL) {
+            cee_ios_task = ((unsigned long (*)(cee_id, cee_sel, void *))cee_uikit.send)(
+                cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication"),
+                cee_ios_sel("beginBackgroundTaskWithExpirationHandler:"), &cee_ios_expired);
+        }
+    }
+    cee_ios_app_event(CEE_APP_BACKGROUND);
+}
+
+static void cee_ios_scene_foreground(cee_id self, cee_sel cmd, cee_id scene) {
+    (void)self;
+    (void)cmd;
+    (void)scene;
+    cee_ios_task_end();
+    cee_ios_app_event(CEE_APP_FOREGROUND);
+}
+
+static void cee_ios_memory_warning(cee_id self, cee_sel cmd, cee_id application) {
+    (void)self;
+    (void)cmd;
+    (void)application;
+    cee_ios_app_event(CEE_APP_MEMORY);
+}
+
 static void cee_ios_scene_disconnect(cee_id self, cee_sel cmd, cee_id scene) {
     (void)self;
     (void)cmd;
@@ -2288,6 +2412,8 @@ void ceesafe_window_app_start(void) {
         cee_uikit.add_method(delegate, cee_ios_sel("application:didFinishLaunchingWithOptions:"),
                              (cee_fn)cee_ios_did_finish, "c@:@@");
         cee_uikit.add_method(delegate, cee_ios_sel("ceesafeRun:"), (cee_fn)cee_ios_run, "v@:@");
+        cee_uikit.add_method(delegate, cee_ios_sel("applicationDidReceiveMemoryWarning:"),
+                             (cee_fn)cee_ios_memory_warning, "v@:@");
         cee_uikit.add_method(delegate, cee_ios_sel("application:configurationForConnectingSceneSession:options:"),
                              (cee_fn)cee_ios_configuration, "@@:@@@");
         void *app_protocol = cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIApplicationDelegate") : NULL;
@@ -2302,6 +2428,10 @@ void ceesafe_window_app_start(void) {
                              (cee_fn)cee_ios_scene_connect, "v@:@@@");
         cee_uikit.add_method(scene_delegate, cee_ios_sel("sceneDidDisconnect:"), (cee_fn)cee_ios_scene_disconnect,
                              "v@:@");
+        cee_uikit.add_method(scene_delegate, cee_ios_sel("sceneDidEnterBackground:"),
+                             (cee_fn)cee_ios_scene_background, "v@:@");
+        cee_uikit.add_method(scene_delegate, cee_ios_sel("sceneWillEnterForeground:"),
+                             (cee_fn)cee_ios_scene_foreground, "v@:@");
         void *scene_protocol =
             cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIWindowSceneDelegate") : NULL;
         if (scene_protocol != NULL && cee_uikit.add_protocol != NULL) {
@@ -2509,6 +2639,12 @@ static void cee_native_text_input(struct cee_window *w, int on) {
 }
 
 static void cee_native_text_area(struct cee_window *w) { (void)w; } /* the field is hidden: nothing follows the caret */
+
+/* The program has saved (it waits or polls again after BACKGROUND): the background time is given back (ADR 0159). */
+static void cee_native_saved(struct cee_window *w) {
+    (void)w;
+    cee_ios_task_end();
+}
 
 /* A new kind of text: the field's traits, and the keyboard shown again for them. */
 static void cee_native_text_kind(struct cee_window *w) {
@@ -5805,6 +5941,28 @@ static struct {
 } cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f, {0, 0, 0, 0}, 0, 0, {-1, -1}, 0,
                  NULL, 0, 0, NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, NULL, 0};
 
+/* The app's life (ADR 0159), under cee_android's lock: whether the activity is stopped (off the screen), whether the
+   program asks for app events at all (only then is onStop held for it), and whether it has saved since the last
+   stop. */
+static struct {
+    int background;
+    int listening;
+    int saved;
+    /* What the activity was told since the program last took it, in order (WindowAppEvent's numbers): a stop and a
+       start that come between two of the program's polls are both given. */
+    uint8_t told[16];
+    unsigned told_count;
+} cee_android_life;
+
+/* Under the lock. A full list drops its oldest word. */
+static void cee_android_told(int kind) {
+    if (cee_android_life.told_count == sizeof cee_android_life.told) {
+        memmove(cee_android_life.told, cee_android_life.told + 1, sizeof cee_android_life.told - 1u);
+        cee_android_life.told_count--;
+    }
+    cee_android_life.told[cee_android_life.told_count++] = (uint8_t)kind;
+}
+
 /* The input view's class as a dex file (ADR 0157), loaded from memory at the first text input. */
 /* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */
 /* the Java sources' SHA-256: 5b6f3c41d9bb83d723bfacc4d5f07bf472d7fe5f25fd8132ad0fde8ce49a9c2e */
@@ -6776,6 +6934,44 @@ static void cee_android_content_rect(ANativeActivity *activity, const ARect *rec
     cee_android_wake_program();
 }
 
+/* The activity is off the screen. For a program that takes app events, this returns only once the program has taken
+   BACKGROUND and waited or polled again, which is its word that it has saved, two seconds at most: the system does
+   not end a process inside onStop (ADR 0159 §2.2). */
+static void cee_android_stop(ANativeActivity *activity) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_life.background = 1;
+    cee_android_life.saved = 0;
+    cee_android_told(CEE_APP_BACKGROUND);
+    /* Not while the program waits in a file dialog, whose picker is what covers the activity (ADR 0158). */
+    int hold = cee_android_life.listening && cee_android.looper != NULL && cee_android.pick_state == 0;
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+    for (int k = 0; hold && k < 400; k++) {
+        usleep(5000);
+        pthread_mutex_lock(&cee_android.lock);
+        hold = !cee_android_life.saved && cee_android.looper != NULL;
+        pthread_mutex_unlock(&cee_android.lock);
+    }
+}
+
+static void cee_android_start(ANativeActivity *activity) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_life.background = 0;
+    cee_android_told(CEE_APP_FOREGROUND);
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+static void cee_android_low_memory(ANativeActivity *activity) {
+    (void)activity;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_told(CEE_APP_MEMORY);
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
 static void cee_android_configuration(ANativeActivity *activity) {
     cee_android_read_scale(activity);
     cee_android_read_insets(activity);
@@ -6934,6 +7130,9 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     activity->callbacks->onNativeWindowRedrawNeeded = cee_android_window_resized;
     activity->callbacks->onContentRectChanged = cee_android_content_rect;
     activity->callbacks->onConfigurationChanged = cee_android_configuration;
+    activity->callbacks->onStop = cee_android_stop;
+    activity->callbacks->onStart = cee_android_start;
+    activity->callbacks->onLowMemory = cee_android_low_memory;
     cee_android_read_scale(activity);
     /* The activity's thread's looper takes what the program asks of text input (ADR 0157). */
     ALooper *ui = ALooper_forThread();
@@ -7102,6 +7301,10 @@ static void cee_native_pump(struct cee_window *w) {
     int32_t safe[4];
     memcpy(safe, cee_android.safe, sizeof safe);
     int32_t keyboard = cee_android.keyboard;
+    uint8_t told[sizeof cee_android_life.told];
+    unsigned told_count = cee_android_life.told_count;
+    memcpy(told, cee_android_life.told, told_count);
+    cee_android_life.told_count = 0;
     char *typed = cee_android.typed;
     size_t typed_length = cee_android.typed_length;
     cee_android.typed = NULL; /* taken: the activity's thread starts a new queue */
@@ -7157,6 +7360,10 @@ static void cee_native_pump(struct cee_window *w) {
     cee_window_safe_area(w, (float)safe[0] / scale, (float)safe[1] / scale, (float)safe[2] / scale,
                          (float)safe[3] / scale);
     cee_window_keyboard(w, (float)keyboard / scale);
+    /* The app's life (ADR 0159). */
+    for (unsigned k = 0; k < told_count; k++) {
+        cee_window_app(w, told[k]);
+    }
     if (destroyed) {
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
     }
@@ -7213,6 +7420,15 @@ static void cee_native_title(struct cee_window *w, const char *title) { (void)w;
 static void cee_native_text_input(struct cee_window *w, int on) { cee_android_wish(on, w->text_kind); }
 static void cee_native_text_kind(struct cee_window *w) { cee_android_wish(w->text_input == 1, w->text_kind); }
 static void cee_native_text_area(struct cee_window *w) { (void)w; } /* the input view has no place of its own */
+
+/* The program has saved (it waits or polls again after BACKGROUND): the activity's onStop, held for it, goes on
+   (ADR 0159). */
+static void cee_native_saved(struct cee_window *w) {
+    (void)w;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android_life.saved = 1;
+    pthread_mutex_unlock(&cee_android.lock);
+}
 
 /* Android's clipboard is a Java service (ClipboardManager): not covered yet (ADR 0154 §4). */
 static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
@@ -8880,8 +9096,22 @@ int32_t ceesafe_window_native(void *window, uint64_t *first, uint64_t *second) {
 #endif
 }
 
+/* The program waits or polls again after it took a BACKGROUND: it has saved what it had to, and the time the system
+   was asked for is given back (ADR 0159 §2.2). */
+static void cee_window_saved(struct cee_window *w) {
+    if (w->saving) {
+        w->saving = 0;
+#if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
+        if (!w->scripted) {
+            cee_native_saved(w);
+        }
+#endif
+    }
+}
+
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position) {
     struct cee_window *w = (struct cee_window *)window;
+    cee_window_saved(w);
     struct cee_window_event e;
     int pumped = 0;
     do {
@@ -8933,6 +9163,8 @@ int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t wi
         memcpy(w->kept, pixels, count * sizeof(uint32_t));
         result = cee_window_dump(w, w->kept, width, height);
         w->frames++;
+    } else if (w->background) {
+        return 0; /* off the screen: nothing is shown, and nothing is drawn for no one (ADR 0159 §2.2) */
     } else {
 #if !defined(CEE_WINDOW_NO_NATIVE)
         result = cee_native_present(w, pixels, width, height);
@@ -8958,6 +9190,9 @@ int32_t ceesafe_window_present_changed(void *window, const uint32_t *pixels, uin
     }
     if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE * 4u || height > CEE_WINDOW_MAX_SIDE * 4u) {
         return -CEE_WINDOW_RESOURCES;
+    }
+    if (!w->scripted && w->background) {
+        return 0; /* as ceesafe_window_present */
     }
     if (!w->shown || w->shown_width != width || w->shown_height != height || count > 4096u) {
         return ceesafe_window_present(window, pixels, width, height);
@@ -9038,9 +9273,10 @@ void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t lengt
 
 void ceesafe_window_wait(void *window) {
     struct cee_window *w = (struct cee_window *)window;
+    cee_window_saved(w);
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
     if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || w->drop_count > 0 || w->drag_changed ||
-        w->touch_count > 0 || cee_wake_pending(w)) {
+        w->touch_count > 0 || w->app_count > 0 || cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
         cee_wake_take(w);
         return;
@@ -9057,9 +9293,9 @@ void ceesafe_window_wait(void *window) {
 
 /* Whether nextEvent would return an event (one is queued that was not taken back), nextMenuChoice an id (ADR 0146:
    a scripted window's choice only of an enabled item of its menu), or nextDrop a drop, or whether the drag of files
-   over the window changed (ADR 0150), or nextTouch a touch (ADR 0155). */
+   over the window changed (ADR 0150), or nextTouch a touch (ADR 0155), or nextAppEvent an app event (ADR 0159). */
 static int cee_window_has_event(struct cee_window *w) {
-    if (w->drop_count > 0 || w->drag_changed || w->touch_count > 0) {
+    if (w->drop_count > 0 || w->drag_changed || w->touch_count > 0 || w->app_count > 0) {
         return 1;
     }
     for (unsigned k = 0; k < w->count; k++) {
@@ -9080,6 +9316,7 @@ static int cee_window_has_event(struct cee_window *w) {
    once while its script still holds events, which come only with presents; then it waits on its signal alone. */
 void ceesafe_window_wait_event(void *window, uint32_t timeout_ms) {
     struct cee_window *w = (struct cee_window *)window;
+    cee_window_saved(w);
     double deadline = cee_window_now() + (double)timeout_ms / 1000.0;
     for (;;) {
         if (cee_window_has_event(w) || cee_wake_pending(w)) {
@@ -9131,6 +9368,10 @@ static int cee_window_any_event(int scripts) {
    is a sleep. */
 void ceesafe_window_wait_any(uint32_t timeout_ms) {
     double deadline = cee_window_now() + (double)timeout_ms / 1000.0;
+    for (struct cee_window *each = cee_wake_windows; each != NULL && cee_window_on_main_thread();
+         each = each->wake_link) {
+        cee_window_saved(each);
+    }
     if (!cee_window_on_main_thread() || cee_wake_windows == NULL) {
         cee_window_sleep_until(deadline);
         return;
@@ -9530,6 +9771,39 @@ int32_t ceesafe_window_set_touches(void *window, int32_t on) {
         w->touches_on = 0;
     }
     return 1;
+}
+
+/* The next app event (ADR 0159): WindowAppEvent's number, or -1. With none queued, the window takes the system's (or
+   its script's) events first, as ceesafe_window_poll does. Taking a BACKGROUND begins the program's time to save. */
+int32_t ceesafe_window_app_event(void *window) {
+    struct cee_window *w = (struct cee_window *)window;
+#if defined(__ANDROID__)
+    if (!w->scripted) {
+        pthread_mutex_lock(&cee_android.lock);
+        cee_android_life.listening = 1; /* a program that asks is one the activity's onStop waits for */
+        pthread_mutex_unlock(&cee_android.lock);
+    }
+#endif
+    if (w->app_count == 0) {
+        if (w->scripted) {
+            cee_window_script_pump(w);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+        }
+#endif
+    }
+    if (w->app_count == 0) {
+        return -1;
+    }
+    int32_t kind = w->app_events[w->app_head];
+    w->app_head = (w->app_head + 1u) % CEE_APP_QUEUE;
+    w->app_count--;
+    if (kind == CEE_APP_BACKGROUND) {
+        w->saving = 1;
+    }
+    return kind;
 }
 
 /* The next touch: 1 with its fields, or 0. With none queued, the window takes the system's (or its script's) events

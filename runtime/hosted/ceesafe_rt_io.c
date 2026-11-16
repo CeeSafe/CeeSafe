@@ -2590,6 +2590,108 @@ static int64_t ceesafe_host_copy_out(const char *text, uint8_t *buffer, uint64_t
     return (int64_t)n;
 }
 
+#if defined(__ANDROID__)
+/* An Android app's own folder: "/data/data/<package>" then `leaf` ("/cache", "/files"), the package being the
+   process's name (/proc/self/cmdline's first string). False for a process that is not an app's (a program run from a
+   shell, a service's process named with ':') or a path that does not fit. */
+static bool cee_android_folder(const char *leaf, char *out, size_t capacity) {
+    char package[256];
+    int command = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+    ssize_t read_count = command >= 0 ? read(command, package, sizeof package - 1u) : -1;
+    if (command >= 0) (void)close(command);
+    if (read_count <= 0) return false;
+    package[read_count] = 0; /* the first string ends at its own zero byte */
+    size_t length = strlen(package);
+    if (length == 0u || 11u + length + strlen(leaf) + 1u > capacity) return false;
+    for (size_t k = 0; k < length; k++) {
+        char c = package[k];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_')) {
+            return false;
+        }
+    }
+    memcpy(out, "/data/data/", 11u);
+    memcpy(out + 11u, package, length);
+    memcpy(out + 11u + length, leaf, strlen(leaf) + 1u);
+    return true;
+}
+#endif
+
+/* Makes the directory at `path` and those above it that are missing (each for this user alone); 0, or an errno. */
+static int cee_host_make_path(char *path) {
+    size_t n = strlen(path);
+    for (size_t k = 1; k <= n; k++) {
+        if (k < n && path[k] != '/' && path[k] != '\\') continue;
+        if (k < n && (path[k - 1u] == ':' || path[k - 1u] == '/' || path[k - 1u] == '\\')) continue; /* "C:\", "//" */
+        char kept = path[k];
+        path[k] = 0;
+#ifdef _WIN32
+        wchar_t wide[4096];
+        int made = cee_win_path(path, wide) ? _wmkdir(wide) : -1;
+#else
+        int made = mkdir(path, 0700);
+#endif
+        int failed = made != 0 && errno != EEXIST ? errno : 0;
+        path[k] = kept;
+        /* A directory above that this user cannot make but that is there (EACCES or EROFS on "/Users") is passed. */
+        if (failed != 0 && k == n) return failed;
+    }
+    return 0;
+}
+
+/* The folder for an app's own data, kept from one run to the next, made if it is missing (ADR 0159); its path goes
+   to (buffer, capacity). `name` is the app's folder name: not empty, without a separator, not "." or "..". macOS and
+   iOS: $HOME/Library/Application Support/<name> (on iOS HOME is the app's container). Windows: %APPDATA%\<name>.
+   Android: the app's files folder, /data/data/<package>/files/<name>. Elsewhere: $XDG_DATA_HOME/<name>, or
+   $HOME/.local/share/<name>. */
+int64_t ceesafe_host_app_data(const uint8_t *name, uint64_t name_length, uint8_t *buffer, uint64_t capacity) {
+    char path[4096];
+    if (name_length == 0u || name_length > 255u) return -(int64_t)EINVAL;
+    for (uint64_t k = 0; k < name_length; k++) {
+        if (name[k] == '/' || name[k] == '\\' || name[k] == 0u) return -(int64_t)EINVAL;
+    }
+    if ((name_length == 1u && name[0] == '.') || (name_length == 2u && name[0] == '.' && name[1] == '.')) {
+        return -(int64_t)EINVAL;
+    }
+#if defined(_WIN32)
+    wchar_t wide_base[4096];
+    DWORD got = GetEnvironmentVariableW(L"APPDATA", wide_base, 4096u);
+    if (got == 0u) return -(int64_t)ENOENT;
+    if (got >= 4096u || !cee_win_narrow(wide_base, path, (int)sizeof path - 300)) return -(int64_t)ENAMETOOLONG;
+#elif defined(__ANDROID__)
+    if (!cee_android_folder("/files", path, sizeof path - 300u)) return -(int64_t)ENOENT;
+#else
+    const char *home = getenv("HOME");
+#if defined(__APPLE__)
+    const char *base = NULL;
+    const char *under = "/Library/Application Support";
+#else
+    const char *base = getenv("XDG_DATA_HOME");
+    const char *under = "/.local/share";
+#endif
+    if (base != NULL && base[0] == '/') {
+        under = "";
+    } else {
+        base = home;
+    }
+    if (base == NULL || base[0] == 0) return -(int64_t)ENOENT;
+    if (strlen(base) + strlen(under) >= sizeof path - 300u) return -(int64_t)ENAMETOOLONG;
+    (void)strcpy(path, base);
+    (void)strcat(path, under);
+#endif
+    size_t n = strlen(path);
+    while (n > 1u && (path[n - 1u] == '/' || path[n - 1u] == '\\')) n--;
+#ifdef _WIN32
+    path[n++] = '\\';
+#else
+    path[n++] = '/';
+#endif
+    memcpy(path + n, name, (size_t)name_length);
+    path[n + (size_t)name_length] = 0;
+    int failed = cee_host_make_path(path);
+    if (failed != 0) return -(int64_t)failed;
+    return ceesafe_host_copy_out(path, buffer, capacity);
+}
+
 /* A new, empty directory only this user can enter, under the platform's temporary directory; its path goes to
  * (buffer, capacity). A name is tried until mkdir creates it (mkdir fails on an existing name, so this is atomic
  * without mkdtemp, which CosmoOS's libc lacks). The counter is atomic: a split build's compiles call this from several
@@ -2612,27 +2714,9 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     char android_cache[512];
     if (tmp == NULL || tmp[0] == 0) {
         tmp = "/data/local/tmp";
-        char package[256];
-        int command = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
-        ssize_t read_count = command >= 0 ? read(command, package, sizeof package - 1u) : -1;
-        if (command >= 0) (void)close(command);
-        if (read_count > 0) {
-            package[read_count] = 0; /* the first string ends at its own zero byte */
-            size_t length = strlen(package);
-            int plain = length > 0u;
-            for (size_t k = 0; k < length; k++) {
-                char c = package[k];
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
-                      c == '_')) {
-                    plain = 0; /* a path, or a process named by ':' for a service: not a package's own name */
-                }
-            }
-            if (plain) {
-                memcpy(android_cache, "/data/data/", 11u);
-                memcpy(android_cache + 11u, package, length);
-                memcpy(android_cache + 11u + length, "/cache", 7u);
-                if (access(android_cache, W_OK | X_OK) == 0) tmp = android_cache;
-            }
+        if (cee_android_folder("/cache", android_cache, sizeof android_cache) &&
+            access(android_cache, W_OK | X_OK) == 0) {
+            tmp = android_cache;
         }
     }
 #else

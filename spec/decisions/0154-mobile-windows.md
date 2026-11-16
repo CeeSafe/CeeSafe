@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-16 ("continue", after the proposal of a window on iOS and Android behind
   the same `Window` API, the program's `main` inside `UIApplicationMain` and on a NativeActivity's thread). ClayWind's
-  roadmap phase P4 (mobile) step 2. Implemented on branch `adr/0154-mobile-windows`: iOS first (§5), Android after.
+  roadmap phase P4 (mobile) step 2. Implemented on branch `adr/0154-mobile-windows`, iOS and Android (§5).
 - Scope: `runtime/hosted/ceesafe_rt_window.c`, `runtime/hosted/ceesafe_rt_hosted.c`, `lib/std/window.cee`
   (`WindowHandle`), type-system.md §26.13, `spec/api/std.md` (generated), `tools/window_check.py`. No compiler change:
   the generated C stays target-independent, and the runtime chooses by the C compiler's target.
@@ -35,7 +35,7 @@
   `waitFrame`, `waitAny`), which run it (`CFRunLoopRunInMode`), as SDL does on iOS. C's `main` may be called again
   (unlike C++'s).
 - **Without a windowed build**, `Window.open` on iOS is `NoDisplay`: there is no application to put a window in.
-- **Android** (§4, after iOS): the window runtime provides `ANativeActivity_onCreate`, the entry of a NativeActivity's
+- **Android**: the window runtime provides `ANativeActivity_onCreate`, the entry of a NativeActivity's
   library, with its own glue rather than the NDK's `android_native_app_glue` (Apache-2.0, and a thread model the
   runtime would wrap anyway). It starts the program's `main` on a thread of its own, which counts as the program's
   first thread for `Window`; the activity's callbacks queue what happens (the window created and destroyed, input,
@@ -58,13 +58,30 @@
 - **Not on iOS:** a title, a cursor, menus and file dialogs (`Unsupported`, and the first two do nothing), text input
   (P4 step 5), and closing: iOS never asks an app to close its window, so no `Closed` comes.
 
-### 2.3 Native handles
+### 2.3 The window on Android
 
-`WindowHandle` gains `UIKit(window, view)` (the `UIWindow` and the view, whose layer is the content) and, with §4,
-`Android(nativeWindow, activity)` (the `ANativeWindow` while it exists, and the `ANativeActivity`). A program that
+- **One window, the activity's**: `open` waits for it (ten seconds at most, else `NoDisplay`). Its size in points is
+  its pixels over `dpi / 160`. Frames are copied into the `ANativeWindow`'s buffer (`RGBX_8888`, the frames' byte
+  order), under a lock that the activity's thread also takes before it lets the window go.
+- **Input**: the activity's `AInputQueue`, attached to the program thread's looper and read only under that lock;
+  the activity's callbacks detach it under the lock, and so does the activity's end, since the system may dispose of
+  the queue without a callback then. The first touch is the primary pointer, as on iOS.
+- **Focus** from `onWindowFocusChanged`; **`Closed`** when the activity ends (`onDestroy`: Back, or the system's), and
+  nothing touches the activity after that.
+- **The program's end**: when `main` returns, the activity is finished and the process ends with `_exit` and `main`'s
+  code, as `main`'s return ends the process elsewhere. Not the thread's own end, whose thread-local destructors would
+  run after `ceesafe_shutdown`, and not `exit()`, whose static destructors Android's own threads still use: bionic
+  aborts on both (a destroyed mutex). Standard output and error go to logcat (tag `ceesafe`), and the pipe is
+  drained first, so the program's last lines are kept.
+- **Not yet**: the clipboard (a Java service), a title, a cursor, menus, file dialogs, text input.
+
+### 2.4 Native handles
+
+`WindowHandle` gains `UIKit(window, view)` (the `UIWindow` and the view, whose layer is the content) and
+`Android(window, activity)` (the `ANativeWindow`, 0 while the activity has none, and the `ANativeActivity`). A program that
 draws with its own GPU code (ADR 0137) uses them as it uses `AppKit`'s.
 
-### 2.4 Building
+### 2.5 Building
 
 No new option: the platform's clang through `--cc`, the target and SDK through `--cflag`, and `--windowed`. An app
 bundle (iOS) and an APK (Android) are made from the executable or library by the app's own tooling (P4 step 8); a
@@ -82,13 +99,18 @@ test makes the minimal bundle itself (§5).
 
 ## 4. Consequences
 
-- **A new `WindowHandle` variant** (`UIKit`, and `Android` with §4): every exhaustive `match` over `WindowHandle`
+- **Two new `WindowHandle` variants** (`UIKit`, `Android`): every exhaustive `match` over `WindowHandle`
   needs an arm for it (N0256), as `WindowEvent.Composition` needed in ADR 0141.
 - **iOS programs that open a window are windowed builds.**
-- **Android is not covered by this ADR's first part**: the glue, the window, input and the APK are its second part.
 - **Not covered:** multi-touch and gestures (step 3), safe areas (step 4), the soft keyboard (step 5), the app's
   lifecycle beyond focus (step 6), signing and devices (step 8).
 
-## 5. Implementation and evidence
+## 5. Implementation and evidence (2026-11-16)
 
-Recorded in ROADMAP §10 with the commands and results, for each part.
+**Files:** `runtime/hosted/ceesafe_rt_window.c` (the UIKit backend and `ceesafe_window_app_start`; the Android
+backend and its activity glue; the program's thread on Android for `Window`'s first-thread check),
+`runtime/hosted/ceesafe_rt_hosted.c` (a windowed build's start on iOS), `lib/std/window.cee` (`WindowHandle.UIKit`,
+`Android`), type-system.md §26.13, `spec/api/std.md`, `tools/window_check.py` (its exhaustive matches).
+
+**Tests** are recorded in ROADMAP §10 (2026-11-16, ADR 0154): a test program in the iOS 26 simulator (as an app
+bundle) and in the Android 16 emulator (as an APK), and the window runtime under strict flags on every system.

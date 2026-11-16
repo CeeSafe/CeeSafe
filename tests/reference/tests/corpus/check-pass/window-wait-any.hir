@@ -71,7 +71,7 @@
       (let results#4: Channel<u32> = (unwrap (call Channel<u32>.create 4:usize):Result<Channel<u32>, AllocError>):Channel<u32>)
       (let sender#5: Channel<u32> = (call Channel<u32>.clone (borrow results#4)):Channel<u32>)
       (let waker#6: WindowWaker = (call Window.waker (borrow tools#3)):WindowWaker)
-      (let worker#7: Thread<Result<void, AsyncError>> = (unwrap (Process.exit (closure 1110 (move sender#5 move waker#6) (block (return (run-task (call finish sender#5 waker#6):Result<void, AsyncError>):Result<void, AsyncError>))):{closure environment 1 in main})):Thread<Result<void, AsyncError>>)
+      (let worker#7: Thread<Result<void, AsyncError>> = (unwrap (Process.exit (closure 1114 (move sender#5 move waker#6) (block (return (run-task (call finish sender#5 waker#6):Result<void, AsyncError>):Result<void, AsyncError>))):{closure environment 1 in main})):Thread<Result<void, AsyncError>>)
       (let total#8: u32 = (call host (borrow-mut main#1) (borrow-mut tools#3) (borrow results#4)):u32)
       (let finished#9: Result<void, AsyncError> = (Process.exit worker#7))
       (return (value (if (== total#8 42:u32):bool (block (yield 0:i32)) (else (block (yield 2:i32))))):i32)

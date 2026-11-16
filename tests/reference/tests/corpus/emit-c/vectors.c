@@ -203,7 +203,13 @@ static ceeR_vE10AllocError ceeVZ_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, u
     }
     ceeR_vE10AllocError room = ceeVR_VUi32S10SystemHeap(v, n - v->len);
     if (room.tag != 0) return room;
-    for (uint64_t i = v->len; i < n; i++) v->ptr[i] = fill;
+    int32_t *at = v->ptr;
+    uint64_t from = v->len;
+    if (cee_all_zero(&fill, sizeof fill)) {
+        ceesafe_mem_set(at + from, 0, (size_t)(n - from) * sizeof fill);
+    } else {
+        for (uint64_t i = from; i < n; i++) at[i] = fill;
+    }
     v->len = n;
     return room;
 }

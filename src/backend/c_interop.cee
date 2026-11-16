@@ -836,10 +836,23 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
     if (main == none() || e.omitMain) {
         return Ok();
     }
-    e.line("int main(int argc, char **argv) {")?;
     if (e.windowed) {
         // A windowed program (ADR 0151): on Windows, standard streams without a handle get the parent's console or NUL.
+        // On iOS the first call never returns, and the launched application calls `main` again inside it (ADR 0154
+        // §2.1). So `main` keeps nothing on the stack: the program runs in a function of its own, never inlined,
+        // or its frame (the entry's, inlined, can be most of a megabyte) is there twice on a main thread's 1 MiB.
+        e.line("#if defined(_MSC_VER)")?;
+        e.line("__declspec(noinline) static int ceesafe_program(int argc, char **argv);")?;
+        e.line("#else")?;
+        e.line("__attribute__((noinline)) static int ceesafe_program(int argc, char **argv);")?;
+        e.line("#endif")?;
+        e.line("int main(int argc, char **argv) {")?;
         e.line("    ceesafe_rt_windowed();")?;
+        e.line("    return ceesafe_program(argc, argv);")?;
+        e.line("}")?;
+        e.line("static int ceesafe_program(int argc, char **argv) {")?;
+    } else {
+        e.line("int main(int argc, char **argv) {")?;
     }
     // The runtime's one start path (ADR 0088 §2.2): the environment's settings and argv, through ceesafe_init.
     e.line("    ceesafe_config config = {")?;

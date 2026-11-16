@@ -1,0 +1,55 @@
+// ADR 0160 §3: the end of the storage of a local that is certainly not initialised runs no drop, so it reads no
+// loan. Here `held` is not initialised on the path where `?` returns, and the temporaries of `lease(owner)?` have
+// been moved out of: none of them keeps the last turn's borrow of `owner` alive into the next.
+struct Owner {
+    id: u32;
+    count: Cell<u32>;
+}
+
+struct Lease<region c> {
+    owner: borrow(c) Owner;
+
+    drop {
+        this.owner.count.set(this.owner.count.get() + 1);
+        Console.write("lease of ");
+        Console.writeLine(this.owner.id);
+    }
+}
+
+fn lease<region c>(owner: borrow(c) Owner, refuse: bool) -> Result<Lease<c>, u32> =>
+    if (refuse) Err(owner.id) else Ok(Lease { owner: owner });
+
+fn run(stopAt: u32) -> Result<u32, u32> {
+    var total: u32 = 0;
+    for (k in 0u32..4) {
+        let owner = Owner { id: k, count: Cell<u32>.create(0) };
+        {
+            let held = lease(owner, k == stopAt)?;
+            total += held.owner.id;
+        }
+        total += owner.count.get() * 10;
+    }
+    return Ok(total);
+}
+
+fn main() {
+    match (run(9)) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(k) => { Console.writeLine(k); }
+    }
+    match (run(2)) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(k) => {
+            Console.write("refused at ");
+            Console.writeLine(k);
+        }
+    }
+}
+// expect-stdout: lease of 0
+// expect-stdout: lease of 1
+// expect-stdout: lease of 2
+// expect-stdout: lease of 3
+// expect-stdout: 46
+// expect-stdout: lease of 0
+// expect-stdout: lease of 1
+// expect-stdout: refused at 2

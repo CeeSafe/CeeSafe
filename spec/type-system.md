@@ -574,6 +574,9 @@ N0243 (out of scope or temporary dropped while borrowed).
 ### 13.5 Returning references
 - A function returning `borrow T` / `borrow mut T` with exactly one reference parameter (counting
   a reference receiver) returns something derived from that parameter.
+- A method with several, whose receiver is one of them, returns something derived from the receiver (ADR 0160 §2):
+  `fn slot(borrow mut this, key: StringView) -> borrow mut u32`. So does a method's result of any scoped type with
+  no source written (§25.6). A `borrow mut` result from a shared receiver is N0245.
 - Otherwise the return type names the sources: `fn longer(a: borrow T, b: borrow T) ->
   borrow(a, b) T`. Missing, unknown or non-reference sources are N0245, and so is a
   `borrow mut` result naming a shared parameter. After `borrow`, a `(` begins a source list only when it holds
@@ -2688,7 +2691,10 @@ Each parameter and the result of a function have **flow names**:
   scoped implementation (§37.2). An owned `dyn` value (`Box<dyn I<T>>`) and a `dyn I + Send` have none;
 - for a parameter of scoped type without written regions: a fresh name of its own (elision);
 - for a result of scoped type without written regions: the flow names of the single scoped
-  parameter (v0 elision); with several scoped parameters and none written, N0245 (as in v0).
+  parameter (v0 elision). With several scoped parameters and none written: in a method whose receiver is one of
+  them, the receiver's (ADR 0160 §2: `fn find(borrow this, name: StringView) -> Slice<u8>?` borrows from `this`, and
+  is tied to it as by `borrow(this)`, not a deep result), unless the result's written type names a type parameter;
+  otherwise N0245 (as in v0).
 - for a result `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions written on the
   reference itself, whose pointee names regions (`-> borrow HeaderList<r>`): the reference's own region is elided
   as above, when there is a single scoped parameter. So the result is tied to that parameter, and is not a deep
@@ -2803,7 +2809,10 @@ With one loan set per value:
    parameter is no reference: "if 'T' never holds one, bound it: 'T: Send'". A raw pointer is no loan (§27.1):
    `*mut T` carries none, and what is read through it is `unsafe` code's to answer for.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
-   them, so they must still be live (N0243 otherwise).
+   them, so they must still be live (N0243 otherwise). The end of the storage of a local that is certainly not
+   initialised there (never assigned on any path to it, moved out of, or ended already: the move analysis's init
+   states, `ownership.md` §4) destroys nothing and is no use (ADR 0160 §3): `let held = lease(owner)?;` in a loop
+   does not keep the last turn's loan of `owner` live through the path where `?` returns.
 
 Diagnostics: N0270, N0272, N0273, N0274 (`diagnostics.md`).
 

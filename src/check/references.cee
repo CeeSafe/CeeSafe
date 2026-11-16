@@ -1312,7 +1312,7 @@ fn parameterIndex(c: borrow Checker, function: u32, symbol: u32) -> u32 {
 }
 
 /// The parameters a returned reference may be derived from (ResolveReturnSources, §13.5): its source list, or the
-/// only reference parameter.
+/// only reference parameter, or among several a method's receiver (ADR 0160).
 fn resolveReturnSources(
     c: borrow mut Checker,
     f: u32,
@@ -1357,6 +1357,33 @@ fn resolveReturnSources(
                 c.error(returnSourceMismatch(), returnSpan.start, returnSpan.end, message)?;
             }
             out.push(i)?;
+            return Ok();
+        }
+        // A method with several: the result borrows from the receiver (ADR 0160), as `map.get(key)` does. A static
+        // function, and a method whose receiver holds no loan, has no parameter that stands out.
+        // Not for a result that is scoped only in an instance (`-> U` with `U` a view): what a type parameter holds
+        // came through the declaration's flows (§25.7 rule 5, ADR 0131), and the receiver is no more its source there.
+        let receiverCount = parameterCount - decl.parameters.count as usize;
+        var written = Vector<u64>.create();
+        collectFlowNames(c, decl.returnType, function, true, mut written)?;
+        var generic = false;
+        for (name in written.view()) {
+            if (isTypeFlowName(name)) {
+                generic = true;
+            }
+        }
+        if (referenceParameters.length > 1 && receiverCount == 1 && referenceParameters[0] == 0 && !generic) {
+            let receiver = c.hir.functions[function as usize].parameters[0];
+            let receiverType = c.hir.locals[receiver as usize].typ;
+            if (returnsMutable && !c.types.info(receiverType).mutableReference) {
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "a 'borrow mut' result cannot be derived from the shared receiver: write 'borrow mut this', or name the result's sources, e.g. 'borrow(a) mut T'",
+                )?;
+                return c.error(returnSourceMismatch(), returnSpan.start, returnSpan.end, message);
+            }
+            out.push(0)?;
             return Ok();
         }
         var message = Vector<u8>.create();

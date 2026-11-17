@@ -628,9 +628,6 @@ backend never emits an expression whose meaning depends on unspecified C
 evaluation order (function-argument order, `a[i] = i++`-style). Arguments
 with side effects are always assigned to temporaries first.
 
-A temporary that temporary forwarding took out (`optimisations.md` §6; `NirProgram.forwarded`) is declared nowhere: a
-statement is still one call or one copy, written where the value was going.
-
 ## 5. UB avoidance checklist (enforced by construction + tests)
 
 | Hazard | Strategy |

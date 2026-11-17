@@ -56,6 +56,7 @@ static int64_t ceeF_area(CEE_UNUSED ceeE_Shape v_s_0) {
     CEE_UNUSED int32_t v_w_2 = 0;
     CEE_UNUSED int64_t v_h_3 = 0;
     CEE_TEMP uint32_t t_4 = 0;
+    CEE_TEMP int64_t t_5 = 0;
     CEE_TEMP int64_t t_6 = 0;
     CEE_TEMP int64_t t_7 = 0;
     CEE_TEMP int64_t t_8 = 0;
@@ -63,7 +64,8 @@ static int64_t ceeF_area(CEE_UNUSED ceeE_Shape v_s_0) {
     t_4 = (uint32_t)v_s_0.tag;
     switch (t_4) {
     case ((uint32_t)0):
-        return ((int64_t)0);
+        t_5 = ((int64_t)0);
+        return t_5;
     case ((uint32_t)1):
         v_r_1 = v_s_0.u.v_Circle.f__0;
         t_6 = v_r_1;

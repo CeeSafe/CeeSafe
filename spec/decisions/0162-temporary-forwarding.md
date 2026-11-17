@@ -1,10 +1,11 @@
 # ADR 0162 — A value is not copied through a temporary it only passes through
 
-- Status: **Accepted** by the owner, 2026-11-17 ("I accept ADR 0162 as written"), for ClayWind's finding O13: a
-  function's frame holds every copy of a large value. Implemented on branch `adr/0162-temporary-forwarding` (from
-  release 0.63.0), with §2.1 **amended in implementation** as §5 foresaw (§2.5): the rule as first written did not
-  reach the line of §1.
-- Scope: a new pass over NIR (`src/nir/`), run where closure-call specialisation runs, before the C backend and
+- Status: **Withdrawn** by the owner, 2026-11-17 ("Go ahead drop it"), after it was accepted ("I accept ADR 0162 as
+  written"), implemented and measured: the pass was sound and gained nothing in a release build (§5). **Nothing of
+  it is in the compiler.** This document stays as the record of what was tried, why its premise was wrong, and what
+  the numbers were; the implementation is in the history of branch `adr/0162-temporary-forwarding` (commit
+  `d49106ca`).
+- Scope (as proposed): a new pass over NIR (`src/nir/`), run where closure-call specialisation runs, before the C backend and
   before the interpreter; `src/main.cee` (its switch); `optimisations.md` (a new §6),
   `intermediate-representation.md` §3, `c-backend.md` §2.1; the corpus's C snapshots, which change. No change to
   the language, to a library or to the runtime.
@@ -193,8 +194,12 @@ was wrong; both are recorded here so that the owner decides with them whether th
   pass removes. What fills the frame in a release build is what the pass leaves by its own rule: the call's
   `Result`, the binding `r`, `masks`, and the copy inside the `GpuBackend` made from it, with the values of the
   functions inlined into `main`.
-- **What that leaves of the decision:**
-  - the pass helps debug builds (`-O0`), where no C compiler forwards anything, and makes the C a little shorter;
-  - it does not address ClayWind's finding O13 in release builds. That needs what §3 set aside: coalescing by
+- **What it left of the decision, and the decision:**
+  - the pass would have helped debug builds (`-O0`), where no C compiler forwards anything, and made the C a little
+    shorter;
+  - it did not address ClayWind's finding O13 in release builds. That needs what §3 set aside: coalescing by
     liveness (so that `r` and `masks` are one value), or passing a large value by reference where it is moved;
-  - it is one more optimisation to keep correct, for that gain. Keeping it or dropping it is the owner's.
+  - it was one more optimisation to keep correct, for that gain. **The owner dropped it.** `optimisations.md` has no
+    §6, and `--no-temporary-forwarding` is not an option.
+  - **For whoever takes O13 up again**: measure the binary's frames first (`otool`, `-fstack-usage`), with the
+    optimisation level a release uses, before counting what the C declares.

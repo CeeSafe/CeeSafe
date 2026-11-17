@@ -237,10 +237,6 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
-        "  --no-temporary-forwarding  (build, run) keep every temporary a value passes through (optimisations.md §6)\n",
-    )?;
-    appendText(
-        out,
         "  --split           (build) write the C as ceesafe_program.h, c/<package>/<path>.c per CeeSafe file and\n",
     )?;
     appendText(out, "                    ceesafe_instances.c, so it compiles in parallel (c-backend.md §2.4)\n")?;
@@ -295,7 +291,6 @@ struct Options {
     building: bool;              // `build`: until P5, only `--dump-nir`, which prints the NIR and stops
     dumpNir: bool;               // --dump-nir (build)
     closureSpecialisation: bool; // on unless --no-closure-specialisation (optimisations.md §5)
-    temporaryForwarding: bool;   // on unless --no-temporary-forwarding (optimisations.md §6)
     explainClosureCalls: bool;   // --explain-closure-calls
     placement: bool;             // on unless --no-placement (memory-model.md §5)
     explainAllocations: bool;    // --explain-allocations
@@ -489,8 +484,6 @@ fn readOptions(options: borrow mut Options) -> i32 {
             }
         } else if ((options.building || options.running) && arg == "--no-closure-specialisation") {
             options.closureSpecialisation = false;
-        } else if ((options.building || options.running) && arg == "--no-temporary-forwarding") {
-            options.temporaryForwarding = false;
         } else if (options.building && arg == "--explain-closure-calls") {
             options.explainClosureCalls = true;
         } else if ((options.building || options.running) && arg == "--no-placement") {
@@ -879,7 +872,6 @@ fn parseCommand() -> i32 {
         building: false,
         dumpNir: false,
         closureSpecialisation: true,
-        temporaryForwarding: true,
         explainClosureCalls: false,
         placement: true,
         explainAllocations: false,
@@ -1145,7 +1137,6 @@ fn interpretChecked(
         programName: copyBytes("program".bytes())!,
         exportsHeader: copyBytes(options.exportsHeader.view())!,
         closureSpecialisation: options.closureSpecialisation,
-        temporaryForwarding: options.temporaryForwarding,
         placement: options.placement,
         bce: options.bce,
         oce: options.oce,
@@ -1248,7 +1239,6 @@ fn defaultOptions(building: bool) -> Options => Options {
     building: building,
     dumpNir: false,
     closureSpecialisation: true,
-    temporaryForwarding: true,
     explainClosureCalls: false,
     placement: true,
     explainAllocations: false,
@@ -1595,7 +1585,6 @@ fn compileFiles(
             programName: programName,
             exportsHeader: copyBytes(options.exportsHeader.view())!,
             closureSpecialisation: options.closureSpecialisation,
-            temporaryForwarding: options.temporaryForwarding,
             placement: options.placement,
             bce: options.bce,
             oce: options.oce,

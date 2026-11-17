@@ -1256,7 +1256,7 @@ for it.
 | `--lib-main` | build, test | build, with `--emit lib` | test: nothing. Without `--emit lib` it is a usage error in both |
 | `--library-diagnostics` | parse, check, build, run, fix, test | check, build, run, fix, test | internal (§12.2). parse: nothing |
 | `--line-directives`, `-g` | build, test | build, test | |
-| `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-oce`, `--no-placement`, `--no-temporary-forwarding` | build, run, test | build, run, test | |
+| `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-oce`, `--no-placement` | build, run, test | build, run, test | |
 | `--offline` | parse, check, build, run, fix, test | all six, in a package | `fetch` and `index-check` have their own |
 | `--package`, `--record`, `--whole-program` | check | check | |
 | `--program`, `--split` | build, test | build, test | |

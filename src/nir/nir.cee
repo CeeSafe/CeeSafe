@@ -162,9 +162,6 @@ struct NirProgram {
     terminatorSpans: Vector<Span>;
     cases: Vector<NirCase>;
     debugAsserts: Vector<NirDebugAssert>; // ADR 0087 §2.5
-    /// The temporaries that temporary forwarding took out (optimisations.md §6, ADR 0162): (function << 32) | local,
-    /// in order. They are still in their functions' `locals`, mentioned nowhere, and are declared nowhere in the C.
-    forwarded: Vector<u64>;
 
     fn create() -> NirProgram => NirProgram {
         functions: Vector<NirFunction>.create(),
@@ -185,7 +182,6 @@ struct NirProgram {
         terminatorSpans: Vector<Span>.create(),
         cases: Vector<NirCase>.create(),
         debugAsserts: Vector<NirDebugAssert>.create(),
-        forwarded: Vector<u64>.create(),
     };
 
     fn list(borrow mut this, ids: Slice<u32>) -> Result<Range, AllocError> {

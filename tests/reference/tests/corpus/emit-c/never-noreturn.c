@@ -18,6 +18,7 @@ static _Noreturn void ceeF_die(CEE_UNUSED int32_t v_code_0) {
 static int32_t ceeF_main(void) {
     CEE_UNUSED uint64_t v_n_0 = 0;
     CEE_UNUSED int32_t v_k_1 = 0;
+    CEE_TEMP int32_t t_2 = 0;
     CEE_TEMP bool t_3 = false;
     CEE_TEMP int32_t t_4 = 0;
     v_n_0 = ceesafe_arg_count();
@@ -26,7 +27,8 @@ static int32_t ceeF_main(void) {
         ceeF_die(((int32_t)2));
         ceesafe_panic(CEE_PANIC_UNREACHABLE, CEE_LOC(cee_file_0, 5u, 4u));
     }
-    v_k_1 = ((int32_t)1);
+    t_2 = ((int32_t)1);
+    v_k_1 = t_2;
     t_4 = v_k_1;
     return t_4;
 }

@@ -90,10 +90,12 @@ static ceeT_4Cell1u32 ceeM_S4Cell1u32_create(CEE_UNUSED uint32_t v_value_0) {
 static uint32_t ceeM_S4Cell1u32_get(CEE_UNUSED const ceeT_4Cell1u32 * v_this_0) {
     CEE_TEMP const ceeT_7RawCell1u32 * t_1 = NULL;
     CEE_TEMP uint32_t * t_2 = 0;
+    CEE_TEMP uint32_t t_3 = 0;
     CEE_TEMP uint32_t t_4 = 0;
     t_1 = &(*v_this_0).f_raw;
     t_2 = ceeM_S7RawCell1u32_pointer(t_1);
-    t_4 = (*t_2);
+    t_3 = (*t_2);
+    t_4 = t_3;
     return t_4;
 }
 

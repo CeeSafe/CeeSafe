@@ -50,16 +50,20 @@ static ceeO_i32 ceeF_half(CEE_UNUSED int32_t v_n_0) {
 
 static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
     CEE_UNUSED int32_t v_h_1 = 0;
+    CEE_TEMP ceeO_i32 t_2;
     CEE_TEMP ceeO_i32 t_3 = {0};
     CEE_TEMP uint32_t t_4 = 0;
     CEE_TEMP ceeO_i32 t_5;
+    CEE_TEMP ceeO_i32 t_6;
     CEE_TEMP ceeO_i32 t_7;
-    t_3 = ceeF_half(v_n_0);
+    t_2 = ceeF_half(v_n_0);
+    t_3 = t_2;
     t_4 = (uint32_t)t_3.tag;
     switch (t_4) {
     case ((uint32_t)1):
         v_h_1 = t_3.u.v_Some.f__0;
-        t_7 = ceeF_half(v_h_1);
+        t_6 = ceeF_half(v_h_1);
+        t_7 = t_6;
         return t_7;
     default:
         t_5 = ((ceeO_i32){ .tag = 0 });

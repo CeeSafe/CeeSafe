@@ -38,6 +38,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP uint64_t t_0 = 0;
     CEE_TEMP uint64_t t_1 = 0;
     CEE_TEMP uint64_t t_2 = 0;
+    CEE_TEMP int32_t t_3 = 0;
     t_0 = ceeF_gcd(((uint64_t)1071), ((uint64_t)462));
     ceesafe_write_u64((uint64_t)t_0);
     ceesafe_write_newline();
@@ -47,7 +48,8 @@ static int32_t ceeF_main(void) {
     t_2 = ceeF_gcd(((uint64_t)0), ((uint64_t)9));
     ceesafe_write_u64((uint64_t)t_2);
     ceesafe_write_newline();
-    return ((int32_t)0);
+    t_3 = ((int32_t)0);
+    return t_3;
 }
 
 int main(int argc, char **argv) {

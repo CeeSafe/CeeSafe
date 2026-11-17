@@ -40,7 +40,6 @@ struct CBuildOptions {
     programName: Vector<u8>;
     exportsHeader: Vector<u8>;
     closureSpecialisation: bool; // optimisations.md §5 (off: --no-closure-specialisation)
-    temporaryForwarding: bool;   // optimisations.md §6 (off: --no-temporary-forwarding)
     placement: bool;             // memory-model.md §5 (off: --no-placement)
     bce: bool;                   // optimisations.md §2 (off: --no-bce)
     oce: bool;                   // optimisations.md §3 (off: --no-oce)
@@ -86,10 +85,6 @@ fn generateC(
     if (o.closureSpecialisation) {
         // Calls through known closures become direct (optimisations.md §5).
         specialiseClosures(c, n, true)?;
-    }
-    if (o.temporaryForwarding) {
-        // A value is not copied through a temporary it only passes through (optimisations.md §6).
-        let forwarded = forwardTemporaries(n)?;
     }
     // Twice: the location constants come before the code that uses them, and only emitting the code finds them.
     var trial = CEmitter.create(true);

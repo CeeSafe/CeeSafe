@@ -228,13 +228,14 @@ struct cee_window_drop {
     size_t length;
 };
 
-/* An element of a window for a screen reader (ADR 0164): lib/std's RawAccessNode, field for field. */
+/* An element of a window for a screen reader (ADR 0164), from the ten words lib/std gives for it. */
 struct cee_access_node {
     uint64_t id;
     double min, max, now;
     float x, y, width, height;
     uint32_t role, flags;
     uint32_t label_start, label_length, value_start, value_length;
+    uint32_t caret, anchor; /* a text field's, as byte offsets into its value */
 };
 #define CEE_ACCESS_CHECKED 1u
 #define CEE_ACCESS_SELECTED 2u
@@ -3119,6 +3120,7 @@ static struct {
     /* Accessibility (ADR 0164): CeeSafeAccessElement, an NSAccessibilityElement that answers from the window's list;
        NSAccessibilityPostNotification and …WithUserInfo. NULL without them: the window then has no elements. */
     cee_id access_class;
+    cee_id access_text_class; /* CeeSafeAccessText: a text field's element, which also answers for its text */
     void (*access_post)(cee_id, cee_id);
     void (*access_post_info)(cee_id, cee_id, cee_id);
 } cee_objc;
@@ -3717,7 +3719,111 @@ static signed char cee_mac_access_is_focused(cee_id self, cee_sel cmd) {
     return w != NULL && (w->access[index].flags & CEE_ACCESS_FOCUSED) != 0;
 }
 
-/* The content view's part: its children are the elements, and it is no element itself. */
+/* A text field's element (CeeSafeAccessText) answers what a reader asks of text: without these VoiceOver says the
+   field's name twice and never its contents. The text is the element's value, one line, the caret at its end:
+   reading by character and selection are not here (ADR 0164 §2.3). */
+static cee_id cee_mac_access_text_of(cee_id self) {
+    cee_id value = cee_send(self, "accessibilityValue");
+    return value != NULL ? value : cee_nsstring("");
+}
+
+static long cee_mac_access_text_count(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return (long)cee_send_ulong(cee_mac_access_text_of(self), "length");
+}
+
+static cee_range cee_mac_access_text_all(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_range r = {0, cee_send_ulong(cee_mac_access_text_of(self), "length")};
+    return r;
+}
+
+/* The UTF-16 units of the first `bytes` bytes of UTF-8 `text`: NSString's offsets are in them. */
+static unsigned long cee_utf16_units(const char *text, uint32_t bytes) {
+    unsigned long units = 0;
+    for (uint32_t k = 0; k < bytes; k++) {
+        unsigned char c = (unsigned char)text[k];
+        if ((c & 0xc0u) != 0x80u) {
+            units += c >= 0xf0u ? 2u : 1u; /* a lead byte: one unit, or two for a scalar past the BMP */
+        }
+    }
+    return units;
+}
+
+/* The field's selection, from its node's caret and anchor: the caret alone when they are equal. */
+static cee_range cee_mac_access_text_selected(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_range r = {0, 0};
+    uint32_t index = 0;
+    struct cee_window *w = cee_mac_access_owner(self, &index);
+    if (w == NULL || (w->access[index].flags & CEE_ACCESS_SECURE) != 0) {
+        return r;
+    }
+    const struct cee_access_node *n = &w->access[index];
+    uint32_t from = n->caret < n->anchor ? n->caret : n->anchor, to = n->caret < n->anchor ? n->anchor : n->caret;
+    r.location = cee_utf16_units(w->access_text + n->value_start, from);
+    r.length = cee_utf16_units(w->access_text + n->value_start, to) - r.location;
+    return r;
+}
+
+static cee_id cee_mac_access_text_string(cee_id self, cee_sel cmd, cee_range range) {
+    (void)cmd;
+    cee_id text = cee_mac_access_text_of(self);
+    unsigned long length = cee_send_ulong(text, "length");
+    if (range.location > length) {
+        range.location = length;
+    }
+    if (range.length > length - range.location) {
+        range.length = length - range.location;
+    }
+    return ((cee_id(*)(cee_id, cee_sel, cee_range))cee_objc.send)(text, cee_mac_sel("substringWithRange:"), range);
+}
+
+/* VoiceOver reads a field through this one: without it, it reads as many characters of the field's name. */
+static cee_id cee_mac_access_text_attributed(cee_id self, cee_sel cmd, cee_range range) {
+    cee_id string = cee_mac_access_text_string(self, cmd, range);
+    cee_id attributed = cee_send_id_id(cee_send(cee_mac_cls("NSAttributedString"), "alloc"), "initWithString:", string);
+    return attributed != NULL ? cee_send(attributed, "autorelease") : NULL;
+}
+
+/* A field's value and selection can be set, which is what makes it "edit text" to VoiceOver, with the characters
+   the caret passes said; what sets them is the keyboard, through the program. */
+static signed char cee_mac_access_text_settable(cee_id self, cee_sel cmd, cee_id attribute) {
+    (void)self;
+    (void)cmd;
+    return cee_send_bool_id(attribute, "isEqualToString:", cee_nsstring("AXValue")) ||
+           cee_send_bool_id(attribute, "isEqualToString:", cee_nsstring("AXSelectedTextRange")) ||
+           cee_send_bool_id(attribute, "isEqualToString:", cee_nsstring("AXFocused"));
+}
+
+static cee_id cee_mac_access_text_selection(cee_id self, cee_sel cmd) {
+    return cee_mac_access_text_string(self, cmd, cee_mac_access_text_selected(self, cmd));
+}
+
+static long cee_mac_access_text_line(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return 0;
+}
+
+static long cee_mac_access_text_line_for(cee_id self, cee_sel cmd, long index) {
+    (void)self;
+    (void)cmd;
+    (void)index;
+    return 0;
+}
+
+static cee_range cee_mac_access_text_range_for_line(cee_id self, cee_sel cmd, long line) {
+    (void)line;
+    return cee_mac_access_text_all(self, cmd);
+}
+
+static cee_rect cee_mac_access_text_frame_for(cee_id self, cee_sel cmd, cee_range range) {
+    (void)range;
+    return cee_mac_access_frame(self, cmd);
+}
+
+/* The content view's part: its children are the elements, and it is a group of them. */
 static cee_id cee_mac_access_children(cee_id self, cee_sel cmd) {
     (void)cmd;
     struct cee_window *w = cee_mac_view_owner(self);
@@ -3734,7 +3840,7 @@ static cee_id cee_mac_access_children(cee_id self, cee_sel cmd) {
 static signed char cee_mac_access_view_is_element(cee_id self, cee_sel cmd) {
     (void)self;
     (void)cmd;
-    return 0;
+    return 1;
 }
 
 static cee_id cee_mac_access_view_role(cee_id self, cee_sel cmd) {
@@ -3808,6 +3914,10 @@ static void cee_mac_access_apply(cee_id element, const struct cee_access_node *n
         value = cee_mac_number(n->now);
         cee_send_v_id(element, "setAccessibilityMinValue:", cee_mac_number(n->min));
         cee_send_v_id(element, "setAccessibilityMaxValue:", cee_mac_number(n->max));
+        /* The value as the program writes it, when it gives one: a reader says a slider's value as a share of its
+           range otherwise, which is wrong for a count ("3%" for 3 of 99). */
+        cee_send_v_id(element, "setAccessibilityValueDescription:",
+                      n->value_length > 0 ? cee_mac_string(text + n->value_start, n->value_length) : NULL);
         break;
     case 4:
         if ((n->flags & CEE_ACCESS_SECURE) != 0) {
@@ -3815,7 +3925,8 @@ static void cee_mac_access_apply(cee_id element, const struct cee_access_node *n
             value = cee_nsstring("");
             break;
         }
-        value = cee_mac_string(text + n->value_start, n->value_length);
+        /* An empty field has no value: given an empty string, VoiceOver says the field's name in its place. */
+        value = n->value_length > 0 ? cee_mac_string(text + n->value_start, n->value_length) : NULL;
         break;
     case 9:
         value = cee_mac_string(text + n->value_start, n->value_length);
@@ -3871,7 +3982,8 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
             }
             layout = 1;
         }
-        if (j < old_count && m->access_elements[j] != NULL) {
+        /* A text field's element is of its own class: a node that became one, or stopped being one, gets a new one. */
+        if (j < old_count && m->access_elements[j] != NULL && (old[j].role == 4) == (n->role == 4)) {
             const struct cee_access_node *o = &old[j];
             cee_id element = m->access_elements[j];
             m->access_elements[j] = NULL;
@@ -3892,12 +4004,19 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
                 if (valued) {
                     cee_objc.access_post(element, cee_nsstring("AXValueChanged"));
                 }
+                if (n->role == 4 && (valued || n->caret != o->caret || n->anchor != o->anchor)) {
+                    cee_objc.access_post(element, cee_nsstring("AXSelectedTextChanged")); /* the caret moved */
+                }
                 if ((n->flags & CEE_ACCESS_FOCUSED) != 0 && (o->flags & CEE_ACCESS_FOCUSED) == 0) {
                     cee_objc.access_post(element, cee_nsstring("AXFocusedUIElementChanged"));
                 }
             }
         } else {
-            cee_id element = cee_send(cee_send(cee_objc.access_class, "alloc"), "init");
+            cee_id element = cee_send(
+                cee_send(n->role == 4 && cee_objc.access_text_class != NULL ? cee_objc.access_text_class
+                                                                              : cee_objc.access_class,
+                         "alloc"),
+                "init");
             elements[k] = element;
             if (element != NULL) {
                 cee_send_v_id(element, "setAccessibilityParent:", m->view);
@@ -4076,6 +4195,10 @@ static int cee_mac_load(void) {
             cee_objc.add_protocol(view, protocol); /* NSView's inputContext asks for it */
         }
         cee_objc.add_method(view, cee_mac_sel("accessibilityChildren"), (cee_fn)cee_mac_access_children, "@@:");
+        /* The list's order is the reading order: without this VoiceOver sorts the elements by where they are, and
+           reads a sidebar's rows between a page's. */
+        cee_objc.add_method(view, cee_mac_sel("accessibilityChildrenInNavigationOrder"),
+                            (cee_fn)cee_mac_access_children, "@@:");
         cee_objc.add_method(view, cee_mac_sel("isAccessibilityElement"), (cee_fn)cee_mac_access_view_is_element, "c@:");
         cee_objc.add_method(view, cee_mac_sel("accessibilityRole"), (cee_fn)cee_mac_access_view_role, "@@:");
         cee_objc.add_method(view, cee_mac_sel("accessibilityHitTest:"), (cee_fn)cee_mac_access_hit, "@@:{CGPoint=dd}");
@@ -4102,6 +4225,35 @@ static int cee_mac_load(void) {
         cee_objc.register_class(access);
     }
     cee_objc.access_class = access;
+    cee_id access_text = access != NULL ? cee_objc.allocate_class(access, "CeeSafeAccessText", 0) : NULL;
+    if (access_text == NULL) {
+        access_text = cee_mac_cls("CeeSafeAccessText");
+    } else {
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityNumberOfCharacters"),
+                            (cee_fn)cee_mac_access_text_count, "q@:");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityVisibleCharacterRange"),
+                            (cee_fn)cee_mac_access_text_all, "{_NSRange=QQ}@:");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilitySelectedTextRange"),
+                            (cee_fn)cee_mac_access_text_selected, "{_NSRange=QQ}@:");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilitySelectedText"), (cee_fn)cee_mac_access_text_selection,
+                            "@@:");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityStringForRange:"),
+                            (cee_fn)cee_mac_access_text_string, "@@:{_NSRange=QQ}");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityAttributedStringForRange:"),
+                            (cee_fn)cee_mac_access_text_attributed, "@@:{_NSRange=QQ}");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityIsAttributeSettable:"),
+                            (cee_fn)cee_mac_access_text_settable, "c@:@");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityInsertionPointLineNumber"),
+                            (cee_fn)cee_mac_access_text_line, "q@:");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityLineForIndex:"),
+                            (cee_fn)cee_mac_access_text_line_for, "q@:q");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityRangeForLine:"),
+                            (cee_fn)cee_mac_access_text_range_for_line, "{_NSRange=QQ}@:q");
+        cee_objc.add_method(access_text, cee_mac_sel("accessibilityFrameForRange:"),
+                            (cee_fn)cee_mac_access_text_frame_for, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}");
+        cee_objc.register_class(access_text);
+    }
+    cee_objc.access_text_class = access_text;
     /* Waking from another thread (ADR 0142): a version 0 run loop source in the main run loop's common modes.
        CFRunLoopSourceSignal and CFRunLoopWakeUp may be called from any thread and allocate nothing; the callback runs
        here, on the main thread. */
@@ -10317,8 +10469,31 @@ int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t coun
             ceesafe_platform_free(copy);
             return 0;
         }
-        memcpy(copy, nodes, (size_t)count * sizeof *copy);
-        for (uint32_t k = 0; k < count; k++) {
+        const uint64_t *words = (const uint64_t *)nodes;
+        for (uint32_t k = 0; k < count; k++, words += 10) {
+            /* id; min, max, now as f64 bits; x|y, width|height as f32 bits; role|flags; the label's and the
+               value's start|length; caret|anchor. */
+            uint32_t halves[12];
+            for (int j = 0; j < 6; j++) {
+                halves[2 * j] = (uint32_t)words[4 + j];
+                halves[2 * j + 1] = (uint32_t)(words[4 + j] >> 32);
+            }
+            copy[k].id = words[0];
+            memcpy(&copy[k].min, &words[1], sizeof(double));
+            memcpy(&copy[k].max, &words[2], sizeof(double));
+            memcpy(&copy[k].now, &words[3], sizeof(double));
+            memcpy(&copy[k].x, &halves[0], sizeof(float));
+            memcpy(&copy[k].y, &halves[1], sizeof(float));
+            memcpy(&copy[k].width, &halves[2], sizeof(float));
+            memcpy(&copy[k].height, &halves[3], sizeof(float));
+            copy[k].role = halves[4];
+            copy[k].flags = halves[5];
+            copy[k].label_start = halves[6];
+            copy[k].label_length = halves[7];
+            copy[k].value_start = halves[8];
+            copy[k].value_length = halves[9];
+            copy[k].caret = halves[10] <= halves[9] ? halves[10] : halves[9];
+            copy[k].anchor = halves[11] <= halves[9] ? halves[11] : halves[9];
             ids[k] = copy[k].id;
             if (copy[k].role >= CEE_ACCESS_ROLES) {
                 copy[k].role = 0;

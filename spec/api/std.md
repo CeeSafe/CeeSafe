@@ -2958,6 +2958,8 @@ public struct WindowAccessNode {
     public labelLength: u32;
     public valueStart: u32;
     public valueLength: u32;
+    public caret: u32;
+    public anchor: u32;
 }
 ```
 
@@ -3204,9 +3206,9 @@ public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: 
 The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
 holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
 last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
-A range outside `text`, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
+A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
 there yet, and when memory runs out, the last list stays.
-Safety: the runtime copies `nodes.length` nodes and `text.length` bytes during the call.
+Safety: the runtime reads ten words for each node and `text.length` bytes during the call.
 
 ### Window.takeAccessAction
 

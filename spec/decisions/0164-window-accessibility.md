@@ -51,8 +51,10 @@ match (window.takeAccessAction()) {               // what the reader asked, one 
 - **`WindowAccessNode`**, a Copy struct: `id: u64` (the program's, the same from one list to the next for the same
   element, never 0); `role`; `flags: u32` (`checked`, `selected`, `focused`, `disabled`, `expanded`, `secure`, as
   constants of the struct); `x`, `y`, `width`, `height: f32` in points from the content's top left, as pointer events
-  are; `min`, `max`, `now: f64` for a slider; and `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`,
-  ranges of the `text` given with the list (UTF-8).
+  are; `min`, `max`, `now: f64` for a slider; `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges
+  of the `text` given with the list (UTF-8); and `caret` and `anchor: u32`, a text field's caret and the other end
+  of its selection as byte offsets into its value (added after VoiceOver showed the need, §6; this replaces §2.3's
+  "a later addition").
 - **`WindowAccessAction`**: `Press`, `Focus`, `Increment`, `Decrement`. **`WindowAccessRequest`**: `id: u64`,
   `action`.
 
@@ -139,5 +141,35 @@ Each system is its own step and its own release, in this order; the API is relea
   `takeAccessAction` in order; a press of the disabled element does not; after a second list with a changed value
   and focus, all eleven elements are the same objects and say the new value and focus; `accessActive` is false
   before the first question and true after. 76 checks, 0 problems.
-- **Not checked yet**: VoiceOver itself, which is the owner's check with ClayWind's component demo; the
-  notifications' effect on a reader (they are posted; nothing in the process hears them).
+- **VoiceOver, 2026-11-17**, on ClayWind's component demo, driven with VoiceOver's keys and read from its
+  caption panel (the owner: "Turn VoiceOver back on and finish the check"). What it says: "Clicked 0, button";
+  "Reset, dimmed, button"; "Dashboard, selected, tab"; "Subscribe to updates, unchecked, checkbox"; "Dark,
+  selected, radio button"; "High, Priority, collapsed, pop up button"; "50%, Volume, slider"; "Al, Name, text";
+  plain text as it is written. Its activate command clicks a button, and it says the button's new name by itself.
+  Four things it found, each fixed:
+  - **The order was the screen's, not the list's**: with the view no element itself, VoiceOver read a sidebar's
+    rows between a page's. The view is now a group whose children in navigation order are the list.
+  - **A count was a percentage** ("3%, Quantity, slider" for 3 of 99): a slider's value text, when the node has
+    one, is its value's description.
+  - **A text field said its name twice and never its text**: a field's element now answers for its text.
+  - **The list was one action stale** (two radio buttons chosen, a dropdown still open): ClayWind's, not the
+    runtime's. A reader's action is input to its Ui, so a second frame says what the action did.
+- **The storage of the list changed after the first commit**: a C-layout struct in `lib/std` for it appeared in
+  every program's exports header (20 `ffi` tests and 29 `emit-c` snapshots differed). The list crosses as nine
+  64-bit words a node.
+- **The open points, closed the same day** (the owner: "Go ahead and fix the open points"):
+  - **An empty field said its name twice.** It has no value now, and says "Note, edit text".
+  - **Reading by character.** `WindowAccessNode` has `caret` and `anchor` (§2.1); a field's element answers its
+    selection from them, says its value and selection can be set, and `AXSelectedTextChanged` is posted when they
+    change. VoiceOver then calls the field "edit text" and says each character the caret passes: with "Hello" in
+    the field and the Left arrow pressed four times, "o", "l", "l", "e". The caret is still moved by the keyboard
+    through the program; a reader setting the selection itself is not taken.
+  - **VoiceOver's own adjustment of a slider** (interact, then its arrows): "In slider", "60%", "70%", "60%", "Out
+    of slider", and the program's value followed.
+  - **The pages not walked before**: a list's rows ("README.md, selected, button", then each row), a row of
+    buttons ("1 M, button"), and the demo's other pages, which are text. On its Drag page the cards are read as
+    text: dragging is not something this API gives a reader.
+  - `window_check --display` also reads the field's selection back from AppKit (caret 1, anchor 2 of "Al":
+    `1+1`, "l").
+- **Open**: a reader setting a field's selection or value itself; dragging; containers and tables (§2.3); the
+  owner's own pass with VoiceOver.

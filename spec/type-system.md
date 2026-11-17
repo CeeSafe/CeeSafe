@@ -3531,10 +3531,12 @@ Diagnostics: none new.
     `Button`, `Checkbox`, `Radio`, `TextField`, `Slider`, `Tab`, `ListItem`, `MenuItem`, `Dropdown`, `Image`);
     `flags: u32`, the sum of `WindowAccessNode.checked()`, `selected()`, `focused()`, `disabled()`, `expanded()`
     and `secure()`; `x`, `y`, `width`, `height: f32` in points from the content's top left; `min`, `max`,
-    `now: f64` for a slider; and `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges of `text`
-    (UTF-8). The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
+    `now: f64` for a slider; `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges of `text`
+    (UTF-8); and `caret` and `anchor: u32`, a text field's caret and the other end of its selection as byte
+    offsets into its value (equal when nothing is selected; 0 for another element). The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
     removed, renamed or changed value, state or focus; an element whose `id` is in both lists is the same element
-    to the system. A range outside `text`, an `id` of 0 and an `id` given twice are panics. When memory runs out
+    to the system. A range outside `text`, a caret or anchor past its value's end, an `id` of 0 and an `id` given
+    twice are panics. When memory runs out
     the last list stays.
   - **`w.takeAccessAction() -> WindowAccessRequest?`** (`borrow mut`) is the oldest request not yet taken, or
     null; it never blocks. A `WindowAccessRequest` is `id: u64` and `action: WindowAccessAction` (`Press`, `Focus`,
@@ -3550,15 +3552,26 @@ Diagnostics: none new.
     number from 1): a request of element `ID`, queued if the list has it. Its `accessActive` is false, and
     `announce` does nothing.
   - **Backends.** macOS: each node is a `CeeSafeAccessElement`, an `NSAccessibilityElement` whose parent is the
-    content view; the view answers `accessibilityChildren`, `accessibilityHitTest:` and
-    `accessibilityFocusedUIElement`, and the first such question makes `accessActive` true. An element answers its
-    frame from the list as it is, in screen coordinates. The roles are `AXStaticText` (the name is its value),
-    `AXButton`, `AXCheckBox` and `AXRadioButton` (the value is 1 when `checked`), `AXTextField` (`AXSecureTextField`
-    when `secure`, and then no value), `AXSlider` (value, minimum and maximum), `AXRadioButton` with the subrole
-    `AXTabButton` (the value is 1 when `selected`), `AXButton` for a `ListItem`, `AXMenuItem`, `AXPopUpButton` and
-    `AXImage`. `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` queue the
+    content view. The view is a group (`AXGroup`) whose `accessibilityChildren` and
+    `accessibilityChildrenInNavigationOrder` are the elements in the list's order, which is then the order
+    VoiceOver moves in (the elements of a view that is no element itself are read by where they are on the
+    screen); it also answers `accessibilityHitTest:` and `accessibilityFocusedUIElement`, and the first such
+    question makes `accessActive` true. An element answers its frame from the list as it is, in screen coordinates.
+    The roles are `AXStaticText` (the name is its value), `AXButton`, `AXCheckBox` and `AXRadioButton` (the value
+    is 1 when `checked`), `AXTextField` (`AXSecureTextField` when `secure`, and then no value), `AXSlider` (value,
+    minimum and maximum, and the node's value text, when it has one, as the value's description: what is said
+    instead of a share of the range), `AXRadioButton` with the subrole `AXTabButton` (the value is 1 when
+    `selected`), `AXButton` for a `ListItem`, `AXMenuItem`, `AXPopUpButton` and `AXImage`. A `TextField`'s element
+    is a `CeeSafeAccessText`, which also answers for its text as one line (`accessibilityNumberOfCharacters`,
+    `…StringForRange:`, `…AttributedStringForRange:`, the visible range, the line calls), for its selection from
+    the node's `caret` and `anchor`, in UTF-16 units (`accessibilitySelectedTextRange`, `…SelectedText`), and that
+    its value, selection and focus can be set (`accessibilityIsAttributeSettable:`), which is what makes it "edit
+    text" to VoiceOver: it then reads the field's contents, and says each character the caret passes when
+    `AXSelectedTextChanged` is posted, which it is when the caret, the anchor or the value changed. An empty
+    field has no value (given an empty string, VoiceOver says the field's name in its place). What changes a
+    field's text and caret is the keyboard, through the program. `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` queue the
     requests. The notifications posted are `AXLayoutChanged` on the view when elements came or went,
-    `AXValueChanged`, `AXTitleChanged` and `AXFocusedUIElementChanged` on an element, and `AXAnnouncementRequested`
+    `AXValueChanged`, `AXTitleChanged`, `AXSelectedTextChanged` and `AXFocusedUIElementChanged` on an element, and `AXAnnouncementRequested`
     for `announce`. iOS, Android, Windows, Linux and FreeBSD: not implemented yet (ADR 0164 §3); the list is kept
     and `takeAccessAction` is null, `accessActive` false.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may

@@ -74,7 +74,8 @@ that opened a window would open one on the developer's screen:
    window has none.
 15. accessibility (ADR 0164): a scripted window's `access` items come from takeAccessAction in order when the list
    given to setAccessNodes has the element, and not when it has not; an id of 0 or an unknown action is a malformed
-   script; an id given twice and a label outside the text are panics; accessActive is false. With --display on
+   script; an id given twice and a label outside the text are panics;
+   a text field's selection is its node's caret and anchor; accessActive is false. With --display on
    macOS, AppKit reports each of the eleven roles back with its name, value, state and frame, an action performed
    through it arrives, an element is the same object from one list to the next, and accessActive is then true.
 
@@ -1798,6 +1799,8 @@ fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], va
         labelLength: label[1],
         valueStart: value[0],
         valueLength: value[1],
+        caret: if (id == 5) 1 else 0,
+        anchor: if (id == 5) 2 else 0,
     };
 
 fn give(window: borrow mut Window, volume: f64, focusField: bool) {
@@ -1934,6 +1937,12 @@ int32_t access_inspect(int32_t act) {
                text(send0(e, "accessibilityRole")), text(send0(e, "accessibilitySubrole")),
                text(send0(e, "accessibilityLabel")), text(send0(e, "accessibilityValue")), f.x - cr.x,
                cr.y + cr.h - f.y - f.h, f.w, f.h, enabled, selected, focused, send0(e, "accessibilityParent") == view);
+        if (k == 4) { /* the text field: its selection, from the node's caret and anchor */
+            typedef struct { unsigned long location, length; } range;
+            range r = ((range(*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilitySelectedTextRange"));
+            printf("  selection %lu+%lu %s of %ld\n", r.location, r.length, text(send0(e, "accessibilitySelectedText")),
+                   ((long (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityNumberOfCharacters")));
+        }
         if (k < 32) {
             same += seen[k] == (void *)e;
             seen[k] = (void *)e;
@@ -1977,6 +1986,8 @@ def access_real_expected():
             line = (f"  {role} label={label} value={value} at 10,{20 * k} 100x18 enabled={enabled} "
                     f"selected={selected} focused={1 if focused and label == 'Name' else 0} parent=1")
             out.append(("inspect " if k == 0 else "") + line)
+            if label == "Name":
+                out.append("  selection 1+1 l of 2")
         return out + [f"  same elements as last time: {same}", "11"]
 
     return (["active false"] + listing("4", False, 0) + ["active true", "asked 2 press", "asked 5 focus",

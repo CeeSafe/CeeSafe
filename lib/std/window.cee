@@ -102,7 +102,7 @@ extern "C" {
     fn ceesafe_window_set_return_key(window: *mut void, key: i32);
     fn ceesafe_window_set_access(
         window: *mut void,
-        nodes: *RawAccessNode,
+        nodes: *u64,
         count: u32,
         text: *u8,
         length: u32,
@@ -380,6 +380,10 @@ public struct WindowAccessNode {
     public labelLength: u32;
     public valueStart: u32;
     public valueLength: u32;
+    /// A text field's caret and the other end of its selection, as byte offsets into its value: equal when nothing
+    /// is selected, 0 for an element that is no text field. A screen reader reads by character and word with them.
+    public caret: u32;
+    public anchor: u32;
 
     public fn checked() -> u32 => 1;
     public fn selected() -> u32 => 2;
@@ -406,25 +410,6 @@ public enum WindowAccessAction {
 public struct WindowAccessRequest {
     public id: u64;
     public action: WindowAccessAction;
-}
-
-/// A `WindowAccessNode` as the runtime reads it: numbers only, laid out by C's rules (type-system §12).
-@repr(C)
-struct RawAccessNode {
-    id: u64;
-    min: f64;
-    max: f64;
-    now: f64;
-    x: f32;
-    y: f32;
-    width: f32;
-    height: f32;
-    role: u32;
-    flags: u32;
-    labelStart: u32;
-    labelLength: u32;
-    valueStart: u32;
-    valueLength: u32;
 }
 
 /// Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker()`. It is a plain value, Copy and
@@ -657,14 +642,14 @@ public struct Window {
     /// The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
     /// holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
     /// last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
-    /// A range outside `text`, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
+    /// A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
     /// there yet, and when memory runs out, the last list stays.
-    /// Safety: the runtime copies `nodes.length` nodes and `text.length` bytes during the call.
+    /// Safety: the runtime reads ten words for each node and `text.length` bytes during the call.
     public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: Slice<u8>) {
         if (nodes.length > 0x7FFFFFFF || text.length > 0x7FFFFFFF) {
             panic("Window.setAccessNodes: a list or a text longer than 2^31");
         }
-        var raw = match (Vector<RawAccessNode>.withCapacity(nodes.length)) {
+        var raw = match (Vector<u64>.withCapacity(nodes.length * 10)) {
             Ok(v) => v,
             Err(_) => { return; }
         };
@@ -676,6 +661,9 @@ public struct Window {
             if ((n.labelStart as u64) + (n.labelLength as u64) > limit ||
                 (n.valueStart as u64) + (n.valueLength as u64) > limit) {
                 panic("Window.setAccessNodes: an element's label or value is outside the text");
+            }
+            if (n.caret > n.valueLength || n.anchor > n.valueLength) {
+                panic("Window.setAccessNodes: an element's caret or anchor is outside its value");
             }
             let role: u32 = match (n.role) {
                 WindowAccessRole.Text => 0,
@@ -690,32 +678,31 @@ public struct Window {
                 WindowAccessRole.Dropdown => 9,
                 WindowAccessRole.Image => 10,
             };
-            let pushed = raw.push(RawAccessNode {
-                id: n.id,
-                min: n.min,
-                max: n.max,
-                now: n.now,
-                x: n.x,
-                y: n.y,
-                width: n.width,
-                height: n.height,
-                role: role,
-                flags: n.flags,
-                labelStart: n.labelStart,
-                labelLength: n.labelLength,
-                valueStart: n.valueStart,
-                valueLength: n.valueLength,
-            });
-            match (pushed) {
-                Ok() => {}
-                Err(_) => { return; }
+            // Ten words a node, as the runtime reads them.
+            let words = [
+                n.id,
+                n.min.bits(),
+                n.max.bits(),
+                n.now.bits(),
+                (n.x.bits() as u64) | ((n.y.bits() as u64) << 32),
+                (n.width.bits() as u64) | ((n.height.bits() as u64) << 32),
+                (role as u64) | ((n.flags as u64) << 32),
+                (n.labelStart as u64) | ((n.labelLength as u64) << 32),
+                (n.valueStart as u64) | ((n.valueLength as u64) << 32),
+                (n.caret as u64) | ((n.anchor as u64) << 32),
+            ];
+            for (word in words) {
+                match (raw.push(word)) {
+                    Ok() => {}
+                    Err(_) => { return; }
+                }
             }
         }
         let view = raw.view();
         let result = unsafe { ceesafe_window_set_access(
             this.raw,
             view.ptr,
-            truncate<u32>(view.length),
+            truncate<u32>(nodes.length),
             text.ptr,
             truncate<u32>(text.length),
         ) };

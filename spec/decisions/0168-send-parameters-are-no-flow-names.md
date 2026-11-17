@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S14, its first half). Not implemented yet: nothing of it is in the compiler.
+  S14, its first half). Implemented 2026-11-18 (§6); not released.
 - Scope: the flows of a signature (`src/check/references.cee`, `resolveFlows`); type-system.md §25.6, the guide's
   ownership page. No change to the grammar, to the borrow checker's rules (§25.7), to the backends, to a library or
   to the runtime.
@@ -117,3 +117,31 @@ What the callee can still do with its receiver's loan is what the remaining name
    - run-pass: a dispatcher that is handed a context and calls a boxed handler with it;
    - the contract suite, and the packages of §2.3.
 4. ROADMAP §10.
+
+## 6. Implementation notes (2026-11-18)
+
+- `resolveFlows` collects a signature's type-parameter names with `pushFlowTypeNames`, which leaves out a parameter
+  whose written bounds include `Send` or `Share`: the test rule 5 makes (`sendBound`, `shareBound`, set from the
+  same syntax in `src/check/generics.cee`). It is used for the function's own parameters, its struct's or enum's,
+  and its interface's, so `Self`'s names lose them too. Nothing else changed: the flows, the self-check of
+  declared flows (N0216) and the borrow checker read the names as before.
+- **§2.3 was wrong about what stays accepted**, found when the packages it lists were checked. It said that a
+  function that was accepted stays accepted and that no body can rely on a flow under a `Send` name. One can: a
+  method of `struct App<S: Send + Share>` that passes its `ctx: borrow mut Context<S>` to a method of
+  `interface Middleware<S>`, **whose `S` has no bound**. The callee still declares that it may store its receiver
+  into the context, and the caller's own signature, which allowed that under the name `S` before, no longer does:
+  N0272 (httpserver, `App.enter`; one place). CeeSafe.Web's packages, httpclient, the libraries and the corpus are
+  unchanged. The program is accepted again when the interface declares the bound its users have
+  (`interface Middleware<S: Send + Share>`), which then has to be written on the structs that hold such a
+  handler (`Router<S>`): mechanical, and what the rule is for, but it is a program that compiled and no longer
+  does. **This is for the owner to decide before a release** (ROADMAP §10): keep the rule as accepted and say so
+  in the release notes, or narrow a callee's flows at each call by what its type arguments are there (an `S`
+  whose argument can hold no loan carries nothing), which accepts both and is more work in the checker.
+- **More than §2.3 said.** The closure that httpserver could not write
+  (`Async.timeout(ms, late, async () => await this.dispatch(found, mut ctx, request, exchange))`, its findings'
+  S16) is accepted too once the interface bounds `S`: what was charged to the other capture was the store that the
+  shared name allowed, and there is none now. Without the bound it is refused as before, and why that store is
+  charged to the wrong capture is still not understood.
+- **Tests:** run-pass/adr0168-send-parameter-no-flow (a dispatcher handed a context calls two boxed handlers with
+  it; the output is the program's arithmetic) and check-fail/adr0168-unbounded-parameter-flows (no bound, and
+  `Copy` alone: N0272 as before). The corpus: 0 failures.

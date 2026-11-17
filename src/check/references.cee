@@ -531,6 +531,33 @@ fn overlaps(a: borrow Vector<u64>, b: borrow Vector<u64>) -> bool {
 fn mayHoldLoans(c: borrow Checker, typ: u32) -> bool =>
     c.types.isScoped(typ) || c.types.mentionsParameterOutsideDyn(typ);
 
+/// The type parameters of `list` that are flow names (ADR 0168): every one but those bounded by `Send` or `Share`.
+/// A value of such a type holds no loan (§25.7 rule 5, by the same test: the bound written on the parameter), so
+/// nothing travels under its name, into a result or into a `borrow mut` parameter.
+fn pushFlowTypeNames(c: borrow Checker, list: Range, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    for (k in 0..list.count) {
+        let p = c.front.ast.typeParameters[c.front.ast.at(list, k) as usize];
+        var loanless = false;
+        for (b in 0..p.bounds.count) {
+            let marker = singleName(c, c.front.ast.at(p.bounds, b));
+            if (marker == none()) {
+                continue;
+            }
+            let undeclared = match (c.item(marker)) {
+                Entity.None => true,
+                _ => false,
+            };
+            if (undeclared && (sameText(c.name(marker), "Send") || sameText(c.name(marker), "Share"))) {
+                loanless = true;
+            }
+        }
+        if (!loanless) {
+            out.push(c.front.ast.idents[p.name as usize].symbol)?;
+        }
+    }
+    return Ok();
+}
+
 /// The flows of a signature (ResolveFlows, §25.6): which parameters' loans the result may carry (its return sources)
 /// and which parameters' loans the callee may store through each `borrow mut` parameter.
 fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Result<void, AllocError> {
@@ -538,7 +565,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     var ownerRegions = Vector<u32>.create();
     var ownerTypeParameters = Vector<u32>.create();
     var typeParameters = Vector<u32>.create();
-    pushRegionNames(c, decl.typeParameters, mut typeParameters)?;
+    pushFlowTypeNames(c, decl.typeParameters, mut typeParameters)?;
     // The declarations whose type parameters' bounds are in scope: a bounded parameter has its bounds' names too.
     var bounded = Vector<Range>.create();
     bounded.push(decl.typeParameters)?;
@@ -549,7 +576,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             match (c.front.ast.items[item as usize].kind) {
                 ItemKind.Struct(k) => {
                     pushRegionNames(c, c.front.ast.structs[k as usize].regionParameters, mut ownerRegions)?;
-                    pushRegionNames(c, c.front.ast.structs[k as usize].typeParameters, mut ownerTypeParameters)?;
+                    pushFlowTypeNames(c, c.front.ast.structs[k as usize].typeParameters, mut ownerTypeParameters)?;
                     bounded.push(c.front.ast.structs[k as usize].typeParameters)?;
                 }
                 _ => {}
@@ -562,7 +589,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             match (c.front.ast.items[enumItem as usize].kind) {
                 ItemKind.Enum(_, enumTypes, enumRegions) => {
                     pushRegionNames(c, enumRegions, mut ownerRegions)?;
-                    pushRegionNames(c, enumTypes, mut ownerTypeParameters)?;
+                    pushFlowTypeNames(c, enumTypes, mut ownerTypeParameters)?;
                     bounded.push(enumTypes)?;
                 }
                 _ => {}
@@ -579,7 +606,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             ItemKind.Interface(_, t) => t,
             _ => emptyRange(),
         };
-        pushRegionNames(c, interfaceParameters, mut selfNames)?;
+        pushFlowTypeNames(c, interfaceParameters, mut selfNames)?;
         for (t in selfNames.view()) {
             ownerTypeParameters.push(t)?;
         }

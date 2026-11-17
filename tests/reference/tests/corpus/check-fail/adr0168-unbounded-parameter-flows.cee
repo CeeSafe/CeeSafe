@@ -1,0 +1,33 @@
+// ADR 0168: without a `Send` or `Share` bound the parameter is a flow name as before (§25.6): the handler may store
+// a loan of itself in a context that shares `S` with it, so a context that outlives the call cannot be passed on.
+// A bound of `Copy` alone does not change that: a `Copy` type may be a reference.
+struct Ctx<region r, S> {
+    state: borrow(r) S;
+    seen: u32;
+}
+
+interface Handler<S> {
+    fn handle(borrow this, ctx: borrow mut Ctx<S>) -> u32;
+}
+
+interface Copies<S: Copy> {
+    fn handle(borrow this, ctx: borrow mut Ctx<S>) -> u32;
+}
+
+struct Server<S: Send + Share + Copy> {
+    state: S;
+    handlers: Vector<Box<dyn Handler<S> + Send + Share>>;
+    copies: Vector<Box<dyn Copies<S> + Send + Share>>;
+}
+
+impl<S: Send + Share + Copy> Server<S> {
+    fn dispatch(borrow this, ctx: borrow mut Ctx<S>) -> u32 {
+        return this.handlers[0].handle(mut ctx); // error[N0272]
+    }
+
+    fn copied(borrow this, ctx: borrow mut Ctx<S>) -> u32 {
+        return this.copies[0].handle(mut ctx); // error[N0272]
+    }
+}
+
+fn main() {}

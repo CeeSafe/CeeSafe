@@ -2674,7 +2674,11 @@ one set (ADR 0006). Region arguments matter only for the checks of §25.2–§25
 ### 25.6 Signatures: flows
 Each parameter and the result of a function have **flow names**:
 - the regions written in their types; `borrow(p)` in the result contributes `p`'s flow names;
-- the type parameters their types mention, a projection `P.Item` (§21.1) counting as `P`; and, for each of those,
+- the type parameters their types mention, a projection `P.Item` (§21.1) counting as `P`, **but not one whose
+  bounds include `Send` or `Share`** (ADR 0168): a value of such a type holds no loan (§25.7 rule 5, by the same
+  test), so nothing travels under its name. `interface Handler<S: Send + Share>` so lets a function that is handed
+  a `borrow mut Context<S>` pass it to a handler: the receiver and the context share no name. The bound is the
+  declaration's: for an interface's method, the interface's; and, for each of those,
   the type parameters that its bounds' arguments mention (ADR 0131): under `S: Source<T>` a parameter of type `S`
   has the name `T` too, since an `S` gives a `T` that holds what it holds. So `fn drain<T, S: Source<T>>(s: S) -> T`
   has the flow result ← `s`;

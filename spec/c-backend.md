@@ -883,7 +883,11 @@ Heap (M3b):
   freestanding core has no mutable global (profiles.md §4.4); its `ceesafe_init` ignores `flags`, none being defined.
   The generated `main` of a windowed build (ADR 0151) first calls `ceesafe_rt_windowed()` (`rt.h`, internal), which on
   Windows gives the standard streams without a handle the parent's console or `NUL` (type-system.md §26.3) and
-  elsewhere does nothing. The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls
+  elsewhere does nothing, but on iOS, where it starts the application and the launched application calls `main` again
+  inside that call (ADR 0154 §2.1). So a windowed build's `main` is that call and a call of `ceesafe_program`, a
+  static function that is never inlined (`__attribute__((noinline))`, `__declspec(noinline)` for `cl`) and holds the
+  rest: `main` keeps nothing on the stack, where a frame with the entry inlined would be there twice. That function, or
+  the `main` of a build that is not windowed, fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls
   `ceesafe_rt_init_main` (`rt.h`'s internal twin of `ceesafe_init`, which starts counting even after a C constructor
   allocated through CeeSafe, as before `ceesafe_init`; a failure other than `AGAIN` is a runtime panic), then the
   entry, then `ceesafe_shutdown()`, which prints the allocation report if asked, and returns the entry's code.

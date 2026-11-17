@@ -37,7 +37,10 @@
   program runs: it is on the program's first thread, as `Window` requires. When `main` returns, the process exits with
   its code. While the program runs, the run loop runs only when the program waits or polls (`nextEvent`, `waitEvent`,
   `waitFrame`, `waitAny`), which run it (`CFRunLoopRunInMode`), as SDL does on iOS. C's `main` may be called again
-  (unlike C++'s).
+  (unlike C++'s). The first call's frame stays on the stack under the second, so a windowed build's `main` holds
+  nothing but the two calls, and the program runs in a function of its own that is never inlined (0.62.1; before it,
+  a `main` whose frame was 621 KiB with the entry inlined, ClayWind's GPU host built with `-Os`, was twice on an
+  iPhone's 1 MiB main thread stack, and the app ended as it started).
 - **Without a windowed build**, `Window.open` on iOS is `NoDisplay`: there is no application to put a window in.
 - **Android**: the window runtime provides `ANativeActivity_onCreate`, the entry of a NativeActivity's
   library, with its own glue rather than the NDK's `android_native_app_glue` (Apache-2.0, and a thread model the

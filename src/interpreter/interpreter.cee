@@ -547,12 +547,10 @@ fn bytesOf(it: borrow Interp, slice: borrow Value) -> Result<Vector<u8>, Stop> {
         return Err(fault("a slice longer than the interpreter's memory"));
     }
     let value = it.memory.load(pointer, length as usize)?;
-    for (b in value.init.view()) {
-        if (!b) {
-            return Err(fault("use of uninitialised memory"));
-        }
+    if (!value.allInitialised()) {
+        return Err(fault("use of uninitialised memory"));
     }
-    return Ok(value.data);
+    return Ok(bytesOfValue(value));
 }
 
 /// A slice's elements' bytes, `size` bytes each (`bytesOf` is for byte slices and views).
@@ -566,12 +564,10 @@ fn elementBytesOf(it: borrow Interp, slice: borrow Value, size: u64) -> Result<V
         return Err(fault("a slice longer than the interpreter's memory"));
     }
     let value = it.memory.load(pointer, (count * size) as usize)?;
-    for (b in value.init.view()) {
-        if (!b) {
-            return Err(fault("use of uninitialised memory"));
-        }
+    if (!value.allInitialised()) {
+        return Err(fault("use of uninitialised memory"));
     }
-    return Ok(value.data);
+    return Ok(bytesOfValue(value));
 }
 
 fn pointerAt(it: borrow Interp, address: u64) -> Result<u64, Stop> => it.memory.loadBits(address, 8);

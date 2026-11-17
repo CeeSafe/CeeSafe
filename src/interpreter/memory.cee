@@ -14,17 +14,74 @@ struct Allocation {
     live: bool;
 }
 
+/// An ended local of this many bytes or fewer keeps its buffers for `revive`.
+fn keptLocalBytes() -> usize => 16;
+
 fn allocationBase(id: usize) -> u64 => ((id as u64) + 1) << 32;
 
-/// A value in transit: its bytes and which of them are initialised.
+/// A value in transit: its bytes and which of them are initialised. A value of 8 bytes or fewer (an integer, a
+/// pointer, a bool) is in `word` and `known` and has no memory of its own; a longer one is in `data` and `init`.
 struct Value {
+    length: usize;
+    word: u64;  // length <= 8: the bytes, little-endian
+    known: u64; // length <= 8: bit i is set where byte i is initialised
     data: Vector<u8>;
     init: Vector<bool>;
 
-    fn size(borrow this) -> usize => this.data.length;
+    fn size(borrow this) -> usize => this.length;
+
+    fn byteAt(borrow this, i: usize) -> u8 {
+        if (this.length <= 8) {
+            return truncate<u8>(this.word >> ((8 * i) as u64));
+        }
+        return this.data[i];
+    }
+
+    fn initAt(borrow this, i: usize) -> bool {
+        if (this.length <= 8) {
+            return ((this.known >> (i as u64)) & 1) != 0;
+        }
+        return this.init[i];
+    }
+
+    fn setAt(borrow mut this, i: usize, b: u8, known: bool) {
+        if (this.length <= 8) {
+            let shift = (8 * i) as u64;
+            this.word = (this.word & ((0xFFu64 << shift) ^ 0xFFFFFFFFFFFFFFFF)) | ((b as u64) << shift);
+            let bit = 1u64 << (i as u64);
+            this.known = if (known) this.known | bit else this.known & (bit ^ 0xFFFFFFFFFFFFFFFF);
+            return;
+        }
+        this.data[i] = b;
+        this.init[i] = known;
+    }
+
+    /// Whether every byte is initialised.
+    fn allInitialised(borrow this) -> bool {
+        if (this.length <= 8) {
+            return this.known == lowBits(this.length);
+        }
+        for (b in this.init.view()) {
+            if (!b) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /// The bytes [offset, offset + size) as an unsigned number; a use, so they must be initialised.
     fn bits(borrow this, offset: usize, size: usize) -> Result<u64, Stop> {
+        if (this.length <= 8 && offset + size <= this.length) {
+            let wanted = lowBits(size) << (offset as u64);
+            if ((this.known & wanted) != wanted) {
+                return Err(fault("use of uninitialised memory"));
+            }
+            if (size == 0) {
+                return Ok(0);
+            }
+            let shifted = this.word >> ((8 * offset) as u64);
+            return Ok(if (size >= 8) shifted else shifted & ((1u64 << ((8 * size) as u64)) - 1));
+        }
         var bits: u64 = 0;
         for (i in 0..size) {
             if (!this.init[offset + i]) {
@@ -36,54 +93,83 @@ struct Value {
     }
 
     fn put(borrow mut this, offset: usize, part: borrow Value) {
-        for (i in 0..part.data.length) {
-            this.data[offset + i] = part.data[i];
-            this.init[offset + i] = part.init[i];
+        for (i in 0..part.length) {
+            this.setAt(offset + i, part.byteAt(i), part.initAt(i));
         }
     }
 
     fn slice(borrow this, offset: usize, size: usize) -> Value {
         var value = uninitialisedValue(size);
         for (i in 0..size) {
-            value.data[i] = this.data[offset + i];
-            value.init[i] = this.init[offset + i];
+            value.setAt(i, this.byteAt(offset + i), this.initAt(offset + i));
         }
         return value;
     }
 }
 
+/// The low `count` bits set, `count` at most 8.
+fn lowBits(count: usize) -> u64 => (1u64 << (count as u64)) - 1;
+
+fn smallValue(size: usize, word: u64, known: u64) -> Value =>
+    Value { length: size, word: word, known: known, data: Vector<u8>.create(), init: Vector<bool>.create() };
+
 fn uninitialisedValue(size: usize) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    if (size <= 8) {
+        return smallValue(size, 0, 0);
+    }
+    var data = Vector<u8>.withCapacity(size)!;
+    var init = Vector<bool>.withCapacity(size)!;
     for (i in 0..size) {
         data.push(0)!;
         init.push(false)!;
     }
-    return Value { data: data, init: init };
+    return Value { length: size, word: 0, known: 0, data: data, init: init };
 }
 
 fn initialisedValue(bytes: Slice<u8>) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    if (bytes.length <= 8) {
+        var word: u64 = 0;
+        for (i in 0..bytes.length) {
+            word = word | ((bytes[i] as u64) << ((8 * i) as u64));
+        }
+        return smallValue(bytes.length, word, lowBits(bytes.length));
+    }
+    var data = Vector<u8>.withCapacity(bytes.length)!;
+    var init = Vector<bool>.withCapacity(bytes.length)!;
     for (b in bytes) {
         data.push(b)!;
         init.push(true)!;
     }
-    return Value { data: data, init: init };
+    return Value { length: bytes.length, word: 0, known: 0, data: data, init: init };
 }
 
 /// `bits` as `size` little-endian bytes (x86-64 and AArch64), initialised.
 fn valueOf(bits: u64, size: usize) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    if (size <= 8) {
+        return smallValue(size, if (size == 8) bits else bits & ((1u64 << ((8 * size) as u64)) - 1), lowBits(size));
+    }
+    var data = Vector<u8>.withCapacity(size)!;
+    var init = Vector<bool>.withCapacity(size)!;
     for (i in 0..size) {
         data.push(if (i < 8) truncate<u8>(bits >> ((8 * i) as u64)) else 0)!;
         init.push(true)!;
     }
-    return Value { data: data, init: init };
+    return Value { length: size, word: 0, known: 0, data: data, init: init };
 }
 
-fn copyValue(v: borrow Value) -> Value => v.slice(0, v.data.length);
+fn copyValue(v: borrow Value) -> Value => v.slice(0, v.length);
+
+/// A value's bytes, as a vector: the value's own where it has one.
+fn bytesOfValue(v: Value) -> Vector<u8> {
+    if (v.length > 8) {
+        return v.data;
+    }
+    var bytes = Vector<u8>.create();
+    for (i in 0..v.length) {
+        bytes.push(v.byteAt(i))!;
+    }
+    return bytes;
+}
 
 /// Why the interpreter stopped: a fault (§5.2: something no checked program can do), a panic, or `Process.exit`.
 struct Stop {
@@ -159,8 +245,8 @@ struct Memory {
             return Err(faultBytes(m.view()));
         }
         this.live += truncate<i64>(size);
-        var data = Vector<u8>.create();
-        var init = Vector<bool>.create();
+        var data = Vector<u8>.withCapacity(size)!;
+        var init = Vector<bool>.withCapacity(size)!;
         for (i in 0..size) {
             data.push(0)!;
             init.push(initialised)!;
@@ -187,6 +273,11 @@ struct Memory {
         this.allocations[id].live = false;
         // The buffers themselves are given back, not only emptied: a record outlives its allocation (its id is never
         // reused, so a dangling address is still caught), and clear() kept their capacity with it for the whole run.
+        // A local of a few bytes keeps its: most are revived at once (`revive`), by a loop's next turn or the
+        // function's next call, and giving two buffers back to take two again was a tenth of a run's time.
+        if (this.allocations[id].kind == allocationLocal() && this.allocations[id].data.length <= keptLocalBytes()) {
+            return;
+        }
         this.allocations[id].data = Vector<u8>.create();
         this.allocations[id].init = Vector<bool>.create();
     }
@@ -205,8 +296,16 @@ struct Memory {
             return false;
         }
         this.live += truncate<i64>(size);
-        var data = Vector<u8>.create();
-        var init = Vector<bool>.create();
+        if (size > 0 && this.allocations[index].data.length == size) { // its buffers were kept (`end`)
+            for (i in 0..size) {
+                this.allocations[index].data[i] = 0;
+                this.allocations[index].init[i] = true;
+            }
+            this.allocations[index].live = true;
+            return true;
+        }
+        var data = Vector<u8>.withCapacity(size)!;
+        var init = Vector<bool>.withCapacity(size)!;
         for (i in 0..size) {
             data.push(0)!;
             init.push(true)!;
@@ -266,6 +365,17 @@ struct Memory {
         }
         let offset = this.resolve(address, size, false)?;
         let allocation = borrow this.allocations[((address >> 32) - 1) as usize];
+        if (size <= 8) {
+            var word: u64 = 0;
+            var known: u64 = 0;
+            for (i in 0..size) {
+                word = word | ((allocation.data[offset + i] as u64) << ((8 * i) as u64));
+                if (allocation.init[offset + i]) {
+                    known = known | (1u64 << (i as u64));
+                }
+            }
+            return Ok(smallValue(size, word, known));
+        }
         var value = uninitialisedValue(size);
         for (i in 0..size) {
             value.data[i] = allocation.data[offset + i];
@@ -275,14 +385,14 @@ struct Memory {
     }
 
     fn store(borrow mut this, address: u64, value: borrow Value) -> Result<void, Stop> {
-        if (value.data.length == 0) {
+        if (value.length == 0) {
             return Ok();
         }
-        let offset = this.resolve(address, value.data.length, true)?;
+        let offset = this.resolve(address, value.length, true)?;
         let id = ((address >> 32) - 1) as usize;
-        for (i in 0..value.data.length) {
-            this.allocations[id].data[offset + i] = value.data[i];
-            this.allocations[id].init[offset + i] = value.init[i];
+        for (i in 0..value.length) {
+            this.allocations[id].data[offset + i] = value.byteAt(i);
+            this.allocations[id].init[offset + i] = value.initAt(i);
         }
         return Ok();
     }

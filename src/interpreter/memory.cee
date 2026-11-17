@@ -53,8 +53,8 @@ struct Value {
 }
 
 fn uninitialisedValue(size: usize) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    var data = Vector<u8>.withCapacity(size)!;
+    var init = Vector<bool>.withCapacity(size)!;
     for (i in 0..size) {
         data.push(0)!;
         init.push(false)!;
@@ -63,8 +63,8 @@ fn uninitialisedValue(size: usize) -> Value {
 }
 
 fn initialisedValue(bytes: Slice<u8>) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    var data = Vector<u8>.withCapacity(bytes.length)!;
+    var init = Vector<bool>.withCapacity(bytes.length)!;
     for (b in bytes) {
         data.push(b)!;
         init.push(true)!;
@@ -74,8 +74,8 @@ fn initialisedValue(bytes: Slice<u8>) -> Value {
 
 /// `bits` as `size` little-endian bytes (x86-64 and AArch64), initialised.
 fn valueOf(bits: u64, size: usize) -> Value {
-    var data = Vector<u8>.create();
-    var init = Vector<bool>.create();
+    var data = Vector<u8>.withCapacity(size)!;
+    var init = Vector<bool>.withCapacity(size)!;
     for (i in 0..size) {
         data.push(if (i < 8) truncate<u8>(bits >> ((8 * i) as u64)) else 0)!;
         init.push(true)!;
@@ -159,8 +159,8 @@ struct Memory {
             return Err(faultBytes(m.view()));
         }
         this.live += truncate<i64>(size);
-        var data = Vector<u8>.create();
-        var init = Vector<bool>.create();
+        var data = Vector<u8>.withCapacity(size)!;
+        var init = Vector<bool>.withCapacity(size)!;
         for (i in 0..size) {
             data.push(0)!;
             init.push(initialised)!;
@@ -205,8 +205,8 @@ struct Memory {
             return false;
         }
         this.live += truncate<i64>(size);
-        var data = Vector<u8>.create();
-        var init = Vector<bool>.create();
+        var data = Vector<u8>.withCapacity(size)!;
+        var init = Vector<bool>.withCapacity(size)!;
         for (i in 0..size) {
             data.push(0)!;
             init.push(true)!;

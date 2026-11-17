@@ -78,14 +78,12 @@ static ceeR_S3ResE4Code ceeF_make(CEE_UNUSED bool v_ok_0) {
 
 static ceeR_vE4Code ceeF_use2(void) {
     CEE_UNUSED ceeT_Res v_r_0;
-    CEE_TEMP ceeR_S3ResE4Code t_1;
     CEE_TEMP ceeR_S3ResE4Code t_2 = {0};
     CEE_TEMP uint32_t t_3 = 0;
     CEE_TEMP ceeR_vE4Code t_4;
     CEE_TEMP ceeR_vE4Code t_5;
     CEE_TEMP ceeR_vE4Code t_6;
-    t_1 = ceeF_make(true);
-    t_2 = t_1;
+    t_2 = ceeF_make(true);
     t_3 = (uint32_t)t_2.tag;
     switch (t_3) {
     case ((uint32_t)0):
@@ -102,17 +100,13 @@ static ceeR_vE4Code ceeF_use2(void) {
 }
 
 static int32_t ceeF_main(void) {
-    CEE_TEMP ceeR_vE4Code t_0;
     CEE_TEMP ceeR_vE4Code t_1;
     CEE_TEMP uint32_t t_2 = 0;
-    CEE_TEMP int32_t t_3 = 0;
-    t_0 = ceeF_use2();
-    t_1 = t_0;
+    t_1 = ceeF_use2();
     t_2 = (uint32_t)t_1.tag;
     switch (t_2) {
     case ((uint32_t)0):
-        t_3 = ((int32_t)0);
-        return t_3;
+        return ((int32_t)0);
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 15u, 5u));
     }

@@ -100,12 +100,10 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
 
 static int32_t ceeF_main(void) {
     CEE_TEMP uint64_t t_0 = 0;
-    CEE_TEMP int32_t t_1 = 0;
     t_0 = ceeF_sum(((uint64_t)4));
     ceesafe_write_u64((uint64_t)t_0);
     ceesafe_write_newline();
-    t_1 = ((int32_t)0);
-    return t_1;
+    return ((int32_t)0);
 }
 
 static void ceeD_XS4PairS10SystemHeap(ceeT_Pair * *p) {

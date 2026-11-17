@@ -143,7 +143,6 @@ static int32_t ceeF_main(void) {
     CEE_UNUSED int32_t v_v_2 = 0;
     CEE_TEMP ceeT_Res t_3;
     CEE_TEMP ceeE_List t_4;
-    CEE_TEMP ceeR_E4ListE10AllocError t_5;
     CEE_TEMP ceeR_E4ListE10AllocError t_6 = {0};
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP ceeT_FailingAllocator t_8;
@@ -153,8 +152,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP int32_t t_12 = 0;
     t_3 = ((ceeT_Res){ .f_id = ((int32_t)1) });
     t_4 = ((ceeE_List){ .tag = 0 });
-    t_5 = ceeF_cons(t_3, t_4);
-    t_6 = t_5;
+    t_6 = ceeF_cons(t_3, t_4);
     t_7 = (uint32_t)t_6.tag;
     switch (t_7) {
     case ((uint32_t)0):

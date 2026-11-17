@@ -15,7 +15,6 @@ static CEE_UNUSED int32_t ceeF_wide(uint32_t);
 static CEE_UNUSED int32_t ceeF_main(void);
 
 static int32_t ceeF_kind(CEE_UNUSED uint8_t v_c_0) {
-    CEE_TEMP int32_t t_1 = 0;
     CEE_TEMP int32_t t_2 = 0;
     switch (v_c_0) {
     case ((uint8_t)97):
@@ -35,29 +34,26 @@ static int32_t ceeF_kind(CEE_UNUSED uint8_t v_c_0) {
     case ((uint8_t)51):
         break;
     default:
-        t_1 = ((int32_t)0);
+        t_2 = ((int32_t)0);
         goto bb4;
     }
-    t_1 = ((int32_t)2);
+    t_2 = ((int32_t)2);
     goto bb4;
 bb1:
-    t_1 = ((int32_t)1);
+    t_2 = ((int32_t)1);
 bb4:
-    t_2 = t_1;
     return t_2;
 }
 
 static int32_t ceeF_wide(CEE_UNUSED uint32_t v_x_0) {
-    CEE_TEMP int32_t t_1 = 0;
     CEE_TEMP bool t_2 = false;
     CEE_TEMP int32_t t_3 = 0;
     t_2 = (v_x_0 <= ((uint32_t)1024));
     if (t_2) {
-        t_1 = ((int32_t)1);
+        t_3 = ((int32_t)1);
     } else {
-        t_1 = ((int32_t)2);
+        t_3 = ((int32_t)2);
     }
-    t_3 = t_1;
     return t_3;
 }
 

@@ -150,8 +150,8 @@ fn emitFunction(
     }
     var declarations = Vector<Vector<u8>>.create();
     for (k in function.parameterCount..truncate<u32>(function.locals.length)) {
-        if (containsU32(builtInPlace, k)) {
-            continue;
+        if (containsU32(builtInPlace, k) || isForwarded(n, f, k)) {
+            continue; // forwarded away (optimisations.md §6): mentioned nowhere
         }
         let t = function.locals[k as usize].typ;
         // Zero-initialised: the reference's definite assignment already forbids reading it first (§5).

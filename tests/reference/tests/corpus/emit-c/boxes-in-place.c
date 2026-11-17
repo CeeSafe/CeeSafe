@@ -110,24 +110,20 @@ static ceeR_XS3ResS10SystemHeapE10AllocError ceeF_holder(CEE_UNUSED int32_t v_id
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeA64_u8 * v_t_0 = NULL;
     CEE_UNUSED ceeT_Res * v_h_1 = NULL;
-    CEE_TEMP ceeR_XA64_u8S10SystemHeapE10AllocError t_2;
     CEE_TEMP ceeR_XA64_u8S10SystemHeapE10AllocError t_3 = {0};
     CEE_TEMP uint32_t t_4 = 0;
-    CEE_TEMP ceeR_XS3ResS10SystemHeapE10AllocError t_5;
     CEE_TEMP ceeR_XS3ResS10SystemHeapE10AllocError t_6 = {0};
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP int64_t t_8 = 0;
     CEE_TEMP int32_t t_9 = 0;
     CEE_TEMP int32_t t_10 = 0;
     CEE_TEMP int32_t t_11 = 0;
-    t_2 = ceeF_table();
-    t_3 = t_2;
+    t_3 = ceeF_table();
     t_4 = (uint32_t)t_3.tag;
     switch (t_4) {
     case ((uint32_t)0):
         v_t_0 = t_3.u.v_Ok.f__0;
-        t_5 = ceeF_holder(((int32_t)3));
-        t_6 = t_5;
+        t_6 = ceeF_holder(((int32_t)3));
         t_7 = (uint32_t)t_6.tag;
         switch (t_7) {
         case ((uint32_t)0):

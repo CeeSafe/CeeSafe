@@ -1,0 +1,4 @@
+# The fixture for a sweep failure's own standard error (spec/tooling.md §10.2; tools/test_command_check.py).
+[package]
+name = "seo"
+version = "0.1.0"

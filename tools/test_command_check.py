@@ -13,6 +13,9 @@
    §10.2): `test --sweep alloc` does not count an unwrap in a file that declares an `@test`, whether it is the test's,
    a helper's or the production function's of that file; it counts one in a file without tests; `--sweep-strict`
    counts every one.
+7. On tests/packages/sweep-frame-stack, a stacked await out of memory is set apart (ADR 0147).
+8. On tests/packages/sweep-exit-output, a sweep run that exits says why (spec/tooling.md §10.2): its failure, in the
+   text and in the JSON, ends with the run's own standard error, the message the program wrote before its exit.
 
 usage: python3 tools/test_command_check.py --compiler out/ceesafec
 """
@@ -239,7 +242,25 @@ def main():
         if "stopped by a stacked await out of memory)" not in p.stdout:
             problems.append(f"sweep-frame-stack: the summary's words: {p.stdout[-200:]!r}")
 
-    print(f"test_command_check: {len(expected)} tests, 7 checks; {len(problems)} problems")
+        # 8. a sweep run that exits says why (spec/tooling.md §10.2): an exit carries no message of its own, so the
+        #    failure ends with the run's standard error, here the line the program wrote before Process.exit(3)
+        exiting = os.path.join(work, "sweep-exit-output")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "sweep-exit-output"), exiting,
+                        ignore=shutil.ignore_patterns("out"))
+        wanted = ("exitsWhenMemoryRunsOut: allocation 1 exited: exit status 3; its standard error ends:\n"
+                  "    cell: no memory for a cell; giving up")
+        p = run(["test", "--sweep", "alloc", "--format", "json"], exiting)
+        try:
+            failures = json.loads(p.stdout)["sweepFailures"]
+            if failures != [wanted]:
+                problems.append(f"sweep-exit-output: the JSON's failures {failures!r}; wanted [{wanted!r}]")
+        except ValueError:
+            problems.append(f"sweep-exit-output: no JSON document: {p.stdout[:300]}{p.stderr[-300:]}")
+        p = run(["test", "--sweep", "alloc"], exiting)
+        if wanted not in p.stdout or p.returncode != 1:
+            problems.append(f"sweep-exit-output: exit status {p.returncode}, text {p.stdout[-300:]!r}")
+
+    print(f"test_command_check: {len(expected)} tests, 8 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

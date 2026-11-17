@@ -235,6 +235,49 @@ fn outcomeName(outcome: u32) -> StringView => match (outcome) {
     _ => "not found",
 };
 
+/// The end of `stderr`: its last `lines` lines, at most `bytes` bytes of them, each indented by four spaces, without
+/// the harness protocol's own lines (`ceesafe-test`, `ceesafe alloc`, `ceesafe cancel`) or blank ones.
+fn stderrTail(stderr: Slice<u8>, lines: usize, bytes: usize) -> Vector<u8> {
+    // Where each kept line starts and ends, from the end backwards.
+    var starts = Vector<usize>.create();
+    var ends = Vector<usize>.create();
+    var total: usize = 0;
+    var end = stderr.length;
+    while (end > 0 && starts.length < lines) {
+        var start = end;
+        while (start > 0 && stderr[start - 1] != '\n') {
+            start -= 1;
+        }
+        var stop = end;
+        while (stop > start && (stderr[stop - 1] == '\n' || stderr[stop - 1] == '\r' || stderr[stop - 1] == ' ')) {
+            stop -= 1;
+        }
+        let line = stderr[start..stop];
+        let protocol = startsWithText(line, "ceesafe-test ") || startsWithText(line, "ceesafe alloc:") ||
+            startsWithText(line, "ceesafe cancel:");
+        if (stop > start && !protocol) {
+            if (total + (stop - start) > bytes) {
+                break;
+            }
+            total += stop - start;
+            starts.push(start)!;
+            ends.push(stop)!;
+        }
+        end = if (start > 0) start - 1 else 0;
+    }
+    var out = Vector<u8>.create();
+    var k = starts.length;
+    while (k > 0) {
+        k -= 1;
+        appendText(mut out, "    ")!;
+        appendBytes(mut out, stderr[starts[k]..ends[k]])!;
+        if (k > 0) {
+            out.push('\n')!;
+        }
+    }
+    return out;
+}
+
 /// The number after `key` in `text`, or none.
 fn numberAfter(text: Slice<u8>, key: StringView) -> u64 {
     let k = key.bytes();
@@ -660,6 +703,16 @@ fn testCommand() -> i32 {
                     if (swept.message.length > 0) {
                         appendText(mut what, ": ")!;
                         appendBytes(mut what, swept.message.view())!;
+                    }
+                    // A crash, an exit, a timeout or an unknown end says nothing of why (an exit status, a signal):
+                    // the run's own standard error may (a sanitizer's report, a C library's message), and a sweep's
+                    // run is not run again to find it. A panic or a leak has its own message.
+                    let unexplained = swept.outcome == 3 || swept.outcome == 4 || swept.outcome == 6 ||
+                        swept.outcome == 8;
+                    let tail = if (unexplained) stderrTail(swept.stderr.view(), 40, 4000) else Vector<u8>.create();
+                    if (tail.length > 0) {
+                        appendText(mut what, "; its standard error ends:\n")!;
+                        appendBytes(mut what, tail.view())!;
                     }
                     sweepFailures.push(what)!;
                 }

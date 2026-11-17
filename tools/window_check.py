@@ -63,7 +63,7 @@ that opened a window would open one on the developer's screen:
    answers Unsupported. With --display, a real desktop window's safe area is zero.
 12. the soft keyboard (ADR 0157): a scripted window's keyboard inset is zero until its script gives one; a new one
    shows in keyboardInset with a Resized at the content's size, the same one again gives nothing, one taller than the
-   content is the content's height, and setTextInputKind is accepted; a keyboard of two numbers or a negative one is
+   content is the content's height, and setTextInputKind and setReturnKey are accepted; a keyboard of two numbers or a negative one is
    a malformed script. With --display, a real desktop window's keyboard inset is zero.
 13. exporting a file (ADR 0158): on a scripted window FileDialog.exportFile copies the program's file to the path its
    script's `dialog` item answers and is true, leaves the file as it was, is false without an answer (a cancel), and
@@ -1634,6 +1634,7 @@ fn main() -> i32 {
         Err(_) => { Console.writeLine("open failed"); return 1; }
     };
     window.setTextInputKind(WindowTextKind.Email);
+    window.setReturnKey(WindowReturnKey.Done);
     window.setTextInput(true);
     if (Process.argument(1) == Some("real")) {
         inset(window);

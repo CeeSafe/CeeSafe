@@ -63,6 +63,7 @@
 - [enum WindowHandle](#enum-windowhandle)
 - [struct WindowSize](#struct-windowsize)
 - [struct WindowInsets](#struct-windowinsets)
+- [enum WindowReturnKey](#enum-windowreturnkey)
 - [enum WindowTextKind](#enum-windowtextkind)
 - [enum WindowAppEvent](#enum-windowappevent)
 - [struct WindowBox](#struct-windowbox)
@@ -2718,6 +2719,22 @@ public struct WindowInsets {
 
 How far the system covers a window's content from each of its edges, in points (`Window.safeArea`, ADR 0156).
 
+## enum WindowReturnKey
+
+```ceesafe
+public enum WindowReturnKey {
+    Default,
+    Done,
+    Go,
+    Next,
+    Search,
+    Send,
+}
+```
+
+What the soft keyboard's Return key says (`Window.setReturnKey`, ADR 0161): what the key does in the focused field.
+The key gives `Key.Enter` whatever it says.
+
 ## enum WindowTextKind
 
 ```ceesafe
@@ -3056,6 +3073,17 @@ public fn setTextInputKind(borrow mut this, kind: WindowTextKind)
 The kind of text the focused field takes (ADR 0157): which soft keyboard `setTextInput(true)` shows on iOS and
 Android, at once when it is already shown; for `Password`, the input method neither learns nor suggests.
 Desktop systems ignore it.
+Safety: the runtime only reads the number.
+
+### Window.setReturnKey
+
+```ceesafe
+public fn setReturnKey(borrow mut this, key: WindowReturnKey)
+```
+
+What the soft keyboard's Return key says in the focused field (ADR 0161), on iOS and Android, at once when the
+keyboard is shown. It changes the key's face only: the key is `Key.Enter`, and what Enter does is the
+program's. Desktop systems ignore it.
 Safety: the runtime only reads the number.
 
 ### Window.nextAppEvent

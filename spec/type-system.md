@@ -3453,6 +3453,10 @@ Diagnostics: none new.
   - **`w.setTextInputKind(WindowTextKind)`** (`borrow mut`) takes `Text` (the default), `Number`, `Decimal`,
     `Email`, `Url` or `Password`: the keyboard that text input shows, at once when one is shown; for `Password`,
     the input method neither learns nor suggests. The desktop systems ignore it.
+  - **`w.setReturnKey(WindowReturnKey)`** (`borrow mut`; ADR 0161) takes `Default`, `Done`, `Go`, `Next`, `Search`
+    or `Send`: what the soft keyboard's Return key says, at once when a keyboard is shown. It is the key's face only:
+    the key gives `Key.Enter` whichever it shows, and what Enter does in a field is the program's. The desktop
+    systems ignore it.
   - **Backends.** iOS: a hidden `UITextField` in the window's view (`CeeSafeTextField`), first responder while text
     input is on, with automatic capitals, correction and spell checking off since it never holds more than the
     composition: text without a marked range is committed and taken out of the field, the marked text is the
@@ -3523,7 +3527,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `nextAppEvent`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program

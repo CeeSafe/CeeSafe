@@ -86,13 +86,20 @@ extern "C" {
     @effects()
     fn ceesafe_window_set_touches(window: *mut void, on: i32) -> i32;
     @effects()
-    fn ceesafe_window_touch(window: *mut void, id: *mut u32, phase: *mut i32, position: *mut f32, time: *mut u64) -> i32;
+    fn ceesafe_window_touch(
+        window: *mut void,
+        id: *mut u32,
+        phase: *mut i32,
+        position: *mut f32,
+        time: *mut u64,
+    ) -> i32;
     @effects()
     fn ceesafe_window_safe_area(window: *mut void, insets: *mut f32);
     @effects()
     fn ceesafe_window_keyboard_inset(window: *mut void, inset: *mut f32);
     @effects()
     fn ceesafe_window_set_text_kind(window: *mut void, kind: i32);
+    fn ceesafe_window_set_return_key(window: *mut void, key: i32);
     @effects()
     fn ceesafe_window_app_event(window: *mut void) -> i32;
 }
@@ -150,6 +157,23 @@ public struct WindowInsets {
     public top: f32;
     public right: f32;
     public bottom: f32;
+}
+
+/// What the soft keyboard's Return key says (`Window.setReturnKey`, ADR 0161): what the key does in the focused field.
+/// The key gives `Key.Enter` whatever it says.
+public enum WindowReturnKey {
+    /// The system's own: "return", or a new line's arrow.
+    Default,
+    /// Ends the typing: the program leaves the field, and the keyboard goes.
+    Done,
+    /// Goes to what was typed: an address.
+    Go,
+    /// Moves to the next field.
+    Next,
+    /// Searches for what was typed.
+    Search,
+    /// Sends what was typed: a message.
+    Send,
 }
 
 /// The kind of text a text field takes, which chooses the soft keyboard a phone shows for it
@@ -514,6 +538,22 @@ public struct Window {
             WindowTextKind.Password => 5,
         };
         unsafe { ceesafe_window_set_text_kind(this.raw, number); }
+    }
+
+    /// What the soft keyboard's Return key says in the focused field (ADR 0161), on iOS and Android, at once when the
+    /// keyboard is shown. It changes the key's face only: the key is `Key.Enter`, and what Enter does is the
+    /// program's. Desktop systems ignore it.
+    /// Safety: the runtime only reads the number.
+    public fn setReturnKey(borrow mut this, key: WindowReturnKey) {
+        let number = match (key) {
+            WindowReturnKey.Default => 0,
+            WindowReturnKey.Done => 1,
+            WindowReturnKey.Go => 2,
+            WindowReturnKey.Next => 3,
+            WindowReturnKey.Search => 4,
+            WindowReturnKey.Send => 5,
+        };
+        unsafe { ceesafe_window_set_return_key(this.raw, number); }
     }
 
     /// The next thing the system told this app of its life, in order, or null; it never blocks (ADR 0159). iOS and

@@ -36,7 +36,18 @@ public final class InputView extends View {
     private static final int BACKSPACE = 0;
     private static final int ENTER = 1;
 
+    /** The Return key's faces, by WindowReturnKey's number: the key gives Enter whichever it shows. */
+    private static final int[] ACTIONS = {
+        EditorInfo.IME_ACTION_NONE,
+        EditorInfo.IME_ACTION_DONE,
+        EditorInfo.IME_ACTION_GO,
+        EditorInfo.IME_ACTION_NEXT,
+        EditorInfo.IME_ACTION_SEARCH,
+        EditorInfo.IME_ACTION_SEND,
+    };
+
     private int inputType = TYPES[0];
+    private int action = EditorInfo.IME_ACTION_NONE;
     private boolean shown;
     private String composing = "";
 
@@ -62,9 +73,14 @@ public final class InputView extends View {
     /** Text input on or off, and the kind of text: the keyboard shown, hidden, or shown again for a new kind. */
     public void apply(boolean on, int kind) {
         InputMethodManager manager = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        int type = TYPES[kind >= 0 && kind < TYPES.length ? kind : 0];
-        if (type != inputType) {
+        // The kind of text in the low byte, and the Return key's face above it (ADR 0161).
+        int text = kind & 0xFF;
+        int key = (kind >> 8) & 0xFF;
+        int type = TYPES[text < TYPES.length ? text : 0];
+        int wanted = ACTIONS[key < ACTIONS.length ? key : 0];
+        if (type != inputType || wanted != action) {
             inputType = type;
+            action = wanted;
             if (shown) {
                 finish();
                 manager.restartInput(this);
@@ -93,7 +109,7 @@ public final class InputView extends View {
     @Override
     public InputConnection onCreateInputConnection(EditorInfo out) {
         out.inputType = inputType;
-        out.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NONE;
+        out.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI | action;
         out.initialSelStart = 0;
         out.initialSelEnd = 0;
         composing = "";

@@ -910,7 +910,7 @@ fn hostBytes(
         return Err(fault("a host-service argument larger than the interpreter's memory"));
     }
     let value = it.memory.load(arguments[pointer].bits(0, 8)?, count as usize)?;
-    return Ok(value.data);
+    return Ok(bytesOfValue(value));
 }
 
 /// ceesafe_c_path: no zero byte, at most 4,095 bytes, valid text; null otherwise.
@@ -3219,7 +3219,7 @@ fn runTasks(
                         Some(v) => v,
                         null => uninitialisedValue(0),
                     };
-                    let isErr = result.data.length > 0 && result.bits(0, 1)? != 0;
+                    let isErr = result.size() > 0 && result.bits(0, 1)? != 0;
                     it.asyncScopes[scope as usize].results[joinIndex as usize] = result;
                     if (it.asyncScopes[scope as usize].first == 2) {
                         it.asyncScopes[scope as usize].first = joinIndex;

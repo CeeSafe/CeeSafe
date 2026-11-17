@@ -24,6 +24,10 @@
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
 - The Android window's embedded dex made from its Java source as it is now (tools/gen_android_dex.py --check;
   ADR 0157).
+- The release's chain (tools/bootstrap_release.sh; docs/release.md): HEAD's committed sources built from the
+  release's stage 0, whose chain ends in ceesafec 0.8.0, so a construct newer than it in the compiler's own sources
+  fails here and not at a release. Skipped without a stage 0 (--release-stage0, $CEESAFE_RELEASE_STAGE0 or
+  ~/.cache/ceesafe/stage0/ceesafec).
 - The command line (tools/cli_check.py; tooling.md §4.4 and §12): usage errors' status, the help texts, which command
   accepts which option, and the allocation variables under `run --interp`.
 - `fix` and `fmt` write each file where they read it (tools/fix_paths_check.py; tooling.md §4.4 and §5.3): absolute
@@ -90,7 +94,11 @@ def unsigned_enum_corpus(work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ceesafec", required=True)
+    parser.add_argument("--release-stage0", default=os.environ.get("CEESAFE_RELEASE_STAGE0"),
+                        help="the release's stage 0, ceesafec 0.3.2 (bootstrap/reference.md), for the release chain "
+                             "step; default: $CEESAFE_RELEASE_STAGE0, else ~/.cache/ceesafe/stage0/ceesafec")
     args = parser.parse_args()
+    stage0 = os.path.expanduser(args.release_stage0 or "~/.cache/ceesafe/stage0/ceesafec")
     cee = os.path.abspath(os.path.expanduser(args.ceesafec))
     corpus = os.path.join(ROOT, "tests", "reference", "tests", "corpus")
     support = sorted(glob.glob(os.path.join(ROOT, "src", "support", "*.cee")))
@@ -182,10 +190,20 @@ def main():
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),
             ("const statics", py + [f"{HERE}/const_statics_check.py", "--ceesafec", cee]),
             ("android dex", py + [f"{HERE}/gen_android_dex.py", "--check"]),
+            # The release's seed job builds HEAD through the stage 0's chain, whose last compiler is 0.8.0: the
+            # compiler's own sources may use only what it accepts (docs/release.md, step 2). Committed sources only.
+            ("release chain", ["sh", f"{HERE}/bootstrap_release.sh", stage0, "HEAD",
+                               os.path.join(work, "chain", "ceesafec")]),
         ]
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":
                 print(f"{name:14} skip io_uring is Linux's (ADR 0035)")
+                sys.stdout.flush()
+                continue
+            if name == "release chain" and (platform.system() == "Windows" or not os.path.isfile(stage0)):
+                why = ("the chain is a shell script" if platform.system() == "Windows" else
+                       f"no stage 0 at {stage0}: give --release-stage0 <ceesafec 0.3.2> (bootstrap/reference.md)")
+                print(f"{name:14} skip {why}")
                 sys.stdout.flush()
                 continue
             if name == "unsigned enum" and platform.system() == "Windows":

@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.64.0
+## Releases 0.25.0 to 0.65.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.65.0 | 2026-11-17 | What a window holds, told to a screen reader (ADR 0164). `w.setAccessNodes(nodes, text)` gives the window's elements in reading order, each a `WindowAccessNode` with a role, a name, a value, a state, a place and, for a text field, its caret and selection; `w.takeAccessAction()` is what the reader asked (`Press`, `Focus`, `Increment`, `Decrement`), `w.accessActive()` whether anything has asked for the elements, and `w.announce(text)` says a message. macOS is implemented, where VoiceOver reads and works a window's controls; the other systems keep the list and tell no reader yet | [Appendix C](./appendix-c-built-in-types) |
 | 0.64.0 | 2026-11-17 | Large values in a function's frame are reported (ADR 0163, part 1). `ceesafec build --explain-frames` also lists each function that is not `async` whose values of 4 KiB or more add up to 64 KiB or more of stack, and warning N0406 names one that reaches 256 KiB: a main thread's stack is 1 MiB on iOS and Windows. The totals are the compiler's estimate, and no generated code changes. `ceesafec run --interp` is about 1.6 times as fast on the slowest program of the compiler's tests: a value of 8 bytes or fewer takes no memory of its own | [Appendix E](./appendix-e-ceesafec), [Appendix F](./appendix-f-diagnostics) |
 | 0.63.0 | 2026-11-17 | What a soft keyboard's Return key says (ADR 0161). `w.setReturnKey(WindowReturnKey)` takes `Default`, `Done`, `Go`, `Next`, `Search` or `Send`: the face of the key on iOS and Android, at once when a keyboard is shown. The key gives `Key.Enter` whichever it shows; desktop systems ignore the call | [Appendix C](./appendix-c-built-in-types) |
 | 0.62.2 | 2026-11-17 | A sweep failure that crashed, exited or timed out ends with the last lines of the run's standard error, where a sanitizer's report or a C library's message says what ended it | [11.3](./ch11-03-organising-tests) |

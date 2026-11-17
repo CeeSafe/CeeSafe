@@ -176,7 +176,7 @@ Tests: `frames/large-values` (the report), `check-pass/large-frame-warning` (N04
 | Program | N0406 | Functions in the report | What they hold |
 |---|---|---|---|
 | The compiler (`src/`) | 0 | 5 | each one 64 KiB buffer for reading a file |
-| ClayWind's GPU host, with ClayWind and its desktop package | 0 | 6 | two 64 KiB read buffers; `emptyLayoutBuffer`, `emptyBidiBuffer` and `unicodeProps`, which build a table or a buffer as a value; `Raster.create`, 245,504 bytes, which takes the two buffers by value before it puts them in its memory |
+| ClayWind's GPU host, with ClayWind and its desktop package | 0 | 6 | two 64 KiB read buffers; `emptyLayoutBuffer`, `emptyBidiBuffer` and `unicodeProps`, which build a table or a buffer as a value; `Raster.create`, estimated at 245,504 bytes, which takes the two buffers by value before it puts them in its memory (67,632 in the binary: see below) |
 | The chat client | 0 | 5 | the same of ClayWind's, without the host's own |
 | CeeSafe.Web, its 14 packages and the overload benchmark | 0 | 0 | |
 | The HTTP client and its `get` example | 0 | 0 | |
@@ -186,3 +186,8 @@ Tests: `frames/large-values` (the report), `check-pass/large-frame-warning` (N04
   buffer or a table it means to hold.
 - **So the survey gives no case for Parts 2 and 3**: one program had the shape, the report now names it, and its
   remedy was in the program. They stay designs until a program shows the need.
+- **Corrected the same day: `Raster.create`'s 245,504 bytes is the estimate, and it is 3.6 times the frame.** In the
+  host's binary built by 0.64.0 `Raster.create`'s frame is 67,632 bytes and `emptyLayoutBuffer`'s 24,576 (estimate
+  124,792): clang gives the four buffer temporaries, which are never live together, one place. About 92 KiB is on
+  the stack once, at start-up. The owner's decision on it: "Leave the code and correct the records". It is the
+  largest gap measured between the estimate and a frame, above `frames/large-values`' 2.5 times.

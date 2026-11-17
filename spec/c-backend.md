@@ -641,7 +641,8 @@ reports it and changes no code for it.
   The sum of the values' sizes is the function's **estimate**.
 - **It is an estimate of a release build's frame, not a bound.** An optimising C compiler keeps a value that is
   only passed along in one place, which is what the joining models; it may also give two values that are never
-  live together one place (the estimate is then high: 2.5 times the frame in the corpus's `frames/large-values`),
+  live together one place (the estimate is then high: 2.5 times the frame in the corpus's `frames/large-values`,
+  3.6 times in ClayWind's `Raster.create`, ADR 0163 §6.1),
   and it may inline a callee, whose values are then in the caller's frame (the estimate is then low). A debug
   build keeps every local apart. Values below 4 KiB are not counted.
 - **`ceesafec build --explain-frames`** lists, after the async frames, each such function of the package whose

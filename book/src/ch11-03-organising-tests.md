@@ -241,6 +241,10 @@ The test passed, and the sweep found the panic that a real shortage of memory wo
 allocation and the place. The exit status is 1. The fix is the shape of `totals`: return
 `Result<Vector<u64>, AllocError>` and write `?`.
 
+A panic says where it happened. A run that crashed, exited or timed out says only its exit status or signal, so its
+line ends with the last lines that run wrote to standard error, indented, where a sanitizer's report or a C library's
+message says why. The sweep does not run it again to ask.
+
 The sweep forgives one thing. A `!` in a test file is the test's own business, not a fault in the code under test,
 so a panic from an unwrap in a file that declares a test is not a sweep failure. The last line then counts it:
 `(1 unwrapped by the test itself)`.

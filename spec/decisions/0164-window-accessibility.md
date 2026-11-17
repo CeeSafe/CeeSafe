@@ -1,9 +1,10 @@
 # ADR 0164 — What a window holds, told to a screen reader
 
-- Status: **Proposed**, 2026-11-17, for ClayWind's roadmap phase P5 (platform completeness; the owner: "Continue to
-  P5"), whose gate is "the component library passes VoiceOver, NVDA and TalkBack checks". Nothing is implemented in
-  CeeSafe. ClayWind's side exists (its commit `3b23725`): a frame's elements with role, name, value, state and place,
-  and a screen reader's actions as the controls see them; it names no system, and waits for this.
+- Status: **Accepted** by the owner, 2026-11-17 ("I  accept ADR 0164 as written"), for ClayWind's roadmap phase P5
+  (platform completeness; the owner: "Continue to P5"), whose gate is "the component library passes VoiceOver, NVDA
+  and TalkBack checks". The API and macOS are implemented (§6); iOS, Android, Windows and Linux are the steps left.
+  ClayWind's side exists (its commit `3b23725`): a frame's elements with role, name, value, state and place, and a
+  screen reader's actions as the controls see them.
 - Scope: `lib/std/window.cee` (`WindowAccessRole`, `WindowAccessNode`, `WindowAccessAction`, four methods of
   `Window`), `runtime/hosted/ceesafe_rt_window.c`, `runtime/android/` (a node provider and its embedded dex),
   type-system.md §26.13, `spec/api/std.md` (generated), `tools/window_check.py`. No compiler change, no change to the
@@ -117,3 +118,26 @@ Each system is its own step and its own release, in this order; the API is relea
 - The owner's checks with VoiceOver (macOS, iOS), TalkBack and NVDA on ClayWind's component demo: every control is
   reached in order, says its role, name, value and state, and can be activated.
 - The corpus, the contract suite, the release chain; that a program which never calls these is unchanged.
+
+## 6. Step 1 as implemented: the API and macOS (2026-11-17)
+
+`lib/std/window.cee`, `runtime/hosted/ceesafe_rt_window.c`, type-system.md §26.13, `tools/window_check.py` item 15.
+
+- **As §2 has it**, with these made exact: a window keeps 16 requests not taken and drops a newer one; a request
+  of a `disabled` element is not queued (macOS answers the reader that the action failed); out of memory, the last
+  list stays.
+- **One change from §5: there is no script log.** A scripted run has no log to write the list to, and adding one
+  for this would be a second way to do what the test program does by printing. `access:ID,ACTION` queues a request
+  as §5 says, and the check's program prints what it takes. What the system is told is checked on the system
+  itself, below.
+- **A scripted window's frame 0 is taken when the window opens**, before a program can have given a list, so a
+  request there finds no element: scripts ask from frame 1.
+- **macOS, checked in the process**: `window_check --display` builds a program with one element of each role and a
+  C file that asks AppKit for the content view's `accessibilityChildren`, which needs no permission as another
+  process's questions do. AppKit reports the eleven roles with their names, values, states and frames (to the
+  point); `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` arrive from
+  `takeAccessAction` in order; a press of the disabled element does not; after a second list with a changed value
+  and focus, all eleven elements are the same objects and say the new value and focus; `accessActive` is false
+  before the first question and true after. 76 checks, 0 problems.
+- **Not checked yet**: VoiceOver itself, which is the owner's check with ClayWind's component demo; the
+  notifications' effect on a reader (they are posted; nothing in the process hears them).

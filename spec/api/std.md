@@ -76,6 +76,10 @@
 - [struct WindowDragOver](#struct-windowdragover)
 - [enum WindowTouchPhase](#enum-windowtouchphase)
 - [struct WindowTouch](#struct-windowtouch)
+- [enum WindowAccessRole](#enum-windowaccessrole)
+- [struct WindowAccessNode](#struct-windowaccessnode)
+- [enum WindowAccessAction](#enum-windowaccessaction)
+- [struct WindowAccessRequest](#struct-windowaccessrequest)
 - [struct WindowWaker](#struct-windowwaker)
 - [struct Window](#struct-window)
 - [struct MenuShortcut](#struct-menushortcut)
@@ -2916,6 +2920,111 @@ public struct WindowTouch {
 A finger on a touch screen (§26.13, ADR 0155): `Window.nextTouch`. Each finger gives one `Began`, then `Moved`s,
 then exactly one `Ended` or `Cancelled`.
 
+## enum WindowAccessRole
+
+```ceesafe
+public enum WindowAccessRole {
+    Text,
+    Button,
+    Checkbox,
+    Radio,
+    TextField,
+    Slider,
+    Tab,
+    ListItem,
+    MenuItem,
+    Dropdown,
+    Image,
+}
+```
+
+What an element of a window is, to a screen reader (§26.13, ADR 0164).
+
+## struct WindowAccessNode
+
+```ceesafe
+public struct WindowAccessNode {
+    public id: u64;
+    public role: WindowAccessRole;
+    public flags: u32;
+    public x: f32;
+    public y: f32;
+    public width: f32;
+    public height: f32;
+    public min: f64;
+    public max: f64;
+    public now: f64;
+    public labelStart: u32;
+    public labelLength: u32;
+    public valueStart: u32;
+    public valueLength: u32;
+}
+```
+
+An element of a window as a screen reader is told of it (§26.13, ADR 0164): `Window.setAccessNodes`.
+
+### WindowAccessNode.checked
+
+```ceesafe
+public fn checked() -> u32
+```
+
+### WindowAccessNode.selected
+
+```ceesafe
+public fn selected() -> u32
+```
+
+### WindowAccessNode.focused
+
+```ceesafe
+public fn focused() -> u32
+```
+
+### WindowAccessNode.disabled
+
+```ceesafe
+public fn disabled() -> u32
+```
+
+### WindowAccessNode.expanded
+
+```ceesafe
+public fn expanded() -> u32
+```
+
+### WindowAccessNode.secure
+
+```ceesafe
+public fn secure() -> u32
+```
+
+The text is hidden as it is typed.
+
+## enum WindowAccessAction
+
+```ceesafe
+public enum WindowAccessAction {
+    Press,
+    Focus,
+    Increment,
+    Decrement,
+}
+```
+
+What a screen reader asks of an element (§26.13, ADR 0164).
+
+## struct WindowAccessRequest
+
+```ceesafe
+public struct WindowAccessRequest {
+    public id: u64;
+    public action: WindowAccessAction;
+}
+```
+
+A screen reader's request (§26.13, ADR 0164): `Window.takeAccessAction`.
+
 ## struct WindowWaker
 
 ```ceesafe
@@ -3085,6 +3194,52 @@ What the soft keyboard's Return key says in the focused field (ADR 0161), on iOS
 keyboard is shown. It changes the key's face only: the key is `Key.Enter`, and what Enter does is the
 program's. Desktop systems ignore it.
 Safety: the runtime only reads the number.
+
+### Window.setAccessNodes
+
+```ceesafe
+public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: Slice<u8>)
+```
+
+The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
+holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
+last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
+A range outside `text`, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
+there yet, and when memory runs out, the last list stays.
+Safety: the runtime copies `nodes.length` nodes and `text.length` bytes during the call.
+
+### Window.takeAccessAction
+
+```ceesafe
+public fn takeAccessAction(borrow mut this) -> WindowAccessRequest?
+```
+
+The oldest request of a screen reader not yet taken, or null; it never blocks (ADR 0164). A request is queued
+when the reader asks it of an element of the current list, and ends `waitEvent`, `waitFrame` and
+`Window.waitAny` as an event does. The program does what is asked, or does not: the runtime changes nothing.
+A window keeps at most 16 requests not taken; a newer one is dropped.
+Safety: the runtime writes the request's fields.
+
+### Window.accessActive
+
+```ceesafe
+public fn accessActive(borrow this) -> bool
+```
+
+Whether something has asked the system for this window's elements since it opened: a screen reader, a switch,
+an automation tool (ADR 0164). A program may leave `setAccessNodes` out while it is false, and gives the list
+once it is true. It does not go back to false.
+Safety: the runtime reads a flag.
+
+### Window.announce
+
+```ceesafe
+public fn announce(borrow mut this, text: StringView)
+```
+
+Says `text` through the screen reader now, without moving its cursor: a message arrived, a save finished (ADR
+0164). Nothing happens when no reader runs.
+Safety: the runtime reads `text.length` bytes during the call.
 
 ### Window.nextAppEvent
 

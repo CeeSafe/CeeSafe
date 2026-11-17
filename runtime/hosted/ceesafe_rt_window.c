@@ -92,6 +92,9 @@
 /* A scripted app event (`app:background`, `app:foreground`, `app:memory`, ADR 0159): never queued as a window event,
    it is queued for nextAppEvent. */
 #define CEE_SCRIPT_APP 109
+/* A scripted request of a screen reader (`access:ID,ACTION`, ADR 0164): never queued as an event, it is queued for
+   takeAccessAction if the window's list has the element. */
+#define CEE_SCRIPT_ACCESS 110
 
 /* App events (ADR 0159): WindowAppEvent's numbers, and how many a window keeps that the program has not taken. */
 #define CEE_APP_BACKGROUND 0
@@ -225,6 +228,32 @@ struct cee_window_drop {
     size_t length;
 };
 
+/* An element of a window for a screen reader (ADR 0164): lib/std's RawAccessNode, field for field. */
+struct cee_access_node {
+    uint64_t id;
+    double min, max, now;
+    float x, y, width, height;
+    uint32_t role, flags;
+    uint32_t label_start, label_length, value_start, value_length;
+};
+#define CEE_ACCESS_CHECKED 1u
+#define CEE_ACCESS_SELECTED 2u
+#define CEE_ACCESS_FOCUSED 4u
+#define CEE_ACCESS_DISABLED 8u
+#define CEE_ACCESS_EXPANDED 16u
+#define CEE_ACCESS_SECURE 32u
+#define CEE_ACCESS_ROLES 11u
+#define CEE_ACCESS_PRESS 0
+#define CEE_ACCESS_FOCUS 1
+#define CEE_ACCESS_INCREMENT 2
+#define CEE_ACCESS_DECREMENT 3
+#define CEE_ACCESS_QUEUE 16u
+
+struct cee_access_request {
+    uint64_t id;
+    int32_t action;
+};
+
 struct cee_window {
     int scripted;
     int external; /* WindowSurface.External: the program draws the content, the runtime never does (ADR 0137) */
@@ -319,6 +348,15 @@ struct cee_window {
     float keyboard;
     int32_t text_kind;
     int32_t return_key; /* WindowReturnKey's number, 0 to 5 (ADR 0161) */
+    /* Accessibility (ADR 0164): the list last given and the text its ranges point into (the runtime's copies), the
+       requests not yet taken (a ring), and whether anything has asked the system for the list. */
+    struct cee_access_node *access;
+    uint32_t access_count;
+    char *access_text;
+    uint32_t access_text_length;
+    struct cee_access_request access_requests[CEE_ACCESS_QUEUE];
+    unsigned access_head, access_requests_count;
+    int access_active;
     /* The app's life (ADR 0159): whether the app is in the background, as the last app event queued says; the app
        events not yet taken (a ring); and whether the program took a BACKGROUND and has not waited or polled since,
        which is the time it is given to save. */
@@ -366,6 +404,29 @@ void ceesafe_window_keyboard_inset(void *window, float *inset);
 void ceesafe_window_set_text_kind(void *window, int32_t kind);
 void ceesafe_window_set_return_key(void *window, int32_t key);
 int32_t ceesafe_window_app_event(void *window);
+int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t count, const uint8_t *text, uint32_t length);
+int32_t ceesafe_window_access_request(void *window, uint64_t *id, int32_t *action);
+int32_t ceesafe_window_access_active(void *window);
+void ceesafe_window_announce(void *window, const uint8_t *text, uint64_t length);
+
+/* A screen reader asks `action` of element `id` (ADR 0164): queued if the window's list has the element and the
+   ring has room. The caller ends the wait. */
+static int cee_access_ask(struct cee_window *w, uint64_t id, int32_t action) {
+    if (w->access_requests_count == CEE_ACCESS_QUEUE) {
+        return 0;
+    }
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        if (w->access[k].id == id) {
+            struct cee_access_request *r =
+                &w->access_requests[(w->access_head + w->access_requests_count) % CEE_ACCESS_QUEUE];
+            r->id = id;
+            r->action = action;
+            w->access_requests_count++;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static void cee_touch_cancel_all(struct cee_window *w);
 
@@ -1642,6 +1703,24 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         }
         return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_TOUCH, (int32_t)id, phase, 0, 0, v[0], v[1]);
     }
+    if (CEE_IS("access")) { /* access:ID,ACTION (ADR 0164) */
+        static const char *const actions[4] = {"press", "focus", "increment", "decrement"};
+        uint64_t id = 0;
+        size_t at = 0;
+        while (at < args_length && args[at] >= '0' && args[at] <= '9' && id <= 100000000u) {
+            id = id * 10u + (uint64_t)(args[at++] - '0');
+        }
+        if (at == 0 || at == args_length || args[at] != ',' || id == 0) {
+            return 0;
+        }
+        at++;
+        for (int32_t k = 0; k < 4; k++) {
+            if (args_length - at == strlen(actions[k]) && memcmp(args + at, actions[k], args_length - at) == 0) {
+                return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_ACCESS, (int32_t)id, k, 0, 0, 0.0, 0.0);
+            }
+        }
+        return 0;
+    }
     if (CEE_IS("dragleave")) {
         return name_length == rest && cee_window_script_add(w, capacity, frame, CEE_SCRIPT_DRAG, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -1766,6 +1845,8 @@ static void cee_window_script_pump(struct cee_window *w) {
                 }
             }
             cee_window_dropped(w, e.x, e.y, &p); /* out of memory: the paths kept so far */
+        } else if (e.kind == CEE_SCRIPT_ACCESS) {
+            cee_access_ask(w, (uint64_t)(uint32_t)e.fields[0], e.fields[1]);
         } else if (e.kind == CEE_SCRIPT_TOUCH) {
             uintptr_t key = (uintptr_t)e.fields[0] + 1u;
             uint64_t time = w->frames * (uint64_t)CEE_TOUCH_FRAME_NS;
@@ -3035,6 +3116,11 @@ static struct {
     void *main_loop;
     void (*source_signal)(void *);
     void (*loop_wake_up)(void *);
+    /* Accessibility (ADR 0164): CeeSafeAccessElement, an NSAccessibilityElement that answers from the window's list;
+       NSAccessibilityPostNotification and …WithUserInfo. NULL without them: the window then has no elements. */
+    cee_id access_class;
+    void (*access_post)(cee_id, cee_id);
+    void (*access_post_info)(cee_id, cee_id, cee_id);
 } cee_objc;
 
 /* CFRunLoopSourceContext, version 0 (CoreFoundation's CFRunLoop.h). */
@@ -3093,6 +3179,9 @@ struct cee_mac {
     unsigned char ime_keys[16];
     /* A drag over the view (ADR 0150): how many files its pasteboard holds, read when it entered. */
     uint32_t drag_files;
+    /* Accessibility (ADR 0164): the element of each node of the window's list, in its order, each retained. */
+    cee_id *access_elements;
+    uint32_t access_count;
 };
 
 static cee_fn cee_mac_symbol(void *handle, const char *name) {
@@ -3543,6 +3632,311 @@ static signed char cee_mac_periodic_drags(cee_id self, cee_sel cmd) {
     return 0;
 }
 
+/* ---- Accessibility on macOS (ADR 0164) --------------------------------------------------------------------------
+   Each node of the window's list is an NSAccessibilityElement whose parent is the content view. An element is kept
+   from one list to the next while its id is in both, so a reader's cursor stays on it. The elements answer their
+   frame from the list as it is now, in screen coordinates, so a moved window needs no telling. */
+#define CEE_WINDOW_ACCESS 1
+
+static cee_id cee_mac_string(const char *text, size_t length);
+
+/* The window and the index of `element` in its list, or NULL. */
+static struct cee_window *cee_mac_access_owner(cee_id element, uint32_t *index) {
+    for (int k = 0; k < CEE_MAC_WINDOWS; k++) {
+        struct cee_window *w = cee_mac_windows[k].window;
+        if (w == NULL || w->native == NULL) {
+            continue;
+        }
+        struct cee_mac *m = (struct cee_mac *)w->native;
+        for (uint32_t i = 0; i < m->access_count && i < w->access_count; i++) {
+            if (m->access_elements[i] == element) {
+                *index = i;
+                return w;
+            }
+        }
+    }
+    return NULL;
+}
+
+static cee_rect cee_mac_access_frame(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_rect r = {{0.0, 0.0}, {0.0, 0.0}};
+    uint32_t index = 0;
+    struct cee_window *w = cee_mac_access_owner(self, &index);
+    if (w == NULL) {
+        return r;
+    }
+    const struct cee_access_node *n = &w->access[index];
+    /* The content view's coordinates are the window's, origin bottom left (as cee_mac_first_rect has it). */
+    r.origin.x = (double)n->x;
+    r.origin.y = (double)w->height - (double)n->y - (double)n->height;
+    r.size.width = (double)n->width;
+    r.size.height = (double)n->height;
+    return cee_send_rect_rect(((struct cee_mac *)w->native)->window, "convertRectToScreen:", r);
+}
+
+/* The reader asks `action` of the element: queued, and the wait ended. */
+static signed char cee_mac_access_asked(cee_id self, int32_t action) {
+    uint32_t index = 0;
+    struct cee_window *w = cee_mac_access_owner(self, &index);
+    if (w == NULL || (w->access[index].flags & CEE_ACCESS_DISABLED) != 0) {
+        return 0;
+    }
+    if (cee_access_ask(w, w->access[index].id, action)) {
+        cee_mac_wake_perform(NULL);
+    }
+    return 1;
+}
+
+static signed char cee_mac_access_press(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return cee_mac_access_asked(self, CEE_ACCESS_PRESS);
+}
+
+static signed char cee_mac_access_increment(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return cee_mac_access_asked(self, CEE_ACCESS_INCREMENT);
+}
+
+static signed char cee_mac_access_decrement(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return cee_mac_access_asked(self, CEE_ACCESS_DECREMENT);
+}
+
+static void cee_mac_access_set_focused(cee_id self, cee_sel cmd, signed char on) {
+    (void)cmd;
+    if (on) {
+        cee_mac_access_asked(self, CEE_ACCESS_FOCUS);
+    }
+}
+
+static signed char cee_mac_access_is_focused(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    uint32_t index = 0;
+    struct cee_window *w = cee_mac_access_owner(self, &index);
+    return w != NULL && (w->access[index].flags & CEE_ACCESS_FOCUSED) != 0;
+}
+
+/* The content view's part: its children are the elements, and it is no element itself. */
+static cee_id cee_mac_access_children(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return cee_send(cee_mac_cls("NSArray"), "array");
+    }
+    w->access_active = 1;
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    return ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_objc.send)(
+        cee_mac_cls("NSArray"), cee_mac_sel("arrayWithObjects:count:"), m->access_elements,
+        (unsigned long)(m->access_count < w->access_count ? m->access_count : w->access_count));
+}
+
+static signed char cee_mac_access_view_is_element(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return 0;
+}
+
+static cee_id cee_mac_access_view_role(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    return cee_nsstring("AXGroup");
+}
+
+/* The element at a point of the screen: the last in the list that holds it (drawn later, so on top), or the view. */
+static cee_id cee_mac_access_hit(cee_id self, cee_sel cmd, cee_point point) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w == NULL) {
+        return self;
+    }
+    w->access_active = 1;
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    cee_point p = ((cee_point(*)(cee_id, cee_sel, cee_point))cee_objc.send)(m->window,
+                                                                         cee_mac_sel("convertPointFromScreen:"), point);
+    double x = p.x, y = (double)w->height - p.y;
+    for (uint32_t k = m->access_count < w->access_count ? m->access_count : w->access_count; k-- > 0;) {
+        const struct cee_access_node *n = &w->access[k];
+        if (x >= (double)n->x && y >= (double)n->y && x < (double)n->x + (double)n->width &&
+            y < (double)n->y + (double)n->height) {
+            return m->access_elements[k];
+        }
+    }
+    return self;
+}
+
+static cee_id cee_mac_access_focused_element(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    struct cee_window *w = cee_mac_view_owner(self);
+    if (w != NULL) {
+        struct cee_mac *m = (struct cee_mac *)w->native;
+        for (uint32_t k = 0; k < m->access_count && k < w->access_count; k++) {
+            if ((w->access[k].flags & CEE_ACCESS_FOCUSED) != 0) {
+                return m->access_elements[k];
+            }
+        }
+    }
+    return self;
+}
+
+static cee_id cee_mac_number(double value) {
+    return ((cee_id(*)(cee_id, cee_sel, double))cee_objc.send)(cee_mac_cls("NSNumber"), cee_mac_sel("numberWithDouble:"),
+                                                              value);
+}
+
+/* Gives `element` what node `n` says: its role, name, value and state. Its frame it answers itself. */
+static void cee_mac_access_apply(cee_id element, const struct cee_access_node *n, const char *text) {
+    static const char *const roles[CEE_ACCESS_ROLES] = {
+        "AXStaticText", "AXButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXSlider",
+        "AXRadioButton", "AXButton", "AXMenuItem", "AXPopUpButton", "AXImage"};
+    cee_id label = cee_mac_string(text + n->label_start, n->label_length);
+    cee_id value = NULL;
+    const char *subrole = NULL;
+    switch (n->role) {
+    case 0: /* text: what is read is its value */
+        value = label;
+        label = NULL;
+        break;
+    case 2: case 3:
+        value = cee_mac_number((n->flags & CEE_ACCESS_CHECKED) != 0 ? 1.0 : 0.0);
+        break;
+    case 6: /* a tab is a radio button of the tab kind */
+        subrole = "AXTabButton";
+        value = cee_mac_number((n->flags & CEE_ACCESS_SELECTED) != 0 ? 1.0 : 0.0);
+        break;
+    case 5:
+        value = cee_mac_number(n->now);
+        cee_send_v_id(element, "setAccessibilityMinValue:", cee_mac_number(n->min));
+        cee_send_v_id(element, "setAccessibilityMaxValue:", cee_mac_number(n->max));
+        break;
+    case 4:
+        if ((n->flags & CEE_ACCESS_SECURE) != 0) {
+            subrole = "AXSecureTextField"; /* its text is not given */
+            value = cee_nsstring("");
+            break;
+        }
+        value = cee_mac_string(text + n->value_start, n->value_length);
+        break;
+    case 9:
+        value = cee_mac_string(text + n->value_start, n->value_length);
+        break;
+    default:
+        break;
+    }
+    cee_send_v_id(element, "setAccessibilityRole:", cee_nsstring(roles[n->role]));
+    cee_send_v_id(element, "setAccessibilitySubrole:", subrole != NULL ? cee_nsstring(subrole) : NULL);
+    cee_send_v_id(element, "setAccessibilityLabel:", label);
+    cee_send_v_id(element, "setAccessibilityValue:", value);
+    cee_send_v_bool(element, "setAccessibilityEnabled:", (n->flags & CEE_ACCESS_DISABLED) == 0);
+    cee_send_v_bool(element, "setAccessibilitySelected:", (n->flags & CEE_ACCESS_SELECTED) != 0);
+    if (n->role == 8 || n->role == 9) {
+        cee_send_v_bool(element, "setAccessibilityExpanded:", (n->flags & CEE_ACCESS_EXPANDED) != 0);
+    }
+}
+
+static int cee_access_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                                uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): the elements follow it, and
+   the system is told what a reader needs to hear. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (m == NULL || cee_objc.access_class == NULL) {
+        return;
+    }
+    void *pool = cee_objc.pool_push();
+    uint32_t count = w->access_count;
+    if (old_count > m->access_count) {
+        old_count = m->access_count; /* a list whose elements could not be made */
+    }
+    cee_id *elements = count > 0 ? (cee_id *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
+    if (count > 0 && elements == NULL) {
+        count = 0; /* out of memory: the window has no elements until the next list */
+    }
+    int layout = count != old_count;
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+            layout = 1;
+        }
+        if (j < old_count && m->access_elements[j] != NULL) {
+            const struct cee_access_node *o = &old[j];
+            cee_id element = m->access_elements[j];
+            m->access_elements[j] = NULL;
+            elements[k] = element;
+            int named = !cee_access_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
+                                              o->label_length);
+            int valued = n->now != o->now || n->min != o->min || n->max != o->max ||
+                         ((n->flags ^ o->flags) & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED | CEE_ACCESS_EXPANDED)) != 0 ||
+                         !cee_access_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                               o->value_length);
+            if (named || valued || n->role != o->role || n->flags != o->flags) {
+                cee_mac_access_apply(element, n, w->access_text);
+            }
+            if (w->access_active && cee_objc.access_post != NULL) {
+                if (named) {
+                    cee_objc.access_post(element, cee_nsstring(n->role == 0 ? "AXValueChanged" : "AXTitleChanged"));
+                }
+                if (valued) {
+                    cee_objc.access_post(element, cee_nsstring("AXValueChanged"));
+                }
+                if ((n->flags & CEE_ACCESS_FOCUSED) != 0 && (o->flags & CEE_ACCESS_FOCUSED) == 0) {
+                    cee_objc.access_post(element, cee_nsstring("AXFocusedUIElementChanged"));
+                }
+            }
+        } else {
+            cee_id element = cee_send(cee_send(cee_objc.access_class, "alloc"), "init");
+            elements[k] = element;
+            if (element != NULL) {
+                cee_send_v_id(element, "setAccessibilityParent:", m->view);
+                cee_mac_access_apply(element, n, w->access_text);
+            }
+            layout = 1;
+        }
+    }
+    for (uint32_t j = 0; j < m->access_count; j++) { /* the elements the new list does not have */
+        if (m->access_elements[j] != NULL) {
+            cee_send_v_id(m->access_elements[j], "setAccessibilityParent:", NULL);
+            cee_send_v(m->access_elements[j], "release");
+            layout = 1;
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = elements;
+    m->access_count = count;
+    if (layout && w->access_active && cee_objc.access_post != NULL) {
+        cee_objc.access_post(m->view, cee_nsstring("AXLayoutChanged"));
+    }
+    cee_objc.pool_pop(pool);
+}
+
+/* Says `text` through the reader: an announcement of the application's, at high priority. */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (m == NULL || cee_objc.access_post_info == NULL) {
+        return;
+    }
+    void *pool = cee_objc.pool_push();
+    cee_id keys[2] = {cee_nsstring("AXAnnouncementKey"), cee_nsstring("AXPriorityKey")};
+    cee_id values[2] = {cee_mac_string(text, length), cee_mac_number(90.0)}; /* NSAccessibilityPriorityHigh */
+    cee_id info = ((cee_id(*)(cee_id, cee_sel, const cee_id *, const cee_id *, unsigned long))cee_objc.send)(
+        cee_mac_cls("NSDictionary"), cee_mac_sel("dictionaryWithObjects:forKeys:count:"), values, keys, 2ul);
+    cee_objc.access_post_info(m->window, cee_nsstring("AXAnnouncementRequested"), info);
+    cee_objc.pool_pop(pool);
+}
+
 static int cee_mac_load(void) {
     if (cee_objc.state != 0) {
         return cee_objc.state == 1;
@@ -3681,9 +4075,33 @@ static int cee_mac_load(void) {
         if (protocol != NULL && cee_objc.add_protocol != NULL) {
             cee_objc.add_protocol(view, protocol); /* NSView's inputContext asks for it */
         }
+        cee_objc.add_method(view, cee_mac_sel("accessibilityChildren"), (cee_fn)cee_mac_access_children, "@@:");
+        cee_objc.add_method(view, cee_mac_sel("isAccessibilityElement"), (cee_fn)cee_mac_access_view_is_element, "c@:");
+        cee_objc.add_method(view, cee_mac_sel("accessibilityRole"), (cee_fn)cee_mac_access_view_role, "@@:");
+        cee_objc.add_method(view, cee_mac_sel("accessibilityHitTest:"), (cee_fn)cee_mac_access_hit, "@@:{CGPoint=dd}");
+        cee_objc.add_method(view, cee_mac_sel("accessibilityFocusedUIElement"), (cee_fn)cee_mac_access_focused_element,
+                            "@@:");
         cee_objc.register_class(view);
     }
     cee_objc.view_class = view;
+    /* Accessibility (ADR 0164): the view's children are the window's elements; an element answers from its node. */
+    cee_objc.access_post = (void (*)(cee_id, cee_id))cee_mac_symbol(appkit, "NSAccessibilityPostNotification");
+    cee_objc.access_post_info =
+        (void (*)(cee_id, cee_id, cee_id))cee_mac_symbol(appkit, "NSAccessibilityPostNotificationWithUserInfo");
+    cee_id access = cee_objc.allocate_class(cee_mac_cls("NSAccessibilityElement"), "CeeSafeAccessElement", 0);
+    if (access == NULL) {
+        access = cee_mac_cls("CeeSafeAccessElement");
+    } else {
+        cee_objc.add_method(access, cee_mac_sel("accessibilityFrame"), (cee_fn)cee_mac_access_frame,
+                            "{CGRect={CGPoint=dd}{CGSize=dd}}@:");
+        cee_objc.add_method(access, cee_mac_sel("accessibilityPerformPress"), (cee_fn)cee_mac_access_press, "c@:");
+        cee_objc.add_method(access, cee_mac_sel("accessibilityPerformIncrement"), (cee_fn)cee_mac_access_increment, "c@:");
+        cee_objc.add_method(access, cee_mac_sel("accessibilityPerformDecrement"), (cee_fn)cee_mac_access_decrement, "c@:");
+        cee_objc.add_method(access, cee_mac_sel("setAccessibilityFocused:"), (cee_fn)cee_mac_access_set_focused, "v@:c");
+        cee_objc.add_method(access, cee_mac_sel("isAccessibilityFocused"), (cee_fn)cee_mac_access_is_focused, "c@:");
+        cee_objc.register_class(access);
+    }
+    cee_objc.access_class = access;
     /* Waking from another thread (ADR 0142): a version 0 run loop source in the main run loop's common modes.
        CFRunLoopSourceSignal and CFRunLoopWakeUp may be called from any thread and allocate nothing; the callback runs
        here, on the main thread. */
@@ -3794,6 +4212,15 @@ static void cee_native_close(struct cee_window *w) {
         return;
     }
     void *pool = cee_objc.pool_push();
+    for (uint32_t k = 0; k < m->access_count; k++) { /* the window's elements (ADR 0164) */
+        if (m->access_elements[k] != NULL) {
+            cee_send_v_id(m->access_elements[k], "setAccessibilityParent:", NULL);
+            cee_send_v(m->access_elements[k], "release");
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = NULL;
+    m->access_count = 0;
     for (int k = 0; k < CEE_MAC_WINDOWS; k++) {
         if (cee_mac_windows[k].window == w) {
             cee_mac_windows[k].nswindow = NULL;
@@ -9086,6 +9513,8 @@ void ceesafe_window_close(void *window) {
     ceesafe_platform_free(w->composition);
     ceesafe_platform_free(w->pasted);
     ceesafe_platform_free(w->script_text);
+    ceesafe_platform_free(w->access);
+    ceesafe_platform_free(w->access_text);
     ceesafe_platform_free(w->clipboard);
     ceesafe_platform_free(w->menu);
     ceesafe_platform_free(w->menu_ids);
@@ -9292,7 +9721,7 @@ void ceesafe_window_wait(void *window) {
     cee_window_saved(w);
     double target = w->last_wait + 1.0 / 60.0, now = cee_window_now();
     if (w->scripted || now >= target || w->count > 0 || w->choice_count > 0 || w->drop_count > 0 || w->drag_changed ||
-        w->touch_count > 0 || w->app_count > 0 || cee_wake_pending(w)) {
+        w->touch_count > 0 || w->app_count > 0 || w->access_requests_count > 0 || cee_wake_pending(w)) {
         w->last_wait = now > target ? now : target;
         cee_wake_take(w);
         return;
@@ -9311,7 +9740,8 @@ void ceesafe_window_wait(void *window) {
    a scripted window's choice only of an enabled item of its menu), or nextDrop a drop, or whether the drag of files
    over the window changed (ADR 0150), or nextTouch a touch (ADR 0155), or nextAppEvent an app event (ADR 0159). */
 static int cee_window_has_event(struct cee_window *w) {
-    if (w->drop_count > 0 || w->drag_changed || w->touch_count > 0 || w->app_count > 0) {
+    if (w->drop_count > 0 || w->drag_changed || w->touch_count > 0 || w->app_count > 0 ||
+        w->access_requests_count > 0) {
         return 1;
     }
     for (unsigned k = 0; k < w->count; k++) {
@@ -9863,4 +10293,111 @@ int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *
     position[1] = t.y;
     *time = t.time;
     return 1;
+}
+
+/* ---- Accessibility (ADR 0164) ------------------------------------------------------------------------------------ */
+
+static int cee_access_id_order(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/* The window's elements, replacing the last list: 1, 0 when memory ran out (the last list stays), -1 when an id is
+   given twice (lib/std panics). lib/std has checked the ranges and that no id is 0. The system is told what
+   changed where its part is implemented (CEE_WINDOW_ACCESS). */
+int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t count, const uint8_t *text, uint32_t length) {
+    struct cee_window *w = (struct cee_window *)window;
+    struct cee_access_node *copy = NULL;
+    char *text_copy = NULL;
+    if (count > 0) {
+        uint64_t *ids = (uint64_t *)ceesafe_platform_alloc((size_t)count * sizeof *ids);
+        copy = (struct cee_access_node *)ceesafe_platform_alloc((size_t)count * sizeof *copy);
+        if (ids == NULL || copy == NULL) {
+            ceesafe_platform_free(ids);
+            ceesafe_platform_free(copy);
+            return 0;
+        }
+        memcpy(copy, nodes, (size_t)count * sizeof *copy);
+        for (uint32_t k = 0; k < count; k++) {
+            ids[k] = copy[k].id;
+            if (copy[k].role >= CEE_ACCESS_ROLES) {
+                copy[k].role = 0;
+            }
+        }
+        qsort(ids, count, sizeof *ids, cee_access_id_order);
+        int twice = 0;
+        for (uint32_t k = 1; k < count; k++) {
+            twice = twice || ids[k] == ids[k - 1];
+        }
+        ceesafe_platform_free(ids);
+        if (twice) {
+            ceesafe_platform_free(copy);
+            return -1;
+        }
+    }
+    if (length > 0) {
+        text_copy = (char *)ceesafe_platform_alloc(length);
+        if (text_copy == NULL) {
+            ceesafe_platform_free(copy);
+            return 0;
+        }
+        memcpy(text_copy, text, length);
+    }
+    struct cee_access_node *old = w->access;
+    uint32_t old_count = w->access_count;
+    char *old_text = w->access_text;
+    w->access = copy;
+    w->access_count = count;
+    w->access_text = text_copy;
+    w->access_text_length = length;
+#if defined(CEE_WINDOW_ACCESS)
+    if (!w->scripted) {
+        cee_native_access(w, old, old_count, old_text);
+    }
+#else
+    (void)old_count;
+#endif
+    ceesafe_platform_free(old);
+    ceesafe_platform_free(old_text);
+    return 1;
+}
+
+/* The oldest request not taken: 1 with its fields, or 0. With none queued, the window takes the system's (or its
+   script's) events first, as ceesafe_window_touch does. */
+int32_t ceesafe_window_access_request(void *window, uint64_t *id, int32_t *action) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (w->access_requests_count == 0) {
+        if (w->scripted) {
+            cee_window_script_pump(w);
+        }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        else {
+            cee_native_pump(w);
+        }
+#endif
+    }
+    if (w->access_requests_count == 0) {
+        return 0;
+    }
+    struct cee_access_request r = w->access_requests[w->access_head];
+    w->access_head = (w->access_head + 1u) % CEE_ACCESS_QUEUE;
+    w->access_requests_count--;
+    *id = r.id;
+    *action = r.action;
+    return 1;
+}
+
+int32_t ceesafe_window_access_active(void *window) { return ((struct cee_window *)window)->access_active; }
+
+void ceesafe_window_announce(void *window, const uint8_t *text, uint64_t length) {
+    struct cee_window *w = (struct cee_window *)window;
+#if defined(CEE_WINDOW_ACCESS)
+    if (!w->scripted && length > 0 && length < 0x7fffffffu) {
+        cee_native_announce(w, (const char *)text, (size_t)length);
+    }
+#else
+    (void)w;
+    (void)text;
+    (void)length;
+#endif
 }

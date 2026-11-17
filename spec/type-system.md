@@ -3524,10 +3524,47 @@ Diagnostics: none new.
     connection and the pipe. For `waitAny` (ADR 0145), the process has one more signal, which every `wake` sets too:
     its wait is the system's (on X11, `poll` on every window's connection) with that one signal, however many
     windows are open.
+- **Accessibility** (ADR 0164). A window is a frame of pixels, so the program tells the system what it holds.
+  - **`w.setAccessNodes(nodes: Slice<WindowAccessNode>, text: Slice<u8>)`** (`borrow mut`) gives the window's
+    elements in reading order, replacing the last list whole. A `WindowAccessNode` is a Copy struct: `id: u64` (the
+    program's, the same from one list to the next, never 0, once in a list); `role: WindowAccessRole` (`Text`,
+    `Button`, `Checkbox`, `Radio`, `TextField`, `Slider`, `Tab`, `ListItem`, `MenuItem`, `Dropdown`, `Image`);
+    `flags: u32`, the sum of `WindowAccessNode.checked()`, `selected()`, `focused()`, `disabled()`, `expanded()`
+    and `secure()`; `x`, `y`, `width`, `height: f32` in points from the content's top left; `min`, `max`,
+    `now: f64` for a slider; and `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges of `text`
+    (UTF-8). The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
+    removed, renamed or changed value, state or focus; an element whose `id` is in both lists is the same element
+    to the system. A range outside `text`, an `id` of 0 and an `id` given twice are panics. When memory runs out
+    the last list stays.
+  - **`w.takeAccessAction() -> WindowAccessRequest?`** (`borrow mut`) is the oldest request not yet taken, or
+    null; it never blocks. A `WindowAccessRequest` is `id: u64` and `action: WindowAccessAction` (`Press`, `Focus`,
+    `Increment`, `Decrement`). A request is queued when something asks it of an element of the current list (not
+    of a `disabled` one), and ends `waitEvent`, `waitFrame` and `Window.waitAny` as an event does. The runtime
+    changes nothing: the program does what is asked, and says so in its next list. A window keeps at most 16
+    requests not taken; a newer one is dropped.
+  - **`w.accessActive() -> bool`** is whether anything has asked the system for the window's elements since it
+    opened. A program may leave `setAccessNodes` out while it is false; it does not go back to false.
+  - **`w.announce(text: StringView)`** (`borrow mut`) says `text` through a screen reader now, without moving its
+    cursor. Nothing happens when none runs.
+  - **A scripted window** takes `access:ID,ACTION` (`press`, `focus`, `increment`, `decrement`; `ID` a decimal
+    number from 1): a request of element `ID`, queued if the list has it. Its `accessActive` is false, and
+    `announce` does nothing.
+  - **Backends.** macOS: each node is a `CeeSafeAccessElement`, an `NSAccessibilityElement` whose parent is the
+    content view; the view answers `accessibilityChildren`, `accessibilityHitTest:` and
+    `accessibilityFocusedUIElement`, and the first such question makes `accessActive` true. An element answers its
+    frame from the list as it is, in screen coordinates. The roles are `AXStaticText` (the name is its value),
+    `AXButton`, `AXCheckBox` and `AXRadioButton` (the value is 1 when `checked`), `AXTextField` (`AXSecureTextField`
+    when `secure`, and then no value), `AXSlider` (value, minimum and maximum), `AXRadioButton` with the subrole
+    `AXTabButton` (the value is 1 when `selected`), `AXButton` for a `ListItem`, `AXMenuItem`, `AXPopUpButton` and
+    `AXImage`. `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` queue the
+    requests. The notifications posted are `AXLayoutChanged` on the view when elements came or went,
+    `AXValueChanged`, `AXTitleChanged` and `AXFocusedUIElementChanged` on an element, and `AXAnnouncementRequested`
+    for `announce`. iOS, Android, Windows, Linux and FreeBSD: not implemented yet (ADR 0164 §3); the list is kept
+    and `takeAccessAction` is null, `accessActive` false.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
-  functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop` and `setAccessNodes`, allocate.
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program

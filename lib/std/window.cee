@@ -100,6 +100,17 @@ extern "C" {
     @effects()
     fn ceesafe_window_set_text_kind(window: *mut void, kind: i32);
     fn ceesafe_window_set_return_key(window: *mut void, key: i32);
+    fn ceesafe_window_set_access(
+        window: *mut void,
+        nodes: *RawAccessNode,
+        count: u32,
+        text: *u8,
+        length: u32,
+    ) -> i32;
+    fn ceesafe_window_access_request(window: *mut void, id: *mut u64, action: *mut i32) -> i32;
+    @effects()
+    fn ceesafe_window_access_active(window: *mut void) -> i32;
+    fn ceesafe_window_announce(window: *mut void, text: *u8, length: u64);
     @effects()
     fn ceesafe_window_app_event(window: *mut void) -> i32;
 }
@@ -329,6 +340,93 @@ public struct WindowTouch {
     public time: u64;
 }
 
+/// What an element of a window is, to a screen reader (§26.13, ADR 0164).
+public enum WindowAccessRole {
+    /// Text that is read and nothing else.
+    Text,
+    Button,
+    Checkbox,
+    /// One of a set of which one is chosen.
+    Radio,
+    TextField,
+    Slider,
+    Tab,
+    /// A row of a list.
+    ListItem,
+    MenuItem,
+    /// A button that opens a list of choices and shows the chosen one.
+    Dropdown,
+    Image,
+}
+
+/// An element of a window as a screen reader is told of it (§26.13, ADR 0164): `Window.setAccessNodes`.
+public struct WindowAccessNode {
+    /// The program's name for the element: the same from one list to the next, never 0, once in a list.
+    public id: u64;
+    public role: WindowAccessRole;
+    /// `WindowAccessNode.checked` and the others, added together.
+    public flags: u32;
+    /// Points from the content's top left, as pointer events are.
+    public x: f32;
+    public y: f32;
+    public width: f32;
+    public height: f32;
+    /// A slider's range and value; zero otherwise.
+    public min: f64;
+    public max: f64;
+    public now: f64;
+    /// The element's name and its value, as ranges of the text given with the list (UTF-8).
+    public labelStart: u32;
+    public labelLength: u32;
+    public valueStart: u32;
+    public valueLength: u32;
+
+    public fn checked() -> u32 => 1;
+    public fn selected() -> u32 => 2;
+    public fn focused() -> u32 => 4;
+    public fn disabled() -> u32 => 8;
+    public fn expanded() -> u32 => 16;
+    /// The text is hidden as it is typed.
+    public fn secure() -> u32 => 32;
+}
+
+/// What a screen reader asks of an element (§26.13, ADR 0164).
+public enum WindowAccessAction {
+    /// Activate it: a button's click, a checkbox's toggle, a row's choice.
+    Press,
+    /// Give it the keyboard focus.
+    Focus,
+    /// One step up (a slider).
+    Increment,
+    /// One step down.
+    Decrement,
+}
+
+/// A screen reader's request (§26.13, ADR 0164): `Window.takeAccessAction`.
+public struct WindowAccessRequest {
+    public id: u64;
+    public action: WindowAccessAction;
+}
+
+/// A `WindowAccessNode` as the runtime reads it: numbers only, laid out by C's rules (type-system §12).
+@repr(C)
+struct RawAccessNode {
+    id: u64;
+    min: f64;
+    max: f64;
+    now: f64;
+    x: f32;
+    y: f32;
+    width: f32;
+    height: f32;
+    role: u32;
+    flags: u32;
+    labelStart: u32;
+    labelLength: u32;
+    valueStart: u32;
+    valueLength: u32;
+}
+
 /// Wakes a window from any thread or async task (§26.13, ADR 0142): `Window.waker()`. It is a plain value, Copy and
 /// `Send`: the window's id in the runtime's list of open windows, never reused for another window.
 public struct WindowWaker {
@@ -554,6 +652,116 @@ public struct Window {
             WindowReturnKey.Send => 5,
         };
         unsafe { ceesafe_window_set_return_key(this.raw, number); }
+    }
+
+    /// The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
+    /// holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
+    /// last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
+    /// A range outside `text`, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
+    /// there yet, and when memory runs out, the last list stays.
+    /// Safety: the runtime copies `nodes.length` nodes and `text.length` bytes during the call.
+    public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: Slice<u8>) {
+        if (nodes.length > 0x7FFFFFFF || text.length > 0x7FFFFFFF) {
+            panic("Window.setAccessNodes: a list or a text longer than 2^31");
+        }
+        var raw = match (Vector<RawAccessNode>.withCapacity(nodes.length)) {
+            Ok(v) => v,
+            Err(_) => { return; }
+        };
+        let limit = text.length as u64;
+        for (n in nodes) {
+            if (n.id == 0) {
+                panic("Window.setAccessNodes: an element's id is 0");
+            }
+            if ((n.labelStart as u64) + (n.labelLength as u64) > limit ||
+                (n.valueStart as u64) + (n.valueLength as u64) > limit) {
+                panic("Window.setAccessNodes: an element's label or value is outside the text");
+            }
+            let role: u32 = match (n.role) {
+                WindowAccessRole.Text => 0,
+                WindowAccessRole.Button => 1,
+                WindowAccessRole.Checkbox => 2,
+                WindowAccessRole.Radio => 3,
+                WindowAccessRole.TextField => 4,
+                WindowAccessRole.Slider => 5,
+                WindowAccessRole.Tab => 6,
+                WindowAccessRole.ListItem => 7,
+                WindowAccessRole.MenuItem => 8,
+                WindowAccessRole.Dropdown => 9,
+                WindowAccessRole.Image => 10,
+            };
+            let pushed = raw.push(RawAccessNode {
+                id: n.id,
+                min: n.min,
+                max: n.max,
+                now: n.now,
+                x: n.x,
+                y: n.y,
+                width: n.width,
+                height: n.height,
+                role: role,
+                flags: n.flags,
+                labelStart: n.labelStart,
+                labelLength: n.labelLength,
+                valueStart: n.valueStart,
+                valueLength: n.valueLength,
+            });
+            match (pushed) {
+                Ok() => {}
+                Err(_) => { return; }
+            }
+        }
+        let view = raw.view();
+        let result = unsafe { ceesafe_window_set_access(
+            this.raw,
+            view.ptr,
+            truncate<u32>(view.length),
+            text.ptr,
+            truncate<u32>(text.length),
+        ) };
+        if (result < 0) {
+            panic("Window.setAccessNodes: an element's id is given twice");
+        }
+    }
+
+    /// The oldest request of a screen reader not yet taken, or null; it never blocks (ADR 0164). A request is queued
+    /// when the reader asks it of an element of the current list, and ends `waitEvent`, `waitFrame` and
+    /// `Window.waitAny` as an event does. The program does what is asked, or does not: the runtime changes nothing.
+    /// A window keeps at most 16 requests not taken; a newer one is dropped.
+    /// Safety: the runtime writes the request's fields.
+    public fn takeAccessAction(borrow mut this) -> WindowAccessRequest? {
+        var id: u64 = 0;
+        var action: i32 = 0;
+        let found = unsafe { ceesafe_window_access_request(
+            this.raw,
+            borrow mut id as *mut u64,
+            borrow mut action as *mut i32,
+        ) };
+        if (found == 0) {
+            return null;
+        }
+        let which = match (action) {
+            0 => WindowAccessAction.Press,
+            1 => WindowAccessAction.Focus,
+            2 => WindowAccessAction.Increment,
+            _ => WindowAccessAction.Decrement,
+        };
+        return WindowAccessRequest { id: id, action: which };
+    }
+
+    /// Whether something has asked the system for this window's elements since it opened: a screen reader, a switch,
+    /// an automation tool (ADR 0164). A program may leave `setAccessNodes` out while it is false, and gives the list
+    /// once it is true. It does not go back to false.
+    /// Safety: the runtime reads a flag.
+    public fn accessActive(borrow this) -> bool {
+        return unsafe { ceesafe_window_access_active(this.raw) } != 0;
+    }
+
+    /// Says `text` through the screen reader now, without moving its cursor: a message arrived, a save finished (ADR
+    /// 0164). Nothing happens when no reader runs.
+    /// Safety: the runtime reads `text.length` bytes during the call.
+    public fn announce(borrow mut this, text: StringView) {
+        unsafe { ceesafe_window_announce(this.raw, text.ptr, text.length as u64); }
     }
 
     /// The next thing the system told this app of its life, in order, or null; it never blocks (ADR 0159). iOS and

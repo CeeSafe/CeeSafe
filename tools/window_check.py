@@ -72,6 +72,11 @@ that opened a window would open one on the developer's screen:
    Foreground alternating (one that says what the last said is not given), with memory warnings in either state;
    an app event ends a waitEvent of 20 s; an unknown app event is a malformed script. With --display, a real desktop
    window has none.
+15. accessibility (ADR 0164): a scripted window's `access` items come from takeAccessAction in order when the list
+   given to setAccessNodes has the element, and not when it has not; an id of 0 or an unknown action is a malformed
+   script; an id given twice and a label outside the text are panics; accessActive is false. With --display on
+   macOS, AppKit reports each of the eleven roles back with its name, value, state and frame, an action performed
+   through it arrives, an element is the same object from one list to the next, and accessActive is then true.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1769,6 +1774,215 @@ KEYBOARD_EXPECTED = ["keyboard 0", "frame 0",
                      "resized 40 30", "keyboard 30", "frame 3",
                      "resized 40 30", "closed", "keyboard 0", "frame 4"]
 
+# Accessibility (ADR 0164): a window with one element of each role. Scripted, it prints what takeAccessAction gives;
+# "real", it also asks the system what the window holds (ACCESS_C, in this process: no permission is needed, as
+# another process's questions would) and has it perform actions; "twice" and "outside" are the two panics.
+ACCESS = r"""extern "C" {
+    @effects()
+    fn access_inspect(act: i32) -> i32;
+}
+
+fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], value: [u32; 2]) -> WindowAccessNode =>
+    WindowAccessNode {
+        id: id,
+        role: role,
+        flags: flags,
+        x: 10.0,
+        y: y,
+        width: 100.0,
+        height: 18.0,
+        min: 0.0,
+        max: if (id == 6) 10.0 else 0.0,
+        now: if (id == 6) 4.0 else 0.0,
+        labelStart: label[0],
+        labelLength: label[1],
+        valueStart: value[0],
+        valueLength: value[1],
+    };
+
+fn give(window: borrow mut Window, volume: f64, focusField: bool) {
+    //          0123456789012345678901234567890123456789012345678
+    let text = "HeadingSaveAgreeAppleNameVolumeTabRowItemPickIconAlPear";
+    var nodes = [
+        node(1, WindowAccessRole.Text, 0, 0.0, [0, 7], [0, 0]),
+        node(2, WindowAccessRole.Button, 0, 20.0, [7, 4], [0, 0]),
+        node(3, WindowAccessRole.Checkbox, WindowAccessNode.checked(), 40.0, [11, 5], [0, 0]),
+        node(4, WindowAccessRole.Radio, 0, 60.0, [16, 5], [0, 0]),
+        node(5, WindowAccessRole.TextField, if (focusField) WindowAccessNode.focused() else 0, 80.0, [21, 4], [49, 2]),
+        node(6, WindowAccessRole.Slider, 0, 100.0, [25, 6], [0, 0]),
+        node(7, WindowAccessRole.Tab, WindowAccessNode.selected(), 120.0, [31, 3], [0, 0]),
+        node(8, WindowAccessRole.ListItem, 0, 140.0, [34, 3], [0, 0]),
+        node(9, WindowAccessRole.MenuItem, WindowAccessNode.disabled(), 160.0, [37, 4], [0, 0]),
+        node(10, WindowAccessRole.Dropdown, WindowAccessNode.expanded(), 180.0, [41, 4], [51, 4]),
+        node(11, WindowAccessRole.Image, 0, 200.0, [45, 4], [0, 0]),
+    ];
+    nodes[5].now = volume;
+    window.setAccessNodes(nodes[..], text.bytes());
+}
+
+fn take(window: borrow mut Window) {
+    loop {
+        match (window.takeAccessAction()) {
+            Some(r) => {
+                Console.write("asked ");
+                Console.write(r.id);
+                Console.writeLine(match (r.action) {
+                    WindowAccessAction.Press => " press",
+                    WindowAccessAction.Focus => " focus",
+                    WindowAccessAction.Increment => " increment",
+                    WindowAccessAction.Decrement => " decrement",
+                });
+            }
+            null => { break; }
+        }
+    }
+}
+
+/// Safety: the helper only asks AppKit about this process's window.
+fn main() -> i32 {
+    var window = match (Window.open("access check", 320, 240)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let pixels = [0xFF202020u32; 76800];
+    let real = Process.argument(1) == Some("real");
+    if (Process.argument(1) == Some("twice")) {
+        let pair = [
+            node(7, WindowAccessRole.Button, 0, 0.0, [0, 1], [0, 0]),
+            node(7, WindowAccessRole.Button, 0, 20.0, [0, 1], [0, 0]),
+        ];
+        window.setAccessNodes(pair[..], "x".bytes());
+        return 0;
+    }
+    if (Process.argument(1) == Some("outside")) {
+        let one = [node(7, WindowAccessRole.Button, 0, 0.0, [0, 2], [0, 0])];
+        window.setAccessNodes(one[..], "x".bytes());
+        return 0;
+    }
+    Console.write("active ");
+    Console.writeLine(window.accessActive());
+    give(mut window, 4.0, false);
+    for (frame in 0..6) {
+        loop {
+            match (window.nextEvent()) {
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+        take(mut window);
+        match (window.present(pixels[..], 320, 240)) {
+            Ok() => {}
+            Err(_) => { Console.writeLine("present failed"); return 1; }
+        }
+        if (real && frame == 1) {
+            Console.write("inspect ");
+            Console.writeLine(unsafe { access_inspect(1) });
+            Console.write("active ");
+            Console.writeLine(window.accessActive());
+        }
+        if (real && frame == 3) {
+            give(mut window, 7.0, true);
+            Console.write("inspect ");
+            Console.writeLine(unsafe { access_inspect(0) });
+            window.announce("Saved");
+        }
+        window.waitFrame();
+    }
+    return 0;
+}
+"""
+
+ACCESS_C = r"""/* Asks AppKit, in this process, what the key window's content view holds for a screen reader. */
+#include <stdint.h>
+#include <stdio.h>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+typedef void *id;
+typedef void *SEL;
+typedef void *Class;
+static void *sym(const char *name) { return dlsym(RTLD_DEFAULT, name); }
+#define objc_msgSend (sym("objc_msgSend"))
+static SEL sel_registerName(const char *n) { return ((SEL(*)(const char *))sym("sel_registerName"))(n); }
+static Class objc_getClass(const char *n) { return ((Class(*)(const char *))sym("objc_getClass"))(n); }
+typedef struct { double x, y, w, h; } rect;
+static id send0(id o, const char *s) { return ((id(*)(id, SEL))objc_msgSend)(o, sel_registerName(s)); }
+static const char *text(id s) {
+    if (s == NULL) return "-";
+    if (!((signed char(*)(id, SEL, Class))objc_msgSend)(s, sel_registerName("isKindOfClass:"), objc_getClass("NSString")))
+        s = send0(s, "description");
+    return ((const char *(*)(id, SEL))objc_msgSend)(s, sel_registerName("UTF8String"));
+}
+static void *seen[32];
+int32_t access_inspect(int32_t act);
+int32_t access_inspect(int32_t act) {
+    id app = send0((id)objc_getClass("NSApplication"), "sharedApplication");
+    id windows = send0(app, "windows");
+    id window = ((id(*)(id, SEL, unsigned long))objc_msgSend)(windows, sel_registerName("objectAtIndex:"), 0ul);
+    id view = send0(window, "contentView");
+    id children = send0(view, "accessibilityChildren");
+    unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(children, sel_registerName("count"));
+    rect wf = ((rect(*)(id, SEL))objc_msgSend)(window, sel_registerName("frame"));
+    rect cr = ((rect(*)(id, SEL, rect))objc_msgSend)(window, sel_registerName("contentRectForFrameRect:"), wf);
+    int same = 0;
+    for (unsigned long k = 0; k < n; k++) {
+        id e = ((id(*)(id, SEL, unsigned long))objc_msgSend)(children, sel_registerName("objectAtIndex:"), k);
+        rect f = ((rect(*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityFrame"));
+        signed char enabled = ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("isAccessibilityEnabled"));
+        signed char selected = ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("isAccessibilitySelected"));
+        signed char focused = ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("isAccessibilityFocused"));
+        printf("  %s %s label=%s value=%s at %.0f,%.0f %.0fx%.0f enabled=%d selected=%d focused=%d parent=%d\n",
+               text(send0(e, "accessibilityRole")), text(send0(e, "accessibilitySubrole")),
+               text(send0(e, "accessibilityLabel")), text(send0(e, "accessibilityValue")), f.x - cr.x,
+               cr.y + cr.h - f.y - f.h, f.w, f.h, enabled, selected, focused, send0(e, "accessibilityParent") == view);
+        if (k < 32) {
+            same += seen[k] == (void *)e;
+            seen[k] = (void *)e;
+        }
+        if (act && k == 1) ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityPerformPress"));
+        if (act && k == 5) ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityPerformIncrement"));
+        if (act && k == 5) ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityPerformDecrement"));
+        if (act && k == 4) ((void (*)(id, SEL, signed char))objc_msgSend)(e, sel_registerName("setAccessibilityFocused:"), 1);
+        if (act && k == 8) ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityPerformPress"));
+    }
+    printf("  same elements as last time: %d\n", same);
+    fflush(stdout);
+    return (int32_t)n;
+}
+#else
+int32_t access_inspect(int32_t act) { (void)act; return -1; }
+#endif
+"""
+
+# Requests of elements the list has, in order; of one it has not (99), nothing. Frame 0's items are taken when the
+# window opens, before the program gave a list, so the script starts at frame 1.
+ACCESS_SCRIPT = ("1:access:2,press;1:access:6,increment;2:access:5,focus;2:access:99,press;3:access:6,decrement;"
+                 "3:access:9,press;5:close")
+ACCESS_EXPECTED = ["active false", "asked 2 press", "asked 6 increment", "asked 5 focus", "asked 6 decrement",
+                   "asked 9 press"]
+
+
+def access_real_expected():
+    """What ACCESS prints with "real" on macOS: the list as AppKit reports it, the actions, the changed list."""
+    rows = [("AXStaticText -", "-", "Heading", 1, 0), ("AXButton -", "Save", "-", 1, 0),
+            ("AXCheckBox -", "Agree", "1", 1, 0), ("AXRadioButton -", "Apple", "0", 1, 0),
+            ("AXTextField -", "Name", "Al", 1, 0), ("AXSlider -", "Volume", "4", 1, 0),
+            ("AXRadioButton AXTabButton", "Tab", "1", 1, 1), ("AXButton -", "Row", "-", 1, 0),
+            ("AXMenuItem -", "Item", "-", 0, 0), ("AXPopUpButton -", "Pick", "Pear", 1, 0),
+            ("AXImage -", "Icon", "-", 1, 0)]
+
+    def listing(volume, focused, same):
+        out = []
+        for k, (role, label, value, enabled, selected) in enumerate(rows):
+            value = volume if label == "Volume" else value
+            line = (f"  {role} label={label} value={value} at 10,{20 * k} 100x18 enabled={enabled} "
+                    f"selected={selected} focused={1 if focused and label == 'Name' else 0} parent=1")
+            out.append(("inspect " if k == 0 else "") + line)
+        return out + [f"  same elements as last time: {same}", "11"]
+
+    return (["active false"] + listing("4", False, 0) + ["active true", "asked 2 press", "asked 5 focus",
+            "asked 6 increment", "asked 6 decrement"] + listing("7", True, 11))
+
+
 # Its script, and what SAFE prints for it: none at first; a phone's portrait insets (a Resized at the same size); the
 # same again (nothing); a rotation with new insets (the resize's Resized, then the safe area's); none again; the close.
 SAFE_SCRIPT = "1:safe:0,47,0,34;2:safe:0,47,0,34;3:resize:60,30;3:safe:47.5,0,47.5,21;4:safe:0,0,0,0;5:close"
@@ -3108,6 +3322,31 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
 
+        access = build_package(compiler, ACCESS, ACCESS_C, work, "window_check_access")
+        access_scripts = {}
+        for name, content in (("trace", ACCESS_SCRIPT), ("zero", "1:access:0,press"), ("jump", "1:access:2,jump"),
+                              ("none", "1:close")):
+            access_scripts[name] = os.path.join(work, "access-" + name + ".txt")
+            with open(access_scripts[name], "w", encoding="utf-8") as f:
+                f.write(content)
+        access_cases = [
+            ("a screen reader's requests", [access], "trace", ACCESS_EXPECTED, 0),
+            ("a request of element 0", [errors], "zero", ["4"], 0),
+            ("a request of an unknown action", [errors], "jump", ["4"], 0),
+        ]
+        for what, command, name, want, status in access_cases:
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": access_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+        for argument, message in (("twice", "an element's id is given twice"),
+                                  ("outside", "an element's label or value is outside the text")):
+            r = run([access, argument], {"CEESAFE_WINDOW_SCRIPT": access_scripts["none"]}, work)
+            if r.returncode == 0 or message not in r.stderr:
+                problems.append(f"setAccessNodes, {argument}: expected a panic saying {message!r}, got status "
+                                f"{r.returncode}: {r.stderr.strip()}")
+
         _, app = build(compiler, APP, work, "window_check_app")
         app_scripts = {}
         for name, content in (("trace", APP_SCRIPT), ("wait", "1:app:memory"), ("unknown", "0:app:sleeping"),
@@ -3158,7 +3397,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + 1 + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 2 + 1 + 8)
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
@@ -3196,6 +3435,13 @@ def main():
             if r.returncode != 0 or r.stdout.strip() != "keyboard 0":
                 problems.append(f"a real desktop window's keyboard inset: expected 'keyboard 0', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
+            if sys.platform == "darwin":
+                r = run([access, "real"], {}, work)
+                checks += 1
+                want = access_real_expected()
+                if r.returncode != 0 or r.stdout.splitlines() != want:
+                    problems.append("a real window's elements, as AppKit reports them: expected\n" + "\n".join(want) +
+                                    f"\ngot (status {r.returncode})\n{r.stdout}{r.stderr}")
             r = run([any_program, "real"], {}, work)
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake of the second ok":

@@ -667,7 +667,9 @@ fn fmtWalkFunction(l: borrow mut FmtLayout, ast: borrow Ast, f: u32, inInterface
     let open = l.find(name + 1, TokenKind.OpenParen);
     l.glueBeforeAt(open);
     let close = l.matching[open as usize];
-    if (!inInterface && close != none() && close > open + 1) {
+    // An interface's method breaks its parameters as any function does: left whole, a long one ran off the line
+    // and the list of an attribute before it was broken in its place.
+    if (close != none() && close > open + 1) {
         let parameters = l.addContainer(open, false, true, priorityList())?;
         match (function.receiver) {
             ReceiverKind.None => {}

@@ -88,8 +88,8 @@ author, or by §3.4) is laid out as a block:
 - the last element is followed by a comma, where the grammar allows one (grammar.md §2: parameters, arguments, struct
   field initialisers, array elements, attribute arguments, enum variants, and the arms of a match expression, except
   an arm whose value is a block). The commas between the arms of a match statement are left as written. Type
-  parameters, generic arguments, closure parameters, function-type parameters and interface method parameters are
-  never broken.
+  parameters, generic arguments, closure parameters and function-type parameters are never broken. An interface
+  method's parameters are broken as a function's are (since 0.65.1; before, they never were).
 
 ```ceesafe
 let bodies = [

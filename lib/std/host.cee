@@ -32,7 +32,7 @@ extern "C" {
     @effects(alloc)
     fn ceesafe_signal_subscribe(channel: *mut void) -> i64;
     @effects()
-    fn ceesafe_signal_unsubscribe();
+    fn ceesafe_signal_unsubscribe(channel: *mut void);
     @effects(sleep)
     fn ceesafe_host_console_flush() -> i64;
     @effects(sleep)
@@ -224,9 +224,10 @@ public struct ProcessSignals {
         else ProcessSignal.Terminate;
 
     /// Ends the subscription: the next request ends the process, as before it.
-    /// Safety: this value is the process's one subscription, so the runtime's is this one.
+    /// Safety: the runtime ends the subscription only if it is this value's channel, which it holds a count of. In
+    /// a process made by `fork` from one that had subscribed it is not, and nothing is ended.
     drop {
-        unsafe { ceesafe_signal_unsubscribe(); }
+        unsafe { ceesafe_signal_unsubscribe(this.queue.handle()); }
     }
 }
 

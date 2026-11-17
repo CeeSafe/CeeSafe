@@ -15,7 +15,10 @@ checks what it writes and how it ends, with a deadline for every wait:
    The interpreter runs one thread at a time, so there the server is only told to stop, with no client;
 3. a program that takes one signal with `wait`, finds no other with `poll`, drops its subscription and waits for a
    line: the first signal is named, and the second one ends the process as it would have without a subscription;
-4. a program that never subscribes is ended by the signal, as before ADR 0125.
+4. a program that never subscribes is ended by the signal, as before ADR 0125;
+5. a program that subscribes and then forks (built only: `fork` is C's): the child has no subscription, so it makes
+   its own and is told of a SIGTERM sent to it, while the parent's still tells the parent of its own; and a child
+   that does not subscribe is ended by SIGTERM, though its parent had subscribed.
 
 POSIX only (os.kill with SIGINT, SIGTERM and SIGHUP): elsewhere it reports that it was skipped. On Windows the same
 programs are tried by hand: Ctrl+C in a console (tools/signal_check.py --write DIR writes them).
@@ -206,7 +209,57 @@ fn main() {
 }
 """
 
-PROGRAMS = (("tasks", TASKS), ("threads", THREADS), ("once", ONCE), ("plain", PLAIN))
+FORKED = """
+@header("unistd.h", "sys/wait.h")
+extern "C" {
+    fn fork() -> i32;
+    fn getpid() -> i32;
+    fn sleep(seconds: u32) -> u32;
+    fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+}
+
+fn word(asked: ProcessSignal) -> StringView =>
+    if (asked is ProcessSignal.Interrupt) "interrupt" else if (asked is ProcessSignal.Hangup) "hangup" else "terminate";
+
+/// Safety: fork and getpid take nothing, sleep a number, and waitpid the child's id and a local's address.
+fn main() {
+    let subscribes = Process.argument(1) is null;
+    let signals = ProcessSignals.subscribe()!;
+    let child = unsafe { fork() };
+    if (child == 0) {
+        Console.write("child ");
+        Console.writeLine(truncate<u64>(unsafe { getpid() }));
+        Console.flush();
+        if (!subscribes) {
+            unsafe { sleep(60); } // a SIGTERM ends it here, as it ends a process that never subscribed
+            Console.writeLine("child was not ended");
+            Console.flush();
+            return;
+        }
+        match (ProcessSignals.subscribe()) {
+            Ok(mine) => {
+                Console.writeLine("child subscribed");
+                Console.flush();
+                Console.write("child ");
+                Console.writeLine(word(mine.wait()));
+            }
+            Err(_) => { Console.writeLine("child refused"); }
+        }
+        Console.flush();
+        return; // the child's subscription ends, then the copy of the parent's, which ends nothing
+    }
+    var status: i32 = 0;
+    unsafe { waitpid(child, (borrow mut status) as *mut i32, 0); }
+    Console.write("child ended ");
+    Console.writeLine((truncate<u32>(status) & 127) as u64); // the signal that ended it, 0 if it returned
+    Console.writeLine("parent ready");
+    Console.flush();
+    Console.write("parent ");
+    Console.writeLine(word(signals.wait()));
+}
+"""
+
+PROGRAMS = (("tasks", TASKS), ("threads", THREADS), ("once", ONCE), ("plain", PLAIN), ("forked", FORKED))
 DEADLINE = 30.0
 
 
@@ -352,6 +405,37 @@ def plain(argv, problems, name, number):
         finish(p)
 
 
+def forked(argv, problems, name, subscribes):
+    """A forked child has no subscription: it makes its own, or is ended by the signal; the parent's goes on."""
+    p = start(argv if subscribes else argv + ["plain"], {})
+    out = Reader(p.stdout.fileno())
+    try:
+        first = out.until(b"\n")
+        if first is None or not first.startswith(b"child "):
+            problems.append(f"{name}: no 'child PID' (seen {out.seen!r}, {p.stderr.read1(400)!r})")
+            return
+        child = int(first.split()[1])
+        if subscribes and out.until(b"child subscribed\n") is None:
+            problems.append(f"{name}: the child could not subscribe (seen {out.seen!r})")
+            return
+        time.sleep(0.2)  # the child reaches its wait
+        os.kill(child, signal.SIGTERM)
+        expected = b"child terminate\nchild ended 0\nparent ready\n" if subscribes else \
+            b"child ended %d\nparent ready\n" % signal.SIGTERM
+        if out.until(b"parent ready\n") != expected:
+            problems.append(f"{name}: expected {expected!r} after the child's SIGTERM (seen {out.seen!r})")
+            return
+        time.sleep(0.2)
+        os.kill(p.pid, signal.SIGTERM)
+        if out.until(b"parent terminate\n") != b"parent terminate\n" or p.wait(DEADLINE) != 0:
+            problems.append(f"{name}: the parent's subscription did not tell it of its SIGTERM (seen {out.seen!r}, "
+                            f"status {p.poll()})")
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        problems.append(f"{name}: {e}")
+    finally:
+        finish(p)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
@@ -386,6 +470,8 @@ def main():
                 problems.append(f"{stem}: build failed: {b.stderr.strip()[:600]}")
                 continue
             programs[stem] = {"native": [exe], "interp": [compiler, "run", "--interp", path]}
+            if stem == "forked":
+                del programs[stem]["interp"]  # `fork` is C's: the interpreter runs no foreign code
         for mode, argv in programs.get("tasks", {}).items():
             for number, word in signals:
                 for label, env in (reactors if mode == "native" else reactors[:1]):
@@ -407,6 +493,10 @@ def main():
             for number, word in signals:
                 plain(argv, problems, f"no subscription ({mode}, {word.decode()})", number)
                 cases += 1
+        for mode, argv in programs.get("forked", {}).items():
+            forked(argv, problems, f"a forked child subscribes for itself ({mode})", True)
+            forked(argv, problems, f"a forked child without a subscription is ended ({mode})", False)
+            cases += 2
     for problem in problems:
         print(f"FAIL {problem}")
     print(f"signal_check: {cases} cases: {len(problems)} problems")

@@ -1,0 +1,10 @@
+// The parentheses change nothing the other way either: a branch that does not fit the expected type is still an
+// error, reported at the branch.
+fn pick(a: bool, b: bool) -> u8 {
+    let v: u8 = if (a) (if (b) 300 else 7) else 2; // error[N0206]
+    return v;
+}
+
+fn main() {
+    let x = pick(true, true);
+}

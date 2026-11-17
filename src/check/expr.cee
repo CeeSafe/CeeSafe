@@ -103,6 +103,22 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
     match (c.front.ast.exprs[e as usize]) {
         ExprNode.If(_, _, _) => { return checkBranching(c, e, expected); }
         ExprNode.Match(_, _) => { return checkBranching(c, e, expected); }
+        ExprNode.Paren(_) => {
+            // `(if (b) 308 else 307)`: the parentheses change nothing, so the branches take the expected type as
+            // they do without them (§15.3).
+            let inner = unparenthesized(c, e);
+            var branching = false;
+            match (c.front.ast.exprs[inner as usize]) {
+                ExprNode.If(_, _, _) => { branching = true; }
+                ExprNode.Match(_, _) => { branching = true; }
+                _ => {}
+            }
+            if (branching) {
+                let value = checkBranching(c, inner, expected)?;
+                c.hir.exprSpans[value as usize] = span;
+                return Ok(value);
+            }
+        }
         ExprNode.Closure(closure) => {
             if (c.front.ast.closures[closure as usize].isMove) {
                 return misplacedMoveLiteral(c, span);

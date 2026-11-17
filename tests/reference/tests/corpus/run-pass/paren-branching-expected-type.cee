@@ -1,0 +1,32 @@
+// An `if` or `match` expression in parentheses takes the expected type as it does without them (§15.3): its
+// unsuffixed literals are the expected integer type, not `i32`.
+fn status(permanent: bool, keepMethod: bool) -> u16 {
+    let nested: u16 = if (permanent) (if (keepMethod) 308 else 301) else (if (keepMethod) 307 else 302);
+    return nested;
+}
+
+fn width(kind: u8) -> u64 {
+    let w: u64 = (match (kind) {
+        0 => 1,
+        1 => ((if (kind == 1) 4294967296 else 2)),
+        _ => 8,
+    });
+    return w;
+}
+
+fn main() {
+    Console.writeLine(status(true, true) as u64);
+    Console.writeLine(status(true, false) as u64);
+    Console.writeLine(status(false, true) as u64);
+    Console.writeLine(status(false, false) as u64);
+    Console.writeLine(width(0));
+    Console.writeLine(width(1));
+    Console.writeLine(width(2));
+}
+// expect-stdout: 308
+// expect-stdout: 301
+// expect-stdout: 307
+// expect-stdout: 302
+// expect-stdout: 1
+// expect-stdout: 4294967296
+// expect-stdout: 8

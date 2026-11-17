@@ -152,7 +152,8 @@ Each expression is checked against an optional expected type:
 - local initialiser → the annotated type; assignment value → the target's type;
   argument → the parameter type; `return` value → the return type; `const` value → its
   declared type; `if`/`while` condition → `bool`; each value branch of an `if` or `match` expression → the
-  expression's expected type (§15.3).
+  expression's expected type (§15.3), also where the expression is in parentheses: `(if (b) 308 else 307)` gives
+  its branches the type expected of the parentheses.
 - An expression's *actual* type must equal the expected type, unless it is *never* (N0205).
 - **Flexible operands.** An expression is *flexible* if it consists only of unsuffixed integer
   literals combined with unary `-`, parentheses and the arithmetic/bitwise binary operators, or (M11) if it is an
@@ -2786,6 +2787,10 @@ With one loan set per value:
 3. `push`, `insert` and `append` write their argument through their receiver (rule 2).
 4. At a call, an argument that flows into a `borrow mut` parameter adds its loans to what that
    argument refers to.
+   A value carries loans only if its type can hold one (a scoped type, or rule 5's): a `bool` or a `usize` read
+   through a reference, `entry.flag`, is a copy that lends nothing wherever it is written, so
+   `return Lease { owner: owner, flag: entry.flag };` borrows from `owner` alone, as it does when the field is read
+   into a local first.
 5. In generic code, values whose type mentions a type parameter carry loans like scoped values, unless it mentions
    it only inside a `dyn` type (an interface's arguments, a `dyn fn`'s signature): a `dyn` value carries no loans of
    its own (§37.2), so `Box<dyn Handler<S>>` is stored where `S` is a type parameter as it is for a concrete `S`.
@@ -3686,6 +3691,10 @@ Diagnostics: none new.
   needs drop. There is one at a time: `Err(IoError.AlreadyExists)` while another lives; `Err(IoError.Unsupported)`
   where the system has no such requests (CosmoOS, the interpreter's sandbox). It is `Send` and `Share`: threads and
   tasks use it by reference.
+- **A process made by `fork`** (C's, through `extern "C"`; lib/std starts none that way) has no subscription,
+  whatever its parent had (since 0.65.1): a request ends it as it would have before, and it may subscribe for itself.
+  The parent's `ProcessSignals`, copied into the child with the rest of memory, receives nothing there, and its
+  destruction in the child ends nothing. The parent's subscription is as it was.
 - While it lives, a request does not end the process and is kept in arrival order, up to eight; requests nobody takes
   beyond that are dropped.
   - `signals.poll()`: `ProcessSignal?`, the oldest request, or `null` at once. It never waits.

@@ -1,0 +1,16 @@
+// `[borrow a, borrow b]` asks for an array of references, which an array's elements cannot be (§16.1): it is
+// reported as that, not as the referent being an element that is not Copy.
+struct Big {
+    v: Vector<u8>;
+}
+
+fn size(b: borrow Big) -> usize => b.v.length;
+
+fn main() {
+    let one = Big { v: Vector<u8>.create() };
+    let two = Big { v: Vector<u8>.create() };
+    var n: usize = 0;
+    for (b in [borrow one, borrow two]) { // error[N0246]
+        n += size(b);
+    }
+}

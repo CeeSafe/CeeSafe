@@ -3192,6 +3192,10 @@ void ceesafe_chan_unpark(void *channel, void *wait) {
  *   logoff and shutdown the system ends the process when the handler returns, so it does not: the program has until
  *   it returns from main, or the system's own limit (5 s for a close).
  * Ending the subscription restores what was there before: the next request ends the process, as before any.
+ * A process made by fork() has no subscription, whatever its parent had: the thread that sends is the parent's alone,
+ * so the child gets back what the signals did before (a request ends it), a pipe of its own when it subscribes, and
+ * may subscribe for itself. The parent's ProcessSignals value, copied into the child with the rest, is dead there:
+ * unsubscribing names the channel, so dropping it in the child ends nothing.
  * CosmoOS has no signals: a subscription is EOPNOTSUPP there. Hosted only. */
 #if !defined(CEE_FREESTANDING)
 #define CEE_SIGNAL_INTERRUPT 1u
@@ -3228,7 +3232,7 @@ int64_t ceesafe_signal_subscribe(void *channel) {
     return -(int64_t)EOPNOTSUPP;
 }
 
-void ceesafe_signal_unsubscribe(void) {}
+void ceesafe_signal_unsubscribe(void *channel) { (void)channel; }
 #elif defined(_WIN32)
 static BOOL WINAPI cee_signal_handler(DWORD kind) {
     uint32_t which = kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT ? CEE_SIGNAL_INTERRUPT : CEE_SIGNAL_TERMINATE;
@@ -3251,19 +3255,22 @@ int64_t ceesafe_signal_subscribe(void *channel) {
     cee_signal_channel = channel;
     cee_signal_leave();
     if (!SetConsoleCtrlHandler(cee_signal_handler, TRUE)) {
-        ceesafe_signal_unsubscribe();
+        ceesafe_signal_unsubscribe(channel);
         return -(int64_t)EOPNOTSUPP;
     }
     return 0;
 }
 
-void ceesafe_signal_unsubscribe(void) {
-    (void)SetConsoleCtrlHandler(cee_signal_handler, FALSE);
+void ceesafe_signal_unsubscribe(void *channel) {
     cee_signal_enter();
-    void *channel = cee_signal_channel;
+    if (cee_signal_channel != channel || channel == NULL) {
+        cee_signal_leave();
+        return; /* not the process's subscription */
+    }
     cee_signal_channel = NULL;
     cee_signal_leave();
-    if (channel != NULL && ceesafe_chan_release(channel)) ceesafe_chan_free(channel);
+    (void)SetConsoleCtrlHandler(cee_signal_handler, FALSE);
+    if (ceesafe_chan_release(channel)) ceesafe_chan_free(channel);
 }
 #else
 #include <signal.h>
@@ -3273,6 +3280,31 @@ static uint32_t cee_signal_pending;       /* the CEE_SIGNAL_* bits the handler s
 static uint32_t cee_signal_stop;          /* the watching thread ends (ceesafe_atomic_*) */
 static cee_thread *cee_signal_thread;
 static struct sigaction cee_signal_before[3]; /* what SIGINT, SIGTERM and SIGHUP did before the subscription */
+static bool cee_signal_fork_watched;          /* cee_signal_forked is registered (once, under the lock) */
+
+/* In the child of a fork (pthread_atfork), on its one thread. The subscription's thread did not come with it, and
+   the pipe is the parent's too: a signal sent to the child would wake the parent's thread and reach nobody. So the
+   child has no subscription: the signals do what they did before it, the pipe's ends are closed (the next
+   subscription makes its own), and the lock, which another thread of the parent may have held, is free. The
+   runtime's count of the channel is left: the copy of the parent's value still holds the memory. Only
+   async-signal-safe calls: sigaction and close. */
+static void cee_signal_forked(void) {
+    if (cee_signal_channel != NULL) {
+        (void)sigaction(SIGINT, &cee_signal_before[0], NULL);
+        (void)sigaction(SIGTERM, &cee_signal_before[1], NULL);
+        (void)sigaction(SIGHUP, &cee_signal_before[2], NULL);
+        cee_signal_channel = NULL;
+        cee_signal_thread = NULL;
+    }
+    if (cee_signal_pipe[0] >= 0) {
+        (void)close(cee_signal_pipe[0]);
+        (void)close(cee_signal_pipe[1]);
+        cee_signal_pipe[0] = -1;
+        cee_signal_pipe[1] = -1;
+    }
+    ceesafe_atomic_store_u32(&cee_signal_pending, 0u);
+    ceesafe_atomic_store_u32(&cee_signal_lock, 0u);
+}
 
 /* Async-signal-safe: an atomic or, and write(2), with errno kept. */
 static void cee_signal_handler(int number) {
@@ -3316,6 +3348,10 @@ int64_t ceesafe_signal_subscribe(void *channel) {
         cee_signal_leave();
         return -(int64_t)EEXIST;
     }
+    if (!cee_signal_fork_watched) {
+        /* If it cannot be registered, a forked child keeps the handlers and never hears: as before this was here. */
+        cee_signal_fork_watched = pthread_atfork(NULL, NULL, cee_signal_forked) == 0;
+    }
     if (cee_signal_pipe[0] < 0) {
         int made[2];
         if (pipe(made) < 0) {
@@ -3358,12 +3394,11 @@ int64_t ceesafe_signal_subscribe(void *channel) {
     return 0;
 }
 
-void ceesafe_signal_unsubscribe(void) {
+void ceesafe_signal_unsubscribe(void *channel) {
     cee_signal_enter();
-    void *channel = cee_signal_channel;
-    if (channel == NULL) {
+    if (cee_signal_channel != channel || channel == NULL) {
         cee_signal_leave();
-        return;
+        return; /* not the process's subscription: none, or a parent's value dropped in a forked child */
     }
     (void)sigaction(SIGINT, &cee_signal_before[0], NULL);
     (void)sigaction(SIGTERM, &cee_signal_before[1], NULL);

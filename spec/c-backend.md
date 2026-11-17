@@ -29,6 +29,9 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   a pragma can (clang, MSVC) and requires `FLT_EVAL_METHOD == 0`, in programs that use floats (`CEE_FLOATS`; a
   program without floats compiles under `-mgeneral-regs-only`); builds pass `-ffp-contract=off` to clang and gcc
   and never `-ffast-math` or its parts, so each float operation rounds once, as in the interpreter.
+- **No CRC recognition under gcc 15.** `rt.h` turns `-foptimize-crc` off with `#pragma GCC optimize` for gcc 15 and
+  later (not clang): on at `-O2`, the pass compiled a bit-at-a-time CRC loop, as the backend writes it, to a
+  function with no code (gcc 15.2 and 15.3, x86-64), and a program has no way to see that coming.
 - **No compiler-rt / libgcc.** CosmoOS links no builtins library, so generated code
   must never need one. That rules out `__int128` division, `long double` arithmetic,
   16-byte atomics and, in AArch64 userland, outline-atomic helpers (to be verified in C1;

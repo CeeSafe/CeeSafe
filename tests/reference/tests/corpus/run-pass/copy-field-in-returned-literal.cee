@@ -1,0 +1,37 @@
+// A field that holds no loan, read through a reference inside a returned struct literal, lends nothing: the result
+// borrows only from the parameter whose region it names.
+struct Owner {
+    count: u32;
+}
+
+struct Entry {
+    flag: bool;
+    size: usize;
+}
+
+struct Lease<region c> {
+    owner: borrow(c) Owner;
+    flag: bool;
+    size: usize;
+}
+
+fn direct<region c>(owner: borrow(c) Owner, entry: borrow Entry) -> Lease<c> {
+    return Lease { owner: owner, flag: entry.flag, size: entry.size + 1 };
+}
+
+fn lease<region c>(owner: borrow(c) Owner) -> Lease<c> {
+    // The entry ends with this function; the lease it helped make goes on.
+    let entry = Entry { flag: true, size: 41 };
+    return direct(owner, entry);
+}
+
+fn main() {
+    let owner = Owner { count: 7 };
+    let l = lease(owner);
+    Console.writeLine(l.flag);
+    Console.writeLine(l.size as u64);
+    Console.writeLine(l.owner.count as u64);
+}
+// expect-stdout: true
+// expect-stdout: 42
+// expect-stdout: 7

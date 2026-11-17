@@ -388,7 +388,13 @@ public interface AppendFormatted {
     /// `value` with `digits` digits after the point, rounded half to even: Rust's `{:.N}`.
     fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>;
     /// `text` in a field `width` characters wide, filled with `fill` where `align` puts it: Rust's `{:>8}`, `{:*^9}`.
-    fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>;
+    fn appendPadded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError>;
 }
 
 impl AppendFormatted for Vector<u8> {

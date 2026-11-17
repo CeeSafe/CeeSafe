@@ -1,0 +1,36 @@
+// A CRC-32 table made a bit at a time. gcc 15 at -O2 took this loop, as ceesafec writes it in C, for a CRC it could
+// replace, and left the function without code (-foptimize-crc); the runtime's header turns that pass off.
+struct Table {
+    entries: [u32; 256];
+}
+
+fn make() -> Table {
+    var table = Table { entries: [0u32; 256] };
+    for (n in 0..256) {
+        var c = truncate<u32>(n);
+        for (k in 0..8) {
+            c = if ((c & 1) != 0) 0xEDB88320 ^ (c >> 1) else c >> 1;
+        }
+        table.entries[n] = c;
+    }
+    return table;
+}
+
+fn crc(table: borrow Table, data: Slice<u8>) -> u32 {
+    var c: u32 = 0xFFFFFFFF;
+    for (b in data) {
+        c = table.entries[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
+    }
+    return c ^ 0xFFFFFFFF;
+}
+
+fn main() {
+    let table = make();
+    Console.writeLine(table.entries[1] as u64);
+    Console.writeLine(table.entries[255] as u64);
+    // The check value of CRC-32 (ISO-HDLC): "123456789" gives 0xCBF43926.
+    Console.writeLine(crc(table, "123456789".bytes()) as u64);
+}
+// expect-stdout: 1996959894
+// expect-stdout: 755167117
+// expect-stdout: 3421780262

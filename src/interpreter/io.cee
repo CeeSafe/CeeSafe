@@ -1324,7 +1324,7 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
         return "P:l"; // ADR 0125
     }
     if (sameText(name, "ceesafe_signal_unsubscribe")) {
-        return ":-";
+        return "P:-";
     }
     if (sameText(name, "ceesafe_host_raise_open_files")) {
         return "sP:l";

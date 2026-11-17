@@ -127,7 +127,8 @@ fn signalService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vecto
         interpSignalsWatch();
         return Ok(hostResult(0));
     }
-    if (it.runtime.signalChannel != 0) {
+    // Unsubscribing names the subscription's channel, and ends no other.
+    if (it.runtime.signalChannel != 0 && arguments[0].bits(0, 8)? == it.runtime.signalChannel) {
         interpSignalsRestore();
         it.runtime.channels[(it.runtime.signalChannel - 1) as usize].refs -= 1;
         it.runtime.signalChannel = 0;

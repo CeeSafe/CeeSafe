@@ -205,6 +205,21 @@ fn arrayElement(c: borrow mut Checker, element: u32, expected: u32) -> Result<u3
     if (expected != none()) {
         return checkExpr(c, element, expected);
     }
+    match (c.front.ast.exprs[unparenthesized(c, element) as usize]) {
+        ExprNode.Borrow(_, _) => {
+            // `[borrow a, borrow b]` asks for an array of references in so many words. Reading through it, as a
+            // reference in a variable is read through, would report the referent as an element that is not Copy.
+            let span = c.front.ast.exprSpans[element as usize];
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "array and slice elements cannot be 'borrow' references; views and values holding loans can",
+            )?;
+            c.error(referenceNotAllowed(), span.start, span.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        _ => {}
+    }
     var value = synth(c, element, none())?;
     // References are read through; boxes are values (§18.2). Slices and string views are not: their elements are
     // unsized, so `["a", "b"]` has string-view elements, which CheckElement reports (N0246).

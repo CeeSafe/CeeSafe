@@ -37,6 +37,14 @@
 /* gcc ignores the standard pragma, but does not contract under -std=c11; ceesafec passes -ffp-contract=off too. */
 #endif
 
+/* gcc 15's -foptimize-crc, on at -O2, compiles the bit-at-a-time CRC loop as ceesafec writes it (a branch on the low
+   bit, in the two `for (;;)` loops of a table's making) to a function with no code at all, whose caller falls into
+   the function after it (gcc 15.2 and 15.3, x86-64; tests/corpus/run-pass/crc-table-loop.cee is the loop). The pass
+   is turned off for everything after this header: every function of the program and of the runtime. */
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 15
+#pragma GCC optimize("no-optimize-crc")
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define CEE_UNUSED __attribute__((unused))
 #define CEE_COLD __attribute__((cold))
@@ -989,9 +997,11 @@ void ceesafe_thread_watchdog(uint64_t ms);
  * the process (SIGINT, SIGTERM; Windows' console control events) is sent into `channel`, a ceesafe_chan of u32 the
  * runtime takes a count of, as 1 (interrupt) or 2 (terminate), and dropped if the channel is full. 0, or a negated
  * errno: EEXIST while a subscription lasts, EOPNOTSUPP where there are no signals. Unsubscribing restores what the
- * signals did before, and does nothing when there is no subscription. Both may be called from any thread. */
+ * signals did before; it names the subscription's channel, and does nothing for any other (there is no subscription,
+ * or the value is a parent's, in a process made by fork(), which starts with none). Both may be called from any
+ * thread. */
 int64_t ceesafe_signal_subscribe(void *channel);
-void ceesafe_signal_unsubscribe(void);
+void ceesafe_signal_unsubscribe(void *channel);
 
 /* ---- Threads and mutexes (type-system.md §38; runtime/hosted/ceesafe_rt_thread.c), and atomics (here) ---------- */
 

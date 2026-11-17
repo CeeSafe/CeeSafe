@@ -957,8 +957,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                 let p = toPlaceRef(n, place);
                 // A value whose type mentions a type parameter carries its loans as a scoped value does (§25.7
                 // rule 5, ADR 0131).
-                if (holdsLoans(c, n, b, p.local) &&
-                    (mayHoldLoans(c, n.operandTypes[o as usize]) || derefsReference(c, n, b, p))) {
+                if (holdsLoans(c, n, b, p.local) && mayHoldLoans(c, n.operandTypes[o as usize])) {
                     // A value read through a reference parameter carries what its referent holds, not the
                     // parameter's own loan (ADR 0074 §2.4).
                     let through = throughParameter(c, n, b, p);

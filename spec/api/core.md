@@ -2223,7 +2223,13 @@ public interface AppendFormatted {
     fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>;
     fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>;
     fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>;
-    fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>;
+    fn appendPadded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError>;
 }
 ```
 

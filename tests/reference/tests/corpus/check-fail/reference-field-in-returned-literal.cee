@@ -1,0 +1,25 @@
+// What does hold a loan still lends: a reference read through a parameter inside a returned literal ties the result
+// to that parameter, which the return type must list.
+struct Owner {
+    count: u32;
+}
+
+struct Entry<region e> {
+    other: borrow(e) Owner;
+}
+
+struct Lease<region c> {
+    owner: borrow(c) Owner;
+    other: borrow(c) Owner;
+}
+
+fn direct<region c>(owner: borrow(c) Owner, entry: borrow Entry) -> Lease<c> {
+    return Lease { owner: owner, other: entry.other }; // error[N0245]
+}
+
+fn main() {
+    let a = Owner { count: 1 };
+    let b = Owner { count: 2 };
+    let e = Entry { other: borrow b };
+    let l = direct(a, e);
+}

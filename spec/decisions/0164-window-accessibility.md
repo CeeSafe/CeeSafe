@@ -173,3 +173,22 @@ Each system is its own step and its own release, in this order; the API is relea
     `1+1`, "l").
 - **Open**: a reader setting a field's selection or value itself; dragging; containers and tables (§2.3); the
   owner's own pass with VoiceOver.
+
+## 7. Step 2 as implemented: iOS (2026-11-18)
+
+`runtime/hosted/ceesafe_rt_window.c` (the UIKit part), type-system.md §26.13. The owner: "continue".
+
+- Each node is a `UIAccessibilityElement` in the window's view; the view's `accessibilityElements` are the list.
+  iOS has traits and no roles, so several roles are one thing to VoiceOver (type-system.md §26.13 has the table):
+  a tab, a radio button, a list's row and a menu's item are buttons, selected when they are.
+- **`accessActive` is whether VoiceOver runs**, not whether something asked: UIKit does not say when it reads the
+  elements.
+- **`Focus` is never asked**: VoiceOver's own cursor is not the keyboard's, and activating a field is a `Press`.
+- **A field's caret and anchor are not used**: reading by character in a field needs `UITextInput` on the element,
+  which is not here.
+- **Checked in the iOS Simulator, in the process**: a program with one element of each role and a C file that asks
+  UIKit for the view's `accessibilityElements`. UIKit reports the eleven names, values, traits and frames;
+  `accessibilityActivate`, `…Increment` and `…Decrement` arrive from `takeAccessAction`; the disabled element
+  refuses; after a second list all eleven are the same objects and the slider says its new value. It is not in
+  `window_check`, which builds for the system it runs on.
+- **Not checked yet**: VoiceOver on a phone, which the Simulator does not have.

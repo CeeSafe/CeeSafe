@@ -1965,6 +1965,13 @@ static struct {
     cee_id field_class;       /* CeeSafeTextField (ADR 0157) */
     cee_id *keyboard_changed; /* UIKeyboardWillChangeFrameNotification */
     cee_id *keyboard_end;     /* UIKeyboardFrameEndUserInfoKey */
+    /* Accessibility (ADR 0164): CeeSafeAccessElement, a UIAccessibilityElement that takes a reader's actions;
+       UIAccessibilityPostNotification with its layout-changed and announcement numbers; whether VoiceOver runs. */
+    cee_id access_class;
+    void (*access_post)(uint32_t, cee_id);
+    const uint32_t *access_layout_changed;
+    const uint32_t *access_announcement;
+    signed char (*access_voiceover)(void);
 } cee_uikit;
 
 /* The one window, its view, and the hidden text field that is its editor while text input is on (ADR 0157), with
@@ -1974,6 +1981,9 @@ struct cee_ios {
     cee_id view;
     cee_id field;
     unsigned long sent;
+    /* Accessibility (ADR 0164): the element of each node of the window's list, in its order, each retained. */
+    cee_id *access_elements;
+    uint32_t access_count;
 };
 /* How much of the screen's bottom the soft keyboard covers, in points, as its last notification said. */
 static float cee_ios_keyboard;
@@ -2253,6 +2263,223 @@ static cee_id cee_ios_field(struct cee_window *w) {
 /* The wake source's callback: nothing to do; that a source was handled ends the run loop's wait (ADR 0142). */
 static void cee_ios_wake_perform(void *info) { (void)info; }
 
+/* ---- Accessibility on iOS (ADR 0164) -----------------------------------------------------------------------------
+   Each node of the window's list is a UIAccessibilityElement in the view, which is their container: the view's
+   accessibilityElements are the elements in the list's order, the order VoiceOver moves in. An element is kept
+   from one list to the next while its id is in both. iOS has traits and no roles: a button, a tab, a radio button,
+   a list's row and a menu's item are buttons (selected when they are), a checkbox a toggle button whose value is
+   1 or 0 (said "on" and "off"; a plain button with that value before iOS 17), a slider adjustable with its value as
+   text. A text field is an element with a name and a value: its keyboard comes when it is activated, as a tap
+   does it. */
+#define CEE_WINDOW_ACCESS 1
+
+static cee_id cee_ios_string_of(const char *text, size_t length) {
+    cee_id string = cee_ios_send(cee_ios_cls("NSString"), "alloc");
+    string = ((cee_id(*)(cee_id, cee_sel, const void *, unsigned long, unsigned long))cee_uikit.send)(
+        string, cee_ios_sel("initWithBytes:length:encoding:"), length > 0 ? (const void *)text : (const void *)"",
+        (unsigned long)length, 4ul /* NSUTF8StringEncoding */);
+    return string != NULL ? cee_ios_send(string, "autorelease") : cee_ios_string("");
+}
+
+/* The index of `element` in the shown window's list, or -1. */
+static long cee_ios_access_index(cee_id element) {
+    struct cee_window *w = cee_ios_shown;
+    if (w == NULL || w->native == NULL) {
+        return -1;
+    }
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    for (uint32_t k = 0; k < m->access_count && k < w->access_count; k++) {
+        if (m->access_elements[k] == element) {
+            return (long)k;
+        }
+    }
+    return -1;
+}
+
+/* VoiceOver asks `action` of the element: queued, and the run loop woken so a wait ends. */
+static signed char cee_ios_access_asked(cee_id self, int32_t action) {
+    long index = cee_ios_access_index(self);
+    struct cee_window *w = cee_ios_shown;
+    if (index < 0 || (w->access[index].flags & CEE_ACCESS_DISABLED) != 0) {
+        return 0;
+    }
+    if (cee_access_ask(w, w->access[index].id, action) && cee_uikit.wake_source != NULL) {
+        cee_uikit.source_signal(cee_uikit.wake_source);
+        cee_uikit.loop_wake_up(cee_uikit.main_loop);
+    }
+    return 1;
+}
+
+static signed char cee_ios_access_activate(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return cee_ios_access_asked(self, CEE_ACCESS_PRESS);
+}
+
+static void cee_ios_access_increment(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_ios_access_asked(self, CEE_ACCESS_INCREMENT);
+}
+
+static void cee_ios_access_decrement(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_ios_access_asked(self, CEE_ACCESS_DECREMENT);
+}
+
+/* Gives `element` what node `n` says: its name, value, traits and place in the view. */
+static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n, const char *text) {
+    /* UIAccessibilityTraits, as UIKit's headers have had them since iOS 3 (toggle button since iOS 17). */
+    const uint64_t button = 1u, image = 4u, selected = 8u, static_text = 0x40u, not_enabled = 0x100u,
+                   adjustable = 0x1000u, toggle = (uint64_t)1 << 53;
+    uint64_t traits = 0;
+    cee_id label = cee_ios_string_of(text + n->label_start, n->label_length);
+    cee_id value = NULL;
+    char number[32];
+    switch (n->role) {
+    case 0:
+        traits = static_text;
+        break;
+    case 2: /* a checkbox is a toggle button: its value 1 or 0 is said "on" or "off" */
+        traits = button | toggle;
+        value = cee_ios_string((n->flags & CEE_ACCESS_CHECKED) != 0 ? "1" : "0");
+        break;
+    case 3: /* a radio button is a button, selected when it is the chosen one */
+        traits = button | ((n->flags & CEE_ACCESS_CHECKED) != 0 ? selected : 0u);
+        break;
+    case 4:
+        if ((n->flags & CEE_ACCESS_SECURE) == 0 && n->value_length > 0) {
+            value = cee_ios_string_of(text + n->value_start, n->value_length);
+        }
+        break;
+    case 5: /* a slider says the program's text for its value, or its share of the range */
+        traits = adjustable;
+        if (n->value_length > 0) {
+            value = cee_ios_string_of(text + n->value_start, n->value_length);
+        } else {
+            double share = n->max > n->min ? (n->now - n->min) / (n->max - n->min) : 0.0;
+            share = share < 0.0 ? 0.0 : share > 1.0 ? 1.0 : share;
+            snprintf(number, sizeof number, "%d%%", (int)(share * 100.0 + 0.5));
+            value = cee_ios_string(number);
+        }
+        break;
+    case 9:
+        traits = button;
+        value = cee_ios_string_of(text + n->value_start, n->value_length);
+        break;
+    case 10:
+        traits = image;
+        break;
+    default: /* a button, a tab, a list's row, a menu's item */
+        traits = button;
+        break;
+    }
+    if ((n->flags & CEE_ACCESS_SELECTED) != 0) {
+        traits |= selected;
+    }
+    if ((n->flags & CEE_ACCESS_DISABLED) != 0) {
+        traits |= not_enabled;
+    }
+    cee_ios_send_v_id(element, "setAccessibilityLabel:", label);
+    cee_ios_send_v_id(element, "setAccessibilityValue:", value);
+    ((void (*)(cee_id, cee_sel, uint64_t))cee_uikit.send)(element, cee_ios_sel("setAccessibilityTraits:"), traits);
+    cee_rect frame = {{(double)n->x, (double)n->y}, {(double)n->width, (double)n->height}};
+    ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(element, cee_ios_sel("setAccessibilityFrameInContainerSpace:"),
+                                                         frame);
+}
+
+static int cee_ios_access_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                                    uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): the elements follow it. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m == NULL || cee_uikit.access_class == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    uint32_t count = w->access_count;
+    if (old_count > m->access_count) {
+        old_count = m->access_count;
+    }
+    cee_id *elements = count > 0 ? (cee_id *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
+    if (count > 0 && elements == NULL) {
+        count = 0; /* out of memory: the window has no elements until the next list */
+    }
+    int layout = count != old_count;
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+            layout = 1;
+        }
+        if (j < old_count && m->access_elements[j] != NULL) {
+            const struct cee_access_node *o = &old[j];
+            elements[k] = m->access_elements[j];
+            m->access_elements[j] = NULL;
+            if (n->role != o->role || n->flags != o->flags || n->now != o->now || n->min != o->min || n->max != o->max ||
+                n->x != o->x || n->y != o->y || n->width != o->width || n->height != o->height ||
+                !cee_ios_access_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
+                                          o->label_length) ||
+                !cee_ios_access_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                          o->value_length)) {
+                cee_ios_access_apply(elements[k], n, w->access_text);
+            }
+        } else {
+            cee_id element = ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(
+                cee_ios_send(cee_uikit.access_class, "alloc"), cee_ios_sel("initWithAccessibilityContainer:"), m->view);
+            elements[k] = element;
+            if (element != NULL) {
+                cee_ios_access_apply(element, n, w->access_text);
+            }
+            layout = 1;
+        }
+    }
+    for (uint32_t j = 0; j < m->access_count; j++) { /* the elements the new list does not have */
+        if (m->access_elements[j] != NULL) {
+            cee_ios_send_v(m->access_elements[j], "release");
+            layout = 1;
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = elements;
+    m->access_count = count;
+    if (layout) {
+        /* An element that could not be made leaves the array there: the ones before it are the view's. */
+        uint32_t made = 0;
+        while (made < count && elements[made] != NULL) {
+            made++;
+        }
+        cee_id array = ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_uikit.send)(
+            cee_ios_cls("NSArray"), cee_ios_sel("arrayWithObjects:count:"), elements, (unsigned long)made);
+        cee_ios_send_v_id(m->view, "setAccessibilityElements:", array);
+        if (cee_uikit.access_post != NULL && cee_uikit.access_layout_changed != NULL) {
+            cee_uikit.access_post(*cee_uikit.access_layout_changed, NULL);
+        }
+    }
+    cee_uikit.pool_pop(pool);
+}
+
+/* Says `text` through VoiceOver. */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    if (cee_uikit.access_post == NULL || cee_uikit.access_announcement == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_uikit.access_post(*cee_uikit.access_announcement, cee_ios_string_of(text, length));
+    cee_uikit.pool_pop(pool);
+}
+
 static int cee_uikit_load(void) {
     if (cee_uikit.state != 0) {
         return cee_uikit.state == 1;
@@ -2334,6 +2561,21 @@ static int cee_uikit_load(void) {
         cee_uikit.register_class(view);
     }
     cee_uikit.view_class = view;
+    /* Accessibility (ADR 0164). */
+    cee_uikit.access_post = (void (*)(uint32_t, cee_id))cee_ios_symbol(uikit, "UIAccessibilityPostNotification");
+    cee_uikit.access_layout_changed = (const uint32_t *)dlsym(uikit, "UIAccessibilityLayoutChangedNotification");
+    cee_uikit.access_announcement = (const uint32_t *)dlsym(uikit, "UIAccessibilityAnnouncementNotification");
+    cee_uikit.access_voiceover = (signed char (*)(void))cee_ios_symbol(uikit, "UIAccessibilityIsVoiceOverRunning");
+    cee_id access = cee_uikit.allocate_class(cee_ios_cls("UIAccessibilityElement"), "CeeSafeAccessElement", 0);
+    if (access == NULL) {
+        access = cee_ios_cls("CeeSafeAccessElement");
+    } else {
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityActivate"), (cee_fn)cee_ios_access_activate, "c@:");
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityIncrement"), (cee_fn)cee_ios_access_increment, "v@:");
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityDecrement"), (cee_fn)cee_ios_access_decrement, "v@:");
+        cee_uikit.register_class(access);
+    }
+    cee_uikit.access_class = access;
     cee_uikit.send_super = cee_ios_symbol(objc, "objc_msgSendSuper");
     cee_uikit.keyboard_changed = (cee_id *)dlsym(uikit, "UIKeyboardWillChangeFrameNotification");
     cee_uikit.keyboard_end = (cee_id *)dlsym(uikit, "UIKeyboardFrameEndUserInfoKey");
@@ -2611,6 +2853,14 @@ static void cee_native_close(struct cee_window *w) {
         m->field = NULL;
         cee_ios_keyboard = 0.0f;
     }
+    for (uint32_t k = 0; k < m->access_count; k++) { /* the window's elements (ADR 0164) */
+        if (m->access_elements[k] != NULL) {
+            cee_ios_send_v(m->access_elements[k], "release");
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = NULL;
+    m->access_count = 0;
     cee_ios_send_v_id(m->window, "setRootViewController:", NULL);
     ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(m->window, cee_ios_sel("setHidden:"), 1);
     cee_ios_send_v(m->window, "release");
@@ -2626,6 +2876,9 @@ static void cee_native_close(struct cee_window *w) {
    application's state, which give Resized and Focus when they change. */
 static void cee_native_pump(struct cee_window *w) {
     void *pool = cee_uikit.pool_push();
+    if (!w->access_active && cee_uikit.access_voiceover != NULL && cee_uikit.access_voiceover()) {
+        w->access_active = 1; /* VoiceOver runs: something asks for the window's elements (ADR 0164) */
+    }
     for (int k = 0; k < 256 && cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.0, 1) == 4; k++) {
         /* kCFRunLoopRunHandledSource: another may be pending */
     }

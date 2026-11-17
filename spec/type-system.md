@@ -3572,7 +3572,19 @@ Diagnostics: none new.
     field's text and caret is the keyboard, through the program. `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` queue the
     requests. The notifications posted are `AXLayoutChanged` on the view when elements came or went,
     `AXValueChanged`, `AXTitleChanged`, `AXSelectedTextChanged` and `AXFocusedUIElementChanged` on an element, and `AXAnnouncementRequested`
-    for `announce`. iOS, Android, Windows, Linux and FreeBSD: not implemented yet (ADR 0164 §3); the list is kept
+    for `announce`. iOS: each node is a `CeeSafeAccessElement`, a `UIAccessibilityElement` whose
+    container is the window's view; the view's `accessibilityElements` are the elements in the list's order, the
+    order VoiceOver moves in, and an element's place is its `accessibilityFrameInContainerSpace`. iOS has traits
+    and no roles: `Text` is static text; `Button`, `Tab`, `Radio`, `ListItem`, `MenuItem` and `Dropdown` are
+    buttons, selected when `selected` (a `Radio` when `checked`), a `Dropdown` with its value; a `Checkbox` is a
+    toggle button with the value `1` or `0`, said "on" and "off" (iOS 17; a button with that value before); a
+    `Slider` is adjustable, its value the node's value text or else its share of the range as `40%`; an `Image` is
+    an image; a `TextField` has its name and value and no trait; `disabled` is not enabled. `accessibilityActivate`
+    queues `Press` (which is how a field gets the keyboard, as a tap does), `accessibilityIncrement` and
+    `…Decrement` the steps; `Focus` is never asked. `UIAccessibilityLayoutChangedNotification` is posted when
+    elements came or went, and `announce` posts an announcement. `accessActive` is whether VoiceOver runs
+    (`UIAccessibilityIsVoiceOverRunning`), read when the window takes its events. A field's `caret` and `anchor`
+    are not used. Android, Windows, Linux and FreeBSD: not implemented yet (ADR 0164 §3); the list is kept
     and `takeAccessAction` is null, `accessActive` false.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`

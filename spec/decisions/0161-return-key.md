@@ -4,7 +4,7 @@
   "a Done label on the keyboard's Return key needs a small CeeSafe API addition (an ADR and a release). Want it?"),
   for ClayWind's roadmap phase P4 (mobile) step 9, the chat client on phones: the owner found no key on an iPhone's
   keyboard that said it would put the keyboard away. Implemented on branch `adr/0161-return-key` (from release
-  0.62.1): iOS and Android (§5).
+  0.62.1, rebased onto 0.62.2): iOS and Android (§5).
 - Scope: `lib/std/window.cee` (`WindowReturnKey`, `Window.setReturnKey`), `runtime/hosted/ceesafe_rt_window.c` (iOS,
   Android), `runtime/android/org/ceesafe/window/InputView.java` and its embedded dex, type-system.md §26.13,
   `spec/api/std.md` (generated), `tools/window_check.py`. No compiler change.

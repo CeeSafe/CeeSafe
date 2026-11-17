@@ -1,0 +1,28 @@
+// N0406 (ADR 0163 §2.1): a sync function whose values of 4 KiB or more add up to 256 KiB or more. `three` holds three
+// blocks of 100,000 bytes; `two` holds two and does not warn.
+
+struct Block {
+    data: [u8; 100000];
+}
+
+fn fill(seed: u8) -> Block => Block { data: [seed; 100000] };
+
+fn first(b: borrow Block) -> u32 => b.data[0] as u32;
+
+fn three() -> u32 { // warning[N0406]
+    let a = fill(1);
+    let b = fill(2);
+    let c = fill(3);
+    return first(a) + first(b) + first(c);
+}
+
+fn two() -> u32 {
+    let a = fill(1);
+    let b = fill(2);
+    return first(a) + first(b);
+}
+
+fn main() -> i32 {
+    Console.writeLine(three() + two());
+    return 0;
+}

@@ -131,7 +131,7 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--explain-bounds-checks` | none | Prints each index check and whether it was removed ([13.4](./ch13-04-what-they-cost)). | off |
 | `--explain-overflow-checks` | none | Prints each checked `+`, `-`, `*` and negation and whether its check was removed ([20.4](./ch20-04-arithmetic)). | off |
 | `--explain-closure-calls` | none | Prints each call through a closure, whether it became a direct call, and each variant made ([13.4](./ch13-04-what-they-cost)). | off |
-| `--explain-frames` | none | Prints each `async fn`'s frame size and what makes it large. | off |
+| `--explain-frames` | none | Prints each `async fn`'s frame size and what makes it large, and each other function whose large values add up to 64 KiB or more of stack. | off |
 | `--dump-nir` | none | Prints the program in the compiler's intermediate form on standard output. | off |
 
 ## `ceesafec run`

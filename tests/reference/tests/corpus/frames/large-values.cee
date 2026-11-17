@@ -1,0 +1,60 @@
+// Large values in a sync function's frame (ADR 0163 §2.1): `--explain-frames` lists each function whose values of
+// 4 KiB or more add up to 64 KiB or more. A value is counted once however many locals it is moved through (`r`, the
+// match's temporary and `big` below are one), and so is the value a function returns (`chain`'s, one for all its
+// `?`s and its `return`). `small` holds 8 KiB and is not listed.
+
+struct Big {
+    data: [u8; 65536];
+    n: u32;
+}
+
+struct Holder {
+    big: Big;
+    extra: u32;
+}
+
+fn make(n: u32) -> Result<Big, AllocError> {
+    if (n == 0) {
+        return Err(AllocError.OutOfMemory);
+    }
+    return Ok(Big { data: [1u8; 65536], n: n });
+}
+
+fn hold(big: Big) -> Holder => Holder { big: big, extra: 7 };
+
+fn chain(n: u32) -> Result<Big, AllocError> {
+    var first = make(n)?;
+    first.n += 1;
+    var second = make(first.n)?;
+    second.n += first.n;
+    return Ok(second);
+}
+
+fn small() -> u32 {
+    var bytes = [0u8; 8192];
+    bytes[1] = 3;
+    return bytes[1] as u32;
+}
+
+fn sum(h: borrow Holder) -> u32 {
+    var total: u32 = h.extra;
+    for (b in h.big.data[..]) {
+        total = total.wrappingAdd(b as u32);
+    }
+    return total;
+}
+
+fn main() -> i32 {
+    var big = match (make(1)) {
+        Ok(r) => r,
+        Err(_) => { return 1; }
+    };
+    big.n += small();
+    let holder = hold(big);
+    Console.writeLine(sum(holder));
+    match (chain(2)) {
+        Ok(c) => { Console.writeLine(c.n); }
+        Err(_) => { return 1; }
+    }
+    return 0;
+}

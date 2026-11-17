@@ -1,8 +1,9 @@
 # ADR 0163 — Large values in a function's frame: reported first, then kept in one place
 
-- Status: **Proposed**, 2026-11-17, at the owner's word ("Go ahead with 013 first then 09": ClayWind's finding O13,
-  then O9). Nothing is implemented. Every number here is read from a binary built at `-O2`, which is what a
-  release build uses; ADR 0162 was withdrawn because its numbers were read from the C.
+- Status: **Part 1 accepted** by the owner, 2026-11-17 ("I accept ADR 0163 Part 1 as written"), and implemented
+  (§6). Parts 2 and 3 remain designs, to be decided after the survey of §2.4. Proposed 2026-11-17, at the owner's
+  word ("Go ahead with 013 first then 09": ClayWind's finding O13, then O9). Every number here is read from a binary
+  built at `-O2`, which is what a release build uses; ADR 0162 was withdrawn because its numbers were read from the C.
 - Scope: in three parts, each decided on its own (§2): a report (`src/main.cee`, the C backend's layouts,
   tooling.md); the calling convention for large values that are moved into a call (`c-backend.md` §2,
   `src/backend/`); a matched payload used where it is (`src/nir/`, `optimisations.md`). No change to the language or
@@ -145,3 +146,43 @@ implementation)
 - **Parts 2 and 3**: the frames of §1.1's program and of ClayWind's host, **read from the binary at `-O2`**, before
   and after; the corpus natively, interpreted and with the change switched off; the fixed point and the release
   chain; and the number of functions whose C signature changed.
+
+## 6. Part 1 as implemented (2026-11-17)
+
+`src/backend/large_frames.cee`; c-backend.md §4.1; diagnostics.md, **N0406**.
+
+**One change from §2.1 as written: the sum is an estimate, not an upper bound.** The sum of every large local was
+implemented first and measured on the compiler itself. It warned of three functions, 257 to 404 KiB, whose frames
+in the binary are 22 to 26 KiB: a function that returns a large `Result` has one temporary of that type for each `?`
+and `return`, and clang keeps them all in the caller's place. A warning that is wrong by a factor of ten is not one
+to act on. So:
+
+- Locals that one value passes through whole are one value (`a = b`, `b` moved, a temporary read once, or dead
+  straight after), and the locals a function returns are one value.
+- With that, the compiler has no warning and five functions in the report, each a 64 KiB read buffer, whose frames
+  in the binary are 65,584 bytes.
+- §1.1's program: estimate 196,628 bytes for `main`, binary 196,640.
+- It can be high: `frames/large-values`, callees not inlined, `main` 327,712 against 196,704 and `chain` 327,712
+  against 131,088 (clang gives two `Result`s that are never live together one place).
+- It can be low: ClayWind's host at `7315bac`, `main` 370,552 against 745,408, because clang inlined `Raster.create`
+  and `GpuBackend.create`, whose own values (estimates 491,992 and 247,304) are then in `main`'s frame. All three
+  are in the report, and `main` has the warning.
+
+Tests: `frames/large-values` (the report), `check-pass/large-frame-warning` (N0406 at 300,000 bytes, none at
+200,000).
+
+### 6.1 The survey of §2.4 (2026-11-17)
+
+| Program | N0406 | Functions in the report | What they hold |
+|---|---|---|---|
+| The compiler (`src/`) | 0 | 5 | each one 64 KiB buffer for reading a file |
+| ClayWind's GPU host, with ClayWind and its desktop package | 0 | 6 | two 64 KiB read buffers; `emptyLayoutBuffer`, `emptyBidiBuffer` and `unicodeProps`, which build a table or a buffer as a value; `Raster.create`, 245,504 bytes, which takes the two buffers by value before it puts them in its memory |
+| The chat client | 0 | 5 | the same of ClayWind's, without the host's own |
+| CeeSafe.Web, its 14 packages and the overload benchmark | 0 | 0 | |
+| The HTTP client and its `get` example | 0 | 0 | |
+
+- **§1.1's shape, a large value through a `Result` and into a struct by value, is in one place**: ClayWind's
+  `Raster.create` and what it calls, which is where it was found. Every other function in the report holds a
+  buffer or a table it means to hold.
+- **So the survey gives no case for Parts 2 and 3**: one program had the shape, the report now names it, and its
+  remedy was in the program. They stay designs until a program shows the need.

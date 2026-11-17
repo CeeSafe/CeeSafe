@@ -217,7 +217,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --no-placement    (build, run) keep every box on the heap (placement is on by default, optimisations.md §4)\n",
     )?;
     appendText(out, "  --explain-allocations  (build) print where every allocation site's memory comes from\n")?;
-    appendText(out, "  --explain-frames  (build) print each async fn's frame size and what makes it large\n")?;
+    appendText(out, "  --explain-frames  (build) print each async fn's frame size, and each function's large locals\n")?;
     appendText(
         out,
         "  --no-bce          (build, run) keep every index check (no bounds-check elimination, optimisations.md §2)\n",
@@ -1608,6 +1608,7 @@ fn compileFiles(
         }
         if (options.explainFrames) {
             explainFrames(checker, nir, sources, mut printed)!;
+            explainLargeFrames(checker, nir, sources, mut printed)!; // sync functions (ADR 0163 §2.1)
         }
         if (options.explainBoundsChecks) {
             // What the C backend omits; with --no-bce, nothing (optimisations.md §2.7).

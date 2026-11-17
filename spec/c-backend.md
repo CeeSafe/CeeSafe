@@ -628,6 +628,29 @@ backend never emits an expression whose meaning depends on unspecified C
 evaluation order (function-argument order, `a[i] = i++`-style). Arguments
 with side effects are always assigned to temporaries first.
 
+## 4.1 Large values in a function's frame (ADR 0163 §2.1)
+
+Every local and temporary of a sync function is a variable of its C function, declared at its start, so a value
+of tens of kilobytes held by value is that much of the thread's stack for as long as the function runs. The compiler
+reports it and changes no code for it.
+
+- **What is counted.** In each sync function that is compiled (not a generic version, not a closure-call variant),
+  the locals and temporaries whose type is 4 KiB or more, parameters left out: a large argument is the caller's
+  value. Locals that one value passes through whole are **one value**: `a = b` joins `a` and `b` where `b` is moved,
+  is a temporary nothing else reads, or is dead straight after. The locals a function returns are one value too.
+  The sum of the values' sizes is the function's **estimate**.
+- **It is an estimate of a release build's frame, not a bound.** An optimising C compiler keeps a value that is
+  only passed along in one place, which is what the joining models; it may also give two values that are never
+  live together one place (the estimate is then high: 2.5 times the frame in the corpus's `frames/large-values`),
+  and it may inline a callee, whose values are then in the caller's frame (the estimate is then low). A debug
+  build keeps every local apart. Values below 4 KiB are not counted.
+- **`ceesafec build --explain-frames`** lists, after the async frames, each such function of the package whose
+  estimate is 64 KiB or more: where it is, the number of large values, the estimate, and each value with its type
+  and size, largest first, as `'name'`, `a temporary` or `the value it returns`. Library functions are left out.
+- **Warning N0406** is reported at the function's name where the estimate is 256 KiB or more, in the files other
+  warnings are reported for (diagnostics.md). The two thresholds are constants of the compiler.
+- Async fns are not in this report: their kept locals are in the task's frame, which the same option reports (§3a).
+
 ## 5. UB avoidance checklist (enforced by construction + tests)
 
 | Hazard | Strategy |

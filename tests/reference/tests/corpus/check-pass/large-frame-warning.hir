@@ -1,0 +1,33 @@
+(program
+  (fn fill ((seed#0: u8)) -> Block
+    (block
+      (return (new Block (data (array-repeat seed#0):[u8; 100000])))
+    )
+  )
+  (fn first ((b#0: borrow Block)) -> u32
+    (block
+      (return (as (index (. (deref b#0):Block data):[u8; 100000] 0:usize):u8 u32))
+    )
+  )
+  (fn three () -> u32
+    (block
+      (let a#0: Block = (call fill 1:u8):Block)
+      (let b#1: Block = (call fill 2:u8):Block)
+      (let c#2: Block = (call fill 3:u8):Block)
+      (return (+ (+ (call first (borrow a#0)):u32 (call first (borrow b#1)):u32):u32 (call first (borrow c#2)):u32):u32)
+    )
+  )
+  (fn two () -> u32
+    (block
+      (let a#0: Block = (call fill 1:u8):Block)
+      (let b#1: Block = (call fill 2:u8):Block)
+      (return (+ (call first (borrow a#0)):u32 (call first (borrow b#1)):u32):u32)
+    )
+  )
+  (fn main () -> i32
+    (block
+      (expr (Console.writeLine (+ (call three):u32 (call two):u32):u32))
+      (return 0:i32)
+    )
+  )
+)

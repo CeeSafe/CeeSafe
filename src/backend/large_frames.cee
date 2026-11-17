@@ -1,0 +1,435 @@
+// Large values in a sync function's frame (ADR 0163 §2.1): which functions hold them, for `--explain-frames` and for
+// the warning N0406. It reads checked NIR and the types' layouts, and changes no generated code.
+//
+// What is counted is an estimate of a release build's frame. A value is counted once however many locals it is moved
+// through, and so is the value a function returns: an optimising C compiler keeps each in one place (the binary of
+// ADR 0163 §1.1's program holds three of the five the C declares). Summing every local named functions whose frames
+// are a tenth of the sum: one temporary for each `?` of a function that returns a large `Result`.
+
+/// A local below this size is not counted: the report is of the values that fill a stack, not of every local.
+fn largeLocalBytes() -> u64 => 4096;
+
+/// `--explain-frames` names a function whose large locals add up to this.
+fn reportedFrameBytes() -> u64 => 65536;
+
+/// N0406 is reported for a function whose large locals add up to this.
+fn warnedFrameBytes() -> u64 => 262144;
+
+fn largeFrameWarning() -> u32 => 406;
+
+/// The large values of one function.
+struct LargeFrame {
+    total: u64;          // the sum of their sizes
+    locals: Vector<u32>; // one local for each value, largest first
+    returned: u32;       // the one of them that is the value the function returns, or none
+}
+
+/// The local that stands for `local`'s value in `groups`.
+fn frameValueOf(groups: borrow Vector<u32>, local: u32) -> u32 {
+    var k = local;
+    while (groups[k as usize] != k) {
+        k = groups[k as usize];
+    }
+    return k;
+}
+
+/// `a` and `b` are one value. A named local stands for it where there is one, `a`'s before `b`'s.
+fn joinFrameValues(function: borrow NirFunction, groups: borrow mut Vector<u32>, a: u32, b: u32) {
+    let x = frameValueOf(groups, a);
+    let y = frameValueOf(groups, b);
+    if (x == y) {
+        return;
+    }
+    let xNamed = function.locals[x as usize].name != none();
+    let yNamed = function.locals[y as usize].name != none();
+    let keepX = xNamed || !yNamed; // `a`'s, the local the value ends in
+    if (keepX) {
+        groups[y as usize] = x;
+    } else {
+        groups[x as usize] = y;
+    }
+}
+
+/// The local a whole place names, or none: a place with projections is a part of a value.
+fn frameWholeLocal(n: borrow NirProgram, place: u32) -> u32 {
+    let p = n.places[place as usize];
+    return if (p.projections.count == 0) p.local else none();
+}
+
+/// Counts a place's mentions of locals into `counts`: the local it starts from, and the places among its indices.
+fn frameCountPlace(n: borrow NirProgram, place: u32, counts: borrow mut Vector<u32>) {
+    let p = n.places[place as usize];
+    counts[p.local as usize] = counts[p.local as usize].wrappingAdd(1);
+    for (k in 0..p.projections.count) {
+        frameCountOperand(n, n.projections[(p.projections.start + k) as usize].index, mut counts);
+    }
+}
+
+fn frameCountOperand(n: borrow NirProgram, operand: u32, counts: borrow mut Vector<u32>) {
+    if (operand == none()) {
+        return;
+    }
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => { frameCountPlace(n, place, mut counts); }
+        _ => {}
+    }
+}
+
+fn frameCountOperands(n: borrow NirProgram, operands: Range, counts: borrow mut Vector<u32>) {
+    for (k in 0..operands.count) {
+        frameCountOperand(n, n.at(operands, k), mut counts);
+    }
+}
+
+fn frameCountRvalue(n: borrow NirProgram, r: u32, counts: borrow mut Vector<u32>) {
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Use(a) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.Binary(_, a, b) => {
+            frameCountOperand(n, a, mut counts);
+            frameCountOperand(n, b, mut counts);
+        }
+        NirRvalue.Unary(_, a) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.Cast(a) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.Truncate(a) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.FloatToInt(a, _) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.Ref(_, place) => { frameCountPlace(n, place, mut counts); }
+        NirRvalue.Discriminant(place) => { frameCountPlace(n, place, mut counts); }
+        NirRvalue.EnumAggregate(_, operands) => { frameCountOperands(n, operands, mut counts); }
+        NirRvalue.Aggregate(operands) => { frameCountOperands(n, operands, mut counts); }
+        NirRvalue.Array(operands) => { frameCountOperands(n, operands, mut counts); }
+        NirRvalue.ArrayRepeat(a) => { frameCountOperand(n, a, mut counts); }
+        NirRvalue.Slice(_, place, low, high) => {
+            frameCountPlace(n, place, mut counts);
+            frameCountOperand(n, low, mut counts);
+            frameCountOperand(n, high, mut counts);
+        }
+        NirRvalue.Length(place) => { frameCountPlace(n, place, mut counts); }
+        NirRvalue.Call(_, operands) => { frameCountOperands(n, operands, mut counts); }
+        NirRvalue.Builtin(_, operands) => { frameCountOperands(n, operands, mut counts); }
+        NirRvalue.FunctionAddress(_) => {}
+        NirRvalue.StaticAddress(_) => {}
+    }
+}
+
+/// Every mention of a local in a function, but its StorageDeads: `counts[local]`. A temporary with two is assigned
+/// once and read once.
+fn frameCountFunction(n: borrow NirProgram, function: borrow NirFunction, counts: borrow mut Vector<u32>) {
+    for (block in function.blocks.view()) {
+        for (statement in block.statements.view()) {
+            match (n.statements[statement as usize]) {
+                NirStatement.StorageDead(_) => {}
+                NirStatement.Drop(place, flag) => {
+                    frameCountPlace(n, place, mut counts);
+                    if (flag != none()) {
+                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+                    }
+                }
+                NirStatement.Assign(target, r) => {
+                    frameCountPlace(n, target, mut counts);
+                    frameCountRvalue(n, r, mut counts);
+                }
+                NirStatement.BoundsCheck(a, b) => {
+                    frameCountOperand(n, a, mut counts);
+                    frameCountOperand(n, b, mut counts);
+                }
+                NirStatement.RangeCheck(low, high, length, text) => {
+                    frameCountOperand(n, low, mut counts);
+                    frameCountOperand(n, high, mut counts);
+                    frameCountOperand(n, length, mut counts);
+                    if (text != none()) {
+                        frameCountPlace(n, text, mut counts);
+                    }
+                }
+                NirStatement.LengthCheck(a, b) => {
+                    frameCountOperand(n, a, mut counts);
+                    frameCountOperand(n, b, mut counts);
+                }
+                NirStatement.Unpack(source, _, targets) => {
+                    frameCountPlace(n, source, mut counts);
+                    for (k in 0..targets.count) {
+                        let target = n.at(targets, k);
+                        if (target != none()) {
+                            counts[target as usize] = counts[target as usize].wrappingAdd(1);
+                        }
+                    }
+                }
+                NirStatement.BoxFree(place, flag) => {
+                    frameCountPlace(n, place, mut counts);
+                    if (flag != none()) {
+                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+                    }
+                }
+                NirStatement.Eval(r) => { frameCountRvalue(n, r, mut counts); }
+            }
+        }
+        if (block.terminator != none()) {
+            match (n.terminators[block.terminator as usize]) {
+                NirTerminator.Branch(condition, _, _) => { frameCountOperand(n, condition, mut counts); }
+                NirTerminator.Switch(value, _, _) => { frameCountOperand(n, value, mut counts); }
+                NirTerminator.Return(value) => { frameCountOperand(n, value, mut counts); }
+                NirTerminator.Exit(code) => { frameCountOperand(n, code, mut counts); }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The local an operand names whole, or none.
+fn frameOperandLocal(n: borrow NirProgram, operand: u32) -> u32 {
+    if (operand == none()) {
+        return none();
+    }
+    return match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => frameWholeLocal(n, place),
+        _ => none(),
+    };
+}
+
+/// Whether `local` is not used again after statement `at` of `block`, which reads it through `operand`: the operand
+/// moved it, it is a temporary this statement alone reads, or its StorageDead follows with only other StorageDeads
+/// between.
+fn frameLocalEnds(
+    n: borrow NirProgram,
+    function: borrow NirFunction,
+    block: borrow NirBlock,
+    at: usize,
+    operand: u32,
+    local: u32,
+    counts: borrow Vector<u32>,
+) -> bool {
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(_, moved) => {
+            if (moved) {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    if (function.locals[local as usize].name == none() && counts[local as usize] == 2) {
+        return true;
+    }
+    var k = at + 1;
+    while (k < block.statements.length) {
+        match (n.statements[block.statements[k] as usize]) {
+            NirStatement.StorageDead(dead) => {
+                if (dead == local) {
+                    return true;
+                }
+            }
+            _ => { return false; }
+        }
+        k += 1;
+    }
+    return false;
+}
+
+/// The values of NIR function `f` that are `largeLocalBytes` or more, and their sum. Locals that one value is moved
+/// through whole (`a = b`, `b` not used again) are one value, and so are the locals the function returns: an
+/// optimising C compiler keeps each such value in one place (ADR 0163 §1.1). Parameters are left out: a large
+/// argument is the caller's value, passed by its address.
+fn largeFrame(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<LargeFrame, AllocError> {
+    let function = borrow n.functions[f as usize];
+    let count = truncate<u32>(function.locals.length);
+    var frame = LargeFrame { total: 0, locals: Vector<u32>.create(), returned: none() };
+    var large = Vector<bool>.create();
+    var any = false;
+    for (k in 0..count) {
+        let t = function.locals[k as usize].typ;
+        var is = false;
+        if (k >= function.parameterCount && layoutComputable(c, t, 0)) {
+            let size = cLayout(c, t).size;
+            is = size >= 0 && truncate<u64>(size) >= largeLocalBytes();
+        }
+        large.push(is)?;
+        if (is) {
+            any = true;
+        }
+    }
+    if (!any) {
+        return Ok(frame);
+    }
+    var groups = Vector<u32>.create();
+    for (k in 0..count) {
+        groups.push(k)?;
+    }
+    var counts = Vector<u32>.create();
+    for (k in 0..count) {
+        counts.push(0)?;
+    }
+    frameCountFunction(n, function, mut counts);
+    var returned: u32 = none();
+    for (block in function.blocks.view()) {
+        for (at in 0..block.statements.length) {
+            match (n.statements[block.statements[at] as usize]) {
+                NirStatement.Assign(target, r) => {
+                    let to = frameWholeLocal(n, target);
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.Use(a) => {
+                            let from = frameOperandLocal(n, a);
+                            if (to != none() && from != none() && large[to as usize] && large[from as usize] &&
+                                frameLocalEnds(n, function, block, at, a, from, counts)) {
+                                joinFrameValues(function, mut groups, to, from);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        if (block.terminator != none()) {
+            match (n.terminators[block.terminator as usize]) {
+                NirTerminator.Return(value) => {
+                    let from = frameOperandLocal(n, value);
+                    if (from != none() && large[from as usize]) {
+                        if (returned != none()) {
+                            joinFrameValues(function, mut groups, returned, from);
+                        }
+                        returned = from;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if (returned != none()) {
+        frame.returned = frameValueOf(groups, returned);
+    }
+    for (k in 0..count) {
+        if (!large[k as usize] || frameValueOf(groups, k) != k) {
+            continue;
+        }
+        frame.total += truncate<u64>(cLayout(c, function.locals[k as usize].typ).size);
+        frame.locals.push(k)?;
+    }
+    frame.locals.sortBy((a, b) => {
+        let sa = cLayout(c, function.locals[a as usize].typ).size;
+        let sb = cLayout(c, function.locals[b as usize].typ).size;
+        return if (sa > sb) -1 else if (sa < sb) 1 else if (a < b) -1 else if (a > b) 1 else 0;
+    });
+    return Ok(frame);
+}
+
+/// Whether NIR function `f` is one the report and the warning are about: a sync function that is compiled.
+fn hasSyncFrame(c: borrow Checker, n: borrow NirProgram, f: u32) -> bool {
+    let source = n.functions[f as usize].source;
+    return !isAsyncFunction(c, source) && !functionIsGeneric(c, source) && n.functions[f as usize].variant == 0;
+}
+
+/// "'big', a 'Big' of 65540 bytes", "a temporary, a 'Big' of 65540 bytes" or "the value it returns, a …".
+fn appendLargeLocal(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    function: borrow NirFunction,
+    local: u32,
+    returned: bool,
+    kib: bool,
+) -> Result<void, AllocError> {
+    let l = function.locals[local as usize];
+    if (l.name == none()) {
+        appendText(out, if (returned) "the value it returns" else "a temporary")?;
+    } else {
+        appendText(out, "'")?;
+        appendBytes(out, c.name(l.name))?;
+        appendText(out, "'")?;
+    }
+    appendText(out, ", a ")?;
+    appendQuotedType(out, c, l.typ)?;
+    appendText(out, " of ")?;
+    let size = truncate<u64>(cLayout(c, l.typ).size);
+    if (kib) {
+        appendDecimal(out, size / 1024)?;
+        return appendText(out, " KiB");
+    }
+    appendDecimal(out, size)?;
+    return appendText(out, " bytes");
+}
+
+/// N0406: each sync function of the linted files whose large locals add up to `warnedFrameBytes` or more. Once for
+/// a function: a generic function's instances are one function in the source.
+fn warnLargeFrames(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    computeLayouts(c);
+    var reported = Vector<u32>.create(); // (file, start) pairs
+    for (f in 0..truncate<u32>(n.functions.length)) {
+        if (!hasSyncFrame(c, n, f)) {
+            continue;
+        }
+        let source = n.functions[f as usize].source;
+        let file = c.hir.functions[source as usize].file;
+        if (!isLintedFile(c, file)) {
+            continue;
+        }
+        let frame = largeFrame(c, n, f)?;
+        if (frame.total < warnedFrameBytes()) {
+            continue;
+        }
+        let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
+        let name = c.front.ast.idents[syntax.name as usize];
+        var seen = false;
+        var at: usize = 0;
+        while (at + 1 < reported.length) {
+            if (reported[at] == file && reported[at + 1] == name.start) {
+                seen = true;
+            }
+            at += 2;
+        }
+        if (seen) {
+            continue;
+        }
+        reported.push(file)?;
+        reported.push(name.start)?;
+        var message = Vector<u8>.create();
+        appendText(mut message, "this function's large values add up to ")?;
+        appendDecimal(mut message, frame.total / 1024)?;
+        appendText(mut message, " KiB of stack (the largest: ")?;
+        appendLargeLocal(c, mut message, n.functions[f as usize], frame.locals[0], frame.locals[0] == frame.returned, true)?;
+        appendText(
+            mut message,
+            "): a main thread's stack is 1 MiB on iOS and Windows, and a thread's is smaller on some systems; keep a large value behind a pointer or in an allocator's memory ('--explain-frames' lists them; ADR 0163)",
+        )?;
+        c.front.diagnostics.warning(largeFrameWarning(), file, name.start, name.end, message)?;
+    }
+    return Ok();
+}
+
+/// --explain-frames: each sync function of the program whose large locals add up to `reportedFrameBytes` or more,
+/// that sum, and each such local, largest first (ADR 0163 §2.1).
+fn explainLargeFrames(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    for (f in 0..truncate<u32>(n.functions.length)) {
+        if (!hasSyncFrame(c, n, f)) {
+            continue;
+        }
+        let source = n.functions[f as usize].source;
+        let file = c.hir.functions[source as usize].file;
+        if (c.fileIsLibrary[file as usize]) {
+            continue;
+        }
+        let frame = largeFrame(c, n, f)?;
+        if (frame.total < reportedFrameBytes()) {
+            continue;
+        }
+        appendBytes(out, c.filePaths[file as usize].view())?;
+        out.push(':')?;
+        appendWhere(out, sources, file, functionNameStart(c, source))?;
+        appendText(out, ": ")?;
+        appendDescribedFunction(c, source, out)?;
+        appendText(out, " holds ")?;
+        appendDecimal(out, frame.locals.length as u64)?;
+        appendText(out, " large value(s), ")?;
+        appendDecimal(out, frame.total)?;
+        appendText(out, " bytes of stack: ")?;
+        for (k in 0..frame.locals.length) {
+            if (k > 0) {
+                appendText(out, "; ")?;
+            }
+            appendLargeLocal(c, out, n.functions[f as usize], frame.locals[k], frame.locals[k] == frame.returned, false)?;
+        }
+        out.push('\n')?;
+    }
+    return Ok();
+}

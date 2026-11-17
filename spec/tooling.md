@@ -1052,6 +1052,12 @@ Each test's outcome:
 - **`--sweep alloc`** runs each passing test again once per allocation attempt, the k-th failing. **`--sweep cancel`**
   runs it once per suspension point, the k-th cancelling its root task, sampled past 200 as `tools/cancel_sweep.py`
   is. A run may fail; it may not panic, crash, time out or leak.
+- **A sweep failure's own words.** Each sweep failure is one line, `name: allocation K outcome` (or `cancellation at
+  suspension K`), then the run's message when it has one (a panic's, a leak's). A run that crashed, exited, timed out
+  or ended without a result has none: its line ends `; its standard error ends:` and the last 40 lines of the run's
+  standard error follow (at most 4,000 bytes, each line indented by four spaces, without the harness protocol's lines
+  or blank ones). There a sanitizer's report or a C library's message says what ended the run, since a sweep does not
+  run it again. The JSON's `sweepFailures` holds the same text.
 - **A sweep's unwraps** (ADR 0075 §2.16 and §7 item 6). Under `--sweep alloc`, a run that panics with "unwrapped an
   Err value" or "unwrapped null" at a position in a file that declares an `@test` function (of the root package) is
   not a sweep failure: it is counted apart, and the summary ends `(N unwrapped by the test itself)`

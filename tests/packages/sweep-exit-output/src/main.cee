@@ -1,0 +1,24 @@
+// A run that ends itself under a failed allocation, saying why only on standard error: `--sweep alloc` reports it as
+// "exited", and since an exit has no message of its own, the failure carries the end of the run's standard error.
+// tools/test_command_check.py runs it.
+
+/// Code that stops the program when memory runs out, telling standard error first, as a C library might.
+fn cell(value: i32) -> i32 {
+    var cells = Vector<i32>.create();
+    match (cells.push(value)) {
+        Ok() => { return cells[0]; }
+        Err(_) => {
+            Console.writeErrorLine("cell: no memory for a cell; giving up");
+            Process.exit(3);
+        }
+    }
+}
+
+@test
+fn exitsWhenMemoryRunsOut() {
+    assert(cell(7) == 7);
+}
+
+fn main() {
+    Console.writeLine(cell(1));
+}

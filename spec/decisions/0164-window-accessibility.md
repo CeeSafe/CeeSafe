@@ -214,3 +214,24 @@ part), type-system.md §26.13. The owner: "Moto is connected. Go ahead install a
     to element (180 hover events, the cursor on ten elements in turn), and a double tap activated one. The owner:
     "It's working fine without issues."
 - **Not checked**: a slider's steps through TalkBack; `announce`; a second activity after the first ends.
+
+## 9. Step 4 as implemented: Windows (2026-11-18)
+
+`runtime/hosted/ceesafe_rt_window.c` (the Win32 part), type-system.md §26.13. The owner: "Do Windows and release
+all together".
+
+- UI Automation providers in C: a fragment root for the window, answering `WM_GETOBJECT`, and a provider for each
+  element, with the pattern its role has. The interfaces are their vtables written out, and nothing is linked:
+  `uiautomationcore.dll` and `oleaut32.dll` are loaded at first use.
+- **A slider is set by steps**: `IRangeValueProvider::SetValue` above the value asks `Increment`, below it
+  `Decrement`. **A field's value cannot be set by a client**; `SetFocus` on it asks `Focus`, and the keyboard types.
+- **Checked on Windows 11 with a UI Automation client** (`System.Windows.Automation` from PowerShell, run in the
+  desktop session), on ClayWind's component demo:
+  - the first screen's 77 elements with their control type, name, bounds and patterns; a disabled button says so;
+  - `Invoke` on "Clicked 0" makes it "Clicked 1"; `Select` on a tab opens its page;
+  - a slider: 0.5, a step up 0.6, a step down 0.5; `SetFocus` on a field gives it the focus, and typed keys are its
+    value; a checkbox toggles Off to On; a radio button is selected and the other is not; a dropdown expands, an
+    item of it is invoked, and the dropdown says the new value, collapsed.
+  - `window_check` on the same laptop: 63 checks, 0 problems.
+- **Not checked**: NVDA and Narrator themselves, which read through these providers; the events' effect on a
+  reader; `announce`.

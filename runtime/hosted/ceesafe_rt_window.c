@@ -5433,6 +5433,7 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
 #pragma comment(lib, "user32.lib") /* clang and cl; MinGW's gcc gets -lgdi32 from ceesafec (tooling.md §8.3) */
 #pragma comment(lib, "gdi32.lib")
 #endif
+#include <stddef.h> /* offsetof, for a COM object's interfaces (ADR 0164) */
 #include <imm.h> /* the input method's types and constants; its functions come from imm32.dll, loaded at first use */
 #define COBJMACROS    /* the COM interfaces' C calls, IFileDialog_Show and the like (ADR 0146) */
 #include <shobjidl.h> /* the file dialogs' interfaces; their functions come from ole32.dll, loaded at first use */
@@ -5454,6 +5455,15 @@ struct cee_win32 {
     /* Drops (ADR 0150): whether OLE was initialized for the window, and whether its drop target is registered. */
     int ole, drop_registered;
     struct cee_win32_drop_target drop;
+    /* Accessibility (ADR 0164): the window's UI Automation provider and each node's, in the list's order, each
+       holding a reference; and what a client asked, for the pump to queue (a provider may be called on a thread
+       of UI Automation's). All under cee_uia_lock. */
+    struct cee_uia_root *uia_root;
+    struct cee_uia_element **uia_elements;
+    uint32_t uia_count;
+    struct cee_access_request uia_asked[CEE_ACCESS_QUEUE];
+    unsigned uia_asked_count;
+    int uia_active;
 };
 
 static void cee_win32_drop_open(struct cee_window *w);
@@ -5696,6 +5706,1165 @@ static HCURSOR cee_win32_cursor(int32_t cursor) {
     return LoadCursorW(NULL, MAKEINTRESOURCEW(shapes[cursor >= 0 && cursor < 7 ? cursor : 0]));
 }
 
+/* ---- Accessibility on Windows (ADR 0164): UI Automation providers ------------------------------------------------
+   The window answers WM_GETOBJECT with a fragment root whose children are the list's elements, each a provider of
+   its own that is kept from one list to the next while its id is in both. The interfaces are written here as their
+   vtables, in the order UIAutomationCore.h declares them, and their functions come from uiautomationcore.dll and
+   oleaut32.dll, loaded at first use, so no program needs a header or a link flag. NVDA and Narrator read through
+   these. */
+#define CEE_WINDOW_ACCESS 1
+
+static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID cee_iid_uia_simple = {0xd6dd68d1, 0x86fd, 0x4332, {0x86, 0x66, 0x9a, 0xbe, 0xde, 0xa2, 0xd2, 0x4c}};
+static const IID cee_iid_uia_fragment = {0xf7063da8, 0x8359, 0x439c, {0x92, 0x97, 0xbb, 0xc5, 0x29, 0x9a, 0x7d, 0x87}};
+static const IID cee_iid_uia_root = {0x620ce2a5, 0xab8f, 0x40a9, {0x86, 0xcb, 0xde, 0x3c, 0x75, 0x59, 0x9b, 0x58}};
+static const IID cee_iid_uia_invoke = {0x54fcb24b, 0xe18e, 0x47a2, {0xb4, 0xd3, 0xec, 0xcb, 0xe7, 0x75, 0x99, 0xa2}};
+static const IID cee_iid_uia_toggle = {0x56d00bd0, 0xc4f4, 0x433c, {0xa8, 0x36, 0x1a, 0x52, 0xa5, 0x7e, 0x08, 0x92}};
+static const IID cee_iid_uia_range = {0x36dc7aef, 0x33e6, 0x4691, {0xaf, 0xe1, 0x2b, 0xe7, 0x27, 0x4b, 0x3d, 0x33}};
+static const IID cee_iid_uia_value = {0xc7935180, 0x6fb3, 0x4201, {0xb1, 0x74, 0x7d, 0xf7, 0x3a, 0xdb, 0xf6, 0x4a}};
+static const IID cee_iid_uia_selection = {0x2acad808, 0xb2d4, 0x452d, {0xa4, 0x07, 0x91, 0xff, 0x1a, 0xd1, 0x67, 0xb2}};
+static const IID cee_iid_uia_expand = {0xd847d3a5, 0xcab0, 0x4a98, {0x8c, 0x32, 0xec, 0xb4, 0x5c, 0x59, 0xad, 0x24}};
+
+/* UI Automation's numbers (UIAutomationClient.h). */
+#define CEE_UIA_ROOT_OBJECT (-25)
+#define CEE_UIA_SERVER_SIDE 0x1 /* ProviderOptions_ServerSideProvider */
+#define CEE_UIA_COM_THREADING 0x20 /* ProviderOptions_UseComThreading */
+#define CEE_UIA_E_NOT_ENABLED ((HRESULT)0x80040200L)
+#define CEE_UIA_E_NOT_AVAILABLE ((HRESULT)0x80040201L)
+#define CEE_UIA_PATTERN_INVOKE 10000
+#define CEE_UIA_PATTERN_VALUE 10002
+#define CEE_UIA_PATTERN_RANGE 10003
+#define CEE_UIA_PATTERN_EXPAND 10005
+#define CEE_UIA_PATTERN_SELECTION_ITEM 10010
+#define CEE_UIA_PATTERN_TOGGLE 10015
+#define CEE_UIA_PROPERTY_CONTROL_TYPE 30003
+#define CEE_UIA_PROPERTY_NAME 30005
+#define CEE_UIA_PROPERTY_HAS_FOCUS 30008
+#define CEE_UIA_PROPERTY_FOCUSABLE 30009
+#define CEE_UIA_PROPERTY_ENABLED 30010
+#define CEE_UIA_PROPERTY_AUTOMATION_ID 30011
+#define CEE_UIA_PROPERTY_CONTROL_ELEMENT 30016
+#define CEE_UIA_PROPERTY_CONTENT_ELEMENT 30017
+#define CEE_UIA_PROPERTY_PASSWORD 30019
+#define CEE_UIA_PROPERTY_FRAMEWORK 30024
+#define CEE_UIA_PROPERTY_VALUE 30045
+#define CEE_UIA_PROPERTY_RANGE_VALUE 30047
+#define CEE_UIA_PROPERTY_EXPAND_STATE 30070
+#define CEE_UIA_PROPERTY_IS_SELECTED 30079
+#define CEE_UIA_PROPERTY_TOGGLE_STATE 30086
+#define CEE_UIA_EVENT_FOCUS 20005
+#define CEE_UIA_CHILDREN_INVALIDATED 2
+
+struct cee_uia_rect {
+    double left, top, width, height;
+};
+
+/* The vtables. `self` is the address of the object's pointer to the vtable. */
+struct cee_uia_simple_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *options)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *pattern)(void *self, int pattern, void **out);
+    HRESULT(STDMETHODCALLTYPE *property)(void *self, int property, VARIANT *out);
+    HRESULT(STDMETHODCALLTYPE *host)(void *self, void **out);
+};
+struct cee_uia_fragment_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *navigate)(void *self, int direction, void **out);
+    HRESULT(STDMETHODCALLTYPE *runtime_id)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *bounds)(void *self, struct cee_uia_rect *out);
+    HRESULT(STDMETHODCALLTYPE *embedded)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *set_focus)(void *self);
+    HRESULT(STDMETHODCALLTYPE *fragment_root)(void *self, void **out);
+};
+struct cee_uia_root_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *from_point)(void *self, double x, double y, void **out);
+    HRESULT(STDMETHODCALLTYPE *focus)(void *self, void **out);
+};
+struct cee_uia_invoke_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *invoke)(void *self);
+};
+struct cee_uia_toggle_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *toggle)(void *self);
+    HRESULT(STDMETHODCALLTYPE *state)(void *self, int *out);
+};
+struct cee_uia_range_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *set_value)(void *self, double value);
+    HRESULT(STDMETHODCALLTYPE *value)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *read_only)(void *self, BOOL *out);
+    HRESULT(STDMETHODCALLTYPE *maximum)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *minimum)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *large_change)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *small_change)(void *self, double *out);
+};
+struct cee_uia_value_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *set_value)(void *self, LPCWSTR value);
+    HRESULT(STDMETHODCALLTYPE *value)(void *self, BSTR *out);
+    HRESULT(STDMETHODCALLTYPE *read_only)(void *self, BOOL *out);
+};
+struct cee_uia_selection_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *select)(void *self);
+    HRESULT(STDMETHODCALLTYPE *add)(void *self);
+    HRESULT(STDMETHODCALLTYPE *remove)(void *self);
+    HRESULT(STDMETHODCALLTYPE *is_selected)(void *self, BOOL *out);
+    HRESULT(STDMETHODCALLTYPE *container)(void *self, void **out);
+};
+struct cee_uia_expand_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *expand)(void *self);
+    HRESULT(STDMETHODCALLTYPE *collapse)(void *self);
+    HRESULT(STDMETHODCALLTYPE *state)(void *self, int *out);
+};
+
+/* The window's provider: a fragment root. `w` is NULL once the window closed. */
+struct cee_uia_root {
+    const struct cee_uia_simple_vtbl *simple;
+    const struct cee_uia_fragment_vtbl *fragment;
+    const struct cee_uia_root_vtbl *root;
+    LONG refs;
+    struct cee_window *w;
+};
+
+/* An element's provider. `w` is NULL once the element left the list or the window closed; `hint` is where it was
+   in the list when last looked for. */
+struct cee_uia_element {
+    const struct cee_uia_simple_vtbl *simple;
+    const struct cee_uia_fragment_vtbl *fragment;
+    const struct cee_uia_invoke_vtbl *invoke;
+    const struct cee_uia_toggle_vtbl *toggle;
+    const struct cee_uia_range_vtbl *range;
+    const struct cee_uia_value_vtbl *value;
+    const struct cee_uia_selection_vtbl *selection;
+    const struct cee_uia_expand_vtbl *expand;
+    LONG refs;
+    struct cee_window *w;
+    uint64_t id;
+    uint32_t hint;
+};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    CRITICAL_SECTION lock;
+    LRESULT(WINAPI *return_provider)(HWND, WPARAM, LPARAM, void *);
+    HRESULT(WINAPI *host_provider)(HWND, void **);
+    HRESULT(WINAPI *raise_event)(void *, int);
+    HRESULT(WINAPI *raise_property)(void *, int, VARIANT, VARIANT);
+    HRESULT(WINAPI *raise_structure)(void *, int, int *, int);
+    BOOL(WINAPI *listening)(void);
+    HRESULT(WINAPI *raise_notification)(void *, int, int, BSTR, BSTR); /* Windows 10 1709 on; NULL before */
+    BSTR(WINAPI *string)(const OLECHAR *, UINT);
+    void(WINAPI *string_free)(BSTR);
+    SAFEARRAY *(WINAPI *array)(VARTYPE, LONG, ULONG);
+    HRESULT(WINAPI *array_put)(SAFEARRAY *, LONG *, void *);
+} cee_uia;
+
+static int cee_uia_load(void) {
+    if (cee_uia.state != 0) {
+        return cee_uia.state == 1;
+    }
+    cee_uia.state = -1;
+    HMODULE core = LoadLibraryW(L"uiautomationcore.dll");
+    HMODULE automation = LoadLibraryW(L"oleaut32.dll");
+    if (core == NULL || automation == NULL) {
+        return 0;
+    }
+    FARPROC p[10] = {GetProcAddress(core, "UiaReturnRawElementProvider"), GetProcAddress(core, "UiaHostProviderFromHwnd"),
+                     GetProcAddress(core, "UiaRaiseAutomationEvent"),
+                     GetProcAddress(core, "UiaRaiseAutomationPropertyChangedEvent"),
+                     GetProcAddress(core, "UiaRaiseStructureChangedEvent"), GetProcAddress(core, "UiaClientsAreListening"),
+                     GetProcAddress(automation, "SysAllocStringLen"), GetProcAddress(automation, "SysFreeString"),
+                     GetProcAddress(automation, "SafeArrayCreateVector"), GetProcAddress(automation, "SafeArrayPutElement")};
+    for (int k = 0; k < 10; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    FARPROC notification = GetProcAddress(core, "UiaRaiseNotificationEvent");
+    memcpy(&cee_uia.return_provider, &p[0], sizeof p[0]);
+    memcpy(&cee_uia.host_provider, &p[1], sizeof p[0]);
+    memcpy(&cee_uia.raise_event, &p[2], sizeof p[0]);
+    memcpy(&cee_uia.raise_property, &p[3], sizeof p[0]);
+    memcpy(&cee_uia.raise_structure, &p[4], sizeof p[0]);
+    memcpy(&cee_uia.listening, &p[5], sizeof p[0]);
+    memcpy(&cee_uia.string, &p[6], sizeof p[0]);
+    memcpy(&cee_uia.string_free, &p[7], sizeof p[0]);
+    memcpy(&cee_uia.array, &p[8], sizeof p[0]);
+    memcpy(&cee_uia.array_put, &p[9], sizeof p[0]);
+    if (notification != NULL) {
+        memcpy(&cee_uia.raise_notification, &notification, sizeof notification);
+    }
+    InitializeCriticalSection(&cee_uia.lock);
+    cee_uia.state = 1;
+    return 1;
+}
+
+/* `length` bytes of UTF-8 as a BSTR (an empty one for none or for text that is not UTF-8), or NULL without memory. */
+static BSTR cee_uia_text(const char *text, uint32_t length) {
+    int units = length > 0 ? MultiByteToWideChar(CP_UTF8, 0, text, (int)length, NULL, 0) : 0;
+    BSTR out = cee_uia.string(NULL, (UINT)(units > 0 ? units : 0));
+    if (out != NULL && units > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, text, (int)length, out, units);
+    }
+    return out;
+}
+
+#define CEE_UIA_OBJECT(type, field, self) ((struct type *)(void *)((char *)(self) - offsetof(struct type, field)))
+
+/* The element's node in its window's list as it is now, or NULL. Under the lock. */
+static const struct cee_access_node *cee_uia_node(struct cee_uia_element *e) {
+    struct cee_window *w = e->w;
+    if (w == NULL) {
+        return NULL;
+    }
+    if (e->hint < w->access_count && w->access[e->hint].id == e->id) {
+        return &w->access[e->hint];
+    }
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        if (w->access[k].id == e->id) {
+            e->hint = k;
+            return &w->access[k];
+        }
+    }
+    return NULL;
+}
+
+/* A client asks `action` of the element: kept for the window's pump, which is woken. */
+static HRESULT cee_uia_ask(struct cee_uia_element *e, int32_t action) {
+    HRESULT result = CEE_UIA_E_NOT_AVAILABLE;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL && (n->flags & CEE_ACCESS_DISABLED) != 0) {
+        result = CEE_UIA_E_NOT_ENABLED;
+    } else if (n != NULL) {
+        struct cee_win32 *m = (struct cee_win32 *)e->w->native;
+        if (m != NULL && m->uia_asked_count < CEE_ACCESS_QUEUE) {
+            m->uia_asked[m->uia_asked_count].id = e->id;
+            m->uia_asked[m->uia_asked_count].action = action;
+            m->uia_asked_count++;
+        }
+        if (m != NULL) {
+            PostMessageW(m->hwnd, WM_NULL, 0, 0); /* a message ends the window's wait */
+        }
+        result = S_OK;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+/* ---- An element ---- */
+
+static HRESULT cee_uia_element_query(struct cee_uia_element *e, REFIID iid, void **out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    if (IsEqualIID(iid, &cee_iid_unknown) || IsEqualIID(iid, &cee_iid_uia_simple)) {
+        *out = &e->simple;
+    } else if (IsEqualIID(iid, &cee_iid_uia_fragment)) {
+        *out = &e->fragment;
+    } else if (IsEqualIID(iid, &cee_iid_uia_invoke)) {
+        *out = &e->invoke;
+    } else if (IsEqualIID(iid, &cee_iid_uia_toggle)) {
+        *out = &e->toggle;
+    } else if (IsEqualIID(iid, &cee_iid_uia_range)) {
+        *out = &e->range;
+    } else if (IsEqualIID(iid, &cee_iid_uia_value)) {
+        *out = &e->value;
+    } else if (IsEqualIID(iid, &cee_iid_uia_selection)) {
+        *out = &e->selection;
+    } else if (IsEqualIID(iid, &cee_iid_uia_expand)) {
+        *out = &e->expand;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&e->refs);
+    return S_OK;
+}
+
+static ULONG cee_uia_element_release(struct cee_uia_element *e) {
+    LONG left = InterlockedDecrement(&e->refs);
+    if (left == 0) {
+        ceesafe_platform_free(e);
+    }
+    return (ULONG)left;
+}
+
+/* Each interface's IUnknown, which finds the object from the interface's place in it. */
+#define CEE_UIA_ELEMENT_UNKNOWN(name, field)                                                                           \
+    static HRESULT STDMETHODCALLTYPE cee_uia_##name##_query(void *self, REFIID iid, void **out) {                      \
+        return cee_uia_element_query(CEE_UIA_OBJECT(cee_uia_element, field, self), iid, out);                          \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_add_ref(void *self) {                                              \
+        return (ULONG)InterlockedIncrement(&CEE_UIA_OBJECT(cee_uia_element, field, self)->refs);                       \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_release(void *self) {                                              \
+        return cee_uia_element_release(CEE_UIA_OBJECT(cee_uia_element, field, self));                                  \
+    }
+CEE_UIA_ELEMENT_UNKNOWN(esimple, simple)
+CEE_UIA_ELEMENT_UNKNOWN(efragment, fragment)
+CEE_UIA_ELEMENT_UNKNOWN(einvoke, invoke)
+CEE_UIA_ELEMENT_UNKNOWN(etoggle, toggle)
+CEE_UIA_ELEMENT_UNKNOWN(erange, range)
+CEE_UIA_ELEMENT_UNKNOWN(evalue, value)
+CEE_UIA_ELEMENT_UNKNOWN(eselection, selection)
+CEE_UIA_ELEMENT_UNKNOWN(eexpand, expand)
+
+static HRESULT STDMETHODCALLTYPE cee_uia_options(void *self, int *out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = CEE_UIA_SERVER_SIDE | CEE_UIA_COM_THREADING;
+    return S_OK;
+}
+
+/* The pattern a role has: a button is invoked, a checkbox toggled, a radio button, a tab and a list's row selected,
+   a slider has a range, a field and a dropdown a value, a dropdown and a menu's item are also expanded. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_pattern(void *self, int pattern, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    uint32_t role = n != NULL ? n->role : 0;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (n == NULL) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    if (pattern == CEE_UIA_PATTERN_INVOKE && (role == 1 || role == 7 || role == 8)) {
+        *out = &e->invoke;
+    } else if (pattern == CEE_UIA_PATTERN_TOGGLE && role == 2) {
+        *out = &e->toggle;
+    } else if (pattern == CEE_UIA_PATTERN_SELECTION_ITEM && (role == 3 || role == 6 || role == 7)) {
+        *out = &e->selection;
+    } else if (pattern == CEE_UIA_PATTERN_RANGE && role == 5) {
+        *out = &e->range;
+    } else if (pattern == CEE_UIA_PATTERN_VALUE && (role == 4 || role == 9)) {
+        *out = &e->value;
+    } else if (pattern == CEE_UIA_PATTERN_EXPAND && role == 9) {
+        *out = &e->expand;
+    }
+    if (*out != NULL) {
+        InterlockedIncrement(&e->refs);
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_property(void *self, int property, VARIANT *out) {
+    /* Text, Button, CheckBox, RadioButton, Edit, Slider, TabItem, ListItem, MenuItem, ComboBox, Image. */
+    static const LONG types[CEE_ACCESS_ROLES] = {50020, 50000, 50002, 50013, 50004, 50015, 50019, 50007, 50011, 50003, 50006};
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    V_VT(out) = VT_EMPTY;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n == NULL) {
+        LeaveCriticalSection(&cee_uia.lock);
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    const char *text = e->w->access_text;
+    switch (property) {
+    case CEE_UIA_PROPERTY_CONTROL_TYPE:
+        V_VT(out) = VT_I4;
+        V_I4(out) = types[n->role];
+        break;
+    case CEE_UIA_PROPERTY_NAME:
+        V_BSTR(out) = cee_uia_text(text + n->label_start, n->label_length);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    case CEE_UIA_PROPERTY_AUTOMATION_ID: {
+        char number[24];
+        int length = snprintf(number, sizeof number, "%llu", (unsigned long long)n->id);
+        V_BSTR(out) = cee_uia_text(number, (uint32_t)length);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    }
+    case CEE_UIA_PROPERTY_FRAMEWORK:
+        V_BSTR(out) = cee_uia_text("CeeSafe", 7u);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    case CEE_UIA_PROPERTY_ENABLED:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_DISABLED) == 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_HAS_FOCUS:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_FOCUSED) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_FOCUSABLE:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = n->role != 0 && n->role != 10 && (n->flags & CEE_ACCESS_DISABLED) == 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_CONTROL_ELEMENT:
+    case CEE_UIA_PROPERTY_CONTENT_ELEMENT:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = VARIANT_TRUE;
+        break;
+    case CEE_UIA_PROPERTY_PASSWORD:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_SECURE) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    default:
+        break;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_host(void *self, void **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* only the root has a window of its own */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_navigate(void *self, int direction, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    HRESULT result = S_OK;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m == NULL) {
+        result = CEE_UIA_E_NOT_AVAILABLE;
+    } else if (direction == 0 && m->uia_root != NULL) { /* the parent */
+        InterlockedIncrement(&m->uia_root->refs);
+        *out = &m->uia_root->fragment;
+    } else if (direction == 1 || direction == 2) { /* the next sibling, the one before */
+        uint32_t at = (uint32_t)(n - e->w->access);
+        if ((direction == 1 && at + 1u < m->uia_count) || (direction == 2 && at > 0)) {
+            struct cee_uia_element *other = m->uia_elements[direction == 1 ? at + 1u : at - 1u];
+            if (other != NULL) {
+                InterlockedIncrement(&other->refs);
+                *out = &other->fragment;
+            }
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+/* An element's runtime id: UiaAppendRuntimeId, then the two halves of the program's id. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_runtime_id(void *self, SAFEARRAY **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = cee_uia.array(VT_I4, 0, 3);
+    if (*out == NULL) {
+        return E_OUTOFMEMORY;
+    }
+    int parts[3] = {3, (int)(uint32_t)e->id, (int)(uint32_t)(e->id >> 32)};
+    for (LONG k = 0; k < 3; k++) {
+        cee_uia.array_put(*out, &k, &parts[k]);
+    }
+    return S_OK;
+}
+
+/* Where the element is, on the screen in pixels. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_bounds(void *self, struct cee_uia_rect *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    memset(out, 0, sizeof *out);
+    HRESULT result = CEE_UIA_E_NOT_AVAILABLE;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL) {
+        float scale = e->w->scale > 0.0f ? e->w->scale : 1.0f;
+        POINT origin = {0, 0};
+        ClientToScreen(m->hwnd, &origin);
+        out->left = (double)origin.x + (double)(n->x * scale);
+        out->top = (double)origin.y + (double)(n->y * scale);
+        out->width = (double)(n->width * scale);
+        out->height = (double)(n->height * scale);
+        result = S_OK;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_embedded(void *self, SAFEARRAY **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_set_focus(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, fragment, self), CEE_ACCESS_FOCUS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_fragment_root(void *self, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = e->w != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL && m->uia_root != NULL) {
+        InterlockedIncrement(&m->uia_root->refs);
+        *out = &m->uia_root->root;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return *out != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_invoke(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, invoke, self), CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_toggle(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, toggle, self), CEE_ACCESS_PRESS);
+}
+
+/* A flag of the element's node as 1 or 0, or -1 when the element is gone. */
+static int cee_uia_flag(struct cee_uia_element *e, uint32_t flag) {
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    int on = n != NULL ? (n->flags & flag) != 0 : -1;
+    LeaveCriticalSection(&cee_uia.lock);
+    return on;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_toggle_state(void *self, int *out) {
+    int on = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, toggle, self), CEE_ACCESS_CHECKED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = on > 0; /* ToggleState_On is 1, Off 0 */
+    return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+/* A slider is set by steps: a value above its own asks one step up, a value below one step down. */
+static HRESULT STDMETHODCALLTYPE cee_uia_range_set(void *self, double value) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, range, self);
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    double now = n != NULL ? n->now : 0.0;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (n == NULL) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    if (value == now) {
+        return S_OK;
+    }
+    return cee_uia_ask(e, value > now ? CEE_ACCESS_INCREMENT : CEE_ACCESS_DECREMENT);
+}
+
+/* Which of a slider's numbers: 0 its value, 1 its minimum, 2 its maximum, 3 a step (a tenth of its range). */
+static HRESULT cee_uia_range_number(struct cee_uia_element *e, int which, double *out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = 0.0;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL) {
+        *out = which == 0 ? n->now : which == 1 ? n->min : which == 2 ? n->max : (n->max - n->min) / 10.0;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_range_value(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 0, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_minimum(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 1, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_maximum(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 2, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_change(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 3, out);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_range_read_only(void *self, BOOL *out) {
+    int off = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, range, self), CEE_ACCESS_DISABLED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = off != 0;
+    return off < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+/* A field's text is the keyboard's to change, through the program: a client cannot set it. */
+static HRESULT STDMETHODCALLTYPE cee_uia_value_set(void *self, LPCWSTR value) {
+    (void)self;
+    (void)value;
+    return E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_value_get(void *self, BSTR *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, value, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL) {
+        *out = (n->flags & CEE_ACCESS_SECURE) != 0 ? cee_uia_text("", 0u)
+                                                    : cee_uia_text(e->w->access_text + n->value_start, n->value_length);
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return n == NULL ? CEE_UIA_E_NOT_AVAILABLE : *out != NULL ? S_OK : E_OUTOFMEMORY;
+}
+
+/* A field is not read-only to a reader ("edit"), though a client cannot set it; a dropdown's value is. */
+static HRESULT STDMETHODCALLTYPE cee_uia_value_read_only(void *self, BOOL *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, value, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    *out = n == NULL || n->role != 4 || (n->flags & CEE_ACCESS_DISABLED) != 0;
+    LeaveCriticalSection(&cee_uia.lock);
+    return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_select(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, selection, self), CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_selection_other(void *self) {
+    (void)self;
+    return E_NOTIMPL; /* one of a set is chosen: nothing is added to it or taken from it */
+}
+
+/* A radio button is selected when checked; a tab and a list's row when selected. */
+static HRESULT STDMETHODCALLTYPE cee_uia_is_selected(void *self, BOOL *out) {
+    int on = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, selection, self), CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = on > 0;
+    return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_selection_container(void *self, void **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* the list is flat: a set has no element of its own */
+    return S_OK;
+}
+
+/* A dropdown is opened and closed by a press: only when it is not already as asked. */
+static HRESULT cee_uia_expand_to(struct cee_uia_element *e, int open) {
+    int is = cee_uia_flag(e, CEE_ACCESS_EXPANDED);
+    if (is < 0) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    return is == open ? S_OK : cee_uia_ask(e, CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_expand(void *self) {
+    return cee_uia_expand_to(CEE_UIA_OBJECT(cee_uia_element, expand, self), 1);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_collapse(void *self) {
+    return cee_uia_expand_to(CEE_UIA_OBJECT(cee_uia_element, expand, self), 0);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_expand_state(void *self, int *out) {
+    int is = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, expand, self), CEE_ACCESS_EXPANDED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = is > 0; /* ExpandCollapseState_Expanded is 1, Collapsed 0 */
+    return is < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+static const struct cee_uia_simple_vtbl cee_uia_element_simple = {
+    cee_uia_esimple_query, cee_uia_esimple_add_ref, cee_uia_esimple_release, cee_uia_options,
+    cee_uia_element_pattern, cee_uia_element_property, cee_uia_element_host};
+static const struct cee_uia_fragment_vtbl cee_uia_element_fragment = {
+    cee_uia_efragment_query, cee_uia_efragment_add_ref, cee_uia_efragment_release, cee_uia_element_navigate,
+    cee_uia_element_runtime_id, cee_uia_element_bounds, cee_uia_embedded, cee_uia_element_set_focus,
+    cee_uia_element_fragment_root};
+static const struct cee_uia_invoke_vtbl cee_uia_element_invoke = {cee_uia_einvoke_query, cee_uia_einvoke_add_ref,
+                                                                 cee_uia_einvoke_release, cee_uia_invoke};
+static const struct cee_uia_toggle_vtbl cee_uia_element_toggle = {
+    cee_uia_etoggle_query, cee_uia_etoggle_add_ref, cee_uia_etoggle_release, cee_uia_toggle, cee_uia_toggle_state};
+static const struct cee_uia_range_vtbl cee_uia_element_range = {
+    cee_uia_erange_query, cee_uia_erange_add_ref, cee_uia_erange_release, cee_uia_range_set, cee_uia_range_value,
+    cee_uia_range_read_only, cee_uia_range_maximum, cee_uia_range_minimum, cee_uia_range_change, cee_uia_range_change};
+static const struct cee_uia_value_vtbl cee_uia_element_value = {
+    cee_uia_evalue_query, cee_uia_evalue_add_ref, cee_uia_evalue_release, cee_uia_value_set, cee_uia_value_get,
+    cee_uia_value_read_only};
+static const struct cee_uia_selection_vtbl cee_uia_element_selection = {
+    cee_uia_eselection_query, cee_uia_eselection_add_ref, cee_uia_eselection_release, cee_uia_select,
+    cee_uia_selection_other, cee_uia_selection_other, cee_uia_is_selected, cee_uia_selection_container};
+static const struct cee_uia_expand_vtbl cee_uia_element_expand = {
+    cee_uia_eexpand_query, cee_uia_eexpand_add_ref, cee_uia_eexpand_release, cee_uia_expand, cee_uia_collapse,
+    cee_uia_expand_state};
+
+static struct cee_uia_element *cee_uia_element_new(struct cee_window *w, uint64_t id, uint32_t at) {
+    struct cee_uia_element *e = (struct cee_uia_element *)ceesafe_platform_alloc_zeroed(sizeof *e);
+    if (e != NULL) {
+        e->simple = &cee_uia_element_simple;
+        e->fragment = &cee_uia_element_fragment;
+        e->invoke = &cee_uia_element_invoke;
+        e->toggle = &cee_uia_element_toggle;
+        e->range = &cee_uia_element_range;
+        e->value = &cee_uia_element_value;
+        e->selection = &cee_uia_element_selection;
+        e->expand = &cee_uia_element_expand;
+        e->refs = 1;
+        e->w = w;
+        e->id = id;
+        e->hint = at;
+    }
+    return e;
+}
+
+/* ---- The window's root ---- */
+
+static HRESULT cee_uia_root_query(struct cee_uia_root *r, REFIID iid, void **out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    if (IsEqualIID(iid, &cee_iid_unknown) || IsEqualIID(iid, &cee_iid_uia_simple)) {
+        *out = &r->simple;
+    } else if (IsEqualIID(iid, &cee_iid_uia_fragment)) {
+        *out = &r->fragment;
+    } else if (IsEqualIID(iid, &cee_iid_uia_root)) {
+        *out = &r->root;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&r->refs);
+    return S_OK;
+}
+
+static ULONG cee_uia_root_release(struct cee_uia_root *r) {
+    LONG left = InterlockedDecrement(&r->refs);
+    if (left == 0) {
+        ceesafe_platform_free(r);
+    }
+    return (ULONG)left;
+}
+
+#define CEE_UIA_ROOT_UNKNOWN(name, field)                                                                              \
+    static HRESULT STDMETHODCALLTYPE cee_uia_##name##_query(void *self, REFIID iid, void **out) {                      \
+        return cee_uia_root_query(CEE_UIA_OBJECT(cee_uia_root, field, self), iid, out);                                \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_add_ref(void *self) {                                              \
+        return (ULONG)InterlockedIncrement(&CEE_UIA_OBJECT(cee_uia_root, field, self)->refs);                          \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_release(void *self) {                                              \
+        return cee_uia_root_release(CEE_UIA_OBJECT(cee_uia_root, field, self));                                        \
+    }
+CEE_UIA_ROOT_UNKNOWN(rsimple, simple)
+CEE_UIA_ROOT_UNKNOWN(rfragment, fragment)
+CEE_UIA_ROOT_UNKNOWN(rroot, root)
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_pattern(void *self, int pattern, void **out) {
+    (void)self;
+    (void)pattern;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    return S_OK;
+}
+
+/* The window's own properties are its host provider's (the title, the frame): this adds nothing to them. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_property(void *self, int property, VARIANT *out) {
+    (void)self;
+    (void)property;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    V_VT(out) = VT_EMPTY;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_host(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    HWND hwnd = m != NULL ? m->hwnd : NULL;
+    LeaveCriticalSection(&cee_uia.lock);
+    return hwnd != NULL ? cee_uia.host_provider(hwnd, out) : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_navigate(void *self, int direction, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    if (m != NULL && m->uia_count > 0 && (direction == 3 || direction == 4)) { /* the first child, the last */
+        struct cee_uia_element *e = m->uia_elements[direction == 3 ? 0 : m->uia_count - 1u];
+        if (e != NULL) {
+            InterlockedIncrement(&e->refs);
+            *out = &e->fragment;
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_runtime_id(void *self, SAFEARRAY **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* the window's own, from its host provider */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_bounds(void *self, struct cee_uia_rect *out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    memset(out, 0, sizeof *out); /* the window's own, from its host provider */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_set_focus(void *self) {
+    (void)self;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_fragment_root(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    InterlockedIncrement(&r->refs);
+    *out = &r->root;
+    return S_OK;
+}
+
+/* The element at a point of the screen: the last in the list that holds it (drawn later, so on top), or the root. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_from_point(void *self, double x, double y, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, root, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    if (m != NULL) {
+        float scale = r->w->scale > 0.0f ? r->w->scale : 1.0f;
+        POINT origin = {0, 0};
+        ClientToScreen(m->hwnd, &origin);
+        double px = (x - (double)origin.x) / (double)scale, py = (y - (double)origin.y) / (double)scale;
+        for (uint32_t k = m->uia_count < r->w->access_count ? m->uia_count : r->w->access_count; k-- > 0;) {
+            const struct cee_access_node *n = &r->w->access[k];
+            if (px >= (double)n->x && py >= (double)n->y && px < (double)n->x + (double)n->width &&
+                py < (double)n->y + (double)n->height && m->uia_elements[k] != NULL) {
+                InterlockedIncrement(&m->uia_elements[k]->refs);
+                *out = &m->uia_elements[k]->fragment;
+                break;
+            }
+        }
+    }
+    if (*out == NULL) {
+        InterlockedIncrement(&r->refs);
+        *out = &r->fragment;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+/* The element that has the keyboard focus, if one says so. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_focus(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, root, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    for (uint32_t k = 0; m != NULL && k < m->uia_count && k < r->w->access_count; k++) {
+        if ((r->w->access[k].flags & CEE_ACCESS_FOCUSED) != 0 && m->uia_elements[k] != NULL) {
+            InterlockedIncrement(&m->uia_elements[k]->refs);
+            *out = &m->uia_elements[k]->fragment;
+            break;
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static const struct cee_uia_simple_vtbl cee_uia_root_simple = {
+    cee_uia_rsimple_query, cee_uia_rsimple_add_ref, cee_uia_rsimple_release, cee_uia_options,
+    cee_uia_root_pattern, cee_uia_root_property, cee_uia_root_host};
+static const struct cee_uia_fragment_vtbl cee_uia_root_fragment = {
+    cee_uia_rfragment_query, cee_uia_rfragment_add_ref, cee_uia_rfragment_release, cee_uia_root_navigate,
+    cee_uia_root_runtime_id, cee_uia_root_bounds, cee_uia_embedded, cee_uia_root_set_focus,
+    cee_uia_root_fragment_root};
+static const struct cee_uia_root_vtbl cee_uia_root_root = {cee_uia_rroot_query, cee_uia_rroot_add_ref,
+                                                          cee_uia_rroot_release, cee_uia_root_from_point,
+                                                          cee_uia_root_focus};
+
+/* WM_GETOBJECT for UI Automation's root: the window's provider, made at the first question. */
+static int cee_uia_get_object(struct cee_window *w, HWND hwnd, WPARAM wparam, LPARAM lparam, LRESULT *result) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if ((LONG)lparam != CEE_UIA_ROOT_OBJECT || m == NULL || !cee_uia_load()) {
+        return 0;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    if (m->uia_root == NULL) {
+        struct cee_uia_root *r = (struct cee_uia_root *)ceesafe_platform_alloc_zeroed(sizeof *r);
+        if (r != NULL) {
+            r->simple = &cee_uia_root_simple;
+            r->fragment = &cee_uia_root_fragment;
+            r->root = &cee_uia_root_root;
+            r->refs = 1;
+            r->w = w;
+            m->uia_root = r;
+        }
+    }
+    struct cee_uia_root *root = m->uia_root;
+    m->uia_active = 1;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (root == NULL) {
+        return 0;
+    }
+    *result = cee_uia.return_provider(hwnd, wparam, lparam, &root->simple);
+    return 1;
+}
+
+static int cee_uia_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                             uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* Tells listening clients that `property` of `e` is now `value` (the old one is not said: none reads it). */
+static void cee_uia_changed(struct cee_uia_element *e, int property, VARIANT value) {
+    VARIANT none;
+    V_VT(&none) = VT_EMPTY;
+    cee_uia.raise_property(&e->simple, property, none, value);
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): the providers follow it,
+   and listening clients are told what changed. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || !cee_uia_load()) {
+        return;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    uint32_t count = w->access_count;
+    if (old_count > m->uia_count) {
+        old_count = m->uia_count;
+    }
+    struct cee_uia_element **elements =
+        count > 0 ? (struct cee_uia_element **)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
+    if (count > 0 && elements == NULL) {
+        count = 0; /* out of memory: the window has no elements until the next list */
+    }
+    int listening = m->uia_root != NULL && cee_uia.listening();
+    int layout = count != old_count;
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+            layout = 1;
+        }
+        if (j < old_count && m->uia_elements[j] != NULL) {
+            const struct cee_access_node *o = &old[j];
+            struct cee_uia_element *e = m->uia_elements[j];
+            m->uia_elements[j] = NULL;
+            elements[k] = e;
+            e->hint = k;
+            if (!listening) {
+                continue;
+            }
+            VARIANT value;
+            if (!cee_uia_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
+                                   o->label_length)) {
+                V_BSTR(&value) = cee_uia_text(w->access_text + n->label_start, n->label_length);
+                if (V_BSTR(&value) != NULL) {
+                    V_VT(&value) = VT_BSTR;
+                    cee_uia_changed(e, CEE_UIA_PROPERTY_NAME, value);
+                    cee_uia.string_free(V_BSTR(&value));
+                }
+            }
+            if ((n->role == 4 || n->role == 9) &&
+                !cee_uia_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                   o->value_length)) {
+                V_BSTR(&value) = cee_uia_text(w->access_text + n->value_start, n->value_length);
+                if (V_BSTR(&value) != NULL) {
+                    V_VT(&value) = VT_BSTR;
+                    cee_uia_changed(e, CEE_UIA_PROPERTY_VALUE, value);
+                    cee_uia.string_free(V_BSTR(&value));
+                }
+            }
+            if (n->role == 5 && n->now != o->now) {
+                V_VT(&value) = VT_R8;
+                V_R8(&value) = n->now;
+                cee_uia_changed(e, CEE_UIA_PROPERTY_RANGE_VALUE, value);
+            }
+            uint32_t changed = n->flags ^ o->flags;
+            if (n->role == 2 && (changed & CEE_ACCESS_CHECKED) != 0) {
+                V_VT(&value) = VT_I4;
+                V_I4(&value) = (n->flags & CEE_ACCESS_CHECKED) != 0;
+                cee_uia_changed(e, CEE_UIA_PROPERTY_TOGGLE_STATE, value);
+            }
+            if ((n->role == 3 || n->role == 6 || n->role == 7) &&
+                (changed & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0) {
+                V_VT(&value) = VT_BOOL;
+                V_BOOL(&value) = (n->flags & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+                cee_uia_changed(e, CEE_UIA_PROPERTY_IS_SELECTED, value);
+            }
+            if (n->role == 9 && (changed & CEE_ACCESS_EXPANDED) != 0) {
+                V_VT(&value) = VT_I4;
+                V_I4(&value) = (n->flags & CEE_ACCESS_EXPANDED) != 0;
+                cee_uia_changed(e, CEE_UIA_PROPERTY_EXPAND_STATE, value);
+            }
+            if ((n->flags & CEE_ACCESS_FOCUSED) != 0 && (o->flags & CEE_ACCESS_FOCUSED) == 0) {
+                cee_uia.raise_event(&e->simple, CEE_UIA_EVENT_FOCUS);
+            }
+        } else {
+            elements[k] = cee_uia_element_new(w, n->id, k);
+            layout = 1;
+        }
+    }
+    for (uint32_t j = 0; j < m->uia_count; j++) { /* the elements the new list does not have */
+        if (m->uia_elements[j] != NULL) {
+            m->uia_elements[j]->w = NULL;
+            cee_uia_element_release(m->uia_elements[j]);
+            layout = 1;
+        }
+    }
+    ceesafe_platform_free(m->uia_elements);
+    m->uia_elements = elements;
+    m->uia_count = count;
+    struct cee_uia_root *root = m->uia_root;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (layout && listening && root != NULL) {
+        cee_uia.raise_structure(&root->simple, CEE_UIA_CHILDREN_INVALIDATED, NULL, 0);
+    }
+}
+
+/* Says `text` through a screen reader: a notification of the window's (Windows 10 1709 on; nothing before). */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || m->uia_root == NULL || !cee_uia_load() || cee_uia.raise_notification == NULL) {
+        return;
+    }
+    BSTR said = cee_uia_text(text, (uint32_t)length);
+    BSTR activity = cee_uia_text("ceesafe", 7u);
+    if (said != NULL && activity != NULL) {
+        /* NotificationKind_Other, NotificationProcessing_All */
+        cee_uia.raise_notification(&m->uia_root->simple, 4, 2, said, activity);
+    }
+    if (said != NULL) {
+        cee_uia.string_free(said);
+    }
+    if (activity != NULL) {
+        cee_uia.string_free(activity);
+    }
+}
+
+/* The window closes: its providers stay with whoever holds them, answering that their element is gone. */
+static void cee_uia_close(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    for (uint32_t k = 0; k < m->uia_count; k++) {
+        if (m->uia_elements[k] != NULL) {
+            m->uia_elements[k]->w = NULL;
+            cee_uia_element_release(m->uia_elements[k]);
+        }
+    }
+    ceesafe_platform_free(m->uia_elements);
+    m->uia_elements = NULL;
+    m->uia_count = 0;
+    struct cee_uia_root *root = m->uia_root;
+    m->uia_root = NULL;
+    if (root != NULL) {
+        root->w = NULL;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    if (root != NULL) {
+        cee_uia.return_provider(m->hwnd, 0, 0, NULL); /* the window's providers are no longer given out */
+        cee_uia_root_release(root);
+    }
+}
+
+/* What clients asked since the last pump, into the window's requests; and whether anything asked at all. */
+static void cee_uia_pump(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    for (unsigned k = 0; k < m->uia_asked_count; k++) {
+        cee_access_ask(w, m->uia_asked[k].id, m->uia_asked[k].action);
+    }
+    m->uia_asked_count = 0;
+    if (m->uia_active) {
+        w->access_active = 1;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+}
+
 static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     struct cee_window *w = (struct cee_window *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (w == NULL) {
@@ -5706,6 +6875,13 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     float x = (float)(short)LOWORD(lparam) / scale, y = (float)(short)HIWORD(lparam) / scale;
     static uint32_t high_surrogate;
     switch (message) {
+    case WM_GETOBJECT: { /* UI Automation asks for the window's provider (ADR 0164) */
+        LRESULT provider = 0;
+        if (n != NULL && cee_uia_get_object(w, hwnd, wparam, lparam, &provider)) {
+            return provider;
+        }
+        break;
+    }
     case WM_CLOSE:
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
         return 0;
@@ -5927,6 +7103,7 @@ static void cee_native_close(struct cee_window *w) {
         return;
     }
     cee_win32_drop_close(w);
+    cee_uia_close(w);
     SetWindowLongPtrW(n->hwnd, GWLP_USERDATA, 0);
     DestroyWindow(n->hwnd);
     if (n->ole) {
@@ -5951,6 +7128,7 @@ static void cee_native_pump(struct cee_window *w) {
             cee_window_rescaled(other, cee_win32_scale(((struct cee_win32 *)other->native)->hwnd));
         }
     }
+    cee_uia_pump(w); /* what a screen reader asked while the messages were dispatched (ADR 0164) */
 }
 
 static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
@@ -6482,7 +7660,6 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
    with LoadLibraryW like the dialogs' COM, and initialized from each window's open to its close (OleInitialize counts);
    on a thread whose COM is multithreaded it cannot be, and that window takes no drops. The drag's files are CF_HDROP;
    a drag without them is refused (DROPEFFECT_NONE), so the system shows no drop. */
-static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID cee_iid_drop_target = {0x00000122, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
 static struct {

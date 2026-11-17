@@ -3598,7 +3598,25 @@ Diagnostics: none new.
     A changed list sends `TYPE_WINDOW_CONTENT_CHANGED`; `announce` is `announceForAccessibility`. `accessActive`
     is true once a node was asked for. The list goes from the program's thread to the activity's packed in bytes,
     and requests come back under the runtime's lock. TalkBack's own focus rectangle is not drawn: the window's
-    surface is the program's. A field's `caret` and `anchor` are not used. Windows, Linux and FreeBSD: not
+    surface is the program's. A field's `caret` and `anchor` are not used. Windows: UI Automation providers, which NVDA
+    and Narrator read. The window answers `WM_GETOBJECT` for UI Automation's root with a fragment root
+    (`IRawElementProviderSimple`, `…Fragment`, `…FragmentRoot`) whose host provider is the window's own and whose
+    children are the list's elements in its order; the first such question makes `accessActive` true. Each
+    element is a provider of its own, kept while its `id` is in the list, with the runtime id `{3, id's low half,
+    id's high half}` and its bounds on the screen in pixels. The control types are `Text`, `Button`, `CheckBox`,
+    `RadioButton`, `Edit`, `Slider`, `TabItem`, `ListItem`, `MenuItem`, `ComboBox` and `Image`. The patterns: a
+    `Button`, a `ListItem` and a `MenuItem` are invoked; a `Checkbox` is toggled; a `Radio`, a `Tab` and a
+    `ListItem` are selection items (selected when `checked` or `selected`); a `Slider` has a range value, and
+    setting it above or below its value asks one step; a `TextField` and a `Dropdown` have a value, which a client
+    cannot set; a `Dropdown` expands and collapses by a press. `Invoke`, `Toggle`, `Select`, `Expand` and
+    `Collapse` queue `Press`, and a fragment's `SetFocus` queues `Focus`; a `disabled` element answers
+    `UIA_E_ELEMENTNOTENABLED`, and one that left the list `UIA_E_ELEMENTNOTAVAILABLE`. While a client listens, a
+    changed list raises a structure change of the root, property changes of an element's name, value, range
+    value, toggle state, selection and expansion, and a focus change; `announce` raises a notification (Windows
+    10 1709 on). The interfaces are written in the runtime as their vtables and their functions come from
+    `uiautomationcore.dll` and `oleaut32.dll`, loaded at first use. A provider may be called on a thread of UI
+    Automation's: the providers and the list are under one lock, and what was asked is queued when the window
+    takes its messages. A field's `caret` and `anchor` are not used. Linux and FreeBSD: not
     implemented yet (ADR 0164 §3); the list is kept
     and `takeAccessAction` is null, `accessActive` false.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may

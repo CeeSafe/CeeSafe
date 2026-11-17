@@ -11,8 +11,9 @@ C2 and C3 (every file: the program's C and the embedded runtime) must be byte-eq
 executables (same C, flags and toolchain). The chain runs twice, from clean directories under two different absolute
 paths, and the C of both runs must be equal; no output may contain a work directory's path.
 
-Gen 1 onward runs with PATH holding only a directory of logging shims for the tools a build may start (cc and the
-tools cc itself runs), so no other compiler is reachable; the shims' log is the subprocess audit.
+Gen 1 onward runs with PATH holding only a directory of logging shims for the tools a build may start (cc, the
+tools cc itself runs, and uname and getconf, which ceesafec runs), so no other compiler is reachable; the shims' log
+is the subprocess audit.
 
 A manifest (inputs, toolchain versions, sha256 of every output, the audit) is written to --manifest.
 
@@ -86,8 +87,11 @@ def chain(args, root, log):
     subprocess.run(["tar", "-x", "-C", source], input=archive, check=True)
     audit = os.path.join(root, "subprocesses.log")
     bin_dir = os.path.join(root, "path")
-    # cc and what cc may run (the driver's linker, assembler and SDK tools on macOS).
-    shims(bin_dir, audit, [args.cc, "ld", "as", "clang", "xcrun", "dsymutil", "ar", "lipo", "collect2"])
+    # cc and what cc may run (the driver's linker, assembler and SDK tools on macOS), and what ceesafec itself runs:
+    # `uname -s`, whose "FreeBSD" adds -lpthread to the link (ADR 0149), and `getconf`, the CPU count. Without uname,
+    # gen 1 on FreeBSD linked gen 2 without libthr: "undefined symbol: pthread_create".
+    shims(bin_dir, audit, [args.cc, "ld", "as", "clang", "xcrun", "dsymutil", "ar", "lipo", "collect2", "uname",
+                           "getconf"])
     env = {"PATH": bin_dir, "HOME": root, "TMPDIR": os.path.join(root, "tmp"), "LANG": "C", "LC_ALL": "C"}
     os.makedirs(env["TMPDIR"])
     gen = os.path.join(root, "gen")

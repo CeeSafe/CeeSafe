@@ -51,6 +51,9 @@ One C seed for every platform, so every binary is built from the same C and chec
    `sh tools/bootstrap_release.sh <ceesafec 0.3.2> HEAD <dir>/ceesafec`. The chain's last compiler is 0.8.0, so the
    compiler's own sources may use only what 0.8.0 accepts. A newer feature in `src/` (0.18.0's first tag: a two-phase
    `mut` argument, from 0.17.0) builds with `out/ceesafec` but fails the seed.
+   The contract suite does this build too, as its `release chain` step, when it has the stage 0
+   (`--release-stage0 <ceesafec 0.3.2>`, `$CEESAFE_RELEASE_STAGE0`, or `~/.cache/ceesafe/stage0/ceesafec`), so such
+   a feature fails the suite on the commit that adds it; without a stage 0 the step says it was skipped.
 3. Tag and push: `git tag v<version> && git push origin v<version>`. Only such a tag runs the workflow (there is no
    manual or branch trigger); it builds, checks, signs and notarizes everything and publishes only if every job passes.
 4. Move `main` to the next development version (`<next>-dev`).

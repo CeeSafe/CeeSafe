@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.62.2
+## Releases 0.25.0 to 0.63.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.63.0 | 2026-11-17 | What a soft keyboard's Return key says (ADR 0161). `w.setReturnKey(WindowReturnKey)` takes `Default`, `Done`, `Go`, `Next`, `Search` or `Send`: the face of the key on iOS and Android, at once when a keyboard is shown. The key gives `Key.Enter` whichever it shows; desktop systems ignore the call | [Appendix C](./appendix-c-built-in-types) |
 | 0.62.2 | 2026-11-17 | A sweep failure that crashed, exited or timed out ends with the last lines of the run's standard error, where a sanitizer's report or a C library's message says what ended it | [11.3](./ch11-03-organising-tests) |
 | 0.62.1 | 2026-11-17 | A windowed program on iOS whose `main` has a large stack frame no longer ends as it starts. iOS calls `main` a second time inside the first, from the launched application, so the frame was on the main thread's 1 MiB stack twice; a windowed build's `main` now only starts the program, which runs in a function of its own | [Appendix C](./appendix-c-built-in-types) |
 | 0.62.0 | 2026-11-17 | An app's life on iOS and Android (ADR 0159). `w.nextAppEvent()` gives `WindowAppEvent.Background` when the app leaves the screen, `Foreground` when it is back and `MemoryWarning` when the system is short of memory, queued beside the window's events so that no program's `match` on `WindowEvent` changes; a wait ends when one arrives. At `Background` a program saves what it must keep: iOS gives it time through a background task, and Android holds `onStop` up to two seconds for a program that asks for these events. No frame is presented in the background. `Directory.appData(name)` is the folder an app keeps its own files in: the app's own on a phone, `name` under the user's application data on a desktop. `AsyncTcpStream.sendFile`'s copy, where there is no sendfile (the interpreter always), fills its 64 KiB buffer at once and no longer a byte at a time | [Appendix C](./appendix-c-built-in-types) |

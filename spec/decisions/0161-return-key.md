@@ -63,3 +63,8 @@ window.setReturnKey(WindowReturnKey.Done);   // before or while the keyboard is 
   `InputView.apply`; the dex is regenerated (`tools/gen_android_dex.py --check`: 0 problems).
 - `tools/window_check.py`: 58 checks, 0 problems; its keyboard program calls `setReturnKey`, which a scripted window
   accepts and ignores.
+- A moto g35 5G (Android 15), ClayWind's chat client built with the branch's compiler, by screenshots: the action key
+  is a tick in a field that says `Done`, an arrow in one that says `Go`, a paper plane in one that says `Send`, each
+  at once when the focus moves to the field; Enter from the `Go` key connected, as Enter did before.
+- Not verified: the faces on an iPhone at the time of release (the build is on the owner's iPhone 14 Plus); a
+  scripted window and the desktop systems only in that they accept the call.

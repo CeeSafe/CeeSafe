@@ -192,3 +192,25 @@ Each system is its own step and its own release, in this order; the API is relea
   refuses; after a second list all eleven are the same objects and the slider says its new value. It is not in
   `window_check`, which builds for the system it runs on.
 - **Not checked yet**: VoiceOver on a phone, which the Simulator does not have.
+
+## 8. Step 3 as implemented: Android (2026-11-18)
+
+`runtime/android/org/ceesafe/window/AccessView.java` and its dex, `runtime/hosted/ceesafe_rt_window.c` (the Android
+part), type-system.md §26.13. The owner: "Moto is connected. Go ahead install and perform tests on it."
+
+- A view the size of the window with an `AccessibilityNodeProvider`: the list's elements are its virtual views.
+  The list crosses from the program's thread to the activity's packed in bytes; what TalkBack asks comes back
+  under the runtime's lock and is taken by the program's next poll.
+- **`Focus` is never asked**, as on iOS; **a field's caret and anchor are not used**.
+- **TalkBack's focus rectangle is not drawn**: a NativeActivity's window surface is the program's, so the view
+  system that paints the rectangle paints nothing. What is spoken and what is done are not affected. A program
+  could draw one if the runtime told it where TalkBack's cursor is, which it does not.
+- **Checked on a moto g35 5G, Android 15, TalkBack 17**:
+  - `uiautomator dump` (the system's own reading of the node tree): the component demo's 75 elements of its first
+    screen with their widget, name, selected state, clickability and bounds.
+  - TalkBack reads the list and puts its cursor on the first element when it starts.
+  - **Touches injected with `adb` go round TalkBack**, so its gestures cannot be scripted. The owner made them, with
+    the view's requests logged for the session: a finger exploring the screen moved TalkBack's cursor from element
+    to element (180 hover events, the cursor on ten elements in turn), and a double tap activated one. The owner:
+    "It's working fine without issues."
+- **Not checked**: a slider's steps through TalkBack; `announce`; a second activity after the first ends.

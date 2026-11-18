@@ -250,6 +250,39 @@ void ceesafe_platform_free(void *p) {
     free(p);
 }
 
+/* A block's size as the C library has it (ADR 0170): what a budget counts, so that a free takes off what the
+   allocation put on without a header on every block. */
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#define CEE_BLOCK_SIZE(p) malloc_size(p)
+#elif defined(_WIN32)
+#include <malloc.h>
+#define CEE_BLOCK_SIZE(p) _msize(p)
+#elif defined(__FreeBSD__)
+#include <malloc_np.h>
+#define CEE_BLOCK_SIZE(p) malloc_usable_size(p)
+#elif defined(__linux__) || defined(__ANDROID__)
+#include <malloc.h>
+#define CEE_BLOCK_SIZE(p) malloc_usable_size(p)
+#endif
+
+bool ceesafe_platform_block_sizes(void) {
+#if defined(CEE_BLOCK_SIZE)
+    return !CEE_HOOKED();
+#else
+    return false;
+#endif
+}
+
+size_t ceesafe_platform_block_size(void *p) {
+#if defined(CEE_BLOCK_SIZE)
+    return p == NULL || CEE_HOOKED() ? 0u : (size_t)CEE_BLOCK_SIZE(p);
+#else
+    (void)p;
+    return 0u;
+#endif
+}
+
 uint64_t ceesafe_platform_config(const char *name) {
     const char *text = getenv(name);
     if (text == NULL) {

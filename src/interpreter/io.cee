@@ -1538,6 +1538,15 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_host_spawn")) {
         return "PsPsPsPs:l";
     }
+    if (sameText(name, "ceesafe_budget_enter")) {
+        return "s:P"; // ADR 0170
+    }
+    if (sameText(name, "ceesafe_budget_leave")) {
+        return "P:-";
+    }
+    if (sameText(name, "ceesafe_budget_held") || sameText(name, "ceesafe_budget_limit")) {
+        return ":l";
+    }
     if (sameText(name, "ceesafe_host_child_start")) {
         return "PsuP:l"; // ADR 0169
     }
@@ -2039,6 +2048,17 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_signal_subscribe") || sameText(n0, "ceesafe_signal_unsubscribe")) {
         return signalService(it, n0, arguments); // ADR 0125
+    }
+    // Allocation budgets (ADR 0170) hold nothing back here: the interpreter's memory is its own model, not the
+    // program's blocks. A budget is entered and left, and none is ever current.
+    if (sameText(n0, "ceesafe_budget_enter")) {
+        return Ok(hostResult(1));
+    }
+    if (sameText(n0, "ceesafe_budget_leave")) {
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_budget_held") || sameText(n0, "ceesafe_budget_limit")) {
+        return Ok(hostResult(-1));
     }
     if (n0.length > 14 && sameText(n0[0..14], "ceesafe_async_")) {
         return asyncService(it, n0, arguments);

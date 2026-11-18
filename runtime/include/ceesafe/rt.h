@@ -885,6 +885,25 @@ _Noreturn void ceesafe_platform_abort(void);
 void *ceesafe_platform_alloc(size_t size);
 /* The same, with every byte zero (a C library's calloc can skip zeroing memory that already is). */
 void *ceesafe_platform_alloc_zeroed(size_t size);
+/* The bytes the platform heap holds for a block from ceesafe_platform_alloc, as its C library sizes it (ADR 0170), and
+   whether it can say: not under a host's allocator hook, nor where the C library has no such function. */
+size_t ceesafe_platform_block_size(void *p);
+bool ceesafe_platform_block_sizes(void);
+/* Allocation budgets (ADR 0170; lib/std's Budget; runtime/core/ceesafe_rt_core.c). Hosted only. ceesafe_budget_enter
+   makes a budget of `limit` bytes inside the thread's current one and makes it current: its record, or NULL (no
+   memory, or the platform cannot size a block). ceesafe_budget_leave ends it: the one before is current again.
+   While a budget is current, an allocation of the system allocator that would take what the budget, or one it is
+   inside, holds over its limit fails as if the system had no memory; a free takes the block's size off, never below
+   zero. ceesafe_budget_held and ceesafe_budget_limit are the current budget's, -1 for none. The executor keeps a task's
+   budget: ceesafe_budget_retain when the task is made (its maker's), ceesafe_budget_swap around each resume,
+   ceesafe_budget_release when it ends. */
+void *ceesafe_budget_enter(uint64_t limit);
+void ceesafe_budget_leave(void *budget);
+int64_t ceesafe_budget_held(void);
+int64_t ceesafe_budget_limit(void);
+void *ceesafe_budget_retain(void);
+void *ceesafe_budget_swap(void *next);
+void ceesafe_budget_release(void *budget);
 /* Resizes a block from ceesafe_platform_alloc, keeping its first bytes; NULL with the block unchanged on failure. */
 void *ceesafe_platform_realloc(void *p, size_t size);
 void ceesafe_platform_free(void *p);
@@ -947,6 +966,7 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator);
 #include <stdlib.h>
 #define CEE_ALLOC_WATCH_COUNTED 1u
 #define CEE_ALLOC_WATCH_PLATFORM 2u
+#define CEE_ALLOC_WATCH_BUDGET 4u /* an allocation budget is live somewhere in the process (ADR 0170) */
 extern uint32_t ceesafe_alloc_watched;
 void ceesafe_alloc_watch(uint32_t bit, bool on);
 

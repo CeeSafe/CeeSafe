@@ -135,6 +135,7 @@ typedef struct cee_task {
     struct cee_task *sibling_next; /* its scope's children (ADR 0062) */
     struct cee_task *sibling_prev;
     ceesafe_scope *owned;  /* the scopes it owns that have children or wait for them, innermost first (ADR 0062) */
+    void *budget;          /* its allocation budget (ADR 0170): its maker's when it was made, then its own; hosted */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -1096,6 +1097,9 @@ static void cee_task_init(cee_task *t, void *frame, ceesafe_scope *scope, const 
     t->shield_deadline = UINT64_MAX;
     t->fd = -1;
     t->info = info;
+#if !defined(CEE_FREESTANDING)
+    t->budget = ceesafe_budget_retain(); /* a task is made under its maker's budget (ADR 0170) */
+#endif
 }
 
 /* ---- What a cancellation visits (ADR 0062): each scope's children that run on its worker, and each task's scopes. ----
@@ -2753,8 +2757,18 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         }
         t->home = &cee_exec;
         cee_exec.current = t;
+#if !defined(CEE_FREESTANDING)
+        /* The task's budget is the thread's while the task runs (ADR 0170), and what the task left current is the
+           task's when it parks. */
+        void *outer = ceesafe_budget_swap(t->budget);
+#endif
         bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
+#if !defined(CEE_FREESTANDING)
+        if (!done) {
+            t->budget = ceesafe_budget_swap(outer);
+        }
+#endif
         if (!done) {
             /* A wake counts only when this resume registered a wait on one. Any other is stale: aimed at a wait the
                task already left (Async.blocking's thread sets `done` before it wakes, so a task that sees `done`
@@ -2789,10 +2803,20 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
 #endif
             continue;
         }
+#if !defined(CEE_FREESTANDING)
+        /* A task that returned: its block is freed under its budget, which then loses the task's name for it. */
+        if (t == root) {
+            ceesafe_budget_release(ceesafe_budget_swap(outer));
+            break;
+        }
+        cee_child_done(t);
+        ceesafe_budget_release(ceesafe_budget_swap(outer));
+#else
         if (t == root) {
             break; /* its scopes have ended, so every child has returned */
         }
         cee_child_done(t);
+#endif
     }
 }
 

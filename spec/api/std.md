@@ -6,6 +6,7 @@
 - [struct AsyncUdpSocket](#struct-asyncudpsocket)
 - [struct AsyncSockets](#struct-asyncsockets)
 - [struct AsyncFiles](#struct-asyncfiles)
+- [struct Budget](#struct-budget)
 - [enum SendError](#enum-senderror)
 - [struct Channel](#struct-channel)
 - [struct AsyncMutex](#struct-asyncmutex)
@@ -779,6 +780,61 @@ public async fn syncDirectory(path: StringView) -> Result<void, AsyncError>
 ```
 
 Makes a directory's entries durable (ADR 0075 §2.1).
+
+## struct Budget
+
+```ceesafe
+@noncopy
+public struct Budget {
+    drop { … }
+}
+```
+
+A bound on the memory held at once by the code that runs while this value lives, and by the tasks that code
+starts: a request, a parser, a test.
+
+```
+let budget = Budget.enter(8 * 1048576)?;
+let answer = await handle(request)?;     // an allocation past 8 MiB fails here, as any failed allocation does
+```
+
+While it lives, an allocation that would take what is held over the limit fails with `AllocError.OutOfMemory`,
+from `push`, `Box.create`, `String.append` and the rest: the code that handles a failed allocation handles this
+one. What is held is the size of the blocks allocated under it and not yet freed, as the C library sizes them. A
+block freed under it is taken off, whoever allocated it, never below zero; a block that leaves it and is freed
+elsewhere stays counted. A budget entered inside another counts against both.
+
+In async code the budget is the task's: it stays current across an `await`, and a task started while it is
+current is under it. A thread started under it is not. It is not a sandbox: memory that C libraries take for
+themselves is not counted. Hosted only; under `ceesafec run --interp` it holds nothing back.
+
+### Budget.enter
+
+```ceesafe
+public fn enter(bytes: usize) -> Result<Budget, AllocError>
+```
+
+A budget of `bytes`, current until this value is dropped. `Err(AllocError.OutOfMemory)` if there is no memory
+for its record, or where the system cannot tell a block's size (under a host's allocator hook).
+Safety: the runtime gives a record or null, and the record is given back once, in `drop`.
+
+### Budget.held
+
+```ceesafe
+public fn held() -> usize?
+```
+
+What the current budget holds now, in bytes; null outside any.
+Safety: the runtime only reads the thread's current budget.
+
+### Budget.limit
+
+```ceesafe
+public fn limit() -> usize?
+```
+
+The current budget's limit; null outside any.
+Safety: as `held`.
 
 ## enum SendError
 

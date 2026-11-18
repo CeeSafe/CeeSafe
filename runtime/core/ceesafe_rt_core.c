@@ -512,11 +512,169 @@ static void alloc_count_live(uint32_t allocator, uint64_t delta) {
     }
 }
 
+#ifndef CEE_FREESTANDING
+/* ---- Allocation budgets (ADR 0170; rt.h says what each function does) ----
+ * A budget is a record of a limit and of the bytes held under it, inside the budget that was current when it was
+ * made. The thread's current budget is the running task's (the executor swaps it around each resume) or, outside a
+ * task, the one entered last on the thread. A record lives while something names it: its guard, a budget inside
+ * it, a task that was made under it. The counts are atomic: a block may be freed on another thread than it was
+ * allocated on. Only CeeSafe's own allocators' blocks are counted, not what C libraries ask for through
+ * CEE_ALLOC_FOREIGN. */
+typedef struct cee_budget {
+    uint64_t limit;
+    uint64_t held;
+    uint32_t refs;
+    struct cee_budget *parent;
+} cee_budget;
+
+static _Thread_local cee_budget *cee_budget_now;
+static uint32_t cee_budgets_live; /* records that exist (ceesafe_atomic_*): rt.h's inline path is off while any does */
+
+static bool budget_counts(uint32_t allocator) {
+    return allocator == CEE_ALLOC_SYSTEM || allocator == CEE_ALLOC_FAILING;
+}
+
+/* `bytes` off what `b` and the budgets it is inside hold, never below zero. */
+static void budget_give_back(cee_budget *b, uint64_t bytes) {
+    for (; b != NULL; b = b->parent) {
+        uint64_t held = ceesafe_atomic_load_u64(&b->held);
+        for (;;) {
+            uint64_t seen = ceesafe_atomic_cas_u64(&b->held, held, held > bytes ? held - bytes : 0u);
+            if (seen == held) {
+                break;
+            }
+            held = seen;
+        }
+    }
+}
+
+/* `bytes` onto what `b` and the budgets it is inside hold; false, with nothing added, if one of them would pass its
+   limit. `forced` adds whatever the limits say: for what is already held (a block that grew more than was asked). */
+static bool budget_take(cee_budget *b, uint64_t bytes, bool forced) {
+    for (cee_budget *k = b; k != NULL; k = k->parent) {
+        uint64_t held = ceesafe_atomic_load_u64(&k->held);
+        for (;;) {
+            if (!forced && (bytes > k->limit || held > k->limit - bytes)) {
+                for (cee_budget *taken = b; taken != k; taken = taken->parent) {
+                    uint64_t had = ceesafe_atomic_load_u64(&taken->held);
+                    for (;;) {
+                        uint64_t saw = ceesafe_atomic_cas_u64(&taken->held, had, had > bytes ? had - bytes : 0u);
+                        if (saw == had) {
+                            break;
+                        }
+                        had = saw;
+                    }
+                }
+                return false;
+            }
+            uint64_t seen = ceesafe_atomic_cas_u64(&k->held, held, held + bytes);
+            if (seen == held) {
+                break;
+            }
+            held = seen;
+        }
+    }
+    return true;
+}
+
+static void budget_unname(cee_budget *b) {
+    while (b != NULL && ceesafe_atomic_add_u32(&b->refs, UINT32_MAX) == 1u) { /* minus one: it was the last name */
+        cee_budget *parent = b->parent;
+        ceesafe_platform_free(b);
+        if (ceesafe_atomic_add_u32(&cee_budgets_live, UINT32_MAX) == 1u) {
+            ceesafe_alloc_watch(CEE_ALLOC_WATCH_BUDGET, false);
+        }
+        b = parent;
+    }
+}
+
+void *ceesafe_budget_enter(uint64_t limit) {
+    if (!ceesafe_platform_block_sizes()) {
+        return NULL;
+    }
+    cee_budget *b = (cee_budget *)ceesafe_platform_alloc(sizeof *b); /* not counted: the record is the runtime's */
+    if (b == NULL) {
+        return NULL;
+    }
+    b->limit = limit;
+    b->held = 0u;
+    b->refs = 1u;
+    b->parent = cee_budget_now;
+    if (b->parent != NULL) {
+        (void)ceesafe_atomic_add_u32(&b->parent->refs, 1u);
+    }
+    if (ceesafe_atomic_add_u32(&cee_budgets_live, 1u) == 0u) {
+        ceesafe_alloc_watch(CEE_ALLOC_WATCH_BUDGET, true);
+    }
+    cee_budget_now = b;
+    return b;
+}
+
+void ceesafe_budget_leave(void *budget) {
+    cee_budget *b = (cee_budget *)budget;
+    if (b == NULL) {
+        return;
+    }
+    if (cee_budget_now == b) {
+        cee_budget_now = b->parent; /* else its guard ended elsewhere than it was made: nothing is current through it */
+    }
+    budget_unname(b);
+}
+
+int64_t ceesafe_budget_held(void) {
+    return cee_budget_now == NULL ? -1 : (int64_t)ceesafe_atomic_load_u64(&cee_budget_now->held);
+}
+
+int64_t ceesafe_budget_limit(void) {
+    return cee_budget_now == NULL ? -1 : (int64_t)cee_budget_now->limit;
+}
+
+void *ceesafe_budget_retain(void) {
+    if (cee_budget_now != NULL) {
+        (void)ceesafe_atomic_add_u32(&cee_budget_now->refs, 1u);
+    }
+    return cee_budget_now;
+}
+
+void *ceesafe_budget_swap(void *next) {
+    void *before = cee_budget_now;
+    cee_budget_now = (cee_budget *)next;
+    return before;
+}
+
+void ceesafe_budget_release(void *budget) { budget_unname((cee_budget *)budget); }
+
+/* The current budget, if this allocator's blocks are counted. */
+static cee_budget *budget_for(uint32_t allocator) {
+    return cee_budget_now != NULL && budget_counts(allocator) ? cee_budget_now : NULL;
+}
+
+/* A fresh block under the current budget: the block, or NULL with the block freed if the budget has no room. */
+static void *budget_new_block(void *p, uint32_t allocator) {
+    cee_budget *b = p == NULL ? NULL : budget_for(allocator);
+    if (b != NULL && !budget_take(b, (uint64_t)ceesafe_platform_block_size(p), false)) {
+        ceesafe_platform_free(p);
+        return NULL;
+    }
+    return p;
+}
+
+#else
+/* Freestanding: no budgets (ADR 0170 is the hosted runtime's). The allocator below is the same code, with nothing
+   to count. */
+typedef struct cee_budget cee_budget;
+static cee_budget *budget_for(uint32_t allocator) { (void)allocator; return NULL; }
+static void *budget_new_block(void *p, uint32_t allocator) { (void)allocator; return p; }
+static bool budget_take(cee_budget *b, uint64_t bytes, bool forced) { (void)b; (void)bytes; (void)forced; return true; }
+static void budget_give_back(cee_budget *b, uint64_t bytes) { (void)b; (void)bytes; }
+#define ceesafe_platform_block_size(p) ((size_t)0)
+#endif
+
 void *ceesafe_alloc(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
-    void *p = ceesafe_platform_alloc(size == 0u ? 1u : size);
+    void *p = budget_new_block(ceesafe_platform_alloc(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
     }
@@ -527,7 +685,7 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
-    void *p = ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size);
+    void *p = budget_new_block(ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
     }
@@ -541,13 +699,38 @@ void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
-    return ceesafe_platform_realloc(p, size == 0u ? 1u : size);
+    cee_budget *b = budget_for(allocator);
+    if (b == NULL) {
+        return ceesafe_platform_realloc(p, size == 0u ? 1u : size);
+    }
+    /* What is asked beyond the block's size is taken first, so that a refusal leaves the block as it was. */
+    uint64_t before = (uint64_t)ceesafe_platform_block_size(p);
+    uint64_t asked = (uint64_t)size > before ? (uint64_t)size - before : 0u;
+    if (asked != 0u && !budget_take(b, asked, false)) {
+        return NULL;
+    }
+    void *q = ceesafe_platform_realloc(p, size == 0u ? 1u : size);
+    if (q == NULL) {
+        budget_give_back(b, asked);
+        return NULL;
+    }
+    uint64_t after = (uint64_t)ceesafe_platform_block_size(q);
+    if (after > before + asked) {
+        (void)budget_take(b, after - before - asked, true);
+    } else {
+        budget_give_back(b, before + asked - after);
+    }
+    return q;
 }
 
 void ceesafe_free(void *p, uint32_t allocator) {
     /* every allocator frees to the platform heap */
     if (p == NULL) {
         return; /* C's free(NULL); CeeSafe's own code never frees NULL */
+    }
+    cee_budget *b = budget_for(allocator);
+    if (b != NULL) {
+        budget_give_back(b, (uint64_t)ceesafe_platform_block_size(p));
     }
     if (config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */

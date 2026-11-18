@@ -4451,6 +4451,8 @@ fn make() -> Result<Box<u64, KernelHeap>, AllocError> => Box.createIn(KernelHeap
   has no state that a box would need to carry: a `Box<T, A>` stays one pointer, and dropping it
   needs no allocator value (the memory-model's free-standing allocators, §3.2 there). State that an
   allocator needs (counters, a C handle) lives on the C side or in global C state.
+- An allocation of either built-in allocator also fails when it would pass the current allocation budget (§40.9,
+  ADR 0170).
 - The built-in allocators are still `SystemHeap` and `FailingAllocator`. `Vector`, `String`,
   `SlotMap`, `StableVector`, `Arena` and `Pool` take only those in v0 (N0263): their growth is in the C
   runtime, which cannot call CeeSafe methods.
@@ -6205,6 +6207,31 @@ or an operand of `await` that is not a task), N0343 (recursion through `await`),
 the scope body's own locals), N0345 (`Async.park` or `Async.waker` outside the library); N0295 (blocking in async
 code, `await` while a `@context(atomic)` value is live, `Async.run` in async code); N0241 (conflicting captures of a
 scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend`'s captures, error type and allocator).
+
+### 40.9 Allocation budgets (ADR 0170)
+- `Budget.enter(bytes)` (lib/std): `Result<Budget, AllocError>`. The `Budget` is a move type that needs drop; while
+  it lives it is the **current budget** of the code that runs: of the task, in async code, and of the thread
+  otherwise. Dropping it makes the budget it was entered in current again.
+- **An allocation that would take what the current budget holds over its limit fails**, as an allocation fails
+  when the system has no memory: `Err(AllocError.OutOfMemory)` from `push`, `Box.create`, `String.append` and the
+  rest. Nothing else changes, so the code that handles a failed allocation handles this one. Code that unwraps an
+  allocation (`push(x)!`) panics, and a panic ends the process (§14.5), under a budget as outside one.
+- **What is held** is the sum of the sizes of the blocks of the system allocator (and `FailingAllocator`) that were
+  allocated while the budget was current and are not yet freed, as the C library sizes them. A block freed while a
+  budget is current is taken off it, whoever allocated it, never below zero. A block that is freed where no budget
+  is current stays counted until the budget ends: the count is then too high, never too low. Memory a C library
+  allocates for itself is not counted.
+- **Tasks.** A task is made under the budget that is current where it is made (`Async.all`, `Async.race`, a
+  scope's `spawn`), and the budget stays the task's across every `await`, on whichever worker runs it. A thread
+  started under a budget (`Thread.spawn`) is not under it.
+- **Nesting.** A budget entered while another is current counts against both, and fails at whichever limit is
+  reached first.
+- `Budget.held()` and `Budget.limit()`: `usize?`, the current budget's, `null` where none is current.
+- **Cost.** A program that enters no budget allocates as before (ADR 0101's inline path). While any budget lives
+  in the process every allocation and free goes through the runtime's functions.
+- **Where.** Hosted only. `Budget.enter` is `Err(AllocError.OutOfMemory)` where a block's size cannot be told:
+  under a host's allocator hook (§42), on CosmoOS. Under `ceesafec run --interp` a budget is entered and left and
+  holds nothing back: `held()` and `limit()` are `null` there.
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

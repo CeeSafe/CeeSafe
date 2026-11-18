@@ -38,6 +38,11 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/budget_check.py` (ADR 0170, in the contract suite) builds two programs, each also with the sanitizers: one
+without tasks (4 KiB blocks refused near the 256th under 1 MiB, frees taken off, no limit outside) and one with (a
+task stopped beside one that is not, two tasks under one budget, a budget inside a budget); and runs a third in the
+interpreter, where a budget holds nothing back.
+
 `tools/child_check.py` (ADR 0169, in the contract suite; POSIX) builds a program that starts itself again as its
 children with `Process.spawn`: one exits with a status, one subscribes to `ProcessSignals` and is told by
 `terminate`, one is ended by `kill` (`Signal(9)`), one is dropped while it runs and must be gone, not a zombie, after

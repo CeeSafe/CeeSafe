@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S5). Not implemented yet: nothing of it is in the compiler.
+  S5). Implemented 2026-11-18 (§6), with another API than §2.1's; not released. **Not run on Windows.**
 - Scope: the hosted runtime (the allocator's slow path, `runtime/core/ceesafe_rt_core.c`; the executor's switch of
   tasks, `runtime/hosted/ceesafe_rt_async.c`), lib/core (`Async.budget`, `Budget`), the interpreter; type-system.md
   §40 (a new §40.x), `spec/api/core.md`, the guide's async page. No change to the language, to the generated C's
@@ -134,3 +134,39 @@ Budget.limit()       // usize?: its limit
    - httpserver with a budget for each request, and its supervisor check's "takes memory until it fails" case
      answered by the budget instead of the process limit.
 4. ROADMAP §10.
+
+## 6. Implementation notes (2026-11-18)
+
+- **The API is a guard, not a scope with a body.** §2.1 had `Async.budget(bytes, body)` and
+  `Budget.run(bytes, body)`. What is there is `Budget.enter(bytes) -> Result<Budget, AllocError>`: the budget is
+  current while the value lives, in a task or outside one, and its drop ends it. `Async` is the compiler's own
+  (its operations are lowered by the checker and both backends), so a new one is compiler work in four places; a
+  guard is the runtime and lib/std alone, covers async and sync code with one form, and nests by scope as a body
+  would. `Budget.held()` and `Budget.limit()` are as §2.1 has them. **This is not what was accepted**: if the scope
+  form is wanted it can be added over the same runtime.
+- **In lib/std**, not lib/core (`lib/std/budget.cee`): lib/core is the freestanding profile's too, and a budget is
+  hosted.
+- **The runtime** (`runtime/core/ceesafe_rt_core.c`, hosted part): a record of a limit, the bytes held and the
+  budget it is inside, with a count of what names it (its guard, a budget inside it, a task made under it), so a
+  task that outlives the guard still has somewhere to count. The thread's current budget is a `_Thread_local`.
+  `CEE_ALLOC_WATCH_BUDGET` is ADR 0101's word's third bit, set while any record exists. `ceesafe_alloc`,
+  `ceesafe_alloc_zeroed`, `ceesafe_realloc` and `ceesafe_free` count `CEE_ALLOC_SYSTEM`'s and `CEE_ALLOC_FAILING`'s
+  blocks by `ceesafe_platform_block_size` (`malloc_size`, `malloc_usable_size`, `_msize`); a `realloc` takes what is
+  asked beyond the block's size first, so a refusal leaves the block as it was. A new block that does not fit is
+  freed again and the allocation fails.
+- **The executor** (`runtime/hosted/ceesafe_rt_async.c`): a task has a budget, the one current where it is made
+  (`cee_task_init`); the run loop swaps it in around each resume, keeps what the task left current when it parks,
+  and frees a finished child's block under it before the task's name for it is dropped.
+- **Not there:** under a host's allocator hook (ADR 0088) and on CosmoOS `Budget.enter` fails, since a block's size
+  cannot be told. The interpreter enters and leaves a budget and holds nothing back (§2.3 said it would count):
+  its memory is its own model.
+- **Question 2's measurement** (Linux x86-64, Xeon E3-1270 v6, one process of httpserver's benchmark server, the
+  compiler built there from its own C; `h2load --h1 -c 64 -t 4`, two runs of 5 s each): with a budget of 1 MiB
+  entered for every request in `App.handle`, against none: `/small` 98 356 and 99 602 against 94 314 and 100 475
+  requests a second; `/json` 95 744 and 101 033 against 93 793 and 95 101; 4 KiB of text built for each request
+  33 033 and 35 732 against 32 674 and 35 221; 64 KiB, 3 575 and 3 874 against 3 587 and 3 635. No difference
+  beyond what two runs of the same thing differ by, so the process-wide word stays and the per-thread word was not
+  tried.
+- **Tests:** `tools/budget_check.py`, in the contract suite as `budgets`: the two programs natively and with the
+  sanitizers, and one in the interpreter; 5 cases on macOS and on Linux. They are not corpus tests: the corpus's
+  programs also run in the interpreter, which holds nothing back. httpserver does not use a budget yet.

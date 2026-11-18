@@ -1,8 +1,10 @@
 # ADR 0173 — Handing a child what it inherits: sockets and shared memory
 
-- Status: **Proposed**, 2026-11-18. Written at the owner's request ("Write the descriptor passing ADR"): it is the
+- Status: **Accepted** by the owner, 2026-11-18 ("I accept it as written."): the six questions of §7 as
+  recommended. Implemented the same day (§9), **not as written in several places**, which §9 lists; not released.
+  **Run on Windows nowhere; its Windows half ran under Wine.** Written at the owner's request ("Write the descriptor passing ADR"): it is the
   second half of ADR 0169 §5 question 2, which ADR 0172 §6 question 2 left as "the next ADR". Not accepted: §7 has
-  the questions. Not implemented.
+  the questions.
 - Scope: lib/std (`Handover`, `Inherited`, `Process.spawnWith`, `Process.inherited`, `SharedMemory.anonymous`),
   the hosted runtime (`runtime/hosted/ceesafe_rt_io.c`, `ceesafe_rt_async.c`: POSIX, Windows), the interpreter's
   host services; type-system.md §26 (a new §26.18, and §26.16 and §26.17 where they are touched), `spec/api/std.md`,
@@ -184,3 +186,56 @@ let shared = given.memory(1)?;                         // SharedMemory: the same
 6. httpserver's supervisor on it, with its checks, and the time to start four workers by `fork` and by spawn
    recorded in ROADMAP §10.
 7. ROADMAP §10.
+
+## 9. Implementation notes (2026-11-18)
+
+What is there is §3.1's API on Linux, macOS, FreeBSD and Windows. It differs from what was accepted in these
+places; the first four are the ones to know.
+
+- **A `Handover` holds what it lists; it does not borrow it** (§3.1 said it borrows). Listing a thing duplicates
+  its descriptor into the handover (`ceesafe_host_handover_hold`: a duplicate at 64 or above, close-on-exec; on
+  Windows a second handle), which the handover's drop lets go of. A struct that keeps borrows of three kinds needs
+  vectors of borrows, which a struct's initialiser cannot name (`Vector<borrow(r) T>.create()` does not parse);
+  and the duplicate is the better contract: the parent may drop its listener and go on handing it to new workers,
+  and no handover can outlive what it lists.
+- **The word to the child names no parent** (§3.2 said it would, and that a process whose parent is another
+  ignores it). `CEESAFE_HANDOVER` holds the kinds, a letter a place. A grandchild is told nothing because every
+  program the runtime starts is given an environment without the word, and none of this process's descriptors
+  but the three and those it is handed. A parent's id would have failed a child that asks after its parent has
+  ended.
+- **A place that is never taken stays open in the child** until it ends, close-on-exec (§3.2 said it is closed
+  when `Process.inherited()` is first called, which cannot know what will be taken later).
+- **Windows does not use a handle list** (§3.3). The child is created suspended; a mapping's handle is duplicated
+  into it (`DuplicateHandle`), a socket is duplicated for its process id (`WSADuplicateSocketW`), both are written
+  into a record, a small section under a name of the parent's own that the child finds through
+  `CEESAFE_HANDOVER` and holds a handle of; then it is resumed. `CreateProcessW` still inherits handles as
+  `Process.spawn` did, for the three streams: the runtime's sockets are made non-inheritable where they enter its
+  table, and its files and mappings never were, but **nothing lists a Windows child's handles to prove it**
+  (§8 step 2 said the handle list would be the guarantee).
+- **`SharedMemory.anonymous` on Linux** is `shm_open` under a name of the process's own that is removed in the
+  same call, as on macOS and FreeBSD, not `memfd_create` (§3.3): one path for the three systems.
+- **What closes the parent's other descriptors.** The system, where it can be asked: macOS
+  (`POSIX_SPAWN_CLOEXEC_DEFAULT`), glibc 2.34 and later and FreeBSD 14 (`closefrom` as a file action). Elsewhere
+  the audit holds it: TCP sockets, accepted connections, UDP sockets, the executor's wake pipe and its kqueue were
+  not close-on-exec and are now (`cee_cloexec`, set after the call that makes the descriptor, so another thread
+  that starts a program in between still passes it on); files, directories, epoll, eventfd and the signal pipe
+  already were.
+- **Async code can start and watch a child.** `Process.spawn` and `ChildProcess.poll` were declared as calls that
+  may sleep (ADR 0169), so an async function could not call them (N0295), and ADR 0169 §2.1 says async code polls
+  on a timer. `poll` and `spawn` no longer are; `wait` is, through a runtime function of its own.
+- **§8 step 1 was not done first.** `.github/workflows/windows.yml` is written (it builds `ceesafec` from the
+  tree, compiles its C on Windows and runs `child_check`, `shared_check` and `handover_check`) and **has not
+  run**: nothing was pushed. What ran instead: the three programs cross-compiled with MinGW and run under Wine
+  on Linux.
+  - `shared_check`'s program: every line as on POSIX.
+  - `handover_check`'s program: three workers answer 300 connections on a handed listener and count in handed
+    memory; a handed UDP socket is heard by two children. This found a fault of this ADR's own (unnamed memory
+    was refused as "already exists": the last error is not cleared by a success) and fixed it.
+  - `child_check`'s program: a child's status, its id and the kept exit are right; **`terminate` fails** where
+    the processes have no console (`GenerateConsoleCtrlEvent`), which is ADR 0169's and may be Wine's alone.
+  Wine is not Windows: the job is still the first thing to run.
+- **The test of §8 that every worker answers some connections on Linux** is not made: with one socket, which
+  process is given a connection is the kernel's choice on Linux too.
+- **Tests:** `tools/handover_check.py`, in the contract suite as `handover`: 6 cases on macOS and on Linux
+  (ceesafec built there from its own C), 5 on Windows (no listing of descriptors there). httpserver's supervisor
+  is not moved onto it yet (§8 step 6): it needs a released compiler.

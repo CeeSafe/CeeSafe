@@ -1,0 +1,107 @@
+name: windows
+
+# What lib/std does with processes, on Windows: child processes (ADR 0169), named shared memory (ADR 0172) and what a
+# child is handed (ADR 0173). Their checks start several processes, so the corpus cannot make them, and no machine
+# but this workflow's runs them on Windows. ceesafec is built from the tree on Linux (as checks.yml builds it), emits
+# its own C, and that C is compiled here; the three checks then build and run their programs with it.
+#
+# Like checks.yml it runs when a release is tagged and when started by hand ("Run workflow"), not on pushes: it reports
+# on the release's commit and does not hold the release back.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The fallback's stage 0 (Decision 0009; the same as release.yml's).
+  STAGE0_TAG: v0.3.2
+  STAGE0_ASSET: ceesafec-linux-x64.tar.gz
+  STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
+
+jobs:
+  seed:
+    name: ceesafec's C, from the tree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the fallback's chain builds earlier commits
+      - name: A released ceesafec
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p released
+          for try in 1 2 3 4 5; do
+            gh release download -R "$GITHUB_REPOSITORY" -p ceesafec-linux-x64.tar.gz -p SHA256SUMS -D released --clobber && break
+            [ "$try" = 5 ] && exit 1
+            echo "the latest release: download failed (try $try), retrying in 30 s"; sleep 30
+          done
+          (cd released && grep ' ceesafec-linux-x64.tar.gz$' SHA256SUMS | sha256sum -c - && tar -xzf ceesafec-linux-x64.tar.gz)
+      - name: ceesafec from the tree, and its C
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          released=$(find "$PWD/released" -name ceesafec -type f | head -1)
+          mkdir -p out
+          if "$released" build -o out/first; then
+            echo "built by $("$released" --version)"
+          else
+            echo "::notice::the latest release does not build this tree: bootstrapping from $STAGE0_TAG (tools/bootstrap_release.sh)"
+            for try in 1 2 3 4 5; do
+              gh release download "$STAGE0_TAG" -R "$GITHUB_REPOSITORY" -p "$STAGE0_ASSET" -O stage0.tar.gz --clobber && break
+              [ "$try" = 5 ] && exit 1
+              sleep 30
+            done
+            echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -
+            mkdir -p stage0 && tar -xzf stage0.tar.gz -C stage0
+            sh tools/bootstrap_release.sh "$PWD/stage0/ceesafec" HEAD out/first
+          fi
+          out/first build -o out/ceesafec
+          out/ceesafec --version
+          out/ceesafec build --emit c -o seed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed
+          path: seed
+          retention-days: 3
+
+  processes:
+    name: processes, shared memory and handovers on Windows
+    needs: seed
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed
+          path: seed
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: ceesafec, from its C
+        shell: cmd
+        run: |
+          cd seed
+          cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
+          ceesafec.exe --version
+      - name: Child processes (ADR 0169)
+        if: always()
+        shell: bash
+        run: python tools/child_check.py --compiler seed/ceesafec.exe
+      - name: Named shared memory (ADR 0172)
+        if: always()
+        shell: bash
+        run: python tools/shared_check.py --compiler seed/ceesafec.exe
+      - name: What a child is handed (ADR 0173)
+        if: always()
+        shell: bash
+        run: python tools/handover_check.py --compiler seed/ceesafec.exe

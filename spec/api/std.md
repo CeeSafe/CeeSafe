@@ -25,6 +25,9 @@
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
+- [enum InheritedKind](#enum-inheritedkind)
+- [struct Handover](#struct-handover)
+- [struct Inherited](#struct-inherited)
 - [struct ChildOptions](#struct-childoptions)
 - [enum ChildExit](#enum-childexit)
 - [struct ChildProcess](#struct-childprocess)
@@ -1491,6 +1494,142 @@ public enum ChildStream {
 
 What one of a child's standard streams is (`ChildOptions`, ADR 0169).
 
+## enum InheritedKind
+
+```ceesafe
+public enum InheritedKind {
+    Listener,
+    Datagrams,
+    Memory,
+}
+```
+
+What a place of a handover holds (type-system.md §26.18, ADR 0173).
+
+## struct Handover
+
+```ceesafe
+@noncopy
+public struct Handover {
+    drop { … }
+}
+```
+
+What a child is to have of its parent's: listeners, UDP sockets and shared memory, in the order they are listed
+(type-system.md §26.18, ADR 0173).
+
+```
+var handover = Handover.create();
+let socket = handover.listener(listener)?;       // place 0
+let counters = handover.memory(shared)?;         // place 1
+let child = Process.spawnWith(me.view(), arguments, ChildOptions.inherit(), handover)?;
+```
+
+Listing a thing gives the handover a hold of its own on it, which it lets go of when it is dropped: the parent
+keeps what it listed, may drop it, and one handover serves every child that is to have the same things. What
+is shared is the thing itself: both processes accept from the one socket and map the one memory, and closing
+it in one does not close it in the other. The child has nothing else of its parent's but the three standard
+streams. At most 16 places.
+
+### Handover.create
+
+```ceesafe
+public fn create() -> Handover
+```
+
+A handover of nothing.
+
+### Handover.length
+
+```ceesafe
+public fn length(borrow this) -> u32
+```
+
+How many places it has.
+
+### Handover.listener
+
+```ceesafe
+public fn listener(borrow mut this, listener: borrow AsyncTcpListener) -> Result<u32, IoError>
+```
+
+Lists a TCP listener: its place. `InvalidInput` past 16 places.
+
+### Handover.datagrams
+
+```ceesafe
+public fn datagrams(borrow mut this, socket: borrow AsyncUdpSocket) -> Result<u32, IoError>
+```
+
+Lists a UDP socket: its place. `InvalidInput` past 16 places.
+
+### Handover.memory
+
+```ceesafe
+public fn memory(borrow mut this, memory: borrow SharedMemory) -> Result<u32, IoError>
+```
+
+Lists shared memory: its place. `InvalidInput` past 16 places.
+
+## struct Inherited
+
+```ceesafe
+public struct Inherited
+```
+
+What this process was handed by the one that started it (type-system.md §26.18, ADR 0173): `Process.inherited()`.
+
+```
+var given = Process.inherited();
+let listener = given.listener(0)?;      // the same socket as the parent's
+let shared = given.memory(1)?;          // the same memory
+```
+
+Each place is taken once: asking again, for another kind, or past the end is `Err(IoError.NotFound)`. In a
+program that was started with nothing handed over it is empty. A program this one starts is handed nothing of
+it.
+
+### Inherited.count
+
+```ceesafe
+public fn count(borrow this) -> u32
+```
+
+How many places there are.
+
+### Inherited.kind
+
+```ceesafe
+public fn kind(borrow this, place: u32) -> InheritedKind?
+```
+
+What place `place` holds; null if it is past the end or was taken.
+Safety: the runtime writes at most the 16 bytes of `kinds`.
+
+### Inherited.listener
+
+```ceesafe
+public fn listener(borrow mut this, place: u32) -> Result<AsyncTcpListener, IoError>
+```
+
+Takes the TCP listener at `place`.
+
+### Inherited.datagrams
+
+```ceesafe
+public fn datagrams(borrow mut this, place: u32) -> Result<AsyncUdpSocket, IoError>
+```
+
+Takes the UDP socket at `place`.
+
+### Inherited.memory
+
+```ceesafe
+public fn memory(borrow mut this, place: u32) -> Result<SharedMemory, IoError>
+```
+
+Takes the shared memory at `place`.
+
 ## struct ChildOptions
 
 ```ceesafe
@@ -1853,6 +1992,30 @@ public fn spawn(
 `PATH`, with `arguments`, and returns: the child runs beside this program, with its environment and working
 directory, and the streams `options` says.
 Safety: the runtime reads the views during the call only, and writes the handle it gives.
+
+### HostServices.spawnWith
+
+```ceesafe
+public fn spawnWith(
+    program: StringView,
+    arguments: borrow Vector<StringView>,
+    options: ChildOptions,
+    handover: borrow Handover,
+) -> Result<ChildProcess, IoError>
+```
+
+`Process.spawnWith(program, arguments, options, handover)` (type-system.md §26.18, ADR 0173): `spawn`, and
+the child has what `handover` lists, which `Process.inherited()` gives it.
+Safety: as `spawn`; the runtime reads the handles and kinds during the call only.
+
+### HostServices.inherited
+
+```ceesafe
+public fn inherited() -> Inherited
+```
+
+`Process.inherited()` (type-system.md §26.18, ADR 0173): what this process was handed.
+Safety: the runtime writes at most the 16 bytes of `kinds`.
 
 ### HostServices.id
 
@@ -2542,6 +2705,16 @@ public fn create(name: StringView, bytes: usize) -> Result<SharedMemory, IoError
 
 Makes memory of at least `bytes` bytes, zeroed, under `name`. `AlreadyExists` if the name is taken;
 `InvalidInput` for a name that is not one, or for no bytes.
+
+### SharedMemory.anonymous
+
+```ceesafe
+public fn anonymous(bytes: usize) -> Result<SharedMemory, IoError>
+```
+
+Memory of at least `bytes` bytes, zeroed, with no name: for a child to be handed (`Handover.memory`, ADR
+0173), which is the only way another process reaches it. `InvalidInput` for no bytes.
+Safety: the runtime writes the three words of `out`.
 
 ### SharedMemory.open
 

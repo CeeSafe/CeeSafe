@@ -3843,6 +3843,33 @@ Diagnostics: none new.
 - **Where.** Hosted, on Linux, macOS, FreeBSD and Windows. On Android, on CosmoOS and under `ceesafec run --interp`
   `create`, `open` and `remove` are `Unsupported` (a bad name is `InvalidInput` first).
 
+### 26.18 What a child is handed (ADR 0173)
+- A **`Handover`** (lib/std) lists what a child is to have of its parent's: `listener(l)` a TCP listener
+  (`AsyncTcpListener`), `datagrams(s)` a UDP socket (`AsyncUdpSocket`), `memory(m)` shared memory (§26.17). Each
+  returns the place it was given, from 0, as a `Result<u32, IoError>`; at most 16 places (`InvalidInput` past
+  them). Listing a thing gives the handover a hold of its own on it, let go of when the handover is dropped: the
+  parent keeps what it listed and may drop it, and one handover serves every child that is to have the same
+  things.
+- **`Process.spawnWith(program, arguments, options, handover)`** is `Process.spawn` (§26.16) with the list.
+- **`Process.inherited()`** is the child's `Inherited`: `count()`; `kind(place)`, an `InheritedKind?`
+  (`Listener`, `Datagrams`, `Memory`; `null` past the end and for a place that was taken); and `listener(place)`,
+  `datagrams(place)` and `memory(place)`, which move the thing out. A place is taken once: asking again, for
+  another kind, or past the end is `Err(IoError.NotFound)`. In a program started with nothing handed over it is
+  empty.
+- **What is shared is the thing itself.** Both processes accept from the one socket, and the system gives each
+  connection to one of them, which one being its choice; both map the one memory. Closing or dropping it in one
+  process does not close it in the other.
+- **`SharedMemory.anonymous(bytes)`**: memory with no name, which another process reaches only by being handed
+  it.
+- **A child has nothing else of its parent's** but the three standard streams, whether it is started by
+  `spawn`, `spawnWith`, `Process.run` or `Process.capture`: the descriptors the runtime opens are closed in a
+  program it starts. A program the child starts is handed nothing of what the child was handed.
+- **`Process.spawn`, `spawnWith` and `ChildProcess.poll` do not block**, and async code may call them;
+  `ChildProcess.wait` blocks (N0295 there).
+- **Where.** Hosted, on Linux, macOS, FreeBSD and Windows. On Android and CosmoOS `spawnWith` is `Unsupported`.
+  Under `ceesafec run --interp` `spawnWith`, `Handover`'s listings and `SharedMemory.anonymous` are `Unsupported`,
+  and `Process.inherited()` is empty.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

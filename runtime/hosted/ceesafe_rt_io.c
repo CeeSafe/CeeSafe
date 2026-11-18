@@ -1016,6 +1016,8 @@ void ceesafe_socket_unselect(void *event) {
 /* An id for `s`, or -1 if the table cannot grow (then `s` is closed). */
 static int32_t cee_socket_add(SOCKET s) {
     int32_t id = -1;
+    /* Winsock makes sockets inheritable: not a child's unless it is handed over (ADR 0173 §3.2). */
+    (void)SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
     AcquireSRWLockExclusive(&cee_socket_lock);
     for (uint32_t k = 0; k < cee_socket_count && id < 0; k++) {
         if (cee_sockets[k] == INVALID_SOCKET) {
@@ -3001,13 +3003,18 @@ int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
 #elif defined(_WIN32)
 int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
     wchar_t wide[40] = L"Local\\";
-    if (name_length == 0u || name_length > 30u) return -(int64_t)EINVAL;
-    for (uint64_t i = 0u; i < name_length; i++) wide[6u + i] = (wchar_t)name[i];
-    wide[6u + name_length] = L'\0';
+    if (create != 2u) {
+        if (name_length == 0u || name_length > 30u) return -(int64_t)EINVAL;
+        for (uint64_t i = 0u; i < name_length; i++) wide[6u + i] = (wchar_t)name[i];
+        wide[6u + name_length] = L'\0';
+    }
     HANDLE mapping;
     if (create != 0u) {
-        mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(bytes >> 32), (DWORD)bytes, wide);
-        if (mapping != NULL && GetLastError() == ERROR_ALREADY_EXISTS) {
+        /* create 2: no name (ADR 0173): a child reaches it by being handed it */
+        SetLastError(0u); /* "it already existed" is read from it below, and success need not clear it */
+        mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(bytes >> 32), (DWORD)bytes,
+                                     create == 2u ? NULL : wide);
+        if (mapping != NULL && create != 2u && GetLastError() == ERROR_ALREADY_EXISTS) {
             (void)CloseHandle(mapping);
             return -(int64_t)EEXIST;
         }
@@ -3162,25 +3169,167 @@ void ceesafe_host_child_forget(uint64_t handle, uint32_t ended) { (void)handle; 
 int64_t ceesafe_host_pid(void) { return 0; }
 int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity) { (void)buffer; (void)capacity; return -(int64_t)EOPNOTSUPP; }
 #elif defined(_WIN32)
-/*WINDOWS-HANDOVER-BEGIN*/
-int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle);
+/* ---- What a child is handed, Windows (ADR 0173; the POSIX half below says what each function does) ----
+ * The child is created suspended. What is handed is then given to it by the system's own duplication: a mapping's
+ * handle by DuplicateHandle into the child, a socket by WSADuplicateSocketW for the child's process id, whose
+ * protocol information the child makes its socket from. Both go into a record, a small named section the child
+ * finds through CEESAFE_HANDOVER in its environment; the child has a handle of the record too, so the name lasts as
+ * long as it does. Then the child is resumed. No handle is inherited for this: the child's handles are those the
+ * system gave it. */
+#define CEE_HANDOVER_PLACES 16u
+static const wchar_t cee_handover_name_w[] = L"CEESAFE_HANDOVER=";
+
+typedef struct cee_handover_record {
+    uint32_t count;
+    uint8_t kinds[CEE_HANDOVER_PLACES];   /* 1 a TCP listener, 2 a UDP socket, 3 shared memory; 0 once taken */
+    uint64_t handles[CEE_HANDOVER_PLACES]; /* memory: the mapping's handle in the child */
+    WSAPROTOCOL_INFOW sockets[CEE_HANDOVER_PLACES];
+} cee_handover_record;
+
+static SRWLOCK cee_handover_lock = SRWLOCK_INIT;
+static bool cee_handover_looked;
+static cee_handover_record *cee_handover_mine; /* this process's record, or NULL */
+static uint32_t cee_handover_made;             /* counts the records this process has made, for their names */
+
+static void cee_handover_read(void) {
+    AcquireSRWLockExclusive(&cee_handover_lock);
+    if (!cee_handover_looked) {
+        cee_handover_looked = true;
+        wchar_t name[64];
+        DWORD length = GetEnvironmentVariableW(L"CEESAFE_HANDOVER", name, 64u);
+        if (length > 0u && length < 64u) {
+            HANDLE section = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name);
+            if (section != NULL) {
+                cee_handover_mine = (cee_handover_record *)MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0u, 0u,
+                                                                        sizeof(cee_handover_record));
+                (void)CloseHandle(section); /* the view, and the handle the parent gave, keep it */
+                if (cee_handover_mine != NULL && cee_handover_mine->count > CEE_HANDOVER_PLACES) {
+                    cee_handover_mine = NULL;
+                }
+            }
+        }
+    }
+    ReleaseSRWLockExclusive(&cee_handover_lock);
+}
+
+int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) {
+    if (kind == 3u) {
+        HANDLE held = NULL;
+        if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)(uintptr_t)handle, GetCurrentProcess(), &held, 0u, FALSE,
+                             DUPLICATE_SAME_ACCESS)) {
+            return -(int64_t)cee_win_errno(GetLastError());
+        }
+        return (int64_t)(uintptr_t)held;
+    }
+    if (kind != 1u && kind != 2u) return -(int64_t)EINVAL;
+    /* A second socket handle on the same socket, so that the first may be closed. */
+    SOCKET s = (SOCKET)ceesafe_socket_handle((int32_t)handle);
+    WSAPROTOCOL_INFOW information;
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    if (WSADuplicateSocketW(s, GetCurrentProcessId(), &information) != 0) return -(int64_t)cee_wsa_errno(WSAGetLastError());
+    SOCKET held = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &information, 0u,
+                             WSA_FLAG_OVERLAPPED);
+    if (held == INVALID_SOCKET) return -(int64_t)cee_wsa_errno(WSAGetLastError());
+    (void)SetHandleInformation((HANDLE)held, HANDLE_FLAG_INHERIT, 0);
+    return (int64_t)(uintptr_t)held;
+}
+
+void ceesafe_host_handover_release(uint32_t kind, uint64_t held) {
+    if (kind == 3u) (void)CloseHandle((HANDLE)(uintptr_t)held);
+    else (void)closesocket((SOCKET)(uintptr_t)held);
+}
+
+int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) {
+    cee_handover_read();
+    if (cee_handover_mine == NULL) return 0;
+    AcquireSRWLockExclusive(&cee_handover_lock);
+    uint32_t count = cee_handover_mine->count;
+    for (uint32_t i = 0; i < count && (uint64_t)i < capacity; i++) kinds[i] = cee_handover_mine->kinds[i];
+    ReleaseSRWLockExclusive(&cee_handover_lock);
+    return (int64_t)count;
+}
+
+int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
+    cee_handover_read();
+    if (cee_handover_mine == NULL) return -(int64_t)ENOENT;
+    AcquireSRWLockExclusive(&cee_handover_lock);
+    bool mine = place < cee_handover_mine->count && kind != 0u && cee_handover_mine->kinds[place] == kind;
+    if (mine) cee_handover_mine->kinds[place] = 0u;
+    ReleaseSRWLockExclusive(&cee_handover_lock);
+    if (!mine) return -(int64_t)ENOENT;
+    if (kind == 3u) {
+        HANDLE mapping = (HANDLE)(uintptr_t)cee_handover_mine->handles[place];
+        void *view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0u, 0u, 0u);
+        MEMORY_BASIC_INFORMATION info;
+        if (view == NULL || VirtualQuery(view, &info, sizeof info) == 0u) {
+            int error = cee_win_errno(GetLastError());
+            if (view != NULL) (void)UnmapViewOfFile(view);
+            (void)CloseHandle(mapping);
+            return -(int64_t)error;
+        }
+        out[0] = (uint64_t)(uintptr_t)view;
+        out[1] = (uint64_t)info.RegionSize;
+        out[2] = (uint64_t)(uintptr_t)mapping;
+        return 0;
+    }
+    if (!cee_wsa_ready()) return -(int64_t)ENOSYS;
+    SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &cee_handover_mine->sockets[place],
+                          0u, WSA_FLAG_OVERLAPPED);
+    if (s == INVALID_SOCKET) return -(int64_t)cee_wsa_errno(WSAGetLastError());
+    u_long on = 1;
+    struct sockaddr_storage local;
+    int length = (int)sizeof local;
+    if (ioctlsocket(s, (long)FIONBIO, &on) != 0 || getsockname(s, (struct sockaddr *)&local, &length) != 0) {
+        int error = cee_wsa_errno(WSAGetLastError());
+        (void)closesocket(s);
+        return -(int64_t)error;
+    }
+    int32_t id = cee_socket_add(s);
+    if (id < 0) {
+        (void)closesocket(s);
+        return -(int64_t)ENOMEM;
+    }
+    out[0] = (uint64_t)id;
+    out[1] = local.ss_family == AF_INET6 ? 6u : 4u;
+    out[2] = local.ss_family == AF_INET6 ? (uint64_t)ntohs(((struct sockaddr_in6 *)&local)->sin6_port)
+                                         : (uint64_t)ntohs(((struct sockaddr_in *)&local)->sin_port);
+    return 0;
+}
+
+/* This process's environment as a block for CreateProcessW, without CEESAFE_HANDOVER and with `word` (or nothing, if
+   NULL) in its place: the caller's to free; NULL: no memory. */
+static wchar_t *cee_child_environment(const wchar_t *word) {
+    wchar_t *all = GetEnvironmentStringsW();
+    if (all == NULL) return NULL;
+    size_t prefix = sizeof cee_handover_name_w / sizeof cee_handover_name_w[0] - 1u;
+    size_t total = 0;
+    for (const wchar_t *p = all; *p != L'\0'; p += wcslen(p) + 1u) total += wcslen(p) + 1u;
+    size_t extra = word != NULL ? wcslen(word) + 1u : 0u;
+    wchar_t *made = (wchar_t *)ceesafe_alloc((total + extra + 2u) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+    if (made != NULL) {
+        size_t at = 0;
+        for (const wchar_t *p = all; *p != L'\0'; p += wcslen(p) + 1u) {
+            size_t n = wcslen(p) + 1u;
+            if (_wcsnicmp(p, cee_handover_name_w, prefix) == 0) continue;
+            memcpy(made + at, p, n * sizeof(wchar_t));
+            at += n;
+        }
+        if (word != NULL) {
+            memcpy(made + at, word, extra * sizeof(wchar_t));
+            at += extra;
+        }
+        if (at == 0u) made[at++] = L'\0'; /* an empty block is two terminators */
+        made[at] = L'\0';
+    }
+    (void)FreeEnvironmentStringsW(all);
+    return made;
+}
+
 int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
                                     const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
-    (void)handles; (void)kinds;
-    if (handed != 0u) return -(int64_t)EOPNOTSUPP;
-    return ceesafe_host_child_start(arguments, count, streams, handle);
-}
-int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) { (void)kind; (void)handle; return -(int64_t)EOPNOTSUPP; }
-void ceesafe_host_handover_release(uint32_t kind, uint64_t held) { (void)kind; (void)held; }
-int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) { (void)kinds; (void)capacity; return 0; }
-int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
-    (void)place; (void)kind; (void)out;
-    return -(int64_t)ENOENT;
-}
-/*WINDOWS-HANDOVER-END*/
-int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
     const cee_str *texts = (const cee_str *)arguments;
-    if (count == 0u || count > 4097u || handle == NULL) return -(int64_t)EINVAL;
+    if (count == 0u || count > 4097u || handle == NULL || handed > CEE_HANDOVER_PLACES) return -(int64_t)EINVAL;
+    cee_handover_read();
     size_t capacity = 32768u;
     char *line = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
     wchar_t *wide = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
@@ -3223,21 +3372,89 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
         startup.hStdInput = (streams & 3u) == 1u ? nothing : GetStdHandle(STD_INPUT_HANDLE);
         startup.hStdOutput = ((streams >> 2) & 3u) == 1u ? nothing : GetStdHandle(STD_OUTPUT_HANDLE);
         startup.hStdError = ((streams >> 4) & 3u) == 1u ? nothing : GetStdHandle(STD_ERROR_HANDLE);
-        if ((streams & 0x15u) != 0u && nothing == INVALID_HANDLE_VALUE) {
+        /* The record of what is handed, under a name of this process's own, and the word that tells the child. */
+        wchar_t word[64];
+        wchar_t *environment = NULL;
+        HANDLE section = NULL;
+        cee_handover_record *record = NULL;
+        if (handed != 0u) {
+            (void)_snwprintf(word, 64u, L"%lsLocal\\cee-handover-%lu-%lu", cee_handover_name_w,
+                             (unsigned long)GetCurrentProcessId(),
+                             (unsigned long)ceesafe_atomic_add_u32(&cee_handover_made, 1u));
+            word[63] = L'\0';
+            size_t prefix = sizeof cee_handover_name_w / sizeof cee_handover_name_w[0] - 1u;
+            section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0u,
+                                         (DWORD)sizeof(cee_handover_record), word + prefix);
+            if (section != NULL) {
+                record = (cee_handover_record *)MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0u, 0u,
+                                                             sizeof(cee_handover_record));
+            }
+            if (record == NULL) result = -(int64_t)cee_win_errno(GetLastError());
+        }
+        if (result == 0) {
+            environment = cee_child_environment(handed != 0u ? word : NULL);
+            if (environment == NULL) result = -(int64_t)ENOMEM;
+        }
+        if (result != 0) {
+            /* reported below */
+        } else if ((streams & 0x15u) != 0u && nothing == INVALID_HANDLE_VALUE) {
             result = -(int64_t)cee_win_errno(GetLastError());
-        } else if (!CreateProcessW(NULL, wide, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP, NULL, NULL, &startup,
-                                   &process)) {
+        } else if (!CreateProcessW(NULL, wide, NULL, NULL, TRUE,
+                                   CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED, environment,
+                                   NULL, &startup, &process)) {
             result = -(int64_t)cee_win_errno(GetLastError());
         } else {
-            (void)CloseHandle(process.hThread);
-            *handle = (uint64_t)(uintptr_t)process.hProcess;
-            result = (int64_t)process.dwProcessId;
+            /* Suspended: it is given what it is handed, and a handle of the record, before its first instruction. */
+            int failed = 0;
+            for (uint32_t i = 0; failed == 0 && i < handed; i++) {
+                record->kinds[i] = kinds[i];
+                if (kinds[i] == 3u) {
+                    HANDLE given = NULL;
+                    if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)(uintptr_t)handles[i], process.hProcess, &given, 0u,
+                                         FALSE, DUPLICATE_SAME_ACCESS)) {
+                        failed = cee_win_errno(GetLastError());
+                    }
+                    record->handles[i] = (uint64_t)(uintptr_t)given;
+                } else if (kinds[i] == 1u || kinds[i] == 2u) {
+                    if (WSADuplicateSocketW((SOCKET)(uintptr_t)handles[i], process.dwProcessId, &record->sockets[i]) != 0) {
+                        failed = cee_wsa_errno(WSAGetLastError());
+                    }
+                } else {
+                    failed = EINVAL;
+                }
+            }
+            if (failed == 0 && handed != 0u) {
+                HANDLE kept = NULL;
+                record->count = handed;
+                if (!DuplicateHandle(GetCurrentProcess(), section, process.hProcess, &kept, 0u, FALSE,
+                                     DUPLICATE_SAME_ACCESS)) {
+                    failed = cee_win_errno(GetLastError());
+                }
+            }
+            if (failed != 0) {
+                (void)TerminateProcess(process.hProcess, 1u);
+                (void)CloseHandle(process.hThread);
+                (void)CloseHandle(process.hProcess);
+                result = -(int64_t)failed;
+            } else {
+                (void)ResumeThread(process.hThread);
+                (void)CloseHandle(process.hThread);
+                *handle = (uint64_t)(uintptr_t)process.hProcess;
+                result = (int64_t)process.dwProcessId;
+            }
         }
+        if (record != NULL) (void)UnmapViewOfFile(record);
+        if (section != NULL) (void)CloseHandle(section);
+        if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
         if (nothing != INVALID_HANDLE_VALUE) (void)CloseHandle(nothing);
     }
     if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
     if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
     return result;
+}
+
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, handle);
 }
 
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {

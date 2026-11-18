@@ -38,6 +38,13 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/handover_check.py` (ADR 0173, in the contract suite) builds one program and runs it as several processes:
+three workers started with a listener and unnamed memory handed over answer 300 connections and count them
+together, after the parent has dropped its own listener, and the port is free once they have ended; a UDP socket
+handed to two children; a child started while every kind of descriptor is open has none above 2, and one handed
+two has exactly 3 and 4 (POSIX); a place taken twice, of the other kind or past the end is `NotFound`; a grandchild
+is handed nothing; and the interpreter answers `Unsupported` and is handed nothing.
+
 `tools/shared_check.py` (ADR 0172, in the contract suite) builds one program and runs it as several processes:
 three children add to two words of a parent's memory, 300 000 in each afterwards; the name is gone when the creator
 has ended; a word past the end panics; a creator that is killed leaves its name, which `remove` takes (POSIX); and

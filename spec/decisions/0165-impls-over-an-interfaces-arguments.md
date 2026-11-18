@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S7). Not implemented yet: nothing of it is in the compiler.
+  S7). **Not implemented, and not implementable as written** (§7, 2026-11-18): the owner decides how to go on.
 - Scope: the checker's impls (`src/check/interfaces.cee`: `processImpl`, `implements`, `implMethodFor`), the lookup
   of a method on a concrete type, the `dyn` tables; type-system.md §21 and §20.4, diagnostics.md (N0265, N0267), the
   guide's generics page. No change to the grammar, to the backends, to a library or to the runtime.
@@ -149,3 +149,36 @@ no `S`, and the signature still says it may; a caller through the interface coul
      the use; a direct call that does not determine the parameter; the orphan rule;
    - the contract suite; httpserver with `Filter` removed, as the program that asked.
 4. ROADMAP §10.
+
+## 7. What was found before implementing (2026-11-18)
+
+§1 listed what exists to build on and missed what does not: **a type cannot implement one generic interface for two
+argument lists at all.** A type's methods are one set of names (`Checker.implMethods` is keyed by type and name,
+`implMethodFor(typ, name)`), so the second impl's methods collide with the first's (ceesafec 0.67.0):
+
+```ceesafe
+interface Conv<T> { fn make(borrow this, seed: T) -> u64; }
+struct X { k: u64; }
+impl Conv<u8> for X { fn make(borrow this, seed: u8) -> u64 => this.k + seed as u64; }
+impl Conv<u16> for X { fn make(borrow this, seed: u16) -> u64 => this.k * 1000 + seed as u64; }
+//  N0228: 'X' already has a method named 'make'
+//  N0267: 'impl Conv<u16> for X' is missing method 'make'
+```
+
+§2.2 has `Cors` implement `Middleware<A>` and `Middleware<B>` as two instances with methods of the same names on
+the one type `Cors`: the same collision, made by the compiler. A call through a bound in instantiated code, a `dyn`
+table and a direct call all find a method by the type and the name alone, so with two instances they would find
+the first. Nothing of §2 was implemented.
+
+Two ways on, for the owner:
+
+- **A. First let a type implement a generic interface for several argument lists.** A method is then found by the
+  type, the interface instance and the name: through a bound and through `dyn` the instance is known; on the
+  concrete type a name that several instances have is chosen by the arguments (§2.3's rule, needed here already).
+  It touches `implMethods`, `findMethod`, `implMethodFor`, the `dyn` tables and N0228, and is an ADR of its own;
+  this one follows from it unchanged.
+- **B. This ADR for one argument list a type.** The impl is instantiated on demand, as §2.2 says, for the first
+  `Middleware<A>` the program asks of `Cors`, and a second, different one is an error that says so. A program has
+  one application state type, so httpserver's `Filter` could still go; a test that builds applications of two
+  state types with one filter could not be written. It needs nothing the compiler lacks, and A can lift the
+  limit later without changing a program that compiles under B.

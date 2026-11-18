@@ -1233,6 +1233,14 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
     if (sameText(name, "ceesafe_host_child_forget") || sameText(name, "ceesafe_host_pid")) {
         return Ok(hostResult(0));
     }
+    // Named shared memory (ADR 0172) is the system's, at an address of the system's: the interpreter's memory is
+    // its own model, with no word at an address. `Unsupported`.
+    if (sameText(name, "ceesafe_host_shared_map") || sameText(name, "ceesafe_host_shared_remove")) {
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130)));
+    }
+    if (sameText(name, "ceesafe_host_shared_unmap")) {
+        return Ok(hostResult(0));
+    }
     // ceesafe_host_spawn: argv as views, then the paths of standard input, output and error.
     let count = arguments[1].bits(0, 8)?;
     if (count == 0 || count > 4097) {
@@ -1546,6 +1554,15 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_budget_held") || sameText(name, "ceesafe_budget_limit")) {
         return ":l";
+    }
+    if (sameText(name, "ceesafe_host_shared_map")) {
+        return "PssuP:l"; // ADR 0172
+    }
+    if (sameText(name, "ceesafe_host_shared_unmap")) {
+        return "sss:-";
+    }
+    if (sameText(name, "ceesafe_host_shared_remove")) {
+        return "Ps:l";
     }
     if (sameText(name, "ceesafe_host_child_start")) {
         return "PsuP:l"; // ADR 0169
@@ -2093,7 +2110,8 @@ fn callC(
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_host_")) {
         let result = hostService(it, n0, arguments)?;
         return Ok(
-            if (sameText(n0, "ceesafe_host_dir_close") || sameText(n0, "ceesafe_host_child_forget")) null else result,
+            if (sameText(n0, "ceesafe_host_dir_close") || sameText(n0, "ceesafe_host_child_forget") ||
+                sameText(n0, "ceesafe_host_shared_unmap")) null else result,
         );
     }
     // ceesafe_atomic_*: one thread runs at a time (§5), so every operation is atomic; the width is the name's suffix.

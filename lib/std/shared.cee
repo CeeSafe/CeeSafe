@@ -1,0 +1,139 @@
+// Memory that processes reach by a name (ADR 0172; type-system.md §26.17).
+
+extern "C" {
+    @effects()
+    fn ceesafe_host_shared_map(name: *u8, nameLength: u64, bytes: u64, create: u32, out: *mut u64) -> i64;
+    @effects()
+    fn ceesafe_host_shared_unmap(address: u64, length: u64, handle: u64);
+    @effects()
+    fn ceesafe_host_shared_remove(name: *u8, nameLength: u64) -> i64;
+}
+
+/// Memory that two processes which share nothing else both reach, by a name one tells the other.
+///
+/// ```
+/// let counters = SharedMemory.create("myserver-counters", 4096)?;   // the parent
+/// let counters = SharedMemory.open("myserver-counters")?;           // each child, told the name
+/// counters.word(3).fetchAdd(1);
+/// ```
+///
+/// What it gives safely is 64-bit atomic words: what two processes can read and write with no rule between them.
+/// It starts as zeros and its size is fixed. It is mapped at another address in each process, so what is kept in
+/// it is numbers and offsets, never a pointer, a `Box` or a view. Dropping the value unmaps the memory; dropping
+/// the one `create` returned also removes the name, and the memory lives until the last process lets go of it. A
+/// creator that is killed leaves its name behind on POSIX: `remove` takes it.
+///
+/// A name is 1 to 30 bytes of letters, digits, `.`, `_` and `-`, and is the user's (the session's on Windows): a
+/// program picks one that is its own, with `Process.id()` in it. Hosted, on Linux, macOS, FreeBSD and Windows;
+/// `Unsupported` elsewhere and under `ceesafec run --interp`.
+@noncopy
+public struct SharedMemory {
+    /// The mapping's address, as a number: the value is Send and Share, since what it gives safely is atomics.
+    private base: usize;
+    private size: usize;
+    /// What the system needs to let go of it (Windows: the mapping's handle).
+    private handle: u64;
+    /// The name, kept by the value `create` returned, which removes it.
+    private made: [u8; 30];
+    private madeLength: usize;
+
+    /// Whether `name` is one: 1 to 30 bytes of `A`-`Z`, `a`-`z`, `0`-`9`, `.`, `_`, `-`.
+    fn named(name: StringView) -> bool {
+        let bytes = name.bytes();
+        if (bytes.length == 0 || bytes.length > 30) {
+            return false;
+        }
+        for (b in bytes) {
+            let letter = (b >= 'a' as u8 && b <= 'z' as u8) || (b >= 'A' as u8 && b <= 'Z' as u8);
+            let other = (b >= '0' as u8 && b <= '9' as u8) || b == '.' as u8 || b == '_' as u8 || b == '-' as u8;
+            if (!letter && !other) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Safety: the runtime reads the name during the call and writes the three words of `out`.
+    fn map(name: StringView, bytes: usize, create: bool) -> Result<SharedMemory, IoError> {
+        if (!SharedMemory.named(name) || (create && bytes == 0)) {
+            return Err(IoError.InvalidInput);
+        }
+        var out = [0u64; 3];
+        let status = unsafe { ceesafe_host_shared_map(
+            name.ptr,
+            name.length as u64,
+            bytes as u64,
+            if (create) 1u32 else 0u32,
+            borrow mut out[0] as *mut u64,
+        ) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        var made = [0u8; 30];
+        var madeLength: usize = 0;
+        if (create) {
+            for (b in name.bytes()) {
+                made[madeLength] = b;
+                madeLength += 1;
+            }
+        }
+        return Ok(SharedMemory {
+            base: truncate<usize>(out[0]),
+            size: truncate<usize>(out[1]),
+            handle: out[2],
+            made: made,
+            madeLength: madeLength,
+        });
+    }
+
+    /// Makes memory of at least `bytes` bytes, zeroed, under `name`. `AlreadyExists` if the name is taken;
+    /// `InvalidInput` for a name that is not one, or for no bytes.
+    public fn create(name: StringView, bytes: usize) -> Result<SharedMemory, IoError> =>
+        SharedMemory.map(name, bytes, true);
+
+    /// Maps the memory made under `name`, all of it. `NotFound` if there is none.
+    public fn open(name: StringView) -> Result<SharedMemory, IoError> => SharedMemory.map(name, 0, false);
+
+    /// Removes a name, for one a process that was killed left behind; the memory goes when the last process that
+    /// maps it lets go. `NotFound` if there is no such name, and always on Windows, where none is ever left.
+    /// Safety: the runtime reads the name during the call.
+    public fn remove(name: StringView) -> Result<void, IoError> {
+        if (!SharedMemory.named(name)) {
+            return Err(IoError.InvalidInput);
+        }
+        let status = unsafe { ceesafe_host_shared_remove(name.ptr, name.length as u64) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        return Ok();
+    }
+
+    /// Its size in bytes: what `create` was asked for, rounded up to the system's pages.
+    public fn length(borrow this) -> usize => this.size;
+
+    /// How many 64-bit words it holds.
+    public fn words(borrow this) -> usize => this.size / 8;
+
+    /// Word `index`, as an atomic. Panics if `index >= words()`.
+    /// Safety: the word is inside the mapping, which lives as long as this value, is aligned (a mapping starts on
+    /// a page) and is only ever read and written as an atomic through this function.
+    public fn word(borrow this, index: usize) -> borrow AtomicU64 {
+        if (index >= this.size / 8) {
+            panic("SharedMemory.word: the index is past the memory's words");
+        }
+        return unsafe { Ptr.toBorrow((this.base as *mut AtomicU64).add(index)) };
+    }
+
+    /// The mapping's address, for code with a layout and a protocol of its own. Reading or writing through it is
+    /// `unsafe`: another process may write the same bytes at any moment.
+    public fn address(borrow this) -> *mut u8 => this.base as *mut u8;
+
+    /// Unmaps the memory; the value `create` returned also removes the name.
+    /// Safety: the address, length and handle are what the runtime gave, given back once.
+    drop {
+        unsafe { ceesafe_host_shared_unmap(this.base as u64, this.size as u64, this.handle); }
+        if (this.madeLength != 0) {
+            let _ = unsafe { ceesafe_host_shared_remove(borrow this.made[0] as *u8, this.madeLength as u64) };
+        }
+    }
+}

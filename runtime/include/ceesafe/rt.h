@@ -1421,6 +1421,10 @@ int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it);
 void ceesafe_host_child_forget(uint64_t handle, uint32_t ended);
 int64_t ceesafe_host_pid(void);
 int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity);
+/* Named shared memory (ADR 0172; lib/std's SharedMemory; runtime/hosted/ceesafe_rt_io.c says what each does). */
+int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out);
+void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle);
+int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length);
 
 /* Files: `mode` 0 opens for reading, 1 creates or truncates for writing; 2 opens for reading and writing, 3 also
    creates a missing file, 4 creates a new one (ADR 0075 §2.1); `value` is the descriptor. */

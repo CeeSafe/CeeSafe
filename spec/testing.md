@@ -38,6 +38,11 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/shared_check.py` (ADR 0172, in the contract suite) builds one program and runs it as several processes:
+three children add to two words of a parent's memory, 300 000 in each afterwards; the name is gone when the creator
+has ended; a word past the end panics; a creator that is killed leaves its name, which `remove` takes (POSIX); and
+the interpreter answers `Unsupported`.
+
 `tools/budget_check.py` (ADR 0170, in the contract suite) builds two programs, each also with the sanitizers: one
 without tasks (4 KiB blocks refused near the 256th under 1 MiB, frees taken off, no limit outside) and one with (a
 task stopped beside one that is not, two tasks under one budget, a budget inside a budget); and runs a third in the

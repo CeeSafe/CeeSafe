@@ -54,6 +54,7 @@
 - [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
+- [struct SharedMemory](#struct-sharedmemory)
 - [struct Mutex](#struct-mutex)
 - [struct MutexGuard](#struct-mutexguard)
 - [struct Arc](#struct-arc)
@@ -2505,6 +2506,95 @@ public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
 ```
 
 The value at `at`, to change it. Changing a value does not change the map's version.
+
+## struct SharedMemory
+
+```ceesafe
+@noncopy
+public struct SharedMemory {
+    drop { … }
+}
+```
+
+Memory that two processes which share nothing else both reach, by a name one tells the other.
+
+```
+let counters = SharedMemory.create("myserver-counters", 4096)?;   // the parent
+let counters = SharedMemory.open("myserver-counters")?;           // each child, told the name
+counters.word(3).fetchAdd(1);
+```
+
+What it gives safely is 64-bit atomic words: what two processes can read and write with no rule between them.
+It starts as zeros and its size is fixed. It is mapped at another address in each process, so what is kept in
+it is numbers and offsets, never a pointer, a `Box` or a view. Dropping the value unmaps the memory; dropping
+the one `create` returned also removes the name, and the memory lives until the last process lets go of it. A
+creator that is killed leaves its name behind on POSIX: `remove` takes it.
+
+A name is 1 to 30 bytes of letters, digits, `.`, `_` and `-`, and is the user's (the session's on Windows): a
+program picks one that is its own, with `Process.id()` in it. Hosted, on Linux, macOS, FreeBSD and Windows;
+`Unsupported` elsewhere and under `ceesafec run --interp`.
+
+### SharedMemory.create
+
+```ceesafe
+public fn create(name: StringView, bytes: usize) -> Result<SharedMemory, IoError>
+```
+
+Makes memory of at least `bytes` bytes, zeroed, under `name`. `AlreadyExists` if the name is taken;
+`InvalidInput` for a name that is not one, or for no bytes.
+
+### SharedMemory.open
+
+```ceesafe
+public fn open(name: StringView) -> Result<SharedMemory, IoError>
+```
+
+Maps the memory made under `name`, all of it. `NotFound` if there is none.
+
+### SharedMemory.remove
+
+```ceesafe
+public fn remove(name: StringView) -> Result<void, IoError>
+```
+
+Removes a name, for one a process that was killed left behind; the memory goes when the last process that
+maps it lets go. `NotFound` if there is no such name, and always on Windows, where none is ever left.
+Safety: the runtime reads the name during the call.
+
+### SharedMemory.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+Its size in bytes: what `create` was asked for, rounded up to the system's pages.
+
+### SharedMemory.words
+
+```ceesafe
+public fn words(borrow this) -> usize
+```
+
+How many 64-bit words it holds.
+
+### SharedMemory.word
+
+```ceesafe
+public fn word(borrow this, index: usize) -> borrow AtomicU64
+```
+
+Word `index`, as an atomic. Panics if `index >= words()`.
+Safety: the word is inside the mapping, which lives as long as this value, is aligned (a mapping starts on
+a page) and is only ever read and written as an atomic through this function.
+
+### SharedMemory.address
+
+```ceesafe
+public fn address(borrow this) -> *mut u8
+```
+
+The mapping's address, for code with a layout and a protocol of its own. Reading or writing through it is
+`unsafe`: another process may write the same bytes at any moment.
 
 ## struct Mutex
 

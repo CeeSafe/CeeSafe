@@ -2941,6 +2941,121 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     return result;
 }
 
+/* ---- Named shared memory (ADR 0172; type-system.md §26.17; lib/std's SharedMemory) ----
+ * ceesafe_host_shared_map maps the memory under `name` (1 to 30 bytes of letters, digits, '.', '_', '-': the caller
+ * has checked) and writes out[0] its address, out[1] its length in bytes and out[2] what ceesafe_host_shared_unmap
+ * needs: 0, or a negated errno. With `create` it makes the memory first, zeroed, of `bytes` rounded up to pages, and
+ * fails with EEXIST if the name is taken; without, it maps all of what is there, ENOENT if nothing is. The object is
+ * the user's (mode 0600; Windows: the session's, "Local\"). ceesafe_host_shared_remove takes the name away; the
+ * memory lives while a process maps it. Windows has no name to take: the object goes with its last handle. */
+#if defined(COSMO_AF_INET) || defined(CEE_COSMOOS) || defined(__ANDROID__)
+int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
+    (void)name; (void)name_length; (void)bytes; (void)create; (void)out;
+    return -(int64_t)EOPNOTSUPP;
+}
+void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle) { (void)address; (void)length; (void)handle; }
+int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
+    (void)name; (void)name_length;
+    return -(int64_t)EOPNOTSUPP;
+}
+#elif defined(_WIN32)
+int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
+    wchar_t wide[40] = L"Local\\";
+    if (name_length == 0u || name_length > 30u) return -(int64_t)EINVAL;
+    for (uint64_t i = 0u; i < name_length; i++) wide[6u + i] = (wchar_t)name[i];
+    wide[6u + name_length] = L'\0';
+    HANDLE mapping;
+    if (create != 0u) {
+        mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, (DWORD)(bytes >> 32), (DWORD)bytes, wide);
+        if (mapping != NULL && GetLastError() == ERROR_ALREADY_EXISTS) {
+            (void)CloseHandle(mapping);
+            return -(int64_t)EEXIST;
+        }
+    } else {
+        mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, wide);
+    }
+    if (mapping == NULL) return -(int64_t)cee_win_errno(GetLastError());
+    void *view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0u, 0u, 0u);
+    MEMORY_BASIC_INFORMATION info;
+    if (view == NULL || VirtualQuery(view, &info, sizeof info) == 0u) {
+        int error = cee_win_errno(GetLastError());
+        if (view != NULL) (void)UnmapViewOfFile(view);
+        (void)CloseHandle(mapping);
+        return -(int64_t)error;
+    }
+    out[0] = (uint64_t)(uintptr_t)view;
+    out[1] = (uint64_t)info.RegionSize;
+    out[2] = (uint64_t)(uintptr_t)mapping;
+    return 0;
+}
+
+void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle) {
+    (void)length;
+    (void)UnmapViewOfFile((void *)(uintptr_t)address);
+    (void)CloseHandle((HANDLE)(uintptr_t)handle);
+}
+
+int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
+    (void)name; (void)name_length;
+    return -(int64_t)ENOENT;
+}
+#else
+#include <sys/mman.h>
+
+static bool cee_shared_path(const uint8_t *name, uint64_t name_length, char *path) {
+    if (name_length == 0u || name_length > 30u) return false;
+    path[0] = '/';
+    memcpy(path + 1, name, (size_t)name_length);
+    path[1u + name_length] = '\0';
+    return true;
+}
+
+int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
+    char path[32];
+    if (!cee_shared_path(name, name_length, path)) return -(int64_t)EINVAL;
+    uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
+    int fd = create != 0u ? shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600) : shm_open(path, O_RDWR, 0);
+    if (fd < 0) return -(int64_t)errno;
+    uint64_t length = 0u;
+    int error = 0;
+    if (create != 0u) {
+        length = bytes > UINT64_MAX - page ? 0u : (bytes + page - 1u) / page * page;
+        if (length == 0u || length > (uint64_t)INT64_MAX) error = EINVAL;
+        else if (ftruncate(fd, (off_t)length) != 0) error = errno;
+    } else {
+        struct stat st;
+        if (fstat(fd, &st) != 0) error = errno;
+        else if (st.st_size <= 0) error = EINVAL; /* made, and not yet given its size */
+        else length = ((uint64_t)st.st_size + page - 1u) / page * page;
+    }
+    void *view = MAP_FAILED;
+    if (error == 0) {
+        view = mmap(NULL, (size_t)length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (view == MAP_FAILED) error = errno;
+    }
+    (void)close(fd);
+    if (error != 0) {
+        if (create != 0u) (void)shm_unlink(path);
+        return -(int64_t)error;
+    }
+    out[0] = (uint64_t)(uintptr_t)view;
+    out[1] = length;
+    out[2] = 0u;
+    return 0;
+}
+
+void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle) {
+    (void)handle;
+    (void)munmap((void *)(uintptr_t)address, (size_t)length);
+}
+
+int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
+    char path[32];
+    if (!cee_shared_path(name, name_length, path)) return -(int64_t)EINVAL;
+    return shm_unlink(path) == 0 ? 0 : -(int64_t)errno;
+}
+#endif
+
 /* ---- Child processes that run beside their parent (ADR 0169; type-system.md §26.16; lib/std's ChildProcess) ----
  * ceesafe_host_child_start starts argv[0] (found on PATH) and returns at once: the child's process id, or a negated
  * errno, with `*handle` what the other calls take (POSIX: the id again; Windows: the process's handle). `streams`

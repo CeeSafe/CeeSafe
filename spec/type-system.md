@@ -3820,6 +3820,26 @@ Diagnostics: none new.
 - **Where.** Hosted only. CosmoOS, and the interpreter, which runs one program and starts none: `spawn` and
   `executable` are `IoError.Unsupported`, and `Process.id()` is 0.
 
+### 26.17 Named shared memory (ADR 0172)
+- `SharedMemory.create(name, bytes)` (lib/std): `Result<SharedMemory, IoError>`. Makes memory of `bytes` rounded up
+  to the system's pages, zeroed, under `name`; `AlreadyExists` if the name is taken. `SharedMemory.open(name)` maps
+  all of the memory another process, or this one, made under the name; `NotFound` if there is none. The size is
+  fixed when it is made.
+- **A name** is 1 to 30 bytes of `A`–`Z`, `a`–`z`, `0`–`9`, `.`, `_`, `-`, on every system; anything else, and a
+  size of zero, is `InvalidInput`. It is the user's (POSIX: the object has mode 0600) or the session's (Windows).
+- **The value** is a move type that needs drop, and is Send and Share. `length()` is its size in bytes, `words()`
+  that divided by 8, and `word(index)` a `borrow AtomicU64` of word `index`; an index past `words()` panics.
+  `address()` is the mapping's address as a `*mut u8`: reading or writing through it is `unsafe` (§27), since
+  another process may write the same bytes at any moment. The memory is mapped at another address in each
+  process, so what is kept in it is numbers, never a pointer or a view.
+- **Dropping it** unmaps the memory, and the value `create` returned also removes the name. The memory lives until
+  the last process that maps it lets go. A creator that does not end by dropping it (it is killed, it panics)
+  leaves the name on POSIX; on Windows the object goes with its last handle. `SharedMemory.remove(name)` takes a
+  name that was left: `NotFound` if there is none, and always on Windows.
+- An allocation budget (§40.9) does not count it.
+- **Where.** Hosted, on Linux, macOS, FreeBSD and Windows. On Android, on CosmoOS and under `ceesafec run --interp`
+  `create`, `open` and `remove` are `Unsupported` (a bad name is `InvalidInput` first).
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

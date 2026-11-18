@@ -1,9 +1,10 @@
 # ADR 0172 — Named shared memory
 
-- Status: **Proposed**, 2026-11-18. Written at the owner's request ("Write named-shared-memory ADR"): ADR 0169 §5
+- Status: **Accepted** by the owner, 2026-11-18 ("Yes, I accept it."): the five questions of §6 as recommended.
+  Implemented the same day (§8); not released. **Not run on Windows.** Written at the owner's request ("Write named-shared-memory ADR"): ADR 0169 §5
   question 2 left "a later ADR for named shared memory and for passing a descriptor", and httpserver's supervisor
   cannot leave `fork` for `Process.spawn` without the first (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  "What ceesafec 0.65.1 to 0.70.0 changed"). Not accepted: §6 has the questions. Not implemented.
+  "What ceesafec 0.65.1 to 0.70.0 changed").
 - Scope: lib/std (`SharedMemory`), the hosted runtime (`runtime/hosted/ceesafe_rt_io.c`: POSIX, Windows, CosmoOS),
   the interpreter's host services; type-system.md §26 (a new §26.17), `spec/api/std.md`, the guide's processes page.
   No change to the language, to the backends or to the allocator. **Passing a descriptor is not in it** (§4).
@@ -166,3 +167,24 @@ public struct SharedMemory {
      ADR 0169's `Process.spawn`;
    - httpserver's `SharedWords` and `Bus` on it, with `tools/ratelimit_check.py` and `tools/bus_check.py`.
 4. ROADMAP §10.
+
+## 8. Implementation notes (2026-11-18)
+
+- `lib/std/shared.cee` over three runtime functions (`runtime/hosted/ceesafe_rt_io.c`):
+  `ceesafe_host_shared_map` (create or open; the address, the length and what unmapping needs),
+  `ceesafe_host_shared_unmap` and `ceesafe_host_shared_remove`. The value keeps the address as a number, so it is
+  Send and Share by its fields, and the creator's keeps its name to remove it. Names are checked in lib/std, before
+  the runtime is asked, so a bad name is `InvalidInput` on every system and in the interpreter.
+- **The interpreter answers `Unsupported`**, not §3.4's table of its own. `word` is a borrow of an `AtomicU64` at
+  an address, and the interpreter's memory is a model with no addresses to make one at; a table would have needed
+  a second `SharedMemory` for it. A program that must run interpreted handles the error, as for `Process.spawn`.
+- **A creator that panics leaves its name** on POSIX, like one that is killed: a panic runs no drop (§14.5). §3.3
+  said "killed or traps"; the check has the case.
+- **An `open` of memory whose creator has not yet given it its size** (between `shm_open` and `ftruncate`, POSIX)
+  is `InvalidInput`. A child is told the name after `create` has returned, so it does not meet this.
+- **macOS** reports a shared object's size in whole pages, and Linux as it was made: `length()` is rounded up to
+  pages on both, so the creator and the opener see the same number.
+- **Windows** is written (`CreateFileMappingW` under `Local\`, `OpenFileMappingW`, `MapViewOfFile`,
+  `VirtualQuery`) and has been compiled and run nowhere yet.
+- **Tests:** `tools/shared_check.py`, in the contract suite as `shared`: 11 cases on macOS and on Linux (9 on
+  Windows, where no name is left behind). httpserver's `SharedWords` and `Bus` are not moved onto it yet.

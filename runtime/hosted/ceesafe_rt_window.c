@@ -1965,6 +1965,13 @@ static struct {
     cee_id field_class;       /* CeeSafeTextField (ADR 0157) */
     cee_id *keyboard_changed; /* UIKeyboardWillChangeFrameNotification */
     cee_id *keyboard_end;     /* UIKeyboardFrameEndUserInfoKey */
+    /* Accessibility (ADR 0164): CeeSafeAccessElement, a UIAccessibilityElement that takes a reader's actions;
+       UIAccessibilityPostNotification with its layout-changed and announcement numbers; whether VoiceOver runs. */
+    cee_id access_class;
+    void (*access_post)(uint32_t, cee_id);
+    const uint32_t *access_layout_changed;
+    const uint32_t *access_announcement;
+    signed char (*access_voiceover)(void);
 } cee_uikit;
 
 /* The one window, its view, and the hidden text field that is its editor while text input is on (ADR 0157), with
@@ -1974,6 +1981,9 @@ struct cee_ios {
     cee_id view;
     cee_id field;
     unsigned long sent;
+    /* Accessibility (ADR 0164): the element of each node of the window's list, in its order, each retained. */
+    cee_id *access_elements;
+    uint32_t access_count;
 };
 /* How much of the screen's bottom the soft keyboard covers, in points, as its last notification said. */
 static float cee_ios_keyboard;
@@ -2253,6 +2263,223 @@ static cee_id cee_ios_field(struct cee_window *w) {
 /* The wake source's callback: nothing to do; that a source was handled ends the run loop's wait (ADR 0142). */
 static void cee_ios_wake_perform(void *info) { (void)info; }
 
+/* ---- Accessibility on iOS (ADR 0164) -----------------------------------------------------------------------------
+   Each node of the window's list is a UIAccessibilityElement in the view, which is their container: the view's
+   accessibilityElements are the elements in the list's order, the order VoiceOver moves in. An element is kept
+   from one list to the next while its id is in both. iOS has traits and no roles: a button, a tab, a radio button,
+   a list's row and a menu's item are buttons (selected when they are), a checkbox a toggle button whose value is
+   1 or 0 (said "on" and "off"; a plain button with that value before iOS 17), a slider adjustable with its value as
+   text. A text field is an element with a name and a value: its keyboard comes when it is activated, as a tap
+   does it. */
+#define CEE_WINDOW_ACCESS 1
+
+static cee_id cee_ios_string_of(const char *text, size_t length) {
+    cee_id string = cee_ios_send(cee_ios_cls("NSString"), "alloc");
+    string = ((cee_id(*)(cee_id, cee_sel, const void *, unsigned long, unsigned long))cee_uikit.send)(
+        string, cee_ios_sel("initWithBytes:length:encoding:"), length > 0 ? (const void *)text : (const void *)"",
+        (unsigned long)length, 4ul /* NSUTF8StringEncoding */);
+    return string != NULL ? cee_ios_send(string, "autorelease") : cee_ios_string("");
+}
+
+/* The index of `element` in the shown window's list, or -1. */
+static long cee_ios_access_index(cee_id element) {
+    struct cee_window *w = cee_ios_shown;
+    if (w == NULL || w->native == NULL) {
+        return -1;
+    }
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    for (uint32_t k = 0; k < m->access_count && k < w->access_count; k++) {
+        if (m->access_elements[k] == element) {
+            return (long)k;
+        }
+    }
+    return -1;
+}
+
+/* VoiceOver asks `action` of the element: queued, and the run loop woken so a wait ends. */
+static signed char cee_ios_access_asked(cee_id self, int32_t action) {
+    long index = cee_ios_access_index(self);
+    struct cee_window *w = cee_ios_shown;
+    if (index < 0 || (w->access[index].flags & CEE_ACCESS_DISABLED) != 0) {
+        return 0;
+    }
+    if (cee_access_ask(w, w->access[index].id, action) && cee_uikit.wake_source != NULL) {
+        cee_uikit.source_signal(cee_uikit.wake_source);
+        cee_uikit.loop_wake_up(cee_uikit.main_loop);
+    }
+    return 1;
+}
+
+static signed char cee_ios_access_activate(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    return cee_ios_access_asked(self, CEE_ACCESS_PRESS);
+}
+
+static void cee_ios_access_increment(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_ios_access_asked(self, CEE_ACCESS_INCREMENT);
+}
+
+static void cee_ios_access_decrement(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    cee_ios_access_asked(self, CEE_ACCESS_DECREMENT);
+}
+
+/* Gives `element` what node `n` says: its name, value, traits and place in the view. */
+static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n, const char *text) {
+    /* UIAccessibilityTraits, as UIKit's headers have had them since iOS 3 (toggle button since iOS 17). */
+    const uint64_t button = 1u, image = 4u, selected = 8u, static_text = 0x40u, not_enabled = 0x100u,
+                   adjustable = 0x1000u, toggle = (uint64_t)1 << 53;
+    uint64_t traits = 0;
+    cee_id label = cee_ios_string_of(text + n->label_start, n->label_length);
+    cee_id value = NULL;
+    char number[32];
+    switch (n->role) {
+    case 0:
+        traits = static_text;
+        break;
+    case 2: /* a checkbox is a toggle button: its value 1 or 0 is said "on" or "off" */
+        traits = button | toggle;
+        value = cee_ios_string((n->flags & CEE_ACCESS_CHECKED) != 0 ? "1" : "0");
+        break;
+    case 3: /* a radio button is a button, selected when it is the chosen one */
+        traits = button | ((n->flags & CEE_ACCESS_CHECKED) != 0 ? selected : 0u);
+        break;
+    case 4:
+        if ((n->flags & CEE_ACCESS_SECURE) == 0 && n->value_length > 0) {
+            value = cee_ios_string_of(text + n->value_start, n->value_length);
+        }
+        break;
+    case 5: /* a slider says the program's text for its value, or its share of the range */
+        traits = adjustable;
+        if (n->value_length > 0) {
+            value = cee_ios_string_of(text + n->value_start, n->value_length);
+        } else {
+            double share = n->max > n->min ? (n->now - n->min) / (n->max - n->min) : 0.0;
+            share = share < 0.0 ? 0.0 : share > 1.0 ? 1.0 : share;
+            snprintf(number, sizeof number, "%d%%", (int)(share * 100.0 + 0.5));
+            value = cee_ios_string(number);
+        }
+        break;
+    case 9:
+        traits = button;
+        value = cee_ios_string_of(text + n->value_start, n->value_length);
+        break;
+    case 10:
+        traits = image;
+        break;
+    default: /* a button, a tab, a list's row, a menu's item */
+        traits = button;
+        break;
+    }
+    if ((n->flags & CEE_ACCESS_SELECTED) != 0) {
+        traits |= selected;
+    }
+    if ((n->flags & CEE_ACCESS_DISABLED) != 0) {
+        traits |= not_enabled;
+    }
+    cee_ios_send_v_id(element, "setAccessibilityLabel:", label);
+    cee_ios_send_v_id(element, "setAccessibilityValue:", value);
+    ((void (*)(cee_id, cee_sel, uint64_t))cee_uikit.send)(element, cee_ios_sel("setAccessibilityTraits:"), traits);
+    cee_rect frame = {{(double)n->x, (double)n->y}, {(double)n->width, (double)n->height}};
+    ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(element, cee_ios_sel("setAccessibilityFrameInContainerSpace:"),
+                                                         frame);
+}
+
+static int cee_ios_access_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                                    uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): the elements follow it. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    struct cee_ios *m = (struct cee_ios *)w->native;
+    if (m == NULL || cee_uikit.access_class == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    uint32_t count = w->access_count;
+    if (old_count > m->access_count) {
+        old_count = m->access_count;
+    }
+    cee_id *elements = count > 0 ? (cee_id *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
+    if (count > 0 && elements == NULL) {
+        count = 0; /* out of memory: the window has no elements until the next list */
+    }
+    int layout = count != old_count;
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+            layout = 1;
+        }
+        if (j < old_count && m->access_elements[j] != NULL) {
+            const struct cee_access_node *o = &old[j];
+            elements[k] = m->access_elements[j];
+            m->access_elements[j] = NULL;
+            if (n->role != o->role || n->flags != o->flags || n->now != o->now || n->min != o->min || n->max != o->max ||
+                n->x != o->x || n->y != o->y || n->width != o->width || n->height != o->height ||
+                !cee_ios_access_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
+                                          o->label_length) ||
+                !cee_ios_access_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                          o->value_length)) {
+                cee_ios_access_apply(elements[k], n, w->access_text);
+            }
+        } else {
+            cee_id element = ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(
+                cee_ios_send(cee_uikit.access_class, "alloc"), cee_ios_sel("initWithAccessibilityContainer:"), m->view);
+            elements[k] = element;
+            if (element != NULL) {
+                cee_ios_access_apply(element, n, w->access_text);
+            }
+            layout = 1;
+        }
+    }
+    for (uint32_t j = 0; j < m->access_count; j++) { /* the elements the new list does not have */
+        if (m->access_elements[j] != NULL) {
+            cee_ios_send_v(m->access_elements[j], "release");
+            layout = 1;
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = elements;
+    m->access_count = count;
+    if (layout) {
+        /* An element that could not be made leaves the array there: the ones before it are the view's. */
+        uint32_t made = 0;
+        while (made < count && elements[made] != NULL) {
+            made++;
+        }
+        cee_id array = ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_uikit.send)(
+            cee_ios_cls("NSArray"), cee_ios_sel("arrayWithObjects:count:"), elements, (unsigned long)made);
+        cee_ios_send_v_id(m->view, "setAccessibilityElements:", array);
+        if (cee_uikit.access_post != NULL && cee_uikit.access_layout_changed != NULL) {
+            cee_uikit.access_post(*cee_uikit.access_layout_changed, NULL);
+        }
+    }
+    cee_uikit.pool_pop(pool);
+}
+
+/* Says `text` through VoiceOver. */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    if (cee_uikit.access_post == NULL || cee_uikit.access_announcement == NULL) {
+        return;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_uikit.access_post(*cee_uikit.access_announcement, cee_ios_string_of(text, length));
+    cee_uikit.pool_pop(pool);
+}
+
 static int cee_uikit_load(void) {
     if (cee_uikit.state != 0) {
         return cee_uikit.state == 1;
@@ -2334,6 +2561,21 @@ static int cee_uikit_load(void) {
         cee_uikit.register_class(view);
     }
     cee_uikit.view_class = view;
+    /* Accessibility (ADR 0164). */
+    cee_uikit.access_post = (void (*)(uint32_t, cee_id))cee_ios_symbol(uikit, "UIAccessibilityPostNotification");
+    cee_uikit.access_layout_changed = (const uint32_t *)dlsym(uikit, "UIAccessibilityLayoutChangedNotification");
+    cee_uikit.access_announcement = (const uint32_t *)dlsym(uikit, "UIAccessibilityAnnouncementNotification");
+    cee_uikit.access_voiceover = (signed char (*)(void))cee_ios_symbol(uikit, "UIAccessibilityIsVoiceOverRunning");
+    cee_id access = cee_uikit.allocate_class(cee_ios_cls("UIAccessibilityElement"), "CeeSafeAccessElement", 0);
+    if (access == NULL) {
+        access = cee_ios_cls("CeeSafeAccessElement");
+    } else {
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityActivate"), (cee_fn)cee_ios_access_activate, "c@:");
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityIncrement"), (cee_fn)cee_ios_access_increment, "v@:");
+        cee_uikit.add_method(access, cee_ios_sel("accessibilityDecrement"), (cee_fn)cee_ios_access_decrement, "v@:");
+        cee_uikit.register_class(access);
+    }
+    cee_uikit.access_class = access;
     cee_uikit.send_super = cee_ios_symbol(objc, "objc_msgSendSuper");
     cee_uikit.keyboard_changed = (cee_id *)dlsym(uikit, "UIKeyboardWillChangeFrameNotification");
     cee_uikit.keyboard_end = (cee_id *)dlsym(uikit, "UIKeyboardFrameEndUserInfoKey");
@@ -2611,6 +2853,14 @@ static void cee_native_close(struct cee_window *w) {
         m->field = NULL;
         cee_ios_keyboard = 0.0f;
     }
+    for (uint32_t k = 0; k < m->access_count; k++) { /* the window's elements (ADR 0164) */
+        if (m->access_elements[k] != NULL) {
+            cee_ios_send_v(m->access_elements[k], "release");
+        }
+    }
+    ceesafe_platform_free(m->access_elements);
+    m->access_elements = NULL;
+    m->access_count = 0;
     cee_ios_send_v_id(m->window, "setRootViewController:", NULL);
     ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(m->window, cee_ios_sel("setHidden:"), 1);
     cee_ios_send_v(m->window, "release");
@@ -2626,6 +2876,9 @@ static void cee_native_close(struct cee_window *w) {
    application's state, which give Resized and Focus when they change. */
 static void cee_native_pump(struct cee_window *w) {
     void *pool = cee_uikit.pool_push();
+    if (!w->access_active && cee_uikit.access_voiceover != NULL && cee_uikit.access_voiceover()) {
+        w->access_active = 1; /* VoiceOver runs: something asks for the window's elements (ADR 0164) */
+    }
     for (int k = 0; k < 256 && cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.0, 1) == 4; k++) {
         /* kCFRunLoopRunHandledSource: another may be pending */
     }
@@ -5180,6 +5433,7 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
 #pragma comment(lib, "user32.lib") /* clang and cl; MinGW's gcc gets -lgdi32 from ceesafec (tooling.md §8.3) */
 #pragma comment(lib, "gdi32.lib")
 #endif
+#include <stddef.h> /* offsetof, for a COM object's interfaces (ADR 0164) */
 #include <imm.h> /* the input method's types and constants; its functions come from imm32.dll, loaded at first use */
 #define COBJMACROS    /* the COM interfaces' C calls, IFileDialog_Show and the like (ADR 0146) */
 #include <shobjidl.h> /* the file dialogs' interfaces; their functions come from ole32.dll, loaded at first use */
@@ -5201,6 +5455,16 @@ struct cee_win32 {
     /* Drops (ADR 0150): whether OLE was initialized for the window, and whether its drop target is registered. */
     int ole, drop_registered;
     struct cee_win32_drop_target drop;
+    /* Accessibility (ADR 0164): the window's UI Automation provider and each node's, in the list's order, each
+       holding a reference; and what a client asked, for the pump to queue (a provider may be called on a thread
+       of UI Automation's). All under cee_uia_lock. */
+    struct cee_uia_root *uia_root;
+    struct cee_uia_element **uia_elements;
+    uint32_t uia_count;
+    struct cee_access_request uia_asked[CEE_ACCESS_QUEUE];
+    unsigned uia_asked_count;
+    int uia_active;
+    int uia_focus_told; /* whether clients were told where the focus is since the provider was first given out */
 };
 
 static void cee_win32_drop_open(struct cee_window *w);
@@ -5443,6 +5707,1268 @@ static HCURSOR cee_win32_cursor(int32_t cursor) {
     return LoadCursorW(NULL, MAKEINTRESOURCEW(shapes[cursor >= 0 && cursor < 7 ? cursor : 0]));
 }
 
+/* ---- Accessibility on Windows (ADR 0164): UI Automation providers ------------------------------------------------
+   The window answers WM_GETOBJECT with a fragment root whose children are the list's elements, each a provider of
+   its own that is kept from one list to the next while its id is in both. The interfaces are written here as their
+   vtables, in the order UIAutomationCore.h declares them, and their functions come from uiautomationcore.dll and
+   oleaut32.dll, loaded at first use, so no program needs a header or a link flag. NVDA and Narrator read through
+   these. */
+#define CEE_WINDOW_ACCESS 1
+
+static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID cee_iid_uia_simple = {0xd6dd68d1, 0x86fd, 0x4332, {0x86, 0x66, 0x9a, 0xbe, 0xde, 0xa2, 0xd2, 0x4c}};
+static const IID cee_iid_uia_fragment = {0xf7063da8, 0x8359, 0x439c, {0x92, 0x97, 0xbb, 0xc5, 0x29, 0x9a, 0x7d, 0x87}};
+static const IID cee_iid_uia_root = {0x620ce2a5, 0xab8f, 0x40a9, {0x86, 0xcb, 0xde, 0x3c, 0x75, 0x59, 0x9b, 0x58}};
+static const IID cee_iid_uia_invoke = {0x54fcb24b, 0xe18e, 0x47a2, {0xb4, 0xd3, 0xec, 0xcb, 0xe7, 0x75, 0x99, 0xa2}};
+static const IID cee_iid_uia_toggle = {0x56d00bd0, 0xc4f4, 0x433c, {0xa8, 0x36, 0x1a, 0x52, 0xa5, 0x7e, 0x08, 0x92}};
+static const IID cee_iid_uia_range = {0x36dc7aef, 0x33e6, 0x4691, {0xaf, 0xe1, 0x2b, 0xe7, 0x27, 0x4b, 0x3d, 0x33}};
+static const IID cee_iid_uia_value = {0xc7935180, 0x6fb3, 0x4201, {0xb1, 0x74, 0x7d, 0xf7, 0x3a, 0xdb, 0xf6, 0x4a}};
+static const IID cee_iid_uia_selection = {0x2acad808, 0xb2d4, 0x452d, {0xa4, 0x07, 0x91, 0xff, 0x1a, 0xd1, 0x67, 0xb2}};
+static const IID cee_iid_uia_expand = {0xd847d3a5, 0xcab0, 0x4a98, {0x8c, 0x32, 0xec, 0xb4, 0x5c, 0x59, 0xad, 0x24}};
+
+/* UI Automation's numbers (UIAutomationClient.h). */
+#define CEE_UIA_ROOT_OBJECT (-25)
+#define CEE_UIA_SERVER_SIDE 0x2 /* ProviderOptions_ServerSideProvider (0x1 is a client-side one, whose events go nowhere) */
+#define CEE_UIA_E_NOT_ENABLED ((HRESULT)0x80040200L)
+#define CEE_UIA_E_NOT_AVAILABLE ((HRESULT)0x80040201L)
+#define CEE_UIA_PATTERN_INVOKE 10000
+#define CEE_UIA_PATTERN_VALUE 10002
+#define CEE_UIA_PATTERN_RANGE 10003
+#define CEE_UIA_PATTERN_EXPAND 10005
+#define CEE_UIA_PATTERN_SELECTION_ITEM 10010
+#define CEE_UIA_PATTERN_TOGGLE 10015
+#define CEE_UIA_PROPERTY_CONTROL_TYPE 30003
+#define CEE_UIA_PROPERTY_NAME 30005
+#define CEE_UIA_PROPERTY_HAS_FOCUS 30008
+#define CEE_UIA_PROPERTY_FOCUSABLE 30009
+#define CEE_UIA_PROPERTY_ENABLED 30010
+#define CEE_UIA_PROPERTY_AUTOMATION_ID 30011
+#define CEE_UIA_PROPERTY_CONTROL_ELEMENT 30016
+#define CEE_UIA_PROPERTY_CONTENT_ELEMENT 30017
+#define CEE_UIA_PROPERTY_PASSWORD 30019
+#define CEE_UIA_PROPERTY_FRAMEWORK 30024
+#define CEE_UIA_PROPERTY_VALUE 30045
+#define CEE_UIA_PROPERTY_RANGE_VALUE 30047
+#define CEE_UIA_PROPERTY_EXPAND_STATE 30070
+#define CEE_UIA_PROPERTY_IS_SELECTED 30079
+#define CEE_UIA_PROPERTY_TOGGLE_STATE 30086
+#define CEE_UIA_EVENT_FOCUS 20005
+#define CEE_UIA_CHILDREN_INVALIDATED 2
+
+struct cee_uia_rect {
+    double left, top, width, height;
+};
+
+/* The vtables. `self` is the address of the object's pointer to the vtable. */
+struct cee_uia_simple_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *options)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *pattern)(void *self, int pattern, void **out);
+    HRESULT(STDMETHODCALLTYPE *property)(void *self, int property, VARIANT *out);
+    HRESULT(STDMETHODCALLTYPE *host)(void *self, void **out);
+};
+struct cee_uia_fragment_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *navigate)(void *self, int direction, void **out);
+    HRESULT(STDMETHODCALLTYPE *runtime_id)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *bounds)(void *self, struct cee_uia_rect *out);
+    HRESULT(STDMETHODCALLTYPE *embedded)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *set_focus)(void *self);
+    HRESULT(STDMETHODCALLTYPE *fragment_root)(void *self, void **out);
+};
+struct cee_uia_root_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *from_point)(void *self, double x, double y, void **out);
+    HRESULT(STDMETHODCALLTYPE *focus)(void *self, void **out);
+};
+struct cee_uia_invoke_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *invoke)(void *self);
+};
+struct cee_uia_toggle_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *toggle)(void *self);
+    HRESULT(STDMETHODCALLTYPE *state)(void *self, int *out);
+};
+struct cee_uia_range_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *set_value)(void *self, double value);
+    HRESULT(STDMETHODCALLTYPE *value)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *read_only)(void *self, BOOL *out);
+    HRESULT(STDMETHODCALLTYPE *maximum)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *minimum)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *large_change)(void *self, double *out);
+    HRESULT(STDMETHODCALLTYPE *small_change)(void *self, double *out);
+};
+struct cee_uia_value_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *set_value)(void *self, LPCWSTR value);
+    HRESULT(STDMETHODCALLTYPE *value)(void *self, BSTR *out);
+    HRESULT(STDMETHODCALLTYPE *read_only)(void *self, BOOL *out);
+};
+struct cee_uia_selection_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *select)(void *self);
+    HRESULT(STDMETHODCALLTYPE *add)(void *self);
+    HRESULT(STDMETHODCALLTYPE *remove)(void *self);
+    HRESULT(STDMETHODCALLTYPE *is_selected)(void *self, BOOL *out);
+    HRESULT(STDMETHODCALLTYPE *container)(void *self, void **out);
+};
+struct cee_uia_expand_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *expand)(void *self);
+    HRESULT(STDMETHODCALLTYPE *collapse)(void *self);
+    HRESULT(STDMETHODCALLTYPE *state)(void *self, int *out);
+};
+
+/* The window's provider: a fragment root. `w` is NULL once the window closed. */
+struct cee_uia_root {
+    const struct cee_uia_simple_vtbl *simple;
+    const struct cee_uia_fragment_vtbl *fragment;
+    const struct cee_uia_root_vtbl *root;
+    LONG refs;
+    struct cee_window *w;
+};
+
+/* An element's provider. `w` is NULL once the element left the list or the window closed; `hint` is where it was
+   in the list when last looked for. */
+struct cee_uia_element {
+    const struct cee_uia_simple_vtbl *simple;
+    const struct cee_uia_fragment_vtbl *fragment;
+    const struct cee_uia_invoke_vtbl *invoke;
+    const struct cee_uia_toggle_vtbl *toggle;
+    const struct cee_uia_range_vtbl *range;
+    const struct cee_uia_value_vtbl *value;
+    const struct cee_uia_selection_vtbl *selection;
+    const struct cee_uia_expand_vtbl *expand;
+    LONG refs;
+    struct cee_window *w;
+    uint64_t id;
+    uint32_t hint;
+};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    CRITICAL_SECTION lock;
+    LRESULT(WINAPI *return_provider)(HWND, WPARAM, LPARAM, void *);
+    HRESULT(WINAPI *host_provider)(HWND, void **);
+    HRESULT(WINAPI *raise_event)(void *, int);
+    HRESULT(WINAPI *raise_property)(void *, int, VARIANT, VARIANT);
+    HRESULT(WINAPI *raise_structure)(void *, int, int *, int);
+    BOOL(WINAPI *listening)(void);
+    HRESULT(WINAPI *raise_notification)(void *, int, int, BSTR, BSTR); /* Windows 10 1709 on; NULL before */
+    BSTR(WINAPI *string)(const OLECHAR *, UINT);
+    void(WINAPI *string_free)(BSTR);
+    SAFEARRAY *(WINAPI *array)(VARTYPE, LONG, ULONG);
+    HRESULT(WINAPI *array_put)(SAFEARRAY *, LONG *, void *);
+} cee_uia;
+
+static int cee_uia_load(void) {
+    if (cee_uia.state != 0) {
+        return cee_uia.state == 1;
+    }
+    cee_uia.state = -1;
+    HMODULE core = LoadLibraryW(L"uiautomationcore.dll");
+    HMODULE automation = LoadLibraryW(L"oleaut32.dll");
+    if (core == NULL || automation == NULL) {
+        return 0;
+    }
+    FARPROC p[10] = {GetProcAddress(core, "UiaReturnRawElementProvider"), GetProcAddress(core, "UiaHostProviderFromHwnd"),
+                     GetProcAddress(core, "UiaRaiseAutomationEvent"),
+                     GetProcAddress(core, "UiaRaiseAutomationPropertyChangedEvent"),
+                     GetProcAddress(core, "UiaRaiseStructureChangedEvent"), GetProcAddress(core, "UiaClientsAreListening"),
+                     GetProcAddress(automation, "SysAllocStringLen"), GetProcAddress(automation, "SysFreeString"),
+                     GetProcAddress(automation, "SafeArrayCreateVector"), GetProcAddress(automation, "SafeArrayPutElement")};
+    for (int k = 0; k < 10; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    FARPROC notification = GetProcAddress(core, "UiaRaiseNotificationEvent");
+    memcpy(&cee_uia.return_provider, &p[0], sizeof p[0]);
+    memcpy(&cee_uia.host_provider, &p[1], sizeof p[0]);
+    memcpy(&cee_uia.raise_event, &p[2], sizeof p[0]);
+    memcpy(&cee_uia.raise_property, &p[3], sizeof p[0]);
+    memcpy(&cee_uia.raise_structure, &p[4], sizeof p[0]);
+    memcpy(&cee_uia.listening, &p[5], sizeof p[0]);
+    memcpy(&cee_uia.string, &p[6], sizeof p[0]);
+    memcpy(&cee_uia.string_free, &p[7], sizeof p[0]);
+    memcpy(&cee_uia.array, &p[8], sizeof p[0]);
+    memcpy(&cee_uia.array_put, &p[9], sizeof p[0]);
+    if (notification != NULL) {
+        memcpy(&cee_uia.raise_notification, &notification, sizeof notification);
+    }
+    InitializeCriticalSection(&cee_uia.lock);
+    cee_uia.state = 1;
+    return 1;
+}
+
+/* `length` bytes of UTF-8 as a BSTR (an empty one for none or for text that is not UTF-8), or NULL without memory. */
+static BSTR cee_uia_text(const char *text, uint32_t length) {
+    int units = length > 0 ? MultiByteToWideChar(CP_UTF8, 0, text, (int)length, NULL, 0) : 0;
+    BSTR out = cee_uia.string(NULL, (UINT)(units > 0 ? units : 0));
+    if (out != NULL && units > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, text, (int)length, out, units);
+    }
+    return out;
+}
+
+#define CEE_UIA_OBJECT(type, field, self) ((struct type *)(void *)((char *)(self) - offsetof(struct type, field)))
+
+/* The element's node in its window's list as it is now, or NULL. Under the lock. */
+static const struct cee_access_node *cee_uia_node(struct cee_uia_element *e) {
+    struct cee_window *w = e->w;
+    if (w == NULL) {
+        return NULL;
+    }
+    if (e->hint < w->access_count && w->access[e->hint].id == e->id) {
+        return &w->access[e->hint];
+    }
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        if (w->access[k].id == e->id) {
+            e->hint = k;
+            return &w->access[k];
+        }
+    }
+    return NULL;
+}
+
+/* A client asks `action` of the element: kept for the window's pump, which is woken. */
+static HRESULT cee_uia_ask(struct cee_uia_element *e, int32_t action) {
+    HRESULT result = CEE_UIA_E_NOT_AVAILABLE;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL && (n->flags & CEE_ACCESS_DISABLED) != 0) {
+        result = CEE_UIA_E_NOT_ENABLED;
+    } else if (n != NULL) {
+        struct cee_win32 *m = (struct cee_win32 *)e->w->native;
+        if (m != NULL && m->uia_asked_count < CEE_ACCESS_QUEUE) {
+            m->uia_asked[m->uia_asked_count].id = e->id;
+            m->uia_asked[m->uia_asked_count].action = action;
+            m->uia_asked_count++;
+        }
+        if (m != NULL) {
+            PostMessageW(m->hwnd, WM_NULL, 0, 0); /* a message ends the window's wait */
+        }
+        result = S_OK;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+/* ---- An element ---- */
+
+static HRESULT cee_uia_element_query(struct cee_uia_element *e, REFIID iid, void **out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    if (IsEqualIID(iid, &cee_iid_unknown) || IsEqualIID(iid, &cee_iid_uia_simple)) {
+        *out = &e->simple;
+    } else if (IsEqualIID(iid, &cee_iid_uia_fragment)) {
+        *out = &e->fragment;
+    } else if (IsEqualIID(iid, &cee_iid_uia_invoke)) {
+        *out = &e->invoke;
+    } else if (IsEqualIID(iid, &cee_iid_uia_toggle)) {
+        *out = &e->toggle;
+    } else if (IsEqualIID(iid, &cee_iid_uia_range)) {
+        *out = &e->range;
+    } else if (IsEqualIID(iid, &cee_iid_uia_value)) {
+        *out = &e->value;
+    } else if (IsEqualIID(iid, &cee_iid_uia_selection)) {
+        *out = &e->selection;
+    } else if (IsEqualIID(iid, &cee_iid_uia_expand)) {
+        *out = &e->expand;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&e->refs);
+    return S_OK;
+}
+
+static ULONG cee_uia_element_release(struct cee_uia_element *e) {
+    LONG left = InterlockedDecrement(&e->refs);
+    if (left == 0) {
+        ceesafe_platform_free(e);
+    }
+    return (ULONG)left;
+}
+
+/* Each interface's IUnknown, which finds the object from the interface's place in it. */
+#define CEE_UIA_ELEMENT_UNKNOWN(name, field)                                                                           \
+    static HRESULT STDMETHODCALLTYPE cee_uia_##name##_query(void *self, REFIID iid, void **out) {                      \
+        return cee_uia_element_query(CEE_UIA_OBJECT(cee_uia_element, field, self), iid, out);                          \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_add_ref(void *self) {                                              \
+        return (ULONG)InterlockedIncrement(&CEE_UIA_OBJECT(cee_uia_element, field, self)->refs);                       \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_release(void *self) {                                              \
+        return cee_uia_element_release(CEE_UIA_OBJECT(cee_uia_element, field, self));                                  \
+    }
+CEE_UIA_ELEMENT_UNKNOWN(esimple, simple)
+CEE_UIA_ELEMENT_UNKNOWN(efragment, fragment)
+CEE_UIA_ELEMENT_UNKNOWN(einvoke, invoke)
+CEE_UIA_ELEMENT_UNKNOWN(etoggle, toggle)
+CEE_UIA_ELEMENT_UNKNOWN(erange, range)
+CEE_UIA_ELEMENT_UNKNOWN(evalue, value)
+CEE_UIA_ELEMENT_UNKNOWN(eselection, selection)
+CEE_UIA_ELEMENT_UNKNOWN(eexpand, expand)
+
+static HRESULT STDMETHODCALLTYPE cee_uia_options(void *self, int *out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = CEE_UIA_SERVER_SIDE; /* called on any thread: the lock is what keeps the list whole */
+    return S_OK;
+}
+
+/* The pattern a role has: a button is invoked, a checkbox toggled, a radio button, a tab and a list's row selected,
+   a slider has a range, a field and a dropdown a value, a dropdown and a menu's item are also expanded. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_pattern(void *self, int pattern, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    uint32_t role = n != NULL ? n->role : 0;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (n == NULL) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    if (pattern == CEE_UIA_PATTERN_INVOKE && (role == 1 || role == 7 || role == 8)) {
+        *out = &e->invoke;
+    } else if (pattern == CEE_UIA_PATTERN_TOGGLE && role == 2) {
+        *out = &e->toggle;
+    } else if (pattern == CEE_UIA_PATTERN_SELECTION_ITEM && (role == 3 || role == 6 || role == 7)) {
+        *out = &e->selection;
+    } else if (pattern == CEE_UIA_PATTERN_RANGE && role == 5) {
+        *out = &e->range;
+    } else if (pattern == CEE_UIA_PATTERN_VALUE && (role == 4 || role == 9)) {
+        *out = &e->value;
+    } else if (pattern == CEE_UIA_PATTERN_EXPAND && role == 9) {
+        *out = &e->expand;
+    }
+    if (*out != NULL) {
+        InterlockedIncrement(&e->refs);
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_property(void *self, int property, VARIANT *out) {
+    /* Text, Button, CheckBox, RadioButton, Edit, Slider, TabItem, ListItem, MenuItem, ComboBox, Image. */
+    static const LONG types[CEE_ACCESS_ROLES] = {50020, 50000, 50002, 50013, 50004, 50015, 50019, 50007, 50011, 50003, 50006};
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    V_VT(out) = VT_EMPTY;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n == NULL) {
+        LeaveCriticalSection(&cee_uia.lock);
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    const char *text = e->w->access_text;
+    switch (property) {
+    case CEE_UIA_PROPERTY_CONTROL_TYPE:
+        V_VT(out) = VT_I4;
+        V_I4(out) = types[n->role];
+        break;
+    case CEE_UIA_PROPERTY_NAME:
+        V_BSTR(out) = cee_uia_text(text + n->label_start, n->label_length);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    case CEE_UIA_PROPERTY_AUTOMATION_ID: {
+        char number[24];
+        int length = snprintf(number, sizeof number, "%llu", (unsigned long long)n->id);
+        V_BSTR(out) = cee_uia_text(number, (uint32_t)length);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    }
+    case CEE_UIA_PROPERTY_FRAMEWORK:
+        V_BSTR(out) = cee_uia_text("CeeSafe", 7u);
+        V_VT(out) = V_BSTR(out) != NULL ? VT_BSTR : VT_EMPTY;
+        break;
+    case CEE_UIA_PROPERTY_ENABLED:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_DISABLED) == 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_HAS_FOCUS:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_FOCUSED) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_FOCUSABLE:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = n->role != 0 && n->role != 10 && (n->flags & CEE_ACCESS_DISABLED) == 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    case CEE_UIA_PROPERTY_CONTROL_ELEMENT:
+    case CEE_UIA_PROPERTY_CONTENT_ELEMENT:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = VARIANT_TRUE;
+        break;
+    case CEE_UIA_PROPERTY_PASSWORD:
+        V_VT(out) = VT_BOOL;
+        V_BOOL(out) = (n->flags & CEE_ACCESS_SECURE) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+        break;
+    default:
+        break;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_host(void *self, void **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* only the root has a window of its own */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_navigate(void *self, int direction, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    HRESULT result = S_OK;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m == NULL) {
+        result = CEE_UIA_E_NOT_AVAILABLE;
+    } else if (direction == 0 && m->uia_root != NULL) { /* the parent */
+        InterlockedIncrement(&m->uia_root->refs);
+        *out = &m->uia_root->fragment;
+    } else if (direction == 1 || direction == 2) { /* the next sibling, the one before */
+        uint32_t at = (uint32_t)(n - e->w->access);
+        if ((direction == 1 && at + 1u < m->uia_count) || (direction == 2 && at > 0)) {
+            struct cee_uia_element *other = m->uia_elements[direction == 1 ? at + 1u : at - 1u];
+            if (other != NULL) {
+                InterlockedIncrement(&other->refs);
+                *out = &other->fragment;
+            }
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+/* An element's runtime id: UiaAppendRuntimeId, then the two halves of the program's id. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_runtime_id(void *self, SAFEARRAY **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = cee_uia.array(VT_I4, 0, 3);
+    if (*out == NULL) {
+        return E_OUTOFMEMORY;
+    }
+    int parts[3] = {3, (int)(uint32_t)e->id, (int)(uint32_t)(e->id >> 32)};
+    for (LONG k = 0; k < 3; k++) {
+        cee_uia.array_put(*out, &k, &parts[k]);
+    }
+    return S_OK;
+}
+
+/* Where the element is, on the screen in pixels. */
+static HRESULT STDMETHODCALLTYPE cee_uia_element_bounds(void *self, struct cee_uia_rect *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    memset(out, 0, sizeof *out);
+    HRESULT result = CEE_UIA_E_NOT_AVAILABLE;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL) {
+        float scale = e->w->scale > 0.0f ? e->w->scale : 1.0f;
+        POINT origin = {0, 0};
+        ClientToScreen(m->hwnd, &origin);
+        out->left = (double)origin.x + (double)(n->x * scale);
+        out->top = (double)origin.y + (double)(n->y * scale);
+        out->width = (double)(n->width * scale);
+        out->height = (double)(n->height * scale);
+        result = S_OK;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_embedded(void *self, SAFEARRAY **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_set_focus(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, fragment, self), CEE_ACCESS_FOCUS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_element_fragment_root(void *self, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = e->w != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL && m->uia_root != NULL) {
+        InterlockedIncrement(&m->uia_root->refs);
+        *out = &m->uia_root->root;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return *out != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_invoke(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, invoke, self), CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_toggle(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, toggle, self), CEE_ACCESS_PRESS);
+}
+
+/* A flag of the element's node as 1 or 0, or -1 when the element is gone. */
+static int cee_uia_flag(struct cee_uia_element *e, uint32_t flag) {
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    int on = n != NULL ? (n->flags & flag) != 0 : -1;
+    LeaveCriticalSection(&cee_uia.lock);
+    return on;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_toggle_state(void *self, int *out) {
+    int on = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, toggle, self), CEE_ACCESS_CHECKED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = on > 0; /* ToggleState_On is 1, Off 0 */
+    return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+/* A slider's numbers as clients are given them. One whose program writes its value (a count: "3") has its own
+   range. Any other is given as a percentage of its range, 0 to 100: readers say a slider's value as a whole
+   number (NVDA says "0" for 0.5 of 0 to 1). Which: 0 its value, 1 its minimum, 2 its maximum, 3 a step. */
+static double cee_uia_range_of(const struct cee_access_node *n, int which) {
+    if (n->value_length > 0) {
+        return which == 0 ? n->now : which == 1 ? n->min : which == 2 ? n->max : (n->max - n->min) / 10.0;
+    }
+    if (which == 0) {
+        double share = n->max > n->min ? (n->now - n->min) / (n->max - n->min) : 0.0;
+        share = share < 0.0 ? 0.0 : share > 1.0 ? 1.0 : share;
+        return (double)(long)(share * 100.0 + 0.5);
+    }
+    return which == 1 ? 0.0 : which == 2 ? 100.0 : 10.0;
+}
+
+/* A slider is set by steps: a value above its own asks one step up, a value below one step down. */
+static HRESULT STDMETHODCALLTYPE cee_uia_range_set(void *self, double value) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, range, self);
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    double now = n != NULL ? cee_uia_range_of(n, 0) : 0.0;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (n == NULL) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    if (value == now) {
+        return S_OK;
+    }
+    return cee_uia_ask(e, value > now ? CEE_ACCESS_INCREMENT : CEE_ACCESS_DECREMENT);
+}
+
+/* One of a slider's numbers (cee_uia_range_of). */
+static HRESULT cee_uia_range_number(struct cee_uia_element *e, int which, double *out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = 0.0;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL) {
+        *out = cee_uia_range_of(n, which);
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_range_value(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 0, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_minimum(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 1, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_maximum(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 2, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_range_change(void *self, double *out) {
+    return cee_uia_range_number(CEE_UIA_OBJECT(cee_uia_element, range, self), 3, out);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_range_read_only(void *self, BOOL *out) {
+    int off = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, range, self), CEE_ACCESS_DISABLED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = off != 0;
+    return off < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+/* A field's text is the keyboard's to change, through the program: a client cannot set it. */
+static HRESULT STDMETHODCALLTYPE cee_uia_value_set(void *self, LPCWSTR value) {
+    (void)self;
+    (void)value;
+    return E_NOTIMPL;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_value_get(void *self, BSTR *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, value, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL) {
+        *out = (n->flags & CEE_ACCESS_SECURE) != 0 ? cee_uia_text("", 0u)
+                                                    : cee_uia_text(e->w->access_text + n->value_start, n->value_length);
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return n == NULL ? CEE_UIA_E_NOT_AVAILABLE : *out != NULL ? S_OK : E_OUTOFMEMORY;
+}
+
+/* A field is not read-only to a reader ("edit"), though a client cannot set it; a dropdown's value is. */
+static HRESULT STDMETHODCALLTYPE cee_uia_value_read_only(void *self, BOOL *out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, value, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    *out = n == NULL || n->role != 4 || (n->flags & CEE_ACCESS_DISABLED) != 0;
+    LeaveCriticalSection(&cee_uia.lock);
+    return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_select(void *self) {
+    return cee_uia_ask(CEE_UIA_OBJECT(cee_uia_element, selection, self), CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_selection_other(void *self) {
+    (void)self;
+    return E_NOTIMPL; /* one of a set is chosen: nothing is added to it or taken from it */
+}
+
+/* A radio button is selected when checked; a tab and a list's row when selected. */
+static HRESULT STDMETHODCALLTYPE cee_uia_is_selected(void *self, BOOL *out) {
+    int on = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, selection, self), CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = on > 0;
+    return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_selection_container(void *self, void **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* the list is flat: a set has no element of its own */
+    return S_OK;
+}
+
+/* A dropdown is opened and closed by a press: only when it is not already as asked. */
+static HRESULT cee_uia_expand_to(struct cee_uia_element *e, int open) {
+    int is = cee_uia_flag(e, CEE_ACCESS_EXPANDED);
+    if (is < 0) {
+        return CEE_UIA_E_NOT_AVAILABLE;
+    }
+    return is == open ? S_OK : cee_uia_ask(e, CEE_ACCESS_PRESS);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_expand(void *self) {
+    return cee_uia_expand_to(CEE_UIA_OBJECT(cee_uia_element, expand, self), 1);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_collapse(void *self) {
+    return cee_uia_expand_to(CEE_UIA_OBJECT(cee_uia_element, expand, self), 0);
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_expand_state(void *self, int *out) {
+    int is = cee_uia_flag(CEE_UIA_OBJECT(cee_uia_element, expand, self), CEE_ACCESS_EXPANDED);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = is > 0; /* ExpandCollapseState_Expanded is 1, Collapsed 0 */
+    return is < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
+}
+
+static const struct cee_uia_simple_vtbl cee_uia_element_simple = {
+    cee_uia_esimple_query, cee_uia_esimple_add_ref, cee_uia_esimple_release, cee_uia_options,
+    cee_uia_element_pattern, cee_uia_element_property, cee_uia_element_host};
+static const struct cee_uia_fragment_vtbl cee_uia_element_fragment = {
+    cee_uia_efragment_query, cee_uia_efragment_add_ref, cee_uia_efragment_release, cee_uia_element_navigate,
+    cee_uia_element_runtime_id, cee_uia_element_bounds, cee_uia_embedded, cee_uia_element_set_focus,
+    cee_uia_element_fragment_root};
+static const struct cee_uia_invoke_vtbl cee_uia_element_invoke = {cee_uia_einvoke_query, cee_uia_einvoke_add_ref,
+                                                                 cee_uia_einvoke_release, cee_uia_invoke};
+static const struct cee_uia_toggle_vtbl cee_uia_element_toggle = {
+    cee_uia_etoggle_query, cee_uia_etoggle_add_ref, cee_uia_etoggle_release, cee_uia_toggle, cee_uia_toggle_state};
+static const struct cee_uia_range_vtbl cee_uia_element_range = {
+    cee_uia_erange_query, cee_uia_erange_add_ref, cee_uia_erange_release, cee_uia_range_set, cee_uia_range_value,
+    cee_uia_range_read_only, cee_uia_range_maximum, cee_uia_range_minimum, cee_uia_range_change, cee_uia_range_change};
+static const struct cee_uia_value_vtbl cee_uia_element_value = {
+    cee_uia_evalue_query, cee_uia_evalue_add_ref, cee_uia_evalue_release, cee_uia_value_set, cee_uia_value_get,
+    cee_uia_value_read_only};
+static const struct cee_uia_selection_vtbl cee_uia_element_selection = {
+    cee_uia_eselection_query, cee_uia_eselection_add_ref, cee_uia_eselection_release, cee_uia_select,
+    cee_uia_selection_other, cee_uia_selection_other, cee_uia_is_selected, cee_uia_selection_container};
+static const struct cee_uia_expand_vtbl cee_uia_element_expand = {
+    cee_uia_eexpand_query, cee_uia_eexpand_add_ref, cee_uia_eexpand_release, cee_uia_expand, cee_uia_collapse,
+    cee_uia_expand_state};
+
+static struct cee_uia_element *cee_uia_element_new(struct cee_window *w, uint64_t id, uint32_t at) {
+    struct cee_uia_element *e = (struct cee_uia_element *)ceesafe_platform_alloc_zeroed(sizeof *e);
+    if (e != NULL) {
+        e->simple = &cee_uia_element_simple;
+        e->fragment = &cee_uia_element_fragment;
+        e->invoke = &cee_uia_element_invoke;
+        e->toggle = &cee_uia_element_toggle;
+        e->range = &cee_uia_element_range;
+        e->value = &cee_uia_element_value;
+        e->selection = &cee_uia_element_selection;
+        e->expand = &cee_uia_element_expand;
+        e->refs = 1;
+        e->w = w;
+        e->id = id;
+        e->hint = at;
+    }
+    return e;
+}
+
+/* ---- The window's root ---- */
+
+static HRESULT cee_uia_root_query(struct cee_uia_root *r, REFIID iid, void **out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    if (IsEqualIID(iid, &cee_iid_unknown) || IsEqualIID(iid, &cee_iid_uia_simple)) {
+        *out = &r->simple;
+    } else if (IsEqualIID(iid, &cee_iid_uia_fragment)) {
+        *out = &r->fragment;
+    } else if (IsEqualIID(iid, &cee_iid_uia_root)) {
+        *out = &r->root;
+    } else {
+        return E_NOINTERFACE;
+    }
+    InterlockedIncrement(&r->refs);
+    return S_OK;
+}
+
+static ULONG cee_uia_root_release(struct cee_uia_root *r) {
+    LONG left = InterlockedDecrement(&r->refs);
+    if (left == 0) {
+        ceesafe_platform_free(r);
+    }
+    return (ULONG)left;
+}
+
+#define CEE_UIA_ROOT_UNKNOWN(name, field)                                                                              \
+    static HRESULT STDMETHODCALLTYPE cee_uia_##name##_query(void *self, REFIID iid, void **out) {                      \
+        return cee_uia_root_query(CEE_UIA_OBJECT(cee_uia_root, field, self), iid, out);                                \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_add_ref(void *self) {                                              \
+        return (ULONG)InterlockedIncrement(&CEE_UIA_OBJECT(cee_uia_root, field, self)->refs);                          \
+    }                                                                                                                  \
+    static ULONG STDMETHODCALLTYPE cee_uia_##name##_release(void *self) {                                              \
+        return cee_uia_root_release(CEE_UIA_OBJECT(cee_uia_root, field, self));                                        \
+    }
+CEE_UIA_ROOT_UNKNOWN(rsimple, simple)
+CEE_UIA_ROOT_UNKNOWN(rfragment, fragment)
+CEE_UIA_ROOT_UNKNOWN(rroot, root)
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_pattern(void *self, int pattern, void **out) {
+    (void)self;
+    (void)pattern;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    return S_OK;
+}
+
+/* The window's own properties are its host provider's (the title, the frame): this adds nothing to them. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_property(void *self, int property, VARIANT *out) {
+    (void)self;
+    (void)property;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    V_VT(out) = VT_EMPTY;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_host(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, simple, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    HWND hwnd = m != NULL ? m->hwnd : NULL;
+    LeaveCriticalSection(&cee_uia.lock);
+    return hwnd != NULL ? cee_uia.host_provider(hwnd, out) : CEE_UIA_E_NOT_AVAILABLE;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_navigate(void *self, int direction, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    if (m != NULL && m->uia_count > 0 && (direction == 3 || direction == 4)) { /* the first child, the last */
+        struct cee_uia_element *e = m->uia_elements[direction == 3 ? 0 : m->uia_count - 1u];
+        if (e != NULL) {
+            InterlockedIncrement(&e->refs);
+            *out = &e->fragment;
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_runtime_id(void *self, SAFEARRAY **out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL; /* the window's own, from its host provider */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_bounds(void *self, struct cee_uia_rect *out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    memset(out, 0, sizeof *out); /* the window's own, from its host provider */
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_set_focus(void *self) {
+    (void)self;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_root_fragment_root(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, fragment, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    InterlockedIncrement(&r->refs);
+    *out = &r->root;
+    return S_OK;
+}
+
+/* The element at a point of the screen: the last in the list that holds it (drawn later, so on top), or the root. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_from_point(void *self, double x, double y, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, root, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    if (m != NULL) {
+        float scale = r->w->scale > 0.0f ? r->w->scale : 1.0f;
+        POINT origin = {0, 0};
+        ClientToScreen(m->hwnd, &origin);
+        double px = (x - (double)origin.x) / (double)scale, py = (y - (double)origin.y) / (double)scale;
+        for (uint32_t k = m->uia_count < r->w->access_count ? m->uia_count : r->w->access_count; k-- > 0;) {
+            const struct cee_access_node *n = &r->w->access[k];
+            if (px >= (double)n->x && py >= (double)n->y && px < (double)n->x + (double)n->width &&
+                py < (double)n->y + (double)n->height && m->uia_elements[k] != NULL) {
+                InterlockedIncrement(&m->uia_elements[k]->refs);
+                *out = &m->uia_elements[k]->fragment;
+                break;
+            }
+        }
+    }
+    if (*out == NULL) {
+        InterlockedIncrement(&r->refs);
+        *out = &r->fragment;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+/* The element that has the keyboard focus, if one says so. */
+static HRESULT STDMETHODCALLTYPE cee_uia_root_focus(void *self, void **out) {
+    struct cee_uia_root *r = CEE_UIA_OBJECT(cee_uia_root, root, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
+    for (uint32_t k = 0; m != NULL && k < m->uia_count && k < r->w->access_count; k++) {
+        if ((r->w->access[k].flags & CEE_ACCESS_FOCUSED) != 0 && m->uia_elements[k] != NULL) {
+            InterlockedIncrement(&m->uia_elements[k]->refs);
+            *out = &m->uia_elements[k]->fragment;
+            break;
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+static const struct cee_uia_simple_vtbl cee_uia_root_simple = {
+    cee_uia_rsimple_query, cee_uia_rsimple_add_ref, cee_uia_rsimple_release, cee_uia_options,
+    cee_uia_root_pattern, cee_uia_root_property, cee_uia_root_host};
+static const struct cee_uia_fragment_vtbl cee_uia_root_fragment = {
+    cee_uia_rfragment_query, cee_uia_rfragment_add_ref, cee_uia_rfragment_release, cee_uia_root_navigate,
+    cee_uia_root_runtime_id, cee_uia_root_bounds, cee_uia_embedded, cee_uia_root_set_focus,
+    cee_uia_root_fragment_root};
+static const struct cee_uia_root_vtbl cee_uia_root_root = {cee_uia_rroot_query, cee_uia_rroot_add_ref,
+                                                          cee_uia_rroot_release, cee_uia_root_from_point,
+                                                          cee_uia_root_focus};
+
+/* WM_GETOBJECT for UI Automation's root: the window's provider, made at the first question. */
+static int cee_uia_get_object(struct cee_window *w, HWND hwnd, WPARAM wparam, LPARAM lparam, LRESULT *result) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if ((LONG)lparam != CEE_UIA_ROOT_OBJECT || m == NULL || !cee_uia_load()) {
+        return 0;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    if (m->uia_root == NULL) {
+        struct cee_uia_root *r = (struct cee_uia_root *)ceesafe_platform_alloc_zeroed(sizeof *r);
+        if (r != NULL) {
+            r->simple = &cee_uia_root_simple;
+            r->fragment = &cee_uia_root_fragment;
+            r->root = &cee_uia_root_root;
+            r->refs = 1;
+            r->w = w;
+            m->uia_root = r;
+        }
+    }
+    struct cee_uia_root *root = m->uia_root;
+    m->uia_active = 1;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (root == NULL) {
+        return 0;
+    }
+    *result = cee_uia.return_provider(hwnd, wparam, lparam, &root->simple);
+    return 1;
+}
+
+static int cee_uia_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                             uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+static void cee_uia_focused(struct cee_window *w);
+
+/* A property of an element that changed, to tell listening clients once the lock is let go: an event raised
+   under it would wait for a client's question that waits for the lock. The element is held meanwhile. */
+struct cee_uia_change {
+    struct cee_uia_element *element;
+    int property;
+    VARIANT value;
+};
+#define CEE_UIA_CHANGES 64 /* a list's changes told at once; more are not told, and a reader asks when it comes by */
+
+static void cee_uia_changed(struct cee_uia_change *changes, unsigned *count, struct cee_uia_element *e, int property,
+                            VARIANT value) {
+    if (*count == CEE_UIA_CHANGES) {
+        if (V_VT(&value) == VT_BSTR) {
+            cee_uia.string_free(V_BSTR(&value));
+        }
+        return;
+    }
+    InterlockedIncrement(&e->refs);
+    changes[*count].element = e;
+    changes[*count].property = property;
+    changes[*count].value = value;
+    (*count)++;
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): the providers follow it,
+   and listening clients are told what changed. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || !cee_uia_load()) {
+        return;
+    }
+    struct cee_uia_change changes[CEE_UIA_CHANGES];
+    unsigned change_count = 0;
+    EnterCriticalSection(&cee_uia.lock);
+    uint32_t count = w->access_count;
+    if (old_count > m->uia_count) {
+        old_count = m->uia_count;
+    }
+    struct cee_uia_element **elements =
+        count > 0 ? (struct cee_uia_element **)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
+    if (count > 0 && elements == NULL) {
+        count = 0; /* out of memory: the window has no elements until the next list */
+    }
+    int listening = m->uia_root != NULL && cee_uia.listening();
+    int layout = count != old_count;
+    int refocus = 0; /* an element took the focus or gave it up */
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+            layout = 1;
+        }
+        if (j < old_count && m->uia_elements[j] != NULL) {
+            const struct cee_access_node *o = &old[j];
+            struct cee_uia_element *e = m->uia_elements[j];
+            m->uia_elements[j] = NULL;
+            elements[k] = e;
+            e->hint = k;
+            if (!listening) {
+                continue;
+            }
+            VARIANT value;
+            /* A control's new name is told; text that changes (a clock, a counter) is read when a reader comes
+               by, and not told at each change. */
+            if (n->role != 0 && !cee_uia_same_text(w->access_text, n->label_start, n->label_length, old_text,
+                                                   o->label_start, o->label_length)) {
+                V_BSTR(&value) = cee_uia_text(w->access_text + n->label_start, n->label_length);
+                if (V_BSTR(&value) != NULL) {
+                    V_VT(&value) = VT_BSTR;
+                    cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_NAME, value);
+                }
+            }
+            if ((n->role == 4 || n->role == 9) &&
+                !cee_uia_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                   o->value_length)) {
+                V_BSTR(&value) = cee_uia_text(w->access_text + n->value_start, n->value_length);
+                if (V_BSTR(&value) != NULL) {
+                    V_VT(&value) = VT_BSTR;
+                    cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_VALUE, value);
+                }
+            }
+            if (n->role == 5 && n->now != o->now) {
+                V_VT(&value) = VT_R8;
+                V_R8(&value) = cee_uia_range_of(n, 0);
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_RANGE_VALUE, value);
+            }
+            uint32_t changed = n->flags ^ o->flags;
+            if (n->role == 2 && (changed & CEE_ACCESS_CHECKED) != 0) {
+                V_VT(&value) = VT_I4;
+                V_I4(&value) = (n->flags & CEE_ACCESS_CHECKED) != 0;
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_TOGGLE_STATE, value);
+            }
+            if ((n->role == 3 || n->role == 6 || n->role == 7) &&
+                (changed & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0) {
+                V_VT(&value) = VT_BOOL;
+                V_BOOL(&value) = (n->flags & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_IS_SELECTED, value);
+            }
+            if (n->role == 9 && (changed & CEE_ACCESS_EXPANDED) != 0) {
+                V_VT(&value) = VT_I4;
+                V_I4(&value) = (n->flags & CEE_ACCESS_EXPANDED) != 0;
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_EXPAND_STATE, value);
+            }
+            if ((changed & CEE_ACCESS_FOCUSED) != 0) {
+                refocus = 1;
+            }
+        } else {
+            elements[k] = cee_uia_element_new(w, n->id, k);
+            layout = 1;
+            if ((n->flags & CEE_ACCESS_FOCUSED) != 0) {
+                refocus = 1;
+            }
+        }
+    }
+    for (uint32_t j = 0; j < m->uia_count; j++) { /* the elements the new list does not have */
+        if (m->uia_elements[j] != NULL) {
+            m->uia_elements[j]->w = NULL;
+            cee_uia_element_release(m->uia_elements[j]);
+            layout = 1;
+        }
+    }
+    ceesafe_platform_free(m->uia_elements);
+    m->uia_elements = elements;
+    m->uia_count = count;
+    struct cee_uia_root *root = m->uia_root;
+    if (root != NULL) {
+        InterlockedIncrement(&root->refs);
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    for (unsigned k = 0; k < change_count; k++) { /* outside the lock */
+        VARIANT none;
+        V_VT(&none) = VT_EMPTY;
+        cee_uia.raise_property(&changes[k].element->simple, changes[k].property, none, changes[k].value);
+        if (V_VT(&changes[k].value) == VT_BSTR) {
+            cee_uia.string_free(V_BSTR(&changes[k].value));
+        }
+        cee_uia_element_release(changes[k].element);
+    }
+    if (layout && listening && root != NULL) {
+        cee_uia.raise_structure(&root->simple, CEE_UIA_CHILDREN_INVALIDATED, NULL, 0);
+    }
+    if (root != NULL) {
+        cee_uia_root_release(root);
+    }
+    if (refocus && listening) {
+        cee_uia_focused(w);
+    }
+}
+
+/* Says `text` through a screen reader: a notification of the window's (Windows 10 1709 on; nothing before). */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || m->uia_root == NULL || !cee_uia_load() || cee_uia.raise_notification == NULL) {
+        return;
+    }
+    BSTR said = cee_uia_text(text, (uint32_t)length);
+    BSTR activity = cee_uia_text("ceesafe", 7u);
+    if (said != NULL && activity != NULL) {
+        /* NotificationKind_Other, NotificationProcessing_All */
+        cee_uia.raise_notification(&m->uia_root->simple, 4, 2, said, activity);
+    }
+    if (said != NULL) {
+        cee_uia.string_free(said);
+    }
+    if (activity != NULL) {
+        cee_uia.string_free(activity);
+    }
+}
+
+/* The window closes: its providers stay with whoever holds them, answering that their element is gone. */
+static void cee_uia_close(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    for (uint32_t k = 0; k < m->uia_count; k++) {
+        if (m->uia_elements[k] != NULL) {
+            m->uia_elements[k]->w = NULL;
+            cee_uia_element_release(m->uia_elements[k]);
+        }
+    }
+    ceesafe_platform_free(m->uia_elements);
+    m->uia_elements = NULL;
+    m->uia_count = 0;
+    struct cee_uia_root *root = m->uia_root;
+    m->uia_root = NULL;
+    if (root != NULL) {
+        root->w = NULL;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    if (root != NULL) {
+        cee_uia.return_provider(m->hwnd, 0, 0, NULL); /* the window's providers are no longer given out */
+        cee_uia_root_release(root);
+    }
+}
+
+/* Tells listening clients where the keyboard focus is: the element that says it has it, or else the window. A
+   window with a provider of its own gets no focus event from UI Automation's own watching of windows, and a
+   reader that hears none goes on believing the last window is in front (NVDA: "Foreground took too long to
+   change"). Called when the window gets the focus, when an element takes or gives up the focus, and once after
+   the provider is first given out to a window that has the focus already. */
+static void cee_uia_focused(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    void *target = NULL;
+    struct cee_uia_element *element = NULL;
+    struct cee_uia_root *root = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    if (m->uia_root != NULL && GetFocus() == m->hwnd) {
+        for (uint32_t k = 0; k < m->uia_count && k < w->access_count; k++) {
+            if ((w->access[k].flags & CEE_ACCESS_FOCUSED) != 0 && m->uia_elements[k] != NULL) {
+                element = m->uia_elements[k];
+                InterlockedIncrement(&element->refs);
+                target = &element->simple;
+                break;
+            }
+        }
+        if (target == NULL) {
+            root = m->uia_root;
+            InterlockedIncrement(&root->refs);
+            target = &root->simple;
+        }
+        m->uia_focus_told = 1;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    if (target != NULL) {
+        cee_uia.raise_event(target, CEE_UIA_EVENT_FOCUS); /* outside the lock: a client may call back at once */
+    }
+    if (element != NULL) {
+        cee_uia_element_release(element);
+    }
+    if (root != NULL) {
+        cee_uia_root_release(root);
+    }
+}
+
+/* What clients asked since the last pump, into the window's requests; and whether anything asked at all. */
+static void cee_uia_pump(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    EnterCriticalSection(&cee_uia.lock);
+    for (unsigned k = 0; k < m->uia_asked_count; k++) {
+        cee_access_ask(w, m->uia_asked[k].id, m->uia_asked[k].action);
+    }
+    m->uia_asked_count = 0;
+    if (m->uia_active) {
+        w->access_active = 1;
+    }
+    int tell = m->uia_active && !m->uia_focus_told;
+    LeaveCriticalSection(&cee_uia.lock);
+    if (tell) {
+        cee_uia_focused(w); /* a reader that came after the window had the focus */
+    }
+}
+
 static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     struct cee_window *w = (struct cee_window *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (w == NULL) {
@@ -5453,6 +6979,13 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     float x = (float)(short)LOWORD(lparam) / scale, y = (float)(short)HIWORD(lparam) / scale;
     static uint32_t high_surrogate;
     switch (message) {
+    case WM_GETOBJECT: { /* UI Automation asks for the window's provider (ADR 0164) */
+        LRESULT provider = 0;
+        if (n != NULL && cee_uia_get_object(w, hwnd, wparam, lparam, &provider)) {
+            return provider;
+        }
+        break;
+    }
     case WM_CLOSE:
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
         return 0;
@@ -5474,7 +7007,10 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
-    case WM_SETFOCUS: cee_window_focus(w, 1); return 0;
+    case WM_SETFOCUS:
+        cee_window_focus(w, 1);
+        cee_uia_focused(w); /* a reader is told (ADR 0164) */
+        return 0;
     case WM_KILLFOCUS: cee_window_focus(w, 0); return 0;
     case WM_MOUSEMOVE: cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y); return 0;
     case WM_LBUTTONDOWN:
@@ -5674,6 +7210,7 @@ static void cee_native_close(struct cee_window *w) {
         return;
     }
     cee_win32_drop_close(w);
+    cee_uia_close(w);
     SetWindowLongPtrW(n->hwnd, GWLP_USERDATA, 0);
     DestroyWindow(n->hwnd);
     if (n->ole) {
@@ -5698,6 +7235,7 @@ static void cee_native_pump(struct cee_window *w) {
             cee_window_rescaled(other, cee_win32_scale(((struct cee_win32 *)other->native)->hwnd));
         }
     }
+    cee_uia_pump(w); /* what a screen reader asked while the messages were dispatched (ADR 0164) */
 }
 
 static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
@@ -6229,7 +7767,6 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
    with LoadLibraryW like the dialogs' COM, and initialized from each window's open to its close (OleInitialize counts);
    on a thread whose COM is multithreaded it cannot be, and that window takes no drops. The drag's files are CF_HDROP;
    a drag without them is refused (DROPEFFECT_NONE), so the system shows no drop. */
-static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID cee_iid_drop_target = {0x00000122, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 
 static struct {
@@ -6524,6 +8061,22 @@ static struct {
     int32_t pick_status;
     char *pick_paths;
     size_t pick_length;
+    /* Accessibility (ADR 0164). Under the lock: the program's list packed for AccessView.update, to be given to
+       the view when `access_dirty` (the activity's thread is asked through `ui_pipe`); a text to announce; what
+       TalkBack asked, for the program to take; whether anything asked for the elements. The activity's thread's:
+       the access view, an org.ceesafe.window.AccessView, with its class and methods. */
+    char *access_packed;
+    size_t access_length;
+    int access_dirty;
+    char *access_said;
+    size_t access_said_length;
+    struct cee_access_request access_asked[CEE_ACCESS_QUEUE];
+    unsigned access_asked_count;
+    int access_active;
+    jclass access_class;
+    jobject access_view;
+    jmethodID access_update, access_announce;
+    int access_failed;
 } cee_android = {PTHREAD_MUTEX_INITIALIZER, NULL, NULL, NULL, NULL, 1, 0, NULL, 1.0f, {0, 0, 0, 0}, 0, 0, {-1, -1}, 0,
                  NULL, 0, 0, NULL, NULL, NULL, 0, 0, NULL, 0, 0, NULL, NULL, NULL, 0, NULL, 0};
 
@@ -6551,508 +8104,890 @@ static void cee_android_told(int kind) {
 
 /* The input view's class as a dex file (ADR 0157), loaded from memory at the first text input. */
 /* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */
-/* the Java sources' SHA-256: 5a0c19b721c381b299aabf1d35954a9320a724d579b788da30a8aab3d7c5e49b */
-static uint8_t cee_android_dex[11988] = {
-    100,101,120,10,48,51,57,0,98,134,157,167,190,79,208,150,139,160,237,234,30,220,93,142,
-    110,86,200,53,166,192,33,179,212,46,0,0,112,0,0,0,120,86,52,18,0,0,0,0,
-    0,0,0,0,16,46,0,0,247,0,0,0,112,0,0,0,63,0,0,0,76,4,0,0,
-    79,0,0,0,72,5,0,0,30,0,0,0,252,8,0,0,131,0,0,0,236,9,0,0,
-    4,0,0,0,4,14,0,0,80,32,0,0,132,14,0,0,138,28,0,0,140,28,0,0,
-    145,28,0,0,150,28,0,0,153,28,0,0,176,28,0,0,199,28,0,0,216,28,0,0,
-    230,28,0,0,246,28,0,0,6,29,0,0,27,29,0,0,51,29,0,0,73,29,0,0,
-    76,29,0,0,80,29,0,0,90,29,0,0,98,29,0,0,107,29,0,0,118,29,0,0,
-    129,29,0,0,137,29,0,0,146,29,0,0,158,29,0,0,165,29,0,0,173,29,0,0,
-    181,29,0,0,187,29,0,0,194,29,0,0,197,29,0,0,201,29,0,0,206,29,0,0,
-    210,29,0,0,213,29,0,0,216,29,0,0,220,29,0,0,225,29,0,0,229,29,0,0,
-    233,29,0,0,238,29,0,0,246,29,0,0,251,29,0,0,19,30,0,0,43,30,0,0,
-    74,30,0,0,109,30,0,0,142,30,0,0,170,30,0,0,205,30,0,0,232,30,0,0,
-    2,31,0,0,29,31,0,0,48,31,0,0,70,31,0,0,95,31,0,0,116,31,0,0,
-    139,31,0,0,168,31,0,0,216,31,0,0,255,31,0,0,43,32,0,0,90,32,0,0,
-    120,32,0,0,156,32,0,0,193,32,0,0,225,32,0,0,4,33,0,0,42,33,0,0,
-    73,33,0,0,101,33,0,0,134,33,0,0,150,33,0,0,177,33,0,0,205,33,0,0,
-    228,33,0,0,251,33,0,0,19,34,0,0,45,34,0,0,68,34,0,0,91,34,0,0,
-    109,34,0,0,129,34,0,0,151,34,0,0,181,34,0,0,201,34,0,0,228,34,0,0,
-    248,34,0,0,12,35,0,0,35,35,0,0,63,35,0,0,100,35,0,0,123,35,0,0,
-    166,35,0,0,198,35,0,0,229,35,0,0,2,36,0,0,9,36,0,0,14,36,0,0,
-    21,36,0,0,28,36,0,0,31,36,0,0,35,36,0,0,41,36,0,0,46,36,0,0,
-    50,36,0,0,55,36,0,0,61,36,0,0,69,36,0,0,74,36,0,0,83,36,0,0,
-    88,36,0,0,92,36,0,0,97,36,0,0,100,36,0,0,104,36,0,0,109,36,0,0,
-    114,36,0,0,118,36,0,0,123,36,0,0,128,36,0,0,135,36,0,0,139,36,0,0,
-    143,36,0,0,147,36,0,0,168,36,0,0,189,36,0,0,204,36,0,0,217,36,0,0,
-    225,36,0,0,230,36,0,0,243,36,0,0,2,37,0,0,41,37,0,0,78,37,0,0,
-    112,37,0,0,149,37,0,0,182,37,0,0,210,37,0,0,218,37,0,0,244,37,0,0,
-    251,37,0,0,13,38,0,0,29,38,0,0,45,38,0,0,52,38,0,0,77,38,0,0,
-    89,38,0,0,100,38,0,0,106,38,0,0,129,38,0,0,139,38,0,0,147,38,0,0,
-    175,38,0,0,186,38,0,0,205,38,0,0,213,38,0,0,234,38,0,0,239,38,0,0,
-    0,39,0,0,11,39,0,0,24,39,0,0,34,39,0,0,47,39,0,0,60,39,0,0,
-    80,39,0,0,92,39,0,0,101,39,0,0,121,39,0,0,132,39,0,0,146,39,0,0,
-    158,39,0,0,178,39,0,0,204,39,0,0,218,39,0,0,229,39,0,0,247,39,0,0,
-    7,40,0,0,15,40,0,0,26,40,0,0,42,40,0,0,67,40,0,0,79,40,0,0,
-    94,40,0,0,111,40,0,0,122,40,0,0,136,40,0,0,145,40,0,0,150,40,0,0,
-    163,40,0,0,171,40,0,0,177,40,0,0,184,40,0,0,192,40,0,0,205,40,0,0,
-    211,40,0,0,218,40,0,0,228,40,0,0,242,40,0,0,253,40,0,0,11,41,0,0,
-    23,41,0,0,43,41,0,0,61,41,0,0,82,41,0,0,103,41,0,0,128,41,0,0,
-    139,41,0,0,156,41,0,0,174,41,0,0,201,41,0,0,222,41,0,0,232,41,0,0,
-    239,41,0,0,245,41,0,0,3,42,0,0,17,42,0,0,22,42,0,0,36,42,0,0,
-    54,42,0,0,68,42,0,0,93,42,0,0,111,42,0,0,120,42,0,0,135,42,0,0,
-    142,42,0,0,148,42,0,0,155,42,0,0,162,42,0,0,186,42,0,0,198,42,0,0,
-    209,42,0,0,240,42,0,0,248,42,0,0,1,43,0,0,14,43,0,0,23,43,0,0,
-    36,43,0,0,46,43,0,0,57,43,0,0,67,43,0,0,77,43,0,0,91,43,0,0,
-    101,43,0,0,108,43,0,0,114,43,0,0,121,43,0,0,125,43,0,0,28,0,0,0,
-    32,0,0,0,41,0,0,0,42,0,0,0,43,0,0,0,44,0,0,0,45,0,0,0,
-    46,0,0,0,47,0,0,0,48,0,0,0,49,0,0,0,50,0,0,0,51,0,0,0,
-    52,0,0,0,53,0,0,0,54,0,0,0,55,0,0,0,56,0,0,0,57,0,0,0,
-    58,0,0,0,59,0,0,0,60,0,0,0,61,0,0,0,62,0,0,0,63,0,0,0,
-    64,0,0,0,65,0,0,0,66,0,0,0,67,0,0,0,68,0,0,0,69,0,0,0,
-    70,0,0,0,71,0,0,0,72,0,0,0,73,0,0,0,74,0,0,0,75,0,0,0,
-    76,0,0,0,77,0,0,0,78,0,0,0,79,0,0,0,80,0,0,0,81,0,0,0,
-    82,0,0,0,83,0,0,0,84,0,0,0,85,0,0,0,86,0,0,0,87,0,0,0,
-    88,0,0,0,89,0,0,0,90,0,0,0,91,0,0,0,92,0,0,0,93,0,0,0,
-    94,0,0,0,99,0,0,0,112,0,0,0,120,0,0,0,121,0,0,0,122,0,0,0,
-    123,0,0,0,124,0,0,0,28,0,0,0,0,0,0,0,0,0,0,0,29,0,0,0,
-    0,0,0,0,20,27,0,0,30,0,0,0,0,0,0,0,28,27,0,0,31,0,0,0,
-    0,0,0,0,36,27,0,0,32,0,0,0,1,0,0,0,0,0,0,0,33,0,0,0,
-    2,0,0,0,0,0,0,0,37,0,0,0,3,0,0,0,44,27,0,0,33,0,0,0,
-    4,0,0,0,0,0,0,0,33,0,0,0,5,0,0,0,0,0,0,0,38,0,0,0,
-    5,0,0,0,52,27,0,0,34,0,0,0,6,0,0,0,20,27,0,0,33,0,0,0,
-    7,0,0,0,0,0,0,0,33,0,0,0,8,0,0,0,0,0,0,0,33,0,0,0,
-    9,0,0,0,0,0,0,0,37,0,0,0,10,0,0,0,44,27,0,0,38,0,0,0,
-    10,0,0,0,60,27,0,0,40,0,0,0,10,0,0,0,68,27,0,0,38,0,0,0,
-    10,0,0,0,76,27,0,0,39,0,0,0,11,0,0,0,84,27,0,0,33,0,0,0,
-    12,0,0,0,0,0,0,0,33,0,0,0,13,0,0,0,0,0,0,0,33,0,0,0,
-    16,0,0,0,0,0,0,0,37,0,0,0,17,0,0,0,100,27,0,0,37,0,0,0,
-    20,0,0,0,108,27,0,0,33,0,0,0,22,0,0,0,0,0,0,0,33,0,0,0,
-    31,0,0,0,0,0,0,0,37,0,0,0,35,0,0,0,116,27,0,0,38,0,0,0,
-    36,0,0,0,124,27,0,0,34,0,0,0,41,0,0,0,20,27,0,0,37,0,0,0,
-    41,0,0,0,44,27,0,0,33,0,0,0,44,0,0,0,0,0,0,0,34,0,0,0,
-    44,0,0,0,20,27,0,0,35,0,0,0,44,0,0,0,28,27,0,0,36,0,0,0,
-    44,0,0,0,132,27,0,0,38,0,0,0,44,0,0,0,140,27,0,0,37,0,0,0,
-    44,0,0,0,44,27,0,0,38,0,0,0,44,0,0,0,60,27,0,0,37,0,0,0,
-    44,0,0,0,148,27,0,0,34,0,0,0,45,0,0,0,20,27,0,0,37,0,0,0,
-    45,0,0,0,44,27,0,0,99,0,0,0,56,0,0,0,0,0,0,0,100,0,0,0,
-    56,0,0,0,20,27,0,0,101,0,0,0,56,0,0,0,156,27,0,0,102,0,0,0,
-    56,0,0,0,168,27,0,0,106,0,0,0,56,0,0,0,176,27,0,0,103,0,0,0,
-    56,0,0,0,192,27,0,0,104,0,0,0,56,0,0,0,200,27,0,0,103,0,0,0,
-    56,0,0,0,208,27,0,0,109,0,0,0,56,0,0,0,216,27,0,0,103,0,0,0,
-    56,0,0,0,224,27,0,0,107,0,0,0,56,0,0,0,232,27,0,0,107,0,0,0,
-    56,0,0,0,240,27,0,0,107,0,0,0,56,0,0,0,248,27,0,0,103,0,0,0,
-    56,0,0,0,44,27,0,0,103,0,0,0,56,0,0,0,0,28,0,0,103,0,0,0,
-    56,0,0,0,148,27,0,0,107,0,0,0,56,0,0,0,8,28,0,0,108,0,0,0,
-    56,0,0,0,16,28,0,0,110,0,0,0,56,0,0,0,32,28,0,0,111,0,0,0,
-    56,0,0,0,40,28,0,0,103,0,0,0,56,0,0,0,36,27,0,0,105,0,0,0,
-    56,0,0,0,48,28,0,0,103,0,0,0,56,0,0,0,60,28,0,0,112,0,0,0,
-    57,0,0,0,0,0,0,0,113,0,0,0,57,0,0,0,20,27,0,0,114,0,0,0,
-    57,0,0,0,28,27,0,0,115,0,0,0,57,0,0,0,68,28,0,0,117,0,0,0,
-    57,0,0,0,76,28,0,0,116,0,0,0,57,0,0,0,84,28,0,0,117,0,0,0,
-    57,0,0,0,92,28,0,0,117,0,0,0,57,0,0,0,100,28,0,0,116,0,0,0,
-    57,0,0,0,108,28,0,0,116,0,0,0,57,0,0,0,44,27,0,0,118,0,0,0,
-    57,0,0,0,116,28,0,0,33,0,0,0,58,0,0,0,0,0,0,0,37,0,0,0,
-    58,0,0,0,124,28,0,0,34,0,0,0,59,0,0,0,20,27,0,0,37,0,0,0,
-    61,0,0,0,132,28,0,0,37,0,0,0,62,0,0,0,44,27,0,0,19,0,0,0,
-    180,0,0,0,19,0,0,0,181,0,0,0,19,0,0,0,182,0,0,0,19,0,0,0,
-    183,0,0,0,50,0,49,0,98,0,0,0,52,0,53,0,243,0,0,0,53,0,60,0,
-    17,0,0,0,53,0,0,0,18,0,0,0,53,0,0,0,20,0,0,0,53,0,0,0,
-    21,0,0,0,53,0,0,0,23,0,0,0,53,0,60,0,97,0,0,0,53,0,0,0,
-    127,0,0,0,53,0,44,0,146,0,0,0,53,0,0,0,183,0,0,0,53,0,57,0,
-    223,0,0,0,54,0,55,0,231,0,0,0,54,0,31,0,237,0,0,0,54,0,44,0,
-    238,0,0,0,54,0,0,0,239,0,0,0,54,0,8,0,240,0,0,0,54,0,51,0,
-    241,0,0,0,55,0,0,0,19,0,0,0,55,0,0,0,24,0,0,0,55,0,0,0,
-    25,0,0,0,55,0,0,0,26,0,0,0,55,0,0,0,27,0,0,0,55,0,0,0,
-    95,0,0,0,55,0,44,0,96,0,0,0,55,0,44,0,152,0,0,0,2,0,25,0,
-    161,0,0,0,2,0,12,0,163,0,0,0,2,0,7,0,166,0,0,0,2,0,21,0,
-    177,0,0,0,3,0,40,0,16,0,0,0,4,0,8,0,140,0,0,0,4,0,63,0,
-    151,0,0,0,4,0,6,0,153,0,0,0,5,0,9,0,128,0,0,0,5,0,0,0,
-    144,0,0,0,6,0,19,0,176,0,0,0,7,0,10,0,167,0,0,0,7,0,0,0,
-    168,0,0,0,8,0,26,0,206,0,0,0,8,0,27,0,207,0,0,0,8,0,18,0,
-    211,0,0,0,9,0,29,0,174,0,0,0,10,0,53,0,16,0,0,0,10,0,14,0,
-    129,0,0,0,10,0,11,0,162,0,0,0,10,0,19,0,165,0,0,0,10,0,15,0,
-    210,0,0,0,10,0,16,0,210,0,0,0,10,0,17,0,210,0,0,0,10,0,14,0,
-    221,0,0,0,11,0,40,0,143,0,0,0,11,0,31,0,173,0,0,0,11,0,63,0,
-    192,0,0,0,12,0,30,0,170,0,0,0,14,0,0,0,158,0,0,0,14,0,0,0,
-    169,0,0,0,14,0,0,0,175,0,0,0,15,0,45,0,16,0,0,0,15,0,22,0,
-    202,0,0,0,15,0,66,0,205,0,0,0,16,0,41,0,220,0,0,0,18,0,48,0,
-    16,0,0,0,21,0,67,0,179,0,0,0,21,0,47,0,214,0,0,0,21,0,69,0,
-    222,0,0,0,22,0,35,0,171,0,0,0,22,0,24,0,172,0,0,0,30,0,40,0,
-    16,0,0,0,30,0,74,0,233,0,0,0,30,0,41,0,244,0,0,0,30,0,60,0,
-    244,0,0,0,31,0,50,0,16,0,0,0,31,0,30,0,157,0,0,0,31,0,63,0,
-    191,0,0,0,32,0,53,0,16,0,0,0,33,0,49,0,16,0,0,0,34,0,53,0,
-    16,0,0,0,35,0,40,0,143,0,0,0,35,0,3,0,212,0,0,0,36,0,40,0,
-    143,0,0,0,36,0,61,0,244,0,0,0,37,0,30,0,236,0,0,0,38,0,76,0,
-    234,0,0,0,40,0,33,0,236,0,0,0,41,0,40,0,16,0,0,0,44,0,62,0,
-    16,0,0,0,44,0,71,0,150,0,0,0,44,0,75,0,160,0,0,0,44,0,63,0,
-    185,0,0,0,44,0,1,0,187,0,0,0,44,0,0,0,188,0,0,0,44,0,2,0,
-    200,0,0,0,44,0,78,0,225,0,0,0,44,0,72,0,228,0,0,0,44,0,31,0,
-    229,0,0,0,44,0,32,0,229,0,0,0,44,0,30,0,235,0,0,0,45,0,40,0,
-    16,0,0,0,45,0,38,0,137,0,0,0,45,0,39,0,137,0,0,0,45,0,30,0,
-    236,0,0,0,46,0,4,0,195,0,0,0,47,0,52,0,16,0,0,0,47,0,40,0,
-    226,0,0,0,48,0,54,0,130,0,0,0,51,0,40,0,16,0,0,0,51,0,71,0,
-    128,0,0,0,51,0,28,0,156,0,0,0,51,0,63,0,185,0,0,0,51,0,0,0,
-    224,0,0,0,51,0,77,0,232,0,0,0,52,0,55,0,16,0,0,0,52,0,70,0,
-    145,0,0,0,52,0,65,0,148,0,0,0,52,0,63,0,155,0,0,0,52,0,64,0,
-    209,0,0,0,52,0,68,0,216,0,0,0,52,0,70,0,217,0,0,0,53,0,37,0,
-    4,0,0,0,53,0,56,0,5,0,0,0,53,0,55,0,6,0,0,0,53,0,73,0,
-    7,0,0,0,53,0,41,0,10,0,0,0,53,0,43,0,12,0,0,0,53,0,40,0,
-    15,0,0,0,53,0,45,0,16,0,0,0,53,0,59,0,139,0,0,0,53,0,40,0,
-    154,0,0,0,53,0,13,0,164,0,0,0,53,0,20,0,178,0,0,0,53,0,68,0,
-    186,0,0,0,53,0,40,0,196,0,0,0,53,0,41,0,197,0,0,0,53,0,43,0,
-    199,0,0,0,53,0,22,0,202,0,0,0,53,0,63,0,203,0,0,0,53,0,23,0,
-    204,0,0,0,53,0,66,0,205,0,0,0,53,0,63,0,213,0,0,0,53,0,58,0,
-    218,0,0,0,53,0,58,0,219,0,0,0,54,0,57,0,16,0,0,0,54,0,40,0,
-    215,0,0,0,55,0,51,0,8,0,0,0,55,0,34,0,9,0,0,0,55,0,43,0,
-    11,0,0,0,55,0,40,0,16,0,0,0,55,0,51,0,147,0,0,0,55,0,5,0,
-    159,0,0,0,55,0,36,0,189,0,0,0,55,0,78,0,190,0,0,0,55,0,34,0,
-    193,0,0,0,55,0,43,0,198,0,0,0,55,0,42,0,201,0,0,0,55,0,44,0,
-    226,0,0,0,55,0,46,0,227,0,0,0,52,0,0,0,16,0,0,0,18,0,0,0,
-    0,0,0,0,255,255,255,255,192,45,0,0,125,44,0,0,0,0,0,0,53,0,0,0,
-    17,0,0,0,15,0,0,0,0,0,0,0,255,255,255,255,208,45,0,0,161,44,0,0,
-    113,45,0,0,54,0,0,0,0,0,0,0,41,0,0,0,12,27,0,0,255,255,255,255,
-    224,45,0,0,11,45,0,0,0,0,0,0,55,0,0,0,17,0,0,0,3,0,0,0,
-    0,0,0,0,255,255,255,255,248,45,0,0,43,45,0,0,123,45,0,0,3,0,3,0,
-    2,0,0,0,0,0,0,0,23,0,0,0,84,0,5,0,26,2,0,0,113,32,94,0,
-    32,0,114,16,56,0,1,0,12,0,98,1,4,0,110,32,62,0,16,0,12,0,18,1,
-    113,32,98,0,1,0,18,16,15,0,0,0,3,0,3,0,1,0,0,0,0,0,0,0,
-    12,0,0,0,18,0,1,2,53,18,8,0,113,16,97,0,0,0,216,2,2,1,40,249,
-    18,16,15,0,1,0,1,0,1,0,0,0,0,0,0,0,7,0,0,0,84,0,5,0,
-    113,16,95,0,0,0,18,16,15,0,0,0,2,0,2,0,1,0,0,0,0,0,0,0,
-    10,0,0,0,84,0,5,0,113,16,95,0,0,0,18,16,113,16,97,0,0,0,15,0,
-    2,0,2,0,2,0,0,0,0,0,0,0,7,0,0,0,84,0,5,0,113,32,96,0,
-    16,0,18,16,15,0,0,0,3,0,3,0,2,0,0,0,0,0,0,0,26,0,0,0,
-    84,2,5,0,114,16,56,0,1,0,12,1,113,32,94,0,18,0,84,0,5,0,113,16,
-    93,0,0,0,12,0,98,1,4,0,110,32,62,0,16,0,12,0,18,17,113,32,98,0,
-    1,0,15,1,3,0,2,0,3,0,0,0,0,0,0,0,7,0,0,0,18,0,112,48,
-    36,0,33,0,91,18,5,0,14,0,0,0,2,0,2,0,2,0,0,0,0,0,0,0,
-    8,0,0,0,113,0,106,0,0,0,111,32,33,0,16,0,12,0,17,0,4,0,2,0,
-    2,0,0,0,0,0,0,0,26,0,0,0,82,32,14,0,89,48,3,0,21,0,0,18,
-    82,33,12,0,182,16,89,48,0,0,18,0,89,48,2,0,89,48,1,0,26,3,0,0,
-    91,35,13,0,34,3,52,0,112,32,86,0,35,0,17,3,2,0,2,0,2,0,0,0,
-    0,0,0,0,5,0,0,0,112,32,105,0,16,0,10,0,15,0,0,0,7,0,2,0,
-    3,0,0,0,0,0,0,0,112,0,0,0,110,16,30,0,6,0,10,0,110,16,29,0,
-    6,0,10,1,18,2,18,19,57,1,4,0,1,49,40,2,1,33,19,4,67,0,51,64,
-    44,0,57,1,3,0,15,3,84,86,13,0,110,16,63,0,6,0,10,6,56,6,6,0,
-    113,16,107,0,2,0,40,27,84,86,13,0,110,16,65,0,6,0,10,0,18,241,110,48,
-    66,0,6,1,10,0,110,48,70,0,38,0,12,6,91,86,13,0,98,5,4,0,110,32,
-    62,0,86,0,12,5,113,32,108,0,83,0,15,3,19,4,66,0,50,64,40,0,19,4,
-    160,0,51,64,3,0,40,34,110,16,31,0,6,0,10,6,19,0,32,0,53,6,3,0,
-    15,2,56,1,23,0,112,16,102,0,5,0,34,5,44,0,113,16,57,0,6,0,12,6,
-    112,32,60,0,101,0,98,6,4,0,110,32,62,0,101,0,12,5,113,32,108,0,82,0,
-    15,3,56,1,8,0,112,16,102,0,5,0,113,16,107,0,3,0,15,3,1,0,1,0,
-    0,0,0,0,0,0,0,0,2,0,0,0,18,16,15,0,4,0,3,0,3,0,0,0,
-    0,0,0,0,20,0,0,0,85,16,15,0,56,0,8,0,112,32,105,0,49,0,10,0,
-    57,0,8,0,111,48,34,0,33,3,10,1,56,1,4,0,18,17,15,1,18,1,15,1,
-    1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,84,0,13,0,17,0,0,0,
-    2,0,2,0,0,0,0,0,0,0,0,0,3,0,0,0,91,1,13,0,14,0,0,0,
-    1,0,1,0,1,0,0,0,0,0,0,0,4,0,0,0,112,16,102,0,0,0,14,0,
-    1,0,1,0,1,0,0,0,0,0,0,0,4,0,0,0,113,16,107,0,0,0,14,0,
-    2,0,2,0,2,0,0,0,0,0,0,0,4,0,0,0,113,32,108,0,16,0,14,0,
-    2,0,0,0,0,0,0,0,0,0,0,0,48,0,0,0,18,96,35,1,60,0,38,1,
-    13,0,0,0,105,1,11,0,35,0,60,0,38,0,22,0,0,0,105,0,6,0,14,0,
-    0,3,4,0,6,0,0,0,1,0,0,0,2,0,0,0,2,32,0,0,33,0,0,0,
-    17,0,0,0,129,0,0,0,0,3,4,0,6,0,0,0,1,0,0,0,6,0,0,0,
-    2,0,0,0,5,0,0,0,3,0,0,0,4,0,0,0,4,0,2,0,2,0,0,0,
-    0,0,0,0,39,0,0,0,112,32,32,0,50,0,98,0,11,0,18,1,68,0,0,1,
-    89,32,14,0,18,16,89,32,12,0,26,1,0,0,91,33,13,0,110,32,114,0,2,0,
-    110,32,115,0,2,0,32,50,2,0,56,2,13,0,31,3,2,0,110,16,3,0,3,0,
-    12,2,19,3,48,0,110,32,35,0,50,0,14,0,0,0,8,0,3,0,3,0,0,0,
-    0,0,0,0,94,0,0,0,110,16,103,0,5,0,12,0,26,1,184,0,110,32,16,0,
-    16,0,12,0,31,0,21,0,213,113,255,0,225,7,7,8,213,119,255,0,98,2,11,0,
-    33,35,18,4,53,49,3,0,40,2,1,65,68,1,2,1,98,2,6,0,33,35,53,55,
-    3,0,40,2,1,71,68,7,2,7,82,82,14,0,51,33,6,0,82,82,12,0,50,39,
-    16,0,89,81,14,0,89,87,12,0,85,87,15,0,56,7,8,0,112,16,102,0,5,0,
-    110,32,38,0,80,0,85,87,15,0,56,6,17,0,57,7,11,0,18,22,92,86,15,0,
-    110,16,113,0,5,0,110,32,38,0,80,0,110,48,39,0,80,4,14,0,56,7,15,0,
-    92,84,15,0,26,6,0,0,91,86,13,0,110,16,104,0,5,0,12,5,110,48,37,0,
-    80,4,14,0,3,0,1,0,2,0,0,0,0,0,0,0,25,0,0,0,84,32,13,0,
-    110,16,63,0,0,0,10,0,57,0,18,0,84,32,13,0,26,1,0,0,91,33,13,0,
-    98,2,4,0,110,32,62,0,32,0,12,2,18,0,113,32,108,0,32,0,14,0,0,0,
-    7,0,7,0,1,0,0,0,0,0,0,0,16,0,0,0,91,2,21,0,89,3,19,0,
-    91,4,18,0,91,5,20,0,91,6,17,0,91,1,16,0,112,16,59,0,0,0,14,0,
-    10,0,1,0,3,0,17,0,0,0,0,0,235,0,0,0,18,0,84,145,21,0,110,16,
-    83,0,1,0,10,1,18,2,56,1,6,0,113,32,120,0,2,0,14,0,82,145,19,0,
-    18,67,18,20,51,49,62,0,34,1,32,0,84,147,18,0,112,32,49,0,49,0,84,147,
-    20,0,84,153,21,0,110,32,82,0,41,0,12,9,31,9,12,0,26,2,245,0,110,48,
-    14,0,147,2,12,9,113,32,118,0,145,0,56,9,5,0,110,16,54,0,9,0,110,16,
-    52,0,1,0,113,32,120,0,4,0,14,0,13,2,56,9,10,0,110,16,54,0,9,0,
-    40,5,13,9,110,32,79,0,146,0,39,2,13,9,110,16,52,0,1,0,40,5,13,1,
-    110,32,79,0,25,0,39,9,34,1,30,0,112,16,42,0,1,0,1,35,84,149,21,0,
-    110,16,84,0,5,0,10,5,53,83,130,0,34,5,31,0,84,150,17,0,113,0,76,0,
-    0,0,11,7,113,32,58,0,135,0,12,7,34,8,45,0,112,16,72,0,8,0,110,32,
-    74,0,120,0,26,7,3,0,110,32,74,0,120,0,110,32,73,0,56,0,110,16,75,0,
-    8,0,12,7,112,48,46,0,101,7,110,16,48,0,5,0,34,6,31,0,84,151,20,0,
-    84,152,21,0,110,32,82,0,56,0,12,8,31,8,12,0,113,32,119,0,135,0,12,7,
-    112,48,46,0,86,7,84,149,20,0,84,151,21,0,110,32,82,0,55,0,12,7,31,7,
-    12,0,110,32,13,0,117,0,12,5,34,7,33,0,112,32,50,0,103,0,113,32,118,0,
-    117,0,110,16,54,0,7,0,56,5,5,0,110,16,52,0,5,0,110,16,47,0,6,0,
-    12,5,98,6,4,0,110,32,62,0,101,0,12,5,110,32,45,0,81,0,110,32,44,0,
-    33,0,216,3,3,1,40,143,13,9,110,16,54,0,7,0,40,5,13,1,110,32,79,0,
-    25,0,39,9,13,9,56,5,10,0,110,16,52,0,5,0,40,5,13,1,110,32,79,0,
-    25,0,39,9,110,16,43,0,1,0,12,9,113,32,120,0,148,0,14,0,18,249,113,32,
-    120,0,9,0,14,0,0,0,1,0,0,0,26,0,1,0,27,0,0,0,16,0,5,0,
-    43,0,0,0,3,0,7,0,48,0,0,0,3,0,5,0,51,0,0,0,6,0,1,0,
-    61,0,0,0,3,0,9,0,66,0,0,0,4,0,5,0,71,0,0,0,3,0,11,0,
-    76,0,0,0,89,0,1,0,165,0,0,0,5,0,13,0,170,0,0,0,3,0,16,0,
-    173,0,0,0,3,0,13,0,178,0,0,0,19,0,1,0,201,0,0,0,3,0,19,0,
-    206,0,0,0,4,0,13,0,213,0,0,0,3,0,22,0,218,0,0,0,11,0,1,0,
-    9,1,39,230,1,0,70,0,58,0,65,0,75,0,210,1,0,200,1,0,205,1,0,217,
-    1,0,0,0,2,0,2,0,2,0,0,0,0,0,0,0,5,0,0,0,113,32,126,0,
-    16,0,12,0,17,0,0,0,4,0,2,0,2,0,0,0,0,0,0,0,32,0,0,0,
-    19,0,46,0,110,32,64,0,2,0,10,0,59,0,4,0,18,2,40,19,113,0,41,0,
-    0,0,12,1,216,0,0,1,110,32,69,0,2,0,12,2,110,16,71,0,2,0,12,2,
-    110,32,40,0,33,0,12,2,56,2,3,0,17,2,17,3,10,0,2,0,6,0,5,0,
-    0,0,0,0,101,0,0,0,18,1,26,0,125,0,36,16,62,0,0,0,12,4,18,6,
-    18,7,18,5,7,130,7,147,116,6,15,0,2,0,12,8,56,8,28,0,114,16,27,0,
-    8,0,10,9,56,9,22,0,18,9,114,32,26,0,152,0,12,9,40,16,13,0,7,9,
-    56,8,11,0,114,16,25,0,8,0,40,6,13,0,7,8,110,32,79,0,137,0,39,9,
-    7,25,56,8,5,0,114,16,25,0,8,0,7,145,40,2,7,147,57,1,6,0,110,16,
-    28,0,3,0,12,1,26,8,149,0,57,1,3,0,17,8,19,9,47,0,110,32,64,0,
-    145,0,10,9,216,9,9,1,110,32,69,0,145,0,12,9,110,16,63,0,9,0,10,0,
-    57,0,20,0,26,0,13,0,110,32,61,0,9,0,10,0,57,0,12,0,26,0,14,0,
-    110,32,61,0,9,0,10,0,56,0,3,0,40,2,7,152,17,8,0,0,1,0,0,0,
-    6,0,1,0,12,0,0,0,4,0,4,0,18,0,0,0,11,0,7,0,34,0,0,0,
-    3,0,9,0,40,0,0,0,10,0,4,0,4,1,43,52,1,43,53,0,30,0,38,0,
-    8,0,1,0,2,0,0,0,0,0,0,0,76,0,0,0,34,0,51,0,112,16,80,0,
-    0,0,26,1,119,0,110,32,67,0,23,0,12,7,33,113,18,2,1,35,18,4,53,19,
-    45,0,70,5,7,3,26,6,13,0,110,32,68,0,101,0,10,6,56,6,7,0,18,22,
-    110,32,69,0,101,0,12,5,110,16,63,0,5,0,10,6,56,6,3,0,40,19,113,0,
-    41,0,0,0,12,6,110,16,71,0,5,0,12,5,110,32,40,0,86,0,12,5,57,5,
-    3,0,17,4,110,32,81,0,80,0,216,3,3,1,40,211,110,16,83,0,0,0,10,7,
-    56,7,3,0,17,4,35,39,62,0,110,32,85,0,112,0,12,7,31,7,62,0,17,7,
-    2,0,2,0,2,0,0,0,0,0,0,0,4,0,0,0,113,32,122,0,16,0,14,0,
-    2,0,2,0,2,0,0,0,0,0,0,0,4,0,0,0,113,32,127,0,16,0,14,0,
-    1,0,1,0,1,0,0,0,0,0,0,0,4,0,0,0,112,16,4,0,0,0,14,0,
-    5,0,2,0,4,0,0,0,0,0,0,0,28,0,0,0,56,3,20,0,56,4,18,0,
-    21,0,1,0,35,0,58,0,110,32,53,0,3,0,10,1,61,1,7,0,18,2,110,64,
-    55,0,4,18,40,246,14,0,34,3,34,0,26,4,230,0,112,32,51,0,67,0,39,3,
-    11,0,4,0,7,0,0,0,0,0,0,0,102,0,0,0,216,3,8,255,110,16,123,0,
-    7,0,12,8,18,240,18,1,18,2,51,9,88,0,56,10,86,0,57,8,3,0,40,82,
-    1,41,34,2,51,0,112,16,80,0,2,0,110,16,19,0,10,0,12,0,56,0,22,0,
-    110,16,12,0,0,0,10,10,53,169,29,0,110,32,11,0,144,0,12,10,110,16,10,0,
-    10,0,12,10,110,32,81,0,162,0,216,9,9,1,40,237,110,16,20,0,10,0,12,9,
-    56,9,9,0,110,16,20,0,10,0,12,9,110,32,81,0,146,0,84,116,29,0,91,113,
-    29,0,110,16,1,0,8,0,12,5,34,6,31,0,110,16,0,0,8,0,12,8,26,9,
-    141,0,112,48,46,0,134,9,34,8,47,0,34,0,54,0,7,113,118,7,116,0,0,0,
-    26,7,142,0,112,48,77,0,8,7,110,16,78,0,8,0,14,0,1,41,113,32,127,0,
-    25,0,14,0,8,0,5,0,3,0,1,0,0,0,0,0,110,0,0,0,26,0,208,0,
-    110,16,2,0,3,0,12,3,110,32,7,0,3,0,12,1,31,1,55,0,57,1,21,0,
-    34,1,55,0,112,16,121,0,1,0,110,16,5,0,3,0,12,2,110,48,8,0,18,0,
-    12,0,110,16,9,0,0,0,110,16,6,0,3,0,18,67,18,16,51,52,26,0,91,23,
-    29,0,34,3,10,0,26,5,131,0,112,32,17,0,83,0,26,5,138,0,113,32,124,0,
-    86,0,12,5,110,32,24,0,83,0,26,5,136,0,110,48,21,0,83,6,40,34,34,3,
-    10,0,26,6,132,0,112,32,17,0,99,0,26,6,2,0,110,32,24,0,99,0,113,16,
-    125,0,5,0,12,5,56,5,7,0,26,6,135,0,110,48,23,0,99,5,26,5,134,0,
-    51,4,4,0,1,6,40,2,18,6,110,48,22,0,83,6,26,5,133,0,110,32,18,0,
-    83,0,176,4,110,48,130,0,49,4,14,0,18,243,18,4,113,32,127,0,67,0,14,0,
-    2,0,0,0,101,0,1,0,1,1,43,104,1,0,0,0,42,0,0,0,1,0,0,0,
-    0,0,0,0,2,0,0,0,0,0,0,0,1,0,0,0,58,0,0,0,1,0,0,0,
-    44,0,0,0,2,0,0,0,3,0,44,0,2,0,0,0,44,0,44,0,2,0,0,0,
-    44,0,57,0,2,0,0,0,44,0,62,0,5,0,0,0,12,0,62,0,44,0,62,0,
-    44,0,0,0,1,0,0,0,17,0,0,0,1,0,0,0,19,0,0,0,1,0,0,0,
-    12,0,0,0,2,0,0,0,12,0,44,0,1,0,0,0,1,0,0,0,2,0,0,0,
-    8,0,12,0,1,0,0,0,53,0,0,0,3,0,0,0,0,0,0,0,10,0,0,0,
-    2,0,0,0,0,0,58,0,5,0,0,0,2,0,0,0,44,0,44,0,44,0,0,0,
-    1,0,0,0,9,0,0,0,2,0,0,0,10,0,0,0,1,0,0,0,15,0,0,0,
-    2,0,0,0,15,0,57,0,1,0,0,0,31,0,0,0,2,0,0,0,31,0,44,0,
-    2,0,0,0,35,0,36,0,2,0,0,0,42,0,44,0,1,0,0,0,48,0,0,0,
-    2,0,0,0,53,0,44,0,6,0,0,0,55,0,51,0,0,0,44,0,8,0,31,0,
-    1,0,0,0,57,0,0,0,2,0,0,0,57,0,0,0,3,0,0,0,58,0,0,0,
-    0,0,0,0,1,0,0,0,59,0,0,0,2,0,0,0,0,0,14,0,2,0,0,0,
-    13,0,0,0,1,0,0,0,14,0,0,0,2,0,0,0,15,0,0,0,2,0,0,0,
-    37,0,0,0,1,0,0,0,41,0,0,0,2,0,0,0,53,0,14,0,1,0,0,0,
-    49,0,0,0,1,0,0,0,61,0,0,0,3,40,41,86,0,3,42,47,42,0,1,45,
-    0,21,45,36,36,78,101,115,116,36,102,103,101,116,99,111,109,112,111,115,105,110,103,0,
-    21,45,36,36,78,101,115,116,36,102,112,117,116,99,111,109,112,111,115,105,110,103,0,15,
-    45,36,36,78,101,115,116,36,109,102,105,110,105,115,104,0,12,45,36,36,78,101,115,116,
-    36,109,107,101,121,0,14,45,36,36,78,101,115,116,36,115,109,99,111,112,121,0,14,45,
-    36,36,78,101,115,116,36,115,109,110,97,109,101,0,19,45,36,36,78,101,115,116,36,115,
-    109,110,97,116,105,118,101,75,101,121,0,22,45,36,36,78,101,115,116,36,115,109,110,97,
-    116,105,118,101,80,105,99,107,101,100,0,20,45,36,36,78,101,115,116,36,115,109,110,97,
-    116,105,118,101,84,101,120,116,0,1,46,0,2,46,46,0,8,60,99,108,105,110,105,116,
-    62,0,6,60,105,110,105,116,62,0,7,65,67,84,73,79,78,83,0,9,66,65,67,75,
-    83,80,65,67,69,0,9,67,65,78,67,69,76,76,69,68,0,6,67,79,77,77,73,84,
-    0,7,67,79,77,80,79,83,69,0,10,67,111,110,110,101,99,116,105,111,110,0,5,69,
-    78,84,69,82,0,6,69,88,80,79,82,84,0,6,70,65,73,76,69,68,0,4,70,73,
-    76,69,0,5,70,73,76,69,83,0,1,73,0,2,73,73,0,3,73,73,73,0,2,73,
-    76,0,1,74,0,1,76,0,2,76,73,0,3,76,73,73,0,2,76,74,0,2,76,76,
-    0,3,76,76,76,0,6,76,76,76,76,76,76,0,3,76,76,90,0,22,76,97,110,100,
-    114,111,105,100,47,97,112,112,47,65,99,116,105,118,105,116,121,59,0,22,76,97,110,100,
-    114,111,105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,59,0,29,76,97,110,100,
-    114,111,105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,77,97,110,97,103,101,114,
-    59,0,33,76,97,110,100,114,111,105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,
-    84,114,97,110,115,97,99,116,105,111,110,59,0,31,76,97,110,100,114,111,105,100,47,99,
-    111,110,116,101,110,116,47,67,108,105,112,68,97,116,97,36,73,116,101,109,59,0,26,76,
-    97,110,100,114,111,105,100,47,99,111,110,116,101,110,116,47,67,108,105,112,68,97,116,97,
-    59,0,33,76,97,110,100,114,111,105,100,47,99,111,110,116,101,110,116,47,67,111,110,116,
-    101,110,116,82,101,115,111,108,118,101,114,59,0,25,76,97,110,100,114,111,105,100,47,99,
-    111,110,116,101,110,116,47,67,111,110,116,101,120,116,59,0,24,76,97,110,100,114,111,105,
-    100,47,99,111,110,116,101,110,116,47,73,110,116,101,110,116,59,0,25,76,97,110,100,114,
-    111,105,100,47,100,97,116,97,98,97,115,101,47,67,117,114,115,111,114,59,0,17,76,97,
-    110,100,114,111,105,100,47,110,101,116,47,85,114,105,59,0,20,76,97,110,100,114,111,105,
-    100,47,111,115,47,73,66,105,110,100,101,114,59,0,23,76,97,110,100,114,111,105,100,47,
-    118,105,101,119,47,75,101,121,69,118,101,110,116,59,0,19,76,97,110,100,114,111,105,100,
-    47,118,105,101,119,47,86,105,101,119,59,0,21,76,97,110,100,114,111,105,100,47,118,105,
-    101,119,47,87,105,110,100,111,119,59,0,27,76,97,110,100,114,111,105,100,47,118,105,101,
-    119,47,87,105,110,100,111,119,73,110,115,101,116,115,59,0,46,76,97,110,100,114,111,105,
-    100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,111,100,47,66,97,115,101,73,
-    110,112,117,116,67,111,110,110,101,99,116,105,111,110,59,0,37,76,97,110,100,114,111,105,
-    100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,111,100,47,69,100,105,116,111,
-    114,73,110,102,111,59,0,42,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,
-    112,117,116,109,101,116,104,111,100,47,73,110,112,117,116,67,111,110,110,101,99,116,105,111,
-    110,59,0,45,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,112,117,116,109,
-    101,116,104,111,100,47,73,110,112,117,116,77,101,116,104,111,100,77,97,110,97,103,101,114,
-    59,0,28,76,97,110,100,114,111,105,100,47,119,101,98,107,105,116,47,77,105,109,101,84,
-    121,112,101,77,97,112,59,0,34,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,
-    105,111,110,47,69,110,99,108,111,115,105,110,103,67,108,97,115,115,59,0,35,76,100,97,
-    108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,69,110,99,108,111,115,105,110,
-    103,77,101,116,104,111,100,59,0,30,76,100,97,108,118,105,107,47,97,110,110,111,116,97,
-    116,105,111,110,47,73,110,110,101,114,67,108,97,115,115,59,0,33,76,100,97,108,118,105,
-    107,47,97,110,110,111,116,97,116,105,111,110,47,77,101,109,98,101,114,67,108,97,115,115,
-    101,115,59,0,36,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,
-    77,101,116,104,111,100,80,97,114,97,109,101,116,101,114,115,59,0,29,76,100,97,108,118,
-    105,107,47,97,110,110,111,116,97,116,105,111,110,47,83,105,103,110,97,116,117,114,101,59,
-    0,26,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,84,104,114,
-    111,119,115,59,0,31,76,106,97,118,97,47,105,111,47,66,121,116,101,65,114,114,97,121,
-    79,117,116,112,117,116,83,116,114,101,97,109,59,0,14,76,106,97,118,97,47,105,111,47,
-    70,105,108,101,59,0,25,76,106,97,118,97,47,105,111,47,70,105,108,101,73,110,112,117,
-    116,83,116,114,101,97,109,59,0,26,76,106,97,118,97,47,105,111,47,70,105,108,101,79,
-    117,116,112,117,116,83,116,114,101,97,109,59,0,21,76,106,97,118,97,47,105,111,47,73,
-    79,69,120,99,101,112,116,105,111,110,59,0,21,76,106,97,118,97,47,105,111,47,73,110,
-    112,117,116,83,116,114,101,97,109,59,0,22,76,106,97,118,97,47,105,111,47,79,117,116,
-    112,117,116,83,116,114,101,97,109,59,0,24,76,106,97,118,97,47,108,97,110,103,47,67,
-    104,97,114,83,101,113,117,101,110,99,101,59,0,21,76,106,97,118,97,47,108,97,110,103,
-    47,67,104,97,114,97,99,116,101,114,59,0,21,76,106,97,118,97,47,108,97,110,103,47,
-    69,120,99,101,112,116,105,111,110,59,0,16,76,106,97,118,97,47,108,97,110,103,47,76,
-    111,110,103,59,0,18,76,106,97,118,97,47,108,97,110,103,47,79,98,106,101,99,116,59,
+/* the Java sources' SHA-256: 7fa750e6f8fade563cb7c8b5d9bd6e9f95bd6973d77b4fe850b010b831bf991a */
+static uint8_t cee_android_dex[21168] = {
+    100,101,120,10,48,51,57,0,21,189,122,112,168,39,190,91,169,129,20,98,221,212,117,168,
+    232,197,66,190,98,195,148,43,176,82,0,0,112,0,0,0,120,86,52,18,0,0,0,0,
+    0,0,0,0,236,81,0,0,155,1,0,0,112,0,0,0,88,0,0,0,220,6,0,0,
+    128,0,0,0,60,8,0,0,69,0,0,0,60,14,0,0,231,0,0,0,100,16,0,0,
+    7,0,0,0,156,23,0,0,52,58,0,0,124,24,0,0,54,52,0,0,56,52,0,0,
+    61,52,0,0,66,52,0,0,70,52,0,0,73,52,0,0,92,52,0,0,115,52,0,0,
+    134,52,0,0,155,52,0,0,172,52,0,0,193,52,0,0,213,52,0,0,233,52,0,0,
+    252,52,0,0,15,53,0,0,35,53,0,0,56,53,0,0,75,53,0,0,98,53,0,0,
+    119,53,0,0,136,53,0,0,150,53,0,0,168,53,0,0,190,53,0,0,206,53,0,0,
+    222,53,0,0,246,53,0,0,20,54,0,0,41,54,0,0,65,54,0,0,87,54,0,0,
+    90,54,0,0,94,54,0,0,104,54,0,0,112,54,0,0,116,54,0,0,125,54,0,0,
+    153,54,0,0,187,54,0,0,201,54,0,0,225,54,0,0,248,54,0,0,3,55,0,0,
+    11,55,0,0,22,55,0,0,32,55,0,0,41,55,0,0,50,55,0,0,58,55,0,0,
+    67,55,0,0,79,55,0,0,82,55,0,0,102,55,0,0,113,55,0,0,123,55,0,0,
+    133,55,0,0,140,55,0,0,148,55,0,0,151,55,0,0,159,55,0,0,165,55,0,0,
+    172,55,0,0,175,55,0,0,179,55,0,0,183,55,0,0,188,55,0,0,192,55,0,0,
+    199,55,0,0,210,55,0,0,213,55,0,0,216,55,0,0,220,55,0,0,227,55,0,0,
+    232,55,0,0,243,55,0,0,2,56,0,0,6,56,0,0,10,56,0,0,15,56,0,0,
+    20,56,0,0,28,56,0,0,33,56,0,0,57,56,0,0,81,56,0,0,112,56,0,0,
+    147,56,0,0,180,56,0,0,208,56,0,0,243,56,0,0,14,57,0,0,40,57,0,0,
+    67,57,0,0,92,57,0,0,111,57,0,0,132,57,0,0,154,57,0,0,179,57,0,0,
+    207,57,0,0,228,57,0,0,255,57,0,0,22,58,0,0,51,58,0,0,100,58,0,0,
+    151,58,0,0,223,58,0,0,29,59,0,0,81,59,0,0,137,59,0,0,185,59,0,0,
+    224,59,0,0,12,60,0,0,59,60,0,0,89,60,0,0,125,60,0,0,162,60,0,0,
+    194,60,0,0,229,60,0,0,11,61,0,0,42,61,0,0,70,61,0,0,103,61,0,0,
+    119,61,0,0,146,61,0,0,174,61,0,0,197,61,0,0,220,61,0,0,244,61,0,0,
+    14,62,0,0,37,62,0,0,60,62,0,0,81,62,0,0,99,62,0,0,117,62,0,0,
+    137,62,0,0,159,62,0,0,189,62,0,0,209,62,0,0,236,62,0,0,0,63,0,0,
+    20,63,0,0,43,63,0,0,66,63,0,0,88,63,0,0,116,63,0,0,153,63,0,0,
+    176,63,0,0,196,63,0,0,217,63,0,0,238,63,0,0,255,63,0,0,41,64,0,0,
+    77,64,0,0,110,64,0,0,153,64,0,0,185,64,0,0,216,64,0,0,245,64,0,0,
+    0,65,0,0,7,65,0,0,17,65,0,0,24,65,0,0,31,65,0,0,39,65,0,0,
+    49,65,0,0,57,65,0,0,62,65,0,0,67,65,0,0,73,65,0,0,85,65,0,0,
+    92,65,0,0,99,65,0,0,102,65,0,0,106,65,0,0,111,65,0,0,118,65,0,0,
+    124,65,0,0,129,65,0,0,134,65,0,0,138,65,0,0,143,65,0,0,149,65,0,0,
+    157,65,0,0,162,65,0,0,171,65,0,0,176,65,0,0,180,65,0,0,185,65,0,0,
+    188,65,0,0,192,65,0,0,197,65,0,0,203,65,0,0,208,65,0,0,212,65,0,0,
+    217,65,0,0,222,65,0,0,229,65,0,0,233,65,0,0,237,65,0,0,241,65,0,0,
+    245,65,0,0,249,65,0,0,253,65,0,0,18,66,0,0,39,66,0,0,54,66,0,0,
+    67,66,0,0,82,66,0,0,90,66,0,0,95,66,0,0,106,66,0,0,119,66,0,0,
+    129,66,0,0,144,66,0,0,183,66,0,0,220,66,0,0,254,66,0,0,35,67,0,0,
+    68,67,0,0,96,67,0,0,119,67,0,0,144,67,0,0,169,67,0,0,195,67,0,0,
+    223,67,0,0,247,67,0,0,15,68,0,0,40,68,0,0,50,68,0,0,76,68,0,0,
+    84,68,0,0,110,68,0,0,117,68,0,0,124,68,0,0,142,68,0,0,158,68,0,0,
+    174,68,0,0,181,68,0,0,188,68,0,0,213,68,0,0,225,68,0,0,236,68,0,0,
+    249,68,0,0,255,68,0,0,7,69,0,0,36,69,0,0,59,69,0,0,79,69,0,0,
+    89,69,0,0,98,69,0,0,106,69,0,0,134,69,0,0,145,69,0,0,164,69,0,0,
+    172,69,0,0,193,69,0,0,200,69,0,0,209,69,0,0,214,69,0,0,231,69,0,0,
+    5,70,0,0,16,70,0,0,29,70,0,0,39,70,0,0,52,70,0,0,65,70,0,0,
+    85,70,0,0,97,70,0,0,106,70,0,0,117,70,0,0,127,70,0,0,147,70,0,0,
+    155,70,0,0,166,70,0,0,180,70,0,0,192,70,0,0,212,70,0,0,233,70,0,0,
+    242,70,0,0,12,71,0,0,28,71,0,0,39,71,0,0,53,71,0,0,64,71,0,0,
+    82,71,0,0,98,71,0,0,106,71,0,0,117,71,0,0,133,71,0,0,139,71,0,0,
+    145,71,0,0,170,71,0,0,179,71,0,0,184,71,0,0,196,71,0,0,205,71,0,0,
+    220,71,0,0,237,71,0,0,248,71,0,0,6,72,0,0,16,72,0,0,28,72,0,0,
+    37,72,0,0,48,72,0,0,53,72,0,0,61,72,0,0,74,72,0,0,82,72,0,0,
+    88,72,0,0,95,72,0,0,103,72,0,0,116,72,0,0,122,72,0,0,129,72,0,0,
+    139,72,0,0,153,72,0,0,173,72,0,0,187,72,0,0,198,72,0,0,212,72,0,0,
+    224,72,0,0,232,72,0,0,240,72,0,0,4,73,0,0,22,73,0,0,43,73,0,0,
+    64,73,0,0,89,73,0,0,121,73,0,0,156,73,0,0,167,73,0,0,184,73,0,0,
+    202,73,0,0,209,73,0,0,236,73,0,0,8,74,0,0,23,74,0,0,44,74,0,0,
+    54,74,0,0,59,74,0,0,67,74,0,0,77,74,0,0,84,74,0,0,92,74,0,0,
+    98,74,0,0,105,74,0,0,119,74,0,0,150,74,0,0,164,74,0,0,171,74,0,0,
+    178,74,0,0,183,74,0,0,189,74,0,0,198,74,0,0,212,74,0,0,237,74,0,0,
+    0,75,0,0,19,75,0,0,33,75,0,0,45,75,0,0,59,75,0,0,73,75,0,0,
+    91,75,0,0,114,75,0,0,137,75,0,0,150,75,0,0,162,75,0,0,176,75,0,0,
+    201,75,0,0,231,75,0,0,247,75,0,0,2,76,0,0,15,76,0,0,29,76,0,0,
+    42,76,0,0,60,76,0,0,71,76,0,0,80,76,0,0,89,76,0,0,107,76,0,0,
+    123,76,0,0,138,76,0,0,145,76,0,0,151,76,0,0,158,76,0,0,165,76,0,0,
+    189,76,0,0,201,76,0,0,212,76,0,0,218,76,0,0,249,76,0,0,1,77,0,0,
+    10,77,0,0,23,77,0,0,32,77,0,0,45,77,0,0,55,77,0,0,63,77,0,0,
+    74,77,0,0,84,77,0,0,94,77,0,0,108,77,0,0,118,77,0,0,125,77,0,0,
+    134,77,0,0,142,77,0,0,148,77,0,0,157,77,0,0,163,77,0,0,170,77,0,0,
+    174,77,0,0,51,0,0,0,58,0,0,0,62,0,0,0,69,0,0,0,82,0,0,0,
+    83,0,0,0,84,0,0,0,85,0,0,0,86,0,0,0,87,0,0,0,88,0,0,0,
+    89,0,0,0,90,0,0,0,91,0,0,0,92,0,0,0,93,0,0,0,94,0,0,0,
+    95,0,0,0,96,0,0,0,97,0,0,0,98,0,0,0,99,0,0,0,100,0,0,0,
+    101,0,0,0,102,0,0,0,103,0,0,0,104,0,0,0,105,0,0,0,106,0,0,0,
+    107,0,0,0,108,0,0,0,109,0,0,0,110,0,0,0,111,0,0,0,112,0,0,0,
+    113,0,0,0,114,0,0,0,115,0,0,0,116,0,0,0,117,0,0,0,118,0,0,0,
+    119,0,0,0,120,0,0,0,121,0,0,0,122,0,0,0,123,0,0,0,124,0,0,0,
+    125,0,0,0,126,0,0,0,127,0,0,0,128,0,0,0,129,0,0,0,130,0,0,0,
+    131,0,0,0,132,0,0,0,133,0,0,0,134,0,0,0,135,0,0,0,136,0,0,0,
+    137,0,0,0,138,0,0,0,139,0,0,0,140,0,0,0,141,0,0,0,142,0,0,0,
+    143,0,0,0,144,0,0,0,145,0,0,0,146,0,0,0,147,0,0,0,149,0,0,0,
+    150,0,0,0,151,0,0,0,152,0,0,0,153,0,0,0,154,0,0,0,155,0,0,0,
+    156,0,0,0,171,0,0,0,187,0,0,0,196,0,0,0,197,0,0,0,198,0,0,0,
+    199,0,0,0,200,0,0,0,201,0,0,0,202,0,0,0,203,0,0,0,51,0,0,0,
+    0,0,0,0,0,0,0,0,58,0,0,0,1,0,0,0,0,0,0,0,62,0,0,0,
+    2,0,0,0,0,0,0,0,63,0,0,0,2,0,0,0,216,49,0,0,64,0,0,0,
+    2,0,0,0,224,49,0,0,65,0,0,0,2,0,0,0,232,49,0,0,66,0,0,0,
+    2,0,0,0,240,49,0,0,66,0,0,0,2,0,0,0,248,49,0,0,69,0,0,0,
+    3,0,0,0,0,0,0,0,70,0,0,0,4,0,0,0,0,0,0,0,77,0,0,0,
+    5,0,0,0,0,50,0,0,70,0,0,0,6,0,0,0,0,0,0,0,70,0,0,0,
+    7,0,0,0,0,0,0,0,79,0,0,0,7,0,0,0,8,50,0,0,71,0,0,0,
+    8,0,0,0,224,49,0,0,70,0,0,0,9,0,0,0,0,0,0,0,70,0,0,0,
+    10,0,0,0,0,0,0,0,70,0,0,0,11,0,0,0,0,0,0,0,77,0,0,0,
+    12,0,0,0,0,50,0,0,79,0,0,0,12,0,0,0,16,50,0,0,81,0,0,0,
+    12,0,0,0,24,50,0,0,79,0,0,0,12,0,0,0,32,50,0,0,80,0,0,0,
+    13,0,0,0,40,50,0,0,70,0,0,0,15,0,0,0,0,0,0,0,70,0,0,0,
+    17,0,0,0,0,0,0,0,70,0,0,0,21,0,0,0,0,0,0,0,70,0,0,0,
+    22,0,0,0,0,0,0,0,77,0,0,0,23,0,0,0,56,50,0,0,71,0,0,0,
+    24,0,0,0,224,49,0,0,72,0,0,0,27,0,0,0,64,50,0,0,71,0,0,0,
+    28,0,0,0,224,49,0,0,77,0,0,0,28,0,0,0,76,50,0,0,78,0,0,0,
+    28,0,0,0,84,50,0,0,70,0,0,0,29,0,0,0,0,0,0,0,77,0,0,0,
+    32,0,0,0,92,50,0,0,70,0,0,0,34,0,0,0,0,0,0,0,70,0,0,0,
+    43,0,0,0,0,0,0,0,77,0,0,0,47,0,0,0,100,50,0,0,79,0,0,0,
+    48,0,0,0,108,50,0,0,71,0,0,0,52,0,0,0,224,49,0,0,71,0,0,0,
+    55,0,0,0,224,49,0,0,77,0,0,0,55,0,0,0,116,50,0,0,79,0,0,0,
+    55,0,0,0,124,50,0,0,77,0,0,0,55,0,0,0,0,50,0,0,70,0,0,0,
+    58,0,0,0,0,0,0,0,71,0,0,0,58,0,0,0,224,49,0,0,73,0,0,0,
+    58,0,0,0,232,49,0,0,76,0,0,0,58,0,0,0,132,50,0,0,79,0,0,0,
+    58,0,0,0,140,50,0,0,77,0,0,0,58,0,0,0,0,50,0,0,79,0,0,0,
+    58,0,0,0,16,50,0,0,77,0,0,0,58,0,0,0,148,50,0,0,77,0,0,0,
+    58,0,0,0,156,50,0,0,71,0,0,0,59,0,0,0,224,49,0,0,77,0,0,0,
+    59,0,0,0,0,50,0,0,77,0,0,0,63,0,0,0,164,50,0,0,77,0,0,0,
+    63,0,0,0,248,49,0,0,77,0,0,0,69,0,0,0,240,49,0,0,171,0,0,0,
+    78,0,0,0,0,0,0,0,172,0,0,0,78,0,0,0,224,49,0,0,173,0,0,0,
+    78,0,0,0,232,49,0,0,174,0,0,0,78,0,0,0,172,50,0,0,175,0,0,0,
+    78,0,0,0,184,50,0,0,176,0,0,0,78,0,0,0,196,50,0,0,177,0,0,0,
+    78,0,0,0,204,50,0,0,181,0,0,0,78,0,0,0,212,50,0,0,178,0,0,0,
+    78,0,0,0,228,50,0,0,179,0,0,0,78,0,0,0,236,50,0,0,178,0,0,0,
+    78,0,0,0,244,50,0,0,178,0,0,0,78,0,0,0,76,50,0,0,179,0,0,0,
+    78,0,0,0,84,50,0,0,184,0,0,0,78,0,0,0,252,50,0,0,178,0,0,0,
+    78,0,0,0,4,51,0,0,178,0,0,0,78,0,0,0,12,51,0,0,178,0,0,0,
+    78,0,0,0,20,51,0,0,178,0,0,0,78,0,0,0,28,51,0,0,178,0,0,0,
+    78,0,0,0,36,51,0,0,182,0,0,0,78,0,0,0,44,51,0,0,182,0,0,0,
+    78,0,0,0,52,51,0,0,178,0,0,0,78,0,0,0,60,51,0,0,182,0,0,0,
+    78,0,0,0,68,51,0,0,178,0,0,0,78,0,0,0,0,50,0,0,178,0,0,0,
+    78,0,0,0,76,51,0,0,178,0,0,0,78,0,0,0,84,51,0,0,178,0,0,0,
+    78,0,0,0,240,49,0,0,179,0,0,0,78,0,0,0,92,51,0,0,180,0,0,0,
+    78,0,0,0,100,51,0,0,182,0,0,0,78,0,0,0,112,51,0,0,184,0,0,0,
+    78,0,0,0,120,51,0,0,178,0,0,0,78,0,0,0,156,50,0,0,182,0,0,0,
+    78,0,0,0,128,51,0,0,183,0,0,0,78,0,0,0,136,51,0,0,185,0,0,0,
+    78,0,0,0,152,51,0,0,186,0,0,0,78,0,0,0,160,51,0,0,178,0,0,0,
+    78,0,0,0,248,49,0,0,180,0,0,0,78,0,0,0,168,51,0,0,182,0,0,0,
+    78,0,0,0,180,51,0,0,178,0,0,0,78,0,0,0,188,51,0,0,178,0,0,0,
+    78,0,0,0,196,51,0,0,187,0,0,0,79,0,0,0,0,0,0,0,188,0,0,0,
+    79,0,0,0,224,49,0,0,189,0,0,0,79,0,0,0,232,49,0,0,190,0,0,0,
+    79,0,0,0,204,51,0,0,191,0,0,0,79,0,0,0,216,51,0,0,191,0,0,0,
+    79,0,0,0,224,51,0,0,193,0,0,0,79,0,0,0,232,51,0,0,192,0,0,0,
+    79,0,0,0,240,51,0,0,192,0,0,0,79,0,0,0,248,51,0,0,193,0,0,0,
+    79,0,0,0,84,50,0,0,194,0,0,0,79,0,0,0,0,52,0,0,193,0,0,0,
+    79,0,0,0,8,52,0,0,192,0,0,0,79,0,0,0,116,50,0,0,192,0,0,0,
+    79,0,0,0,0,50,0,0,192,0,0,0,79,0,0,0,240,49,0,0,194,0,0,0,
+    79,0,0,0,16,52,0,0,70,0,0,0,80,0,0,0,0,0,0,0,77,0,0,0,
+    80,0,0,0,24,52,0,0,71,0,0,0,81,0,0,0,224,49,0,0,77,0,0,0,
+    82,0,0,0,240,49,0,0,77,0,0,0,83,0,0,0,240,49,0,0,77,0,0,0,
+    84,0,0,0,240,49,0,0,78,0,0,0,84,0,0,0,32,52,0,0,77,0,0,0,
+    85,0,0,0,240,49,0,0,78,0,0,0,85,0,0,0,40,52,0,0,77,0,0,0,
+    86,0,0,0,48,52,0,0,70,0,0,0,87,0,0,0,0,0,0,0,77,0,0,0,
+    87,0,0,0,0,50,0,0,77,0,0,0,87,0,0,0,240,49,0,0,26,0,26,0,
+    37,0,0,0,26,0,26,0,38,0,0,0,26,0,26,0,39,0,0,0,26,0,26,0,
+    40,0,0,0,26,0,26,0,41,0,0,0,31,0,2,0,37,1,0,0,31,0,2,0,
+    39,1,0,0,31,0,2,0,40,1,0,0,31,0,2,0,41,1,0,0,64,0,64,0,
+    75,0,0,0,66,0,65,0,170,0,0,0,71,0,73,0,134,1,0,0,73,0,2,0,
+    43,0,0,0,73,0,2,0,45,0,0,0,73,0,2,0,46,0,0,0,73,0,87,0,
+    47,0,0,0,73,0,2,0,53,0,0,0,73,0,2,0,54,0,0,0,73,0,2,0,
+    55,0,0,0,73,0,2,0,67,0,0,0,73,0,2,0,68,0,0,0,73,0,2,0,
+    74,0,0,0,73,0,2,0,157,0,0,0,73,0,2,0,158,0,0,0,73,0,2,0,
+    160,0,0,0,73,0,2,0,162,0,0,0,73,0,2,0,163,0,0,0,73,0,2,0,
+    164,0,0,0,73,0,2,0,165,0,0,0,73,0,2,0,167,0,0,0,73,0,2,0,
+    168,0,0,0,73,0,79,0,232,0,0,0,73,0,84,0,255,0,0,0,73,0,2,0,
+    0,1,0,0,73,0,2,0,35,1,0,0,73,0,85,0,36,1,0,0,73,0,69,0,
+    38,1,0,0,73,0,87,0,48,1,0,0,73,0,71,0,81,1,0,0,73,0,82,0,
+    86,1,0,0,73,0,83,0,88,1,0,0,73,0,84,0,92,1,0,0,73,0,87,0,
+    148,1,0,0,73,0,84,0,150,1,0,0,74,0,75,0,149,1,0,0,75,0,84,0,
+    36,0,0,0,75,0,2,0,42,0,0,0,75,0,2,0,48,0,0,0,75,0,2,0,
+    49,0,0,0,75,0,2,0,56,0,0,0,75,0,84,0,169,0,0,0,75,0,2,0,
+    207,0,0,0,75,0,58,0,240,0,0,0,75,0,2,0,41,1,0,0,75,0,79,0,
+    125,1,0,0,76,0,77,0,134,1,0,0,76,0,43,0,141,1,0,0,76,0,58,0,
+    142,1,0,0,76,0,2,0,143,1,0,0,76,0,10,0,144,1,0,0,76,0,67,0,
+    145,1,0,0,77,0,2,0,44,0,0,0,77,0,2,0,57,0,0,0,77,0,2,0,
+    59,0,0,0,77,0,2,0,60,0,0,0,77,0,2,0,61,0,0,0,77,0,2,0,
+    161,0,0,0,77,0,58,0,166,0,0,0,77,0,58,0,251,0,0,0,4,0,36,0,
+    7,1,0,0,4,0,16,0,9,1,0,0,4,0,11,0,14,1,0,0,4,0,26,0,
+    30,1,0,0,5,0,58,0,34,0,0,0,6,0,12,0,233,0,0,0,6,0,99,0,
+    250,0,0,0,6,0,10,0,252,0,0,0,7,0,13,0,208,0,0,0,7,0,2,0,
+    238,0,0,0,8,0,23,0,29,1,0,0,9,0,14,0,16,1,0,0,9,0,2,0,
+    17,1,0,0,10,0,37,0,74,1,0,0,10,0,38,0,75,1,0,0,10,0,22,0,
+    85,1,0,0,11,0,44,0,23,1,0,0,11,0,43,0,27,1,0,0,12,0,81,0,
+    34,0,0,0,12,0,18,0,210,0,0,0,12,0,15,0,8,1,0,0,12,0,23,0,
+    11,1,0,0,12,0,19,0,84,1,0,0,12,0,20,0,84,1,0,0,12,0,21,0,
+    84,1,0,0,12,0,18,0,121,1,0,0,13,0,58,0,237,0,0,0,13,0,45,0,
+    26,1,0,0,13,0,99,0,54,1,0,0,14,0,61,0,34,0,0,0,14,0,60,0,
+    65,1,0,0,15,0,44,0,19,1,0,0,18,0,2,0,4,1,0,0,18,0,2,0,
+    18,1,0,0,18,0,2,0,28,1,0,0,19,0,2,0,4,1,0,0,19,0,1,0,
+    32,1,0,0,19,0,1,0,33,1,0,0,20,0,66,0,34,0,0,0,20,0,107,0,
+    246,0,0,0,20,0,27,0,68,1,0,0,20,0,104,0,73,1,0,0,21,0,109,0,
+    90,1,0,0,22,0,59,0,118,1,0,0,24,0,28,0,64,1,0,0,24,0,79,0,
+    103,1,0,0,24,0,59,0,106,1,0,0,24,0,79,0,113,1,0,0,24,0,70,0,
+    119,1,0,0,25,0,99,0,46,1,0,0,27,0,29,0,64,1,0,0,28,0,73,0,
+    209,0,0,0,28,0,70,0,211,0,0,0,28,0,31,0,64,1,0,0,28,0,32,0,
+    64,1,0,0,28,0,92,0,98,1,0,0,28,0,68,0,99,1,0,0,28,0,68,0,
+    100,1,0,0,28,0,92,0,101,1,0,0,28,0,92,0,102,1,0,0,28,0,79,0,
+    103,1,0,0,28,0,92,0,104,1,0,0,28,0,79,0,107,1,0,0,28,0,92,0,
+    108,1,0,0,28,0,92,0,109,1,0,0,28,0,92,0,110,1,0,0,28,0,79,0,
+    113,1,0,0,28,0,69,0,114,1,0,0,28,0,92,0,115,1,0,0,28,0,74,0,
+    116,1,0,0,28,0,92,0,117,1,0,0,28,0,79,0,120,1,0,0,28,0,92,0,
+    122,1,0,0,29,0,58,0,34,0,0,0,30,0,71,0,34,0,0,0,33,0,105,0,
+    34,1,0,0,33,0,69,0,91,1,0,0,33,0,108,0,124,1,0,0,34,0,49,0,
+    22,1,0,0,34,0,35,0,25,1,0,0,42,0,58,0,34,0,0,0,42,0,115,0,
+    136,1,0,0,42,0,59,0,152,1,0,0,42,0,94,0,152,1,0,0,43,0,77,0,
+    34,0,0,0,43,0,44,0,2,1,0,0,43,0,99,0,53,1,0,0,44,0,81,0,
+    34,0,0,0,45,0,76,0,34,0,0,0,46,0,81,0,34,0,0,0,47,0,58,0,
+    237,0,0,0,47,0,7,0,87,1,0,0,48,0,58,0,237,0,0,0,48,0,95,0,
+    152,1,0,0,49,0,44,0,139,1,0,0,50,0,117,0,137,1,0,0,52,0,2,0,
+    43,1,0,0,52,0,39,0,147,1,0,0,53,0,47,0,139,1,0,0,54,0,3,0,
+    93,1,0,0,55,0,58,0,34,0,0,0,58,0,96,0,34,0,0,0,58,0,97,0,
+    34,0,0,0,58,0,111,0,249,0,0,0,58,0,116,0,6,1,0,0,58,0,99,0,
+    45,1,0,0,58,0,4,0,49,1,0,0,58,0,2,0,50,1,0,0,58,0,5,0,
+    66,1,0,0,58,0,126,0,127,1,0,0,58,0,112,0,130,1,0,0,58,0,45,0,
+    131,1,0,0,58,0,46,0,131,1,0,0,58,0,44,0,138,1,0,0,59,0,58,0,
+    34,0,0,0,59,0,53,0,229,0,0,0,59,0,54,0,229,0,0,0,59,0,44,0,
+    139,1,0,0,60,0,8,0,57,1,0,0,61,0,80,0,34,0,0,0,61,0,58,0,
+    128,1,0,0,62,0,82,0,212,0,0,0,63,0,56,0,1,1,0,0,63,0,0,0,
+    12,1,0,0,63,0,1,0,13,1,0,0,63,0,2,0,15,1,0,0,63,0,8,0,
+    21,1,0,0,63,0,55,0,76,1,0,0,63,0,56,0,151,1,0,0,67,0,58,0,
+    34,0,0,0,67,0,111,0,208,0,0,0,67,0,40,0,1,1,0,0,67,0,99,0,
+    45,1,0,0,67,0,2,0,126,1,0,0,67,0,124,0,135,1,0,0,68,0,121,0,
+    243,0,0,0,68,0,123,0,243,0,0,0,69,0,58,0,34,0,0,0,69,0,58,0,
+    236,0,0,0,69,0,111,0,241,0,0,0,69,0,41,0,1,1,0,0,69,0,42,0,
+    82,1,0,0,69,0,83,0,83,1,0,0,71,0,84,0,34,0,0,0,71,0,87,0,
+    34,0,0,0,71,0,30,0,244,0,0,0,71,0,102,0,79,1,0,0,73,0,113,0,
+    5,0,0,0,73,0,120,0,7,0,0,0,73,0,6,0,8,0,0,0,73,0,122,0,
+    9,0,0,0,73,0,57,0,10,0,0,0,73,0,127,0,11,0,0,0,73,0,118,0,
+    12,0,0,0,73,0,119,0,13,0,0,0,73,0,120,0,14,0,0,0,73,0,127,0,
+    15,0,0,0,73,0,120,0,16,0,0,0,73,0,88,0,17,0,0,0,73,0,85,0,
+    19,0,0,0,73,0,86,0,22,0,0,0,73,0,125,0,23,0,0,0,73,0,64,0,
+    26,0,0,0,73,0,58,0,27,0,0,0,73,0,58,0,33,0,0,0,73,0,66,0,
+    34,0,0,0,73,0,94,0,227,0,0,0,73,0,79,0,228,0,0,0,73,0,107,0,
+    246,0,0,0,73,0,99,0,248,0,0,0,73,0,33,0,3,1,0,0,73,0,17,0,
+    10,1,0,0,73,0,98,0,20,1,0,0,73,0,25,0,24,1,0,0,73,0,58,0,
+    44,1,0,0,73,0,64,0,58,1,0,0,73,0,58,0,59,1,0,0,73,0,72,0,
+    71,1,0,0,73,0,75,0,72,1,0,0,73,0,103,0,78,1,0,0,73,0,72,0,
+    95,1,0,0,73,0,60,0,96,1,0,0,73,0,59,0,112,1,0,0,73,0,92,0,
+    123,1,0,0,73,0,51,0,132,1,0,0,73,0,94,0,140,1,0,0,74,0,89,0,
+    34,0,0,0,74,0,110,0,239,0,0,0,74,0,101,0,245,0,0,0,74,0,99,0,
+    254,0,0,0,74,0,100,0,80,1,0,0,74,0,106,0,97,1,0,0,74,0,110,0,
+    105,1,0,0,75,0,52,0,6,0,0,0,75,0,90,0,18,0,0,0,75,0,89,0,
+    20,0,0,0,75,0,114,0,21,0,0,0,75,0,59,0,28,0,0,0,75,0,63,0,
+    30,0,0,0,75,0,58,0,33,0,0,0,75,0,66,0,34,0,0,0,75,0,93,0,
+    231,0,0,0,75,0,58,0,253,0,0,0,75,0,17,0,10,1,0,0,75,0,24,0,
+    31,1,0,0,75,0,106,0,47,1,0,0,75,0,58,0,60,1,0,0,75,0,59,0,
+    61,1,0,0,75,0,63,0,63,1,0,0,75,0,27,0,68,1,0,0,75,0,99,0,
+    69,1,0,0,75,0,34,0,70,1,0,0,75,0,104,0,73,1,0,0,75,0,99,0,
+    89,1,0,0,75,0,92,0,110,1,0,0,75,0,92,0,111,1,0,0,76,0,91,0,
+    34,0,0,0,76,0,58,0,94,1,0,0,77,0,78,0,24,0,0,0,77,0,48,0,
+    25,0,0,0,77,0,63,0,29,0,0,0,77,0,58,0,34,0,0,0,77,0,78,0,
+    242,0,0,0,77,0,9,0,5,1,0,0,77,0,50,0,51,1,0,0,77,0,126,0,
+    52,1,0,0,77,0,48,0,55,1,0,0,77,0,63,0,62,1,0,0,77,0,62,0,
+    67,1,0,0,77,0,65,0,128,1,0,0,77,0,67,0,129,1,0,0,71,0,0,0,
+    16,0,0,0,29,0,0,0,0,0,0,0,255,255,255,255,108,81,0,0,234,78,0,0,
+    0,0,0,0,72,0,0,0,17,16,0,0,55,0,0,0,0,0,0,0,52,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,73,0,0,0,17,0,0,0,20,0,0,0,
+    0,0,0,0,255,255,255,255,132,81,0,0,7,79,0,0,209,80,0,0,74,0,0,0,
+    16,0,0,0,30,0,0,0,0,0,0,0,255,255,255,255,156,81,0,0,214,79,0,0,
+    0,0,0,0,75,0,0,0,17,0,0,0,20,0,0,0,0,0,0,0,255,255,255,255,
+    172,81,0,0,252,79,0,0,247,80,0,0,76,0,0,0,0,0,0,0,55,0,0,0,
+    208,49,0,0,255,255,255,255,188,81,0,0,104,80,0,0,0,0,0,0,77,0,0,0,
+    17,0,0,0,5,0,0,0,0,0,0,0,255,255,255,255,212,81,0,0,138,80,0,0,
+    1,81,0,0,23,0,2,0,5,0,0,0,0,0,0,0,211,1,0,0,8,0,21,0,
+    2,1,22,0,84,2,11,0,113,16,147,0,2,0,10,2,18,19,57,2,10,0,84,2,
+    11,0,113,32,158,0,50,0,113,0,163,0,0,0,84,2,11,0,18,245,51,81,36,0,
+    113,16,53,0,2,0,12,1,84,2,11,0,110,32,178,0,18,0,18,4,84,2,11,0,
+    113,16,157,0,2,0,12,2,33,34,53,36,16,0,84,2,11,0,113,16,157,0,2,0,
+    12,3,68,3,3,4,110,48,52,0,33,3,216,4,4,1,40,234,17,1,113,16,151,0,
+    2,0,12,2,113,16,97,0,1,0,12,5,110,32,140,0,82,0,12,2,31,2,52,0,
+    57,2,4,0,18,0,17,0,110,16,96,0,2,0,10,2,84,5,11,0,113,16,155,0,
+    5,0,12,5,68,5,5,2,84,6,11,0,113,16,148,0,6,0,12,6,68,6,6,2,
+    84,7,11,0,113,16,152,0,7,0,12,7,70,7,7,2,221,8,6,32,56,8,5,0,
+    26,9,0,0,40,9,84,9,11,0,113,16,156,0,9,0,12,9,70,9,9,2,84,10,
+    11,0,113,32,54,0,26,0,12,10,84,11,11,0,110,16,171,0,11,0,12,11,110,16,
+    16,0,11,0,12,11,110,32,66,0,186,0,113,0,161,0,0,0,12,11,70,11,11,5,
+    110,32,60,0,186,0,84,11,11,0,110,32,67,0,186,0,18,43,35,188,84,0,84,13,
+    11,0,110,32,172,0,205,0,34,13,14,0,84,14,11,0,113,16,154,0,14,0,12,14,
+    218,15,2,4,68,14,14,15,113,16,99,0,14,0,10,14,19,16,0,0,84,4,11,0,
+    113,16,154,0,4,0,12,4,216,17,15,1,68,4,4,17,113,16,99,0,4,0,10,4,
+    84,11,11,0,113,16,154,0,11,0,12,11,68,11,11,15,2,19,3,0,84,3,11,0,
+    113,16,154,0,3,0,12,3,216,20,15,2,68,3,3,20,198,59,113,16,99,0,11,0,
+    10,3,84,11,11,0,113,16,154,0,11,0,12,11,68,11,11,17,2,17,2,0,84,2,
+    11,0,113,16,154,0,2,0,12,2,8,20,2,0,18,50,176,47,68,15,20,15,198,251,
+    113,16,99,0,11,0,10,11,112,91,29,0,237,52,110,32,56,0,218,0,68,3,12,16,
+    68,4,12,19,110,48,30,0,61,4,110,32,57,0,218,0,2,3,19,0,110,32,72,0,
+    58,0,221,4,6,8,57,4,4,0,1,59,40,3,2,11,16,0,110,32,64,0,186,0,
+    110,32,65,0,58,0,221,3,6,2,56,3,4,0,18,19,40,3,2,3,16,0,110,32,
+    70,0,58,0,57,5,6,0,110,32,71,0,122,0,40,34,110,16,105,0,9,0,10,3,
+    56,3,6,0,110,32,62,0,122,0,40,24,34,3,59,0,112,16,114,0,3,0,110,32,
+    116,0,115,0,26,7,3,0,110,32,116,0,115,0,110,32,116,0,147,0,110,16,117,0,
+    3,0,12,3,110,32,62,0,58,0,18,67,51,53,18,0,110,32,71,0,154,0,18,19,
+    110,32,63,0,58,0,56,8,4,0,18,19,40,3,2,3,16,0,110,32,68,0,58,0,
+    18,35,50,53,4,0,51,37,16,0,18,19,110,32,58,0,58,0,181,54,56,6,4,0,
+    18,19,40,3,2,3,16,0,110,32,59,0,58,0,18,83,51,53,58,0,84,3,11,0,
+    113,16,153,0,3,0,12,3,218,2,17,3,69,5,3,2,140,83,84,5,11,0,113,16,
+    153,0,5,0,12,5,216,6,2,1,69,5,5,6,140,85,84,6,11,0,113,16,153,0,
+    6,0,12,6,19,18,2,0,216,2,2,2,69,6,6,2,140,98,18,22,113,64,50,0,
+    54,37,12,2,110,32,69,0,42,0,57,4,31,0,98,2,4,0,110,32,51,0,42,0,
+    98,2,3,0,110,32,51,0,42,0,40,19,56,5,18,0,19,2,10,0,50,37,14,0,
+    57,4,12,0,18,19,110,32,61,0,58,0,98,2,2,0,110,32,51,0,42,0,40,2,
+    18,19,84,0,11,0,113,16,149,0,0,0,10,0,51,16,11,0,110,32,55,0,58,0,
+    98,0,1,0,110,32,51,0,10,0,17,10,98,0,0,0,40,250,0,0,10,0,4,0,
+    3,0,0,0,0,0,0,0,226,0,0,0,84,96,11,0,18,241,51,23,7,0,110,48,
+    179,0,128,9,10,6,15,6,113,16,151,0,0,0,12,9,113,16,97,0,7,0,12,0,
+    110,32,140,0,9,0,12,9,31,9,52,0,18,0,57,9,3,0,15,0,110,16,96,0,
+    9,0,10,9,84,98,11,0,113,16,148,0,2,0,12,2,68,2,2,9,221,2,2,8,
+    18,19,57,2,4,0,1,50,40,2,1,2,19,4,64,0,51,72,30,0,84,104,11,0,
+    113,16,149,0,8,0,10,8,51,120,3,0,15,0,84,104,11,0,113,32,159,0,120,0,
+    84,104,11,0,110,16,174,0,8,0,84,102,11,0,20,8,0,128,0,0,113,48,160,0,
+    118,8,15,3,19,4,128,0,51,72,29,0,84,104,11,0,113,16,149,0,8,0,10,8,
+    50,120,3,0,15,0,84,104,11,0,113,32,159,0,24,0,84,104,11,0,110,16,174,0,
+    8,0,84,102,11,0,21,8,1,0,113,48,160,0,118,8,15,3,19,1,16,0,18,84,
+    51,24,53,0,56,2,51,0,84,97,11,0,113,16,155,0,1,0,12,1,68,1,1,9,
+    56,1,41,0,84,97,11,0,113,16,155,0,1,0,12,1,68,1,1,9,19,5,10,0,
+    50,81,29,0,84,97,11,0,113,16,155,0,1,0,12,1,68,1,1,9,50,65,19,0,
+    84,104,11,0,113,16,150,0,8,0,12,8,69,8,8,9,113,48,162,0,152,0,84,102,
+    11,0,113,48,160,0,118,3,15,3,84,103,11,0,113,16,155,0,7,0,12,7,68,7,
+    7,9,51,71,21,0,56,2,19,0,19,7,0,16,51,120,15,0,84,102,11,0,113,16,
+    150,0,6,0,12,6,69,6,6,9,18,40,113,48,162,0,118,8,15,3,84,103,11,0,
+    113,16,155,0,7,0,12,7,68,7,7,9,51,71,21,0,56,2,19,0,19,7,0,32,
+    51,120,15,0,84,102,11,0,113,16,150,0,6,0,12,6,69,6,6,9,18,56,113,48,
+    162,0,118,8,15,3,15,0,2,0,2,0,1,0,0,0,0,0,0,0,6,0,0,0,
+    91,1,11,0,112,16,73,0,0,0,14,0,3,0,3,0,2,0,0,0,0,0,0,0,
+    4,0,0,0,112,32,143,0,16,0,14,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,84,0,38,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,85,0,31,0,15,0,0,0,11,0,2,0,3,0,0,0,0,0,0,0,
+    101,0,0,0,112,16,169,0,9,0,10,0,57,0,7,0,111,32,39,0,169,0,10,9,
+    15,9,110,16,35,0,10,0,10,0,19,1,10,0,18,18,18,243,50,16,60,0,110,16,
+    36,0,10,0,10,0,110,16,37,0,10,0,10,10,84,145,43,0,33,17,177,33,58,1,
+    46,0,84,148,40,0,218,5,1,4,68,6,4,5,45,7,0,6,58,7,33,0,216,7,
+    5,1,68,7,4,7,45,8,10,7,58,8,25,0,216,8,5,2,68,8,4,8,198,134,
+    46,6,0,6,59,6,16,0,216,5,5,3,68,4,4,5,198,71,46,4,10,7,59,4,
+    7,0,84,154,43,0,68,10,10,1,40,5,216,1,1,255,40,211,1,58,82,144,34,0,
+    50,10,18,0,89,154,34,0,50,48,7,0,19,1,0,1,112,48,181,0,9,1,50,58,
+    7,0,19,0,128,0,112,48,181,0,169,0,15,2,0,0,2,0,1,0,2,0,0,0,
+    0,0,0,0,24,0,0,0,110,16,171,0,1,0,12,1,26,0,206,0,110,32,17,0,
+    1,0,12,1,31,1,25,0,56,1,10,0,110,16,49,0,1,0,10,1,56,1,4,0,
+    18,17,15,1,18,1,15,1,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    84,0,39,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    84,0,40,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    82,0,33,0,15,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    84,0,32,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    84,0,41,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,3,0,0,0,
+    84,0,43,0,17,0,0,0,3,0,1,0,3,0,0,0,0,0,0,0,17,0,0,0,
+    110,16,125,0,2,0,10,0,35,0,80,0,110,32,122,0,2,0,34,2,58,0,98,1,
+    10,0,112,48,101,0,2,1,17,2,0,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,84,0,37,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,84,0,42,0,17,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,98,0,15,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,84,0,36,0,17,0,0,0,1,0,1,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,84,0,35,0,17,0,0,0,2,0,2,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,92,1,31,0,14,0,0,0,2,0,2,0,0,0,0,0,0,0,0,0,
+    3,0,0,0,89,1,33,0,14,0,0,0,3,0,3,0,3,0,0,0,0,0,0,0,
+    4,0,0,0,112,48,181,0,16,2,14,0,3,0,3,0,3,0,0,0,0,0,0,0,
+    4,0,0,0,113,48,175,0,16,2,14,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    4,0,0,0,113,0,176,0,0,0,14,0,11,0,0,0,11,0,0,0,0,0,0,0,
+    29,0,0,0,26,9,225,0,26,10,222,0,26,0,226,0,26,1,219,0,26,2,220,0,
+    26,3,223,0,26,4,221,0,26,5,224,0,26,6,219,0,26,7,219,0,26,8,219,0,
+    37,11,87,0,0,0,12,0,105,0,15,0,14,0,0,0,3,0,2,0,3,0,0,0,
+    0,0,0,0,64,0,0,0,112,32,38,0,33,0,18,2,35,32,85,0,91,16,35,0,
+    35,32,84,0,91,16,43,0,35,32,84,0,91,16,41,0,35,32,84,0,91,16,32,0,
+    35,32,83,0,91,16,40,0,35,32,82,0,91,16,39,0,35,32,87,0,91,16,37,0,
+    35,34,87,0,91,18,42,0,34,2,69,0,112,16,137,0,2,0,91,18,36,0,18,242,
+    89,18,33,0,89,18,34,0,34,2,71,0,18,0,112,48,144,0,18,0,91,18,38,0,
+    18,18,110,32,182,0,33,0,110,32,183,0,33,0,14,0,4,0,2,0,3,0,0,0,
+    0,0,0,0,11,0,0,0,34,0,58,0,98,1,10,0,112,48,101,0,48,1,110,32,
+    167,0,2,0,14,0,0,0,3,0,2,0,3,0,0,0,0,0,0,0,10,0,0,0,
+    110,16,173,0,1,0,12,0,56,0,5,0,114,48,42,0,16,2,14,0,7,0,3,0,
+    3,0,0,0,0,0,0,0,68,0,0,0,112,16,169,0,4,0,10,0,56,0,63,0,
+    84,64,36,0,113,16,97,0,5,0,12,1,110,32,139,0,16,0,10,0,57,0,3,0,
+    40,49,113,16,44,0,6,0,12,6,110,16,171,0,4,0,12,0,110,16,16,0,0,0,
+    12,0,110,32,47,0,6,0,98,0,15,0,84,65,41,0,84,66,36,0,113,16,97,0,
+    5,0,12,3,110,32,140,0,50,0,12,2,31,2,52,0,110,16,96,0,2,0,10,2,
+    68,1,1,2,70,0,0,1,110,32,45,0,6,0,110,48,48,0,70,5,112,32,180,0,
+    100,0,14,0,36,0,2,0,3,0,0,0,0,0,0,0,29,1,0,0,8,0,34,0,
+    119,1,128,0,35,0,12,1,98,2,9,0,110,32,127,0,33,0,12,1,110,16,125,0,
+    1,0,10,2,35,35,85,0,35,36,84,0,35,37,84,0,35,38,84,0,218,7,2,4,
+    35,119,83,0,218,8,2,3,35,136,82,0,35,41,87,0,35,42,87,0,34,11,69,0,
+    112,16,137,0,11,0,18,13,18,14,53,45,148,0,110,16,126,0,1,0,11,15,110,16,
+    125,0,1,0,10,12,110,16,125,0,1,0,10,17,110,16,124,0,1,0,10,18,110,16,
+    124,0,1,0,10,19,110,16,124,0,1,0,10,20,110,16,124,0,1,0,10,21,110,16,
+    123,0,1,0,11,22,110,16,123,0,1,0,11,24,110,16,123,0,1,0,11,26,113,16,
+    184,0,1,0,12,28,113,16,184,0,1,0,12,29,19,30,32,0,165,30,15,30,8,32,
+    1,0,2,33,2,0,162,1,15,30,132,17,20,2,255,255,255,127,181,33,113,16,97,0,
+    1,0,12,2,110,32,139,0,43,0,10,2,56,2,3,0,40,65,113,16,97,0,1,0,
+    12,2,2,30,1,0,113,16,97,0,14,0,12,1,110,48,141,0,43,1,76,15,3,14,
+    75,30,4,14,58,12,8,0,98,1,15,0,33,17,53,28,3,0,40,2,18,12,75,12,
+    5,14,75,17,6,14,218,1,14,4,75,18,7,1,216,2,1,1,75,19,7,2,216,2,
+    1,2,75,20,7,2,216,1,1,3,75,21,7,1,218,1,14,3,76,22,8,1,216,2,
+    1,1,76,24,8,2,216,1,1,2,76,26,8,1,77,28,9,14,77,29,10,14,216,14,
+    14,1,216,13,13,1,8,1,32,0,2,2,33,0,41,0,110,255,113,32,136,0,227,0,
+    12,1,91,1,35,0,113,32,135,0,228,0,12,1,91,1,43,0,91,5,41,0,91,6,
+    32,0,91,7,40,0,91,8,39,0,91,9,37,0,91,10,42,0,84,1,36,0,110,16,
+    138,0,1,0,84,1,36,0,110,32,142,0,177,0,82,1,33,0,18,242,50,33,16,0,
+    84,3,36,0,113,16,97,0,1,0,12,1,110,32,139,0,19,0,10,1,57,1,4,0,
+    89,2,33,0,82,1,34,0,50,33,16,0,84,3,36,0,113,16,97,0,1,0,12,1,
+    110,32,139,0,19,0,10,1,57,1,4,0,89,2,34,0,112,16,169,0,0,0,10,1,
+    56,1,18,0,19,1,0,8,113,16,44,0,1,0,12,1,18,18,110,32,46,0,33,0,
+    110,32,177,0,16,0,112,32,180,0,16,0,14,0,0,0,3,0,3,0,2,0,0,0,
+    0,0,0,0,23,0,0,0,84,0,44,0,26,2,0,0,113,32,194,0,32,0,114,16,
+    94,0,1,0,12,0,98,1,10,0,110,32,104,0,16,0,12,0,18,1,113,32,198,0,
+    1,0,18,16,15,0,0,0,3,0,3,0,1,0,0,0,0,0,0,0,12,0,0,0,
+    18,0,1,2,53,18,8,0,113,16,197,0,0,0,216,2,2,1,40,249,18,16,15,0,
+    1,0,1,0,1,0,0,0,0,0,0,0,7,0,0,0,84,0,44,0,113,16,195,0,
+    0,0,18,16,15,0,0,0,2,0,2,0,1,0,0,0,0,0,0,0,10,0,0,0,
+    84,0,44,0,113,16,195,0,0,0,18,16,113,16,197,0,0,0,15,0,2,0,2,0,
+    2,0,0,0,0,0,0,0,7,0,0,0,84,0,44,0,113,32,196,0,16,0,18,16,
+    15,0,0,0,3,0,3,0,2,0,0,0,0,0,0,0,26,0,0,0,84,2,44,0,
+    114,16,94,0,1,0,12,1,113,32,194,0,18,0,84,0,44,0,113,16,193,0,0,0,
+    12,0,98,1,10,0,110,32,104,0,16,0,12,0,18,17,113,32,198,0,1,0,15,1,
+    3,0,2,0,3,0,0,0,0,0,0,0,7,0,0,0,18,0,112,48,74,0,33,0,
+    91,18,44,0,14,0,0,0,2,0,2,0,2,0,0,0,0,0,0,0,8,0,0,0,
+    113,0,206,0,0,0,111,32,40,0,16,0,12,0,17,0,4,0,2,0,2,0,0,0,
+    0,0,0,0,26,0,0,0,82,32,53,0,89,48,8,0,21,0,0,18,82,33,51,0,
+    182,16,89,48,5,0,18,0,89,48,7,0,89,48,6,0,26,3,0,0,91,35,52,0,
+    34,3,74,0,112,32,186,0,35,0,17,3,2,0,2,0,2,0,0,0,0,0,0,0,
+    5,0,0,0,112,32,205,0,16,0,10,0,15,0,0,0,7,0,2,0,3,0,0,0,
+    0,0,0,0,112,0,0,0,110,16,33,0,6,0,10,0,110,16,32,0,6,0,10,1,
+    18,2,18,19,57,1,4,0,1,49,40,2,1,33,19,4,67,0,51,64,44,0,57,1,
+    3,0,15,3,84,86,52,0,110,16,105,0,6,0,10,6,56,6,6,0,113,16,207,0,
+    2,0,40,27,84,86,52,0,110,16,107,0,6,0,10,0,18,241,110,48,108,0,6,1,
+    10,0,110,48,112,0,38,0,12,6,91,86,52,0,98,5,10,0,110,32,104,0,86,0,
+    12,5,113,32,208,0,83,0,15,3,19,4,66,0,50,64,40,0,19,4,160,0,51,64,
+    3,0,40,34,110,16,34,0,6,0,10,6,19,0,32,0,53,6,3,0,15,2,56,1,
+    23,0,112,16,202,0,5,0,34,5,58,0,113,16,95,0,6,0,12,6,112,32,102,0,
+    101,0,98,6,10,0,110,32,104,0,101,0,12,5,113,32,208,0,82,0,15,3,56,1,
+    8,0,112,16,202,0,5,0,113,16,207,0,3,0,15,3,1,0,1,0,0,0,0,0,
+    0,0,0,0,2,0,0,0,18,16,15,0,4,0,3,0,3,0,0,0,0,0,0,0,
+    20,0,0,0,85,16,54,0,56,0,8,0,112,32,205,0,49,0,10,0,57,0,8,0,
+    111,48,41,0,33,3,10,1,56,1,4,0,18,17,15,1,18,1,15,1,1,0,1,0,
+    0,0,0,0,0,0,0,0,3,0,0,0,84,0,52,0,17,0,0,0,2,0,2,0,
+    0,0,0,0,0,0,0,0,3,0,0,0,91,1,52,0,14,0,0,0,1,0,1,0,
+    1,0,0,0,0,0,0,0,4,0,0,0,112,16,202,0,0,0,14,0,1,0,1,0,
+    1,0,0,0,0,0,0,0,4,0,0,0,113,16,207,0,0,0,14,0,2,0,2,0,
+    2,0,0,0,0,0,0,0,4,0,0,0,113,32,208,0,16,0,14,0,2,0,0,0,
+    0,0,0,0,0,0,0,0,48,0,0,0,18,96,35,1,84,0,38,1,13,0,0,0,
+    105,1,50,0,35,0,84,0,38,0,22,0,0,0,105,0,45,0,14,0,0,3,4,0,
+    6,0,0,0,1,0,0,0,2,0,0,0,2,32,0,0,33,0,0,0,17,0,0,0,
+    129,0,0,0,0,3,4,0,6,0,0,0,1,0,0,0,6,0,0,0,2,0,0,0,
+    5,0,0,0,3,0,0,0,4,0,0,0,4,0,2,0,2,0,0,0,0,0,0,0,
+    39,0,0,0,112,32,38,0,50,0,98,0,50,0,18,1,68,0,0,1,89,32,53,0,
+    18,16,89,32,51,0,26,1,0,0,91,33,52,0,110,32,214,0,2,0,110,32,215,0,
+    2,0,32,50,4,0,56,2,13,0,31,3,4,0,110,16,3,0,3,0,12,2,19,3,
+    48,0,110,32,43,0,50,0,14,0,0,0,8,0,3,0,3,0,0,0,0,0,0,0,
+    94,0,0,0,110,16,203,0,5,0,12,0,26,1,42,1,110,32,17,0,16,0,12,0,
+    31,0,33,0,213,113,255,0,225,7,7,8,213,119,255,0,98,2,50,0,33,35,18,4,
+    53,49,3,0,40,2,1,65,68,1,2,1,98,2,45,0,33,35,53,55,3,0,40,2,
+    1,71,68,7,2,7,82,82,53,0,51,33,6,0,82,82,51,0,50,39,16,0,89,81,
+    53,0,89,87,51,0,85,87,54,0,56,7,8,0,112,16,202,0,5,0,110,32,76,0,
+    80,0,85,87,54,0,56,6,17,0,57,7,11,0,18,22,92,86,54,0,110,16,213,0,
+    5,0,110,32,76,0,80,0,110,48,77,0,80,4,14,0,56,7,15,0,92,84,54,0,
+    26,6,0,0,91,86,52,0,110,16,204,0,5,0,12,5,110,48,75,0,80,4,14,0,
+    3,0,1,0,2,0,0,0,0,0,0,0,25,0,0,0,84,32,52,0,110,16,105,0,
+    0,0,10,0,57,0,18,0,84,32,52,0,26,1,0,0,91,33,52,0,98,2,10,0,
+    110,32,104,0,32,0,12,2,18,0,113,32,208,0,32,0,14,0,0,0,7,0,7,0,
+    1,0,0,0,0,0,0,0,16,0,0,0,91,2,60,0,89,3,58,0,91,4,57,0,
+    91,5,59,0,91,6,56,0,91,1,55,0,112,16,100,0,0,0,14,0,10,0,1,0,
+    3,0,17,0,0,0,0,0,235,0,0,0,18,0,84,145,60,0,110,16,132,0,1,0,
+    10,1,18,2,56,1,6,0,113,32,220,0,2,0,14,0,82,145,58,0,18,67,18,20,
+    51,49,62,0,34,1,44,0,84,147,57,0,112,32,87,0,49,0,84,147,59,0,84,153,
+    60,0,110,32,131,0,41,0,12,9,31,9,15,0,26,2,153,1,110,48,14,0,147,2,
+    12,9,113,32,218,0,145,0,56,9,5,0,110,16,92,0,9,0,110,16,90,0,1,0,
+    113,32,220,0,4,0,14,0,13,2,56,9,10,0,110,16,92,0,9,0,40,5,13,9,
+    110,32,121,0,146,0,39,2,13,9,110,16,90,0,1,0,40,5,13,1,110,32,121,0,
+    25,0,39,9,34,1,42,0,112,16,80,0,1,0,1,35,84,149,60,0,110,16,133,0,
+    5,0,10,5,53,83,130,0,34,5,43,0,84,150,56,0,113,0,118,0,0,0,11,7,
+    113,32,98,0,135,0,12,7,34,8,59,0,112,16,114,0,8,0,110,32,116,0,120,0,
+    26,7,4,0,110,32,116,0,120,0,110,32,115,0,56,0,110,16,117,0,8,0,12,7,
+    112,48,84,0,101,7,110,16,86,0,5,0,34,6,43,0,84,151,59,0,84,152,60,0,
+    110,32,131,0,56,0,12,8,31,8,15,0,113,32,219,0,135,0,12,7,112,48,84,0,
+    86,7,84,149,59,0,84,151,60,0,110,32,131,0,55,0,12,7,31,7,15,0,110,32,
+    13,0,117,0,12,5,34,7,45,0,112,32,88,0,103,0,113,32,218,0,117,0,110,16,
+    92,0,7,0,56,5,5,0,110,16,90,0,5,0,110,16,85,0,6,0,12,5,98,6,
+    10,0,110,32,104,0,101,0,12,5,110,32,83,0,81,0,110,32,82,0,33,0,216,3,
+    3,1,40,143,13,9,110,16,92,0,7,0,40,5,13,1,110,32,121,0,25,0,39,9,
+    13,9,56,5,10,0,110,16,90,0,5,0,40,5,13,1,110,32,121,0,25,0,39,9,
+    110,16,81,0,1,0,12,9,113,32,220,0,148,0,14,0,18,249,113,32,220,0,9,0,
+    14,0,0,0,1,0,0,0,26,0,1,0,27,0,0,0,16,0,5,0,43,0,0,0,
+    3,0,7,0,48,0,0,0,3,0,5,0,51,0,0,0,6,0,1,0,61,0,0,0,
+    3,0,9,0,66,0,0,0,4,0,5,0,71,0,0,0,3,0,11,0,76,0,0,0,
+    89,0,1,0,165,0,0,0,5,0,13,0,170,0,0,0,3,0,16,0,173,0,0,0,
+    3,0,13,0,178,0,0,0,19,0,1,0,201,0,0,0,3,0,19,0,206,0,0,0,
+    4,0,13,0,213,0,0,0,3,0,22,0,218,0,0,0,11,0,1,0,9,1,51,230,
+    1,0,70,0,58,0,65,0,75,0,210,1,0,200,1,0,205,1,0,217,1,0,0,0,
+    2,0,2,0,2,0,0,0,0,0,0,0,5,0,0,0,113,32,226,0,16,0,12,0,
+    17,0,0,0,4,0,2,0,2,0,0,0,0,0,0,0,32,0,0,0,19,0,46,0,
+    110,32,106,0,2,0,10,0,59,0,4,0,18,2,40,19,113,0,79,0,0,0,12,1,
+    216,0,0,1,110,32,111,0,2,0,12,2,110,16,113,0,2,0,12,2,110,32,78,0,
+    33,0,12,2,56,2,3,0,17,2,17,3,10,0,2,0,6,0,5,0,0,0,0,0,
+    101,0,0,0,18,1,26,0,204,0,36,16,87,0,0,0,12,4,18,6,18,7,18,5,
+    7,130,7,147,116,6,15,0,2,0,12,8,56,8,28,0,114,16,28,0,8,0,10,9,
+    56,9,22,0,18,9,114,32,27,0,152,0,12,9,40,16,13,0,7,9,56,8,11,0,
+    114,16,26,0,8,0,40,6,13,0,7,8,110,32,121,0,137,0,39,9,7,25,56,8,
+    5,0,114,16,26,0,8,0,7,145,40,2,7,147,57,1,6,0,110,16,31,0,3,0,
+    12,1,26,8,247,0,57,1,3,0,17,8,19,9,47,0,110,32,106,0,145,0,10,9,
+    216,9,9,1,110,32,111,0,145,0,12,9,110,16,105,0,9,0,10,0,57,0,20,0,
+    26,0,31,0,110,32,103,0,9,0,10,0,57,0,12,0,26,0,32,0,110,32,103,0,
+    9,0,10,0,56,0,3,0,40,2,7,152,17,8,0,0,1,0,0,0,6,0,1,0,
+    12,0,0,0,4,0,4,0,18,0,0,0,11,0,7,0,34,0,0,0,3,0,9,0,
+    40,0,0,0,10,0,4,0,4,1,57,52,1,57,53,0,30,0,38,0,8,0,1,0,
+    2,0,0,0,0,0,0,0,76,0,0,0,34,0,67,0,112,16,129,0,0,0,26,1,
+    195,0,110,32,109,0,23,0,12,7,33,113,18,2,1,35,18,4,53,19,45,0,70,5,
+    7,3,26,6,31,0,110,32,110,0,101,0,10,6,56,6,7,0,18,22,110,32,111,0,
+    101,0,12,5,110,16,105,0,5,0,10,6,56,6,3,0,40,19,113,0,79,0,0,0,
+    12,6,110,16,113,0,5,0,12,5,110,32,78,0,86,0,12,5,57,5,3,0,17,4,
+    110,32,130,0,80,0,216,3,3,1,40,211,110,16,132,0,0,0,10,7,56,7,3,0,
+    17,4,35,39,87,0,110,32,134,0,112,0,12,7,31,7,87,0,17,7,2,0,2,0,
+    2,0,0,0,0,0,0,0,4,0,0,0,113,32,222,0,16,0,14,0,2,0,2,0,
+    2,0,0,0,0,0,0,0,4,0,0,0,113,32,227,0,16,0,14,0,1,0,1,0,
+    1,0,0,0,0,0,0,0,4,0,0,0,112,16,4,0,0,0,14,0,5,0,2,0,
+    4,0,0,0,0,0,0,0,28,0,0,0,56,3,20,0,56,4,18,0,21,0,1,0,
+    35,0,80,0,110,32,91,0,3,0,10,1,61,1,7,0,18,2,110,64,93,0,4,18,
+    40,246,14,0,34,3,46,0,26,4,133,1,112,32,89,0,67,0,39,3,11,0,4,0,
+    7,0,0,0,0,0,0,0,102,0,0,0,216,3,8,255,110,16,223,0,7,0,12,8,
+    18,240,18,1,18,2,51,9,88,0,56,10,86,0,57,8,3,0,40,82,1,41,34,2,
+    67,0,112,16,129,0,2,0,110,16,20,0,10,0,12,0,56,0,22,0,110,16,12,0,
+    0,0,10,10,53,169,29,0,110,32,11,0,144,0,12,10,110,16,10,0,10,0,12,10,
+    110,32,130,0,162,0,216,9,9,1,40,237,110,16,21,0,10,0,12,9,56,9,9,0,
+    110,16,21,0,10,0,12,9,110,32,130,0,146,0,84,116,68,0,91,113,68,0,110,16,
+    1,0,8,0,12,5,34,6,43,0,110,16,0,0,8,0,12,8,26,9,234,0,112,48,
+    84,0,134,9,34,8,61,0,34,0,76,0,7,113,118,7,216,0,0,0,26,7,235,0,
+    112,48,119,0,8,7,110,16,120,0,8,0,14,0,1,41,113,32,227,0,25,0,14,0,
+    8,0,5,0,3,0,1,0,0,0,0,0,110,0,0,0,26,0,77,1,110,16,2,0,
+    3,0,12,3,110,32,7,0,3,0,12,1,31,1,77,0,57,1,21,0,34,1,77,0,
+    112,16,221,0,1,0,110,16,5,0,3,0,12,2,110,48,8,0,18,0,12,0,110,16,
+    9,0,0,0,110,16,6,0,3,0,18,67,18,16,51,52,26,0,91,23,68,0,34,3,
+    12,0,26,5,213,0,112,32,18,0,83,0,26,5,230,0,113,32,224,0,86,0,12,5,
+    110,32,25,0,83,0,26,5,218,0,110,48,22,0,83,6,40,34,34,3,12,0,26,6,
+    214,0,112,32,18,0,99,0,26,6,2,0,110,32,25,0,99,0,113,16,225,0,5,0,
+    12,5,56,5,7,0,26,6,217,0,110,48,24,0,99,5,26,5,216,0,51,4,4,0,
+    1,6,40,2,18,6,110,48,23,0,83,6,26,5,215,0,110,32,19,0,83,0,176,4,
+    110,48,230,0,49,4,14,0,18,243,18,4,113,32,227,0,67,0,14,0,2,0,0,0,
+    101,0,1,0,1,1,57,104,1,0,0,0,56,0,0,0,1,0,0,0,1,0,0,0,
+    1,0,0,0,2,0,0,0,2,0,0,0,2,0,2,0,1,0,0,0,73,0,0,0,
+    1,0,0,0,80,0,0,0,1,0,0,0,58,0,0,0,2,0,0,0,5,0,58,0,
+    2,0,0,0,58,0,58,0,2,0,0,0,58,0,79,0,2,0,0,0,58,0,87,0,
+    5,0,0,0,15,0,87,0,58,0,87,0,58,0,0,0,1,0,0,0,23,0,0,0,
+    4,0,0,0,2,0,1,0,1,0,1,0,1,0,0,0,20,0,0,0,2,0,0,0,
+    20,0,2,0,1,0,0,0,31,0,0,0,1,0,0,0,15,0,0,0,2,0,0,0,
+    15,0,58,0,1,0,0,0,55,0,0,0,2,0,0,0,55,0,55,0,1,0,0,0,
+    3,0,0,0,2,0,0,0,10,0,15,0,1,0,0,0,63,0,0,0,1,0,0,0,
+    75,0,0,0,1,0,0,0,64,0,0,0,4,0,0,0,2,0,2,0,2,0,2,0,
+    3,0,0,0,2,0,2,0,12,0,0,0,2,0,0,0,2,0,80,0,2,0,0,0,
+    3,0,2,0,5,0,0,0,4,0,2,0,58,0,58,0,58,0,0,0,1,0,0,0,
+    11,0,0,0,2,0,0,0,12,0,2,0,1,0,0,0,14,0,0,0,2,0,0,0,
+    20,0,79,0,1,0,0,0,24,0,0,0,1,0,0,0,26,0,0,0,1,0,0,0,
+    27,0,0,0,1,0,0,0,28,0,0,0,1,0,0,0,43,0,0,0,2,0,0,0,
+    43,0,58,0,2,0,0,0,47,0,48,0,1,0,0,0,49,0,0,0,2,0,0,0,
+    56,0,58,0,1,0,0,0,62,0,0,0,1,0,0,0,70,0,0,0,2,0,0,0,
+    73,0,2,0,3,0,0,0,73,0,2,0,2,0,0,0,2,0,0,0,73,0,72,0,
+    2,0,0,0,73,0,79,0,2,0,0,0,75,0,58,0,6,0,0,0,77,0,67,0,
+    2,0,58,0,10,0,43,0,1,0,0,0,79,0,0,0,2,0,0,0,79,0,2,0,
+    3,0,0,0,80,0,2,0,2,0,0,0,2,0,0,0,80,0,65,0,1,0,0,0,
+    81,0,0,0,1,0,0,0,84,0,0,0,3,0,0,0,2,0,2,0,16,0,0,0,
+    2,0,0,0,2,0,16,0,2,0,0,0,2,0,18,0,2,0,0,0,17,0,2,0,
+    1,0,0,0,18,0,0,0,1,0,0,0,19,0,0,0,2,0,0,0,20,0,24,0,
+    2,0,0,0,49,0,2,0,2,0,0,0,75,0,18,0,1,0,0,0,65,0,0,0,
+    2,0,0,0,84,0,2,0,2,0,0,0,85,0,2,0,1,0,0,0,86,0,0,0,
+    3,40,41,86,0,3,42,47,42,0,2,44,32,0,1,45,0,17,45,36,36,78,101,115,
+    116,36,102,103,101,116,97,115,107,101,100,0,21,45,36,36,78,101,115,116,36,102,103,101,
+    116,99,111,109,112,111,115,105,110,103,0,17,45,36,36,78,101,115,116,36,102,103,101,116,
+    102,108,97,103,115,0,19,45,36,36,78,101,115,116,36,102,103,101,116,102,111,99,117,115,
+    101,100,0,15,45,36,36,78,101,115,116,36,102,103,101,116,105,100,115,0,19,45,36,36,
+    78,101,115,116,36,102,103,101,116,105,110,100,101,120,79,102,0,18,45,36,36,78,101,115,
+    116,36,102,103,101,116,108,97,98,101,108,115,0,18,45,36,36,78,101,115,116,36,102,103,
+    101,116,114,97,110,103,101,115,0,17,45,36,36,78,101,115,116,36,102,103,101,116,114,101,
+    99,116,115,0,17,45,36,36,78,101,115,116,36,102,103,101,116,114,111,108,101,115,0,18,
+    45,36,36,78,101,115,116,36,102,103,101,116,118,97,108,117,101,115,0,19,45,36,36,78,
+    101,115,116,36,102,103,101,116,118,105,114,116,117,97,108,0,17,45,36,36,78,101,115,116,
+    36,102,112,117,116,97,115,107,101,100,0,21,45,36,36,78,101,115,116,36,102,112,117,116,
+    99,111,109,112,111,115,105,110,103,0,19,45,36,36,78,101,115,116,36,102,112,117,116,102,
+    111,99,117,115,101,100,0,15,45,36,36,78,101,115,116,36,109,102,105,110,105,115,104,0,
+    12,45,36,36,78,101,115,116,36,109,107,101,121,0,16,45,36,36,78,101,115,116,36,109,
+    115,101,110,100,70,111,114,0,20,45,36,36,78,101,115,116,36,115,102,103,101,116,67,76,
+    65,83,83,69,83,0,14,45,36,36,78,101,115,116,36,115,109,99,111,112,121,0,14,45,
+    36,36,78,101,115,116,36,115,109,110,97,109,101,0,22,45,36,36,78,101,115,116,36,115,
+    109,110,97,116,105,118,101,65,99,99,101,115,115,0,28,45,36,36,78,101,115,116,36,115,
+    109,110,97,116,105,118,101,65,99,99,101,115,115,65,99,116,105,118,101,0,19,45,36,36,
+    78,101,115,116,36,115,109,110,97,116,105,118,101,75,101,121,0,22,45,36,36,78,101,115,
+    116,36,115,109,110,97,116,105,118,101,80,105,99,107,101,100,0,20,45,36,36,78,101,115,
+    116,36,115,109,110,97,116,105,118,101,84,101,120,116,0,1,46,0,2,46,46,0,8,60,
+    99,108,105,110,105,116,62,0,6,60,105,110,105,116,62,0,2,62,59,0,7,65,67,84,
+    73,79,78,83,0,26,65,67,84,73,79,78,95,65,67,67,69,83,83,73,66,73,76,73,
+    84,89,95,70,79,67,85,83,0,32,65,67,84,73,79,78,95,67,76,69,65,82,95,65,
+    67,67,69,83,83,73,66,73,76,73,84,89,95,70,79,67,85,83,0,12,65,67,84,73,
+    79,78,95,67,76,73,67,75,0,22,65,67,84,73,79,78,95,83,67,82,79,76,76,95,
+    66,65,67,75,87,65,82,68,0,21,65,67,84,73,79,78,95,83,67,82,79,76,76,95,
+    70,79,82,87,65,82,68,0,9,66,65,67,75,83,80,65,67,69,0,6,66,85,84,84,
+    79,78,0,9,67,65,78,67,69,76,76,69,68,0,8,67,72,69,67,75,66,79,88,0,
+    7,67,72,69,67,75,69,68,0,7,67,76,65,83,83,69,83,0,6,67,79,77,77,73,
+    84,0,7,67,79,77,80,79,83,69,0,10,67,111,110,110,101,99,116,105,111,110,0,1,
+    68,0,18,68,56,36,36,83,121,110,116,104,101,116,105,99,67,108,97,115,115,0,9,68,
+    69,67,82,69,77,69,78,84,0,8,68,73,83,65,66,76,69,68,0,8,68,82,79,80,
+    68,79,87,78,0,5,69,78,84,69,82,0,6,69,88,80,79,82,84,0,1,70,0,6,
+    70,65,73,76,69,68,0,4,70,73,76,69,0,5,70,73,76,69,83,0,1,73,0,2,
+    73,70,0,2,73,73,0,3,73,73,73,0,2,73,76,0,5,73,77,65,71,69,0,9,
+    73,78,67,82,69,77,69,78,84,0,1,74,0,1,76,0,2,76,73,0,5,76,73,70,
+    70,70,0,3,76,73,73,0,9,76,73,83,84,95,73,84,69,77,0,13,76,73,84,84,
+    76,69,95,69,78,68,73,65,78,0,2,76,74,0,2,76,76,0,3,76,76,73,0,3,
+    76,76,76,0,6,76,76,76,76,76,76,0,3,76,76,90,0,22,76,97,110,100,114,111,
+    105,100,47,97,112,112,47,65,99,116,105,118,105,116,121,59,0,22,76,97,110,100,114,111,
+    105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,59,0,29,76,97,110,100,114,111,
+    105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,77,97,110,97,103,101,114,59,0,
+    33,76,97,110,100,114,111,105,100,47,97,112,112,47,70,114,97,103,109,101,110,116,84,114,
+    97,110,115,97,99,116,105,111,110,59,0,31,76,97,110,100,114,111,105,100,47,99,111,110,
+    116,101,110,116,47,67,108,105,112,68,97,116,97,36,73,116,101,109,59,0,26,76,97,110,
+    100,114,111,105,100,47,99,111,110,116,101,110,116,47,67,108,105,112,68,97,116,97,59,0,
+    33,76,97,110,100,114,111,105,100,47,99,111,110,116,101,110,116,47,67,111,110,116,101,110,
+    116,82,101,115,111,108,118,101,114,59,0,25,76,97,110,100,114,111,105,100,47,99,111,110,
+    116,101,110,116,47,67,111,110,116,101,120,116,59,0,24,76,97,110,100,114,111,105,100,47,
+    99,111,110,116,101,110,116,47,73,110,116,101,110,116,59,0,25,76,97,110,100,114,111,105,
+    100,47,100,97,116,97,98,97,115,101,47,67,117,114,115,111,114,59,0,23,76,97,110,100,
+    114,111,105,100,47,103,114,97,112,104,105,99,115,47,82,101,99,116,59,0,17,76,97,110,
+    100,114,111,105,100,47,110,101,116,47,85,114,105,59,0,19,76,97,110,100,114,111,105,100,
+    47,111,115,47,66,117,110,100,108,101,59,0,20,76,97,110,100,114,111,105,100,47,111,115,
+    47,73,66,105,110,100,101,114,59,0,23,76,97,110,100,114,111,105,100,47,118,105,101,119,
+    47,75,101,121,69,118,101,110,116,59,0,26,76,97,110,100,114,111,105,100,47,118,105,101,
+    119,47,77,111,116,105,111,110,69,118,101,110,116,59,0,19,76,97,110,100,114,111,105,100,
+    47,118,105,101,119,47,86,105,101,119,59,0,25,76,97,110,100,114,111,105,100,47,118,105,
+    101,119,47,86,105,101,119,80,97,114,101,110,116,59,0,21,76,97,110,100,114,111,105,100,
+    47,118,105,101,119,47,87,105,110,100,111,119,59,0,27,76,97,110,100,114,111,105,100,47,
+    118,105,101,119,47,87,105,110,100,111,119,73,110,115,101,116,115,59,0,47,76,97,110,100,
+    114,111,105,100,47,118,105,101,119,47,97,99,99,101,115,115,105,98,105,108,105,116,121,47,
+    65,99,99,101,115,115,105,98,105,108,105,116,121,69,118,101,110,116,59,0,49,76,97,110,
+    100,114,111,105,100,47,118,105,101,119,47,97,99,99,101,115,115,105,98,105,108,105,116,121,
+    47,65,99,99,101,115,115,105,98,105,108,105,116,121,77,97,110,97,103,101,114,59,0,70,
+    76,97,110,100,114,111,105,100,47,118,105,101,119,47,97,99,99,101,115,115,105,98,105,108,
+    105,116,121,47,65,99,99,101,115,115,105,98,105,108,105,116,121,78,111,100,101,73,110,102,
+    111,36,65,99,99,101,115,115,105,98,105,108,105,116,121,65,99,116,105,111,110,59,0,60,
+    76,97,110,100,114,111,105,100,47,118,105,101,119,47,97,99,99,101,115,115,105,98,105,108,
+    105,116,121,47,65,99,99,101,115,115,105,98,105,108,105,116,121,78,111,100,101,73,110,102,
+    111,36,82,97,110,103,101,73,110,102,111,59,0,50,76,97,110,100,114,111,105,100,47,118,
+    105,101,119,47,97,99,99,101,115,115,105,98,105,108,105,116,121,47,65,99,99,101,115,115,
+    105,98,105,108,105,116,121,78,111,100,101,73,110,102,111,59,0,54,76,97,110,100,114,111,
+    105,100,47,118,105,101,119,47,97,99,99,101,115,115,105,98,105,108,105,116,121,47,65,99,
+    99,101,115,115,105,98,105,108,105,116,121,78,111,100,101,80,114,111,118,105,100,101,114,59,
+    0,46,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,
+    104,111,100,47,66,97,115,101,73,110,112,117,116,67,111,110,110,101,99,116,105,111,110,59,
+    0,37,76,97,110,100,114,111,105,100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,
+    104,111,100,47,69,100,105,116,111,114,73,110,102,111,59,0,42,76,97,110,100,114,111,105,
+    100,47,118,105,101,119,47,105,110,112,117,116,109,101,116,104,111,100,47,73,110,112,117,116,
+    67,111,110,110,101,99,116,105,111,110,59,0,45,76,97,110,100,114,111,105,100,47,118,105,
+    101,119,47,105,110,112,117,116,109,101,116,104,111,100,47,73,110,112,117,116,77,101,116,104,
+    111,100,77,97,110,97,103,101,114,59,0,28,76,97,110,100,114,111,105,100,47,119,101,98,
+    107,105,116,47,77,105,109,101,84,121,112,101,77,97,112,59,0,34,76,100,97,108,118,105,
+    107,47,97,110,110,111,116,97,116,105,111,110,47,69,110,99,108,111,115,105,110,103,67,108,
+    97,115,115,59,0,35,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,
+    47,69,110,99,108,111,115,105,110,103,77,101,116,104,111,100,59,0,30,76,100,97,108,118,
+    105,107,47,97,110,110,111,116,97,116,105,111,110,47,73,110,110,101,114,67,108,97,115,115,
+    59,0,33,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,77,101,
+    109,98,101,114,67,108,97,115,115,101,115,59,0,36,76,100,97,108,118,105,107,47,97,110,
+    110,111,116,97,116,105,111,110,47,77,101,116,104,111,100,80,97,114,97,109,101,116,101,114,
+    115,59,0,29,76,100,97,108,118,105,107,47,97,110,110,111,116,97,116,105,111,110,47,83,
+    105,103,110,97,116,117,114,101,59,0,26,76,100,97,108,118,105,107,47,97,110,110,111,116,
+    97,116,105,111,110,47,84,104,114,111,119,115,59,0,31,76,106,97,118,97,47,105,111,47,
+    66,121,116,101,65,114,114,97,121,79,117,116,112,117,116,83,116,114,101,97,109,59,0,14,
+    76,106,97,118,97,47,105,111,47,70,105,108,101,59,0,25,76,106,97,118,97,47,105,111,
+    47,70,105,108,101,73,110,112,117,116,83,116,114,101,97,109,59,0,26,76,106,97,118,97,
+    47,105,111,47,70,105,108,101,79,117,116,112,117,116,83,116,114,101,97,109,59,0,21,76,
+    106,97,118,97,47,105,111,47,73,79,69,120,99,101,112,116,105,111,110,59,0,21,76,106,
+    97,118,97,47,105,111,47,73,110,112,117,116,83,116,114,101,97,109,59,0,22,76,106,97,
+    118,97,47,105,111,47,79,117,116,112,117,116,83,116,114,101,97,109,59,0,24,76,106,97,
+    118,97,47,108,97,110,103,47,67,104,97,114,83,101,113,117,101,110,99,101,59,0,21,76,
+    106,97,118,97,47,108,97,110,103,47,67,104,97,114,97,99,116,101,114,59,0,21,76,106,
+    97,118,97,47,108,97,110,103,47,69,120,99,101,112,116,105,111,110,59,0,19,76,106,97,
+    118,97,47,108,97,110,103,47,73,110,116,101,103,101,114,59,0,16,76,106,97,118,97,47,
+    108,97,110,103,47,76,111,110,103,59,0,16,76,106,97,118,97,47,108,97,110,103,47,77,
+    97,116,104,59,0,18,76,106,97,118,97,47,108,97,110,103,47,79,98,106,101,99,116,59,
     0,20,76,106,97,118,97,47,108,97,110,103,47,82,117,110,110,97,98,108,101,59,0,28,
     76,106,97,118,97,47,108,97,110,103,47,82,117,110,116,105,109,101,69,120,99,101,112,116,
     105,111,110,59,0,18,76,106,97,118,97,47,108,97,110,103,47,83,116,114,105,110,103,59,
     0,25,76,106,97,118,97,47,108,97,110,103,47,83,116,114,105,110,103,66,117,105,108,100,
     101,114,59,0,18,76,106,97,118,97,47,108,97,110,103,47,83,121,115,116,101,109,59,0,
     18,76,106,97,118,97,47,108,97,110,103,47,84,104,114,101,97,100,59,0,21,76,106,97,
-    118,97,47,108,97,110,103,47,84,104,114,111,119,97,98,108,101,59,0,26,76,106,97,118,
-    97,47,110,105,111,47,99,104,97,114,115,101,116,47,67,104,97,114,115,101,116,59,0,35,
-    76,106,97,118,97,47,110,105,111,47,99,104,97,114,115,101,116,47,83,116,97,110,100,97,
-    114,100,67,104,97,114,115,101,116,115,59,0,21,76,106,97,118,97,47,117,116,105,108,47,
-    65,114,114,97,121,76,105,115,116,59,0,41,76,111,114,103,47,99,101,101,115,97,102,101,
-    47,119,105,110,100,111,119,47,73,110,112,117,116,86,105,101,119,36,67,111,110,110,101,99,
-    116,105,111,110,59,0,30,76,111,114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,
-    111,119,47,73,110,112,117,116,86,105,101,119,59,0,29,76,111,114,103,47,99,101,101,115,
-    97,102,101,47,119,105,110,100,111,119,47,80,105,99,107,101,114,36,49,59,0,27,76,111,
-    114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,111,119,47,80,105,99,107,101,114,
-    59,0,5,83,65,86,69,68,0,3,84,65,71,0,5,84,89,80,69,83,0,5,85,84,
-    70,95,56,0,1,86,0,2,86,73,0,4,86,73,73,76,0,3,86,73,76,0,2,86,
+    118,97,47,108,97,110,103,47,84,104,114,111,119,97,98,108,101,59,0,21,76,106,97,118,
+    97,47,110,105,111,47,66,121,116,101,66,117,102,102,101,114,59,0,20,76,106,97,118,97,
+    47,110,105,111,47,66,121,116,101,79,114,100,101,114,59,0,26,76,106,97,118,97,47,110,
+    105,111,47,99,104,97,114,115,101,116,47,67,104,97,114,115,101,116,59,0,35,76,106,97,
+    118,97,47,110,105,111,47,99,104,97,114,115,101,116,47,83,116,97,110,100,97,114,100,67,
+    104,97,114,115,101,116,115,59,0,21,76,106,97,118,97,47,117,116,105,108,47,65,114,114,
+    97,121,76,105,115,116,59,0,18,76,106,97,118,97,47,117,116,105,108,47,65,114,114,97,
+    121,115,59,0,19,76,106,97,118,97,47,117,116,105,108,47,72,97,115,104,77,97,112,59,
+    0,19,76,106,97,118,97,47,117,116,105,108,47,72,97,115,104,77,97,112,60,0,15,76,
+    106,97,118,97,47,117,116,105,108,47,77,97,112,59,0,40,76,111,114,103,47,99,101,101,
+    115,97,102,101,47,119,105,110,100,111,119,47,65,99,99,101,115,115,86,105,101,119,36,80,
+    114,111,118,105,100,101,114,59,0,34,76,111,114,103,47,99,101,101,115,97,102,101,47,119,
+    105,110,100,111,119,47,65,99,99,101,115,115,86,105,101,119,45,73,65,59,0,31,76,111,
+    114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,111,119,47,65,99,99,101,115,115,
+    86,105,101,119,59,0,41,76,111,114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,
+    111,119,47,73,110,112,117,116,86,105,101,119,36,67,111,110,110,101,99,116,105,111,110,59,
+    0,30,76,111,114,103,47,99,101,101,115,97,102,101,47,119,105,110,100,111,119,47,73,110,
+    112,117,116,86,105,101,119,59,0,29,76,111,114,103,47,99,101,101,115,97,102,101,47,119,
+    105,110,100,111,119,47,80,105,99,107,101,114,36,49,59,0,27,76,111,114,103,47,99,101,
+    101,115,97,102,101,47,119,105,110,100,111,119,47,80,105,99,107,101,114,59,0,9,77,69,
+    78,85,95,73,84,69,77,0,5,80,82,69,83,83,0,8,80,114,111,118,105,100,101,114,
+    0,5,82,65,68,73,79,0,5,83,65,86,69,68,0,6,83,69,67,85,82,69,0,8,
+    83,69,76,69,67,84,69,68,0,6,83,76,73,68,69,82,0,3,84,65,66,0,3,84,
+    65,71,0,4,84,69,88,84,0,10,84,69,88,84,95,70,73,69,76,68,0,5,84,89,
+    80,69,83,0,5,85,84,70,95,56,0,1,86,0,2,86,73,0,3,86,73,73,0,5,
+    86,73,73,73,73,0,4,86,73,73,76,0,3,86,73,76,0,3,86,74,73,0,2,86,
     76,0,3,86,76,73,0,4,86,76,73,73,0,6,86,76,73,76,76,76,0,3,86,76,
     76,0,7,86,76,76,73,76,76,76,0,3,86,76,90,0,2,86,90,0,3,86,90,73,
-    0,1,90,0,2,90,73,0,3,90,73,73,0,3,90,73,76,0,2,90,76,0,3,90,
-    76,73,0,3,90,76,76,0,5,91,44,32,93,43,0,2,91,66,0,2,91,67,0,2,
-    91,73,0,19,91,76,106,97,118,97,47,108,97,110,103,47,79,98,106,101,99,116,59,0,
-    19,91,76,106,97,118,97,47,108,97,110,103,47,83,116,114,105,110,103,59,0,13,95,100,
-    105,115,112,108,97,121,95,110,97,109,101,0,11,97,99,99,101,115,115,70,108,97,103,115,
-    0,6,97,99,116,105,111,110,0,3,97,100,100,0,11,97,100,100,67,97,116,101,103,111,
-    114,121,0,13,97,100,100,83,117,112,112,114,101,115,115,101,100,0,37,97,110,100,114,111,
-    105,100,46,105,110,116,101,110,116,46,97,99,116,105,111,110,46,67,82,69,65,84,69,95,
-    68,79,67,85,77,69,78,84,0,35,97,110,100,114,111,105,100,46,105,110,116,101,110,116,
-    46,97,99,116,105,111,110,46,79,80,69,78,95,68,79,67,85,77,69,78,84,0,32,97,
-    110,100,114,111,105,100,46,105,110,116,101,110,116,46,99,97,116,101,103,111,114,121,46,79,
-    80,69,78,65,66,76,69,0,35,97,110,100,114,111,105,100,46,105,110,116,101,110,116,46,
-    101,120,116,114,97,46,65,76,76,79,87,95,77,85,76,84,73,80,76,69,0,31,97,110,
-    100,114,111,105,100,46,105,110,116,101,110,116,46,101,120,116,114,97,46,77,73,77,69,95,
-    84,89,80,69,83,0,26,97,110,100,114,111,105,100,46,105,110,116,101,110,116,46,101,120,
-    116,114,97,46,84,73,84,76,69,0,6,97,112,112,101,110,100,0,24,97,112,112,108,105,
-    99,97,116,105,111,110,47,111,99,116,101,116,45,115,116,114,101,97,109,0,5,97,112,112,
-    108,121,0,16,98,101,103,105,110,84,114,97,110,115,97,99,116,105,111,110,0,14,99,101,
-    101,115,97,102,101,45,112,105,99,107,101,100,0,14,99,101,101,115,97,102,101,45,112,105,
-    99,107,101,114,0,5,99,108,111,115,101,0,23,99,111,109,109,105,116,65,108,108,111,119,
-    105,110,103,83,116,97,116,101,76,111,115,115,0,10,99,111,109,109,105,116,84,101,120,116,
-    0,9,99,111,109,112,111,115,105,110,103,0,4,99,111,112,121,0,21,100,101,108,101,116,
-    101,83,117,114,114,111,117,110,100,105,110,103,84,101,120,116,0,8,100,111,99,117,109,101,
-    110,116,0,6,101,113,117,97,108,115,0,26,101,120,101,99,117,116,101,80,101,110,100,105,
-    110,103,84,114,97,110,115,97,99,116,105,111,110,115,0,9,101,120,112,111,114,116,105,110,
-    103,0,17,102,105,110,100,70,114,97,103,109,101,110,116,66,121,84,97,103,0,6,102,105,
-    110,105,115,104,0,19,102,105,110,105,115,104,67,111,109,112,111,115,105,110,103,84,101,120,
-    116,0,3,103,101,116,0,15,103,101,116,65,98,115,111,108,117,116,101,80,97,116,104,0,
-    9,103,101,116,65,99,116,105,111,110,0,11,103,101,116,65,99,116,105,118,105,116,121,0,
-    8,103,101,116,66,121,116,101,115,0,11,103,101,116,67,97,99,104,101,68,105,114,0,11,
-    103,101,116,67,108,105,112,68,97,116,97,0,18,103,101,116,67,111,110,116,101,110,116,82,
-    101,115,111,108,118,101,114,0,10,103,101,116,67,111,110,116,101,120,116,0,7,103,101,116,
-    68,97,116,97,0,18,103,101,116,70,114,97,103,109,101,110,116,77,97,110,97,103,101,114,
-    0,9,103,101,116,73,116,101,109,65,116,0,12,103,101,116,73,116,101,109,67,111,117,110,
-    116,0,10,103,101,116,75,101,121,67,111,100,101,0,18,103,101,116,76,97,115,116,80,97,
-    116,104,83,101,103,109,101,110,116,0,24,103,101,116,77,105,109,101,84,121,112,101,70,114,
-    111,109,69,120,116,101,110,115,105,111,110,0,12,103,101,116,83,105,110,103,108,101,116,111,
-    110,0,9,103,101,116,83,116,114,105,110,103,0,16,103,101,116,83,121,115,116,101,109,83,
-    101,114,118,105,99,101,0,14,103,101,116,85,110,105,99,111,100,101,67,104,97,114,0,6,
-    103,101,116,85,114,105,0,9,103,101,116,87,105,110,100,111,119,0,14,103,101,116,87,105,
-    110,100,111,119,84,111,107,101,110,0,23,104,105,100,101,83,111,102,116,73,110,112,117,116,
-    70,114,111,109,87,105,110,100,111,119,0,10,105,109,101,79,112,116,105,111,110,115,0,13,
-    105,110,105,116,105,97,108,83,101,108,69,110,100,0,15,105,110,105,116,105,97,108,83,101,
-    108,83,116,97,114,116,0,9,105,110,112,117,116,84,121,112,101,0,12,105,110,112,117,116,
-    95,109,101,116,104,111,100,0,7,105,115,69,109,112,116,121,0,3,107,101,121,0,11,108,
-    97,115,116,73,110,100,101,120,79,102,0,6,108,101,110,103,116,104,0,4,109,105,109,101,
-    0,5,109,105,109,101,115,0,6,109,107,100,105,114,115,0,11,109,111,118,101,84,111,70,
-    105,114,115,116,0,4,110,97,109,101,0,5,110,97,109,101,115,0,8,110,97,110,111,84,
-    105,109,101,0,12,110,97,116,105,118,101,73,110,115,101,116,115,0,9,110,97,116,105,118,
-    101,75,101,121,0,12,110,97,116,105,118,101,80,105,99,107,101,100,0,10,110,97,116,105,
-    118,101,84,101,120,116,0,18,111,102,102,115,101,116,66,121,67,111,100,101,80,111,105,110,
-    116,115,0,16,111,110,65,99,116,105,118,105,116,121,82,101,115,117,108,116,0,19,111,110,
-    65,112,112,108,121,87,105,110,100,111,119,73,110,115,101,116,115,0,19,111,110,67,104,101,
-    99,107,73,115,84,101,120,116,69,100,105,116,111,114,0,23,111,110,67,114,101,97,116,101,
-    73,110,112,117,116,67,111,110,110,101,99,116,105,111,110,0,9,111,110,75,101,121,68,111,
-    119,110,0,15,111,112,101,110,73,110,112,117,116,83,116,114,101,97,109,0,16,111,112,101,
-    110,79,117,116,112,117,116,83,116,114,101,97,109,0,25,111,114,103,46,99,101,101,115,97,
-    102,101,46,119,105,110,100,111,119,46,80,105,99,107,101,114,0,19,112,101,114,102,111,114,
-    109,69,100,105,116,111,114,65,99,116,105,111,110,0,8,112,117,116,69,120,116,114,97,0,
-    5,113,117,101,114,121,0,4,114,101,97,100,0,12,114,101,113,117,101,115,116,70,111,99,
-    117,115,0,12,114,101,115,116,97,114,116,73,110,112,117,116,0,3,114,117,110,0,12,115,
-    101,110,100,75,101,121,69,118,101,110,116,0,16,115,101,116,67,111,109,112,111,115,105,110,
-    103,84,101,120,116,0,12,115,101,116,70,111,99,117,115,97,98,108,101,0,23,115,101,116,
-    70,111,99,117,115,97,98,108,101,73,110,84,111,117,99,104,77,111,100,101,0,16,115,101,
-    116,83,111,102,116,73,110,112,117,116,77,111,100,101,0,7,115,101,116,84,121,112,101,0,
-    13,115,104,111,119,83,111,102,116,73,110,112,117,116,0,5,115,104,111,119,110,0,4,115,
-    105,122,101,0,5,115,112,108,105,116,0,5,115,116,97,114,116,0,22,115,116,97,114,116,
-    65,99,116,105,118,105,116,121,70,111,114,82,101,115,117,108,116,0,10,115,116,97,114,116,
-    115,87,105,116,104,0,9,115,117,98,115,116,114,105,110,103,0,29,116,104,101,32,100,111,
-    99,117,109,101,110,116,32,99,97,110,110,111,116,32,98,101,32,111,112,101,110,101,100,0,
-    6,116,104,105,115,36,48,0,7,116,111,65,114,114,97,121,0,11,116,111,66,121,116,101,
-    65,114,114,97,121,0,7,116,111,67,104,97,114,115,0,11,116,111,76,111,119,101,114,67,
-    97,115,101,0,8,116,111,83,116,114,105,110,103,0,9,118,97,108,36,99,97,99,104,101,
-    0,8,118,97,108,36,102,114,111,109,0,8,118,97,108,36,107,105,110,100,0,12,118,97,
-    108,36,114,101,115,111,108,118,101,114,0,8,118,97,108,36,117,114,105,115,0,5,118,97,
-    108,117,101,0,4,118,105,101,119,0,5,119,114,105,116,101,0,2,119,116,0,158,1,126,
-    126,68,56,123,34,98,97,99,107,101,110,100,34,58,34,100,101,120,34,44,34,99,111,109,
-    112,105,108,97,116,105,111,110,45,109,111,100,101,34,58,34,114,101,108,101,97,115,101,34,
-    44,34,104,97,115,45,99,104,101,99,107,115,117,109,115,34,58,102,97,108,115,101,44,34,
-    109,105,110,45,97,112,105,34,58,50,56,44,34,115,104,97,45,49,34,58,34,48,56,52,
-    97,56,57,49,50,54,97,101,48,53,57,54,99,53,57,57,49,52,51,100,102,53,55,97,
-    54,53,52,54,52,54,97,102,50,56,51,49,51,34,44,34,118,101,114,115,105,111,110,34,
-    58,34,57,46,50,46,52,45,100,101,118,34,125,0,2,25,2,126,4,26,193,1,23,22,
-    2,23,1,242,1,24,53,2,26,1,242,1,28,1,24,52,2,27,2,126,28,6,68,16,
-    128,0,36,16,16,36,16,16,36,16,16,36,16,16,36,16,16,194,1,28,6,30,30,30,
-    30,30,30,2,28,1,242,1,28,1,23,1,2,24,1,242,1,26,128,2,25,2,126,4,
-    0,193,1,30,2,29,1,242,1,28,1,24,34,0,1,1,6,5,18,86,128,128,4,148,
-    31,87,1,132,29,1,1,196,29,1,1,236,29,1,1,140,30,1,1,176,30,1,1,208,
-    30,6,4,13,5,6,26,1,26,1,26,1,26,1,26,1,26,12,2,1,2,1,2,1,
-    2,93,200,32,240,34,1,200,32,136,35,1,200,32,160,35,1,200,32,152,32,1,200,32,
-    184,35,1,200,32,208,35,1,136,128,4,232,35,1,129,128,4,216,36,2,2,132,39,3,
-    2,180,32,1,138,2,0,1,138,2,0,1,138,2,0,101,1,184,37,8,1,180,31,1,
-    1,164,34,1,1,212,31,1,1,184,34,0,6,1,1,16,144,32,1,144,32,1,144,32,
-    1,144,32,1,144,32,1,144,32,116,128,128,4,200,39,117,1,248,39,7,1,10,1,22,
-    26,1,26,1,26,1,26,1,26,1,26,1,26,29,2,118,200,32,168,49,1,200,32,132,
-    45,1,200,32,192,49,1,129,128,4,216,49,1,10,240,49,2,10,160,45,1,10,128,48,
-    1,10,240,45,1,138,2,0,2,9,148,52,128,1,1,184,50,5,30,4,0,4,0,4,
-    1,4,1,7,4,0,4,4,4,255,4,0,4,1,4,1,23,208,0,0,2,0,0,0,
-    40,44,0,0,30,44,0,0,1,0,0,0,47,44,0,0,2,0,0,0,56,44,0,0,
-    91,44,0,0,2,0,0,0,100,44,0,0,107,44,0,0,1,0,0,0,116,44,0,0,
-    140,45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,152,45,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,172,45,0,0,0,0,0,0,1,0,0,0,0,0,0,0,
-    116,0,0,0,160,45,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,
-    122,0,0,0,184,45,0,0,16,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,
-    1,0,0,0,247,0,0,0,112,0,0,0,2,0,0,0,63,0,0,0,76,4,0,0,
-    3,0,0,0,79,0,0,0,72,5,0,0,4,0,0,0,30,0,0,0,252,8,0,0,
-    5,0,0,0,131,0,0,0,236,9,0,0,6,0,0,0,4,0,0,0,4,14,0,0,
-    1,32,0,0,34,0,0,0,132,14,0,0,1,16,0,0,44,0,0,0,12,27,0,0,
-    2,32,0,0,247,0,0,0,138,28,0,0,4,32,0,0,8,0,0,0,30,44,0,0,
-    0,32,0,0,4,0,0,0,125,44,0,0,5,32,0,0,2,0,0,0,113,45,0,0,
-    3,16,0,0,5,0,0,0,140,45,0,0,6,32,0,0,4,0,0,0,192,45,0,0,
-    0,16,0,0,1,0,0,0,16,46,0,0,
+    0,1,90,0,2,90,73,0,3,90,73,73,0,4,90,73,73,76,0,3,90,73,76,0,
+    2,90,76,0,3,90,76,73,0,3,90,76,76,0,5,91,44,32,93,43,0,2,91,66,
+    0,2,91,67,0,2,91,68,0,2,91,70,0,2,91,73,0,2,91,74,0,19,91,76,
+    106,97,118,97,47,108,97,110,103,47,79,98,106,101,99,116,59,0,19,91,76,106,97,118,
+    97,47,108,97,110,103,47,83,116,114,105,110,103,59,0,13,95,100,105,115,112,108,97,121,
+    95,110,97,109,101,0,11,97,99,99,101,115,115,70,108,97,103,115,0,13,97,99,99,101,
+    115,115,105,98,105,108,105,116,121,0,6,97,99,116,105,111,110,0,3,97,100,100,0,9,
+    97,100,100,65,99,116,105,111,110,0,11,97,100,100,67,97,116,101,103,111,114,121,0,8,
+    97,100,100,67,104,105,108,100,0,13,97,100,100,83,117,112,112,114,101,115,115,101,100,0,
+    37,97,110,100,114,111,105,100,46,105,110,116,101,110,116,46,97,99,116,105,111,110,46,67,
+    82,69,65,84,69,95,68,79,67,85,77,69,78,84,0,35,97,110,100,114,111,105,100,46,
+    105,110,116,101,110,116,46,97,99,116,105,111,110,46,79,80,69,78,95,68,79,67,85,77,
+    69,78,84,0,32,97,110,100,114,111,105,100,46,105,110,116,101,110,116,46,99,97,116,101,
+    103,111,114,121,46,79,80,69,78,65,66,76,69,0,35,97,110,100,114,111,105,100,46,105,
+    110,116,101,110,116,46,101,120,116,114,97,46,65,76,76,79,87,95,77,85,76,84,73,80,
+    76,69,0,31,97,110,100,114,111,105,100,46,105,110,116,101,110,116,46,101,120,116,114,97,
+    46,77,73,77,69,95,84,89,80,69,83,0,26,97,110,100,114,111,105,100,46,105,110,116,
+    101,110,116,46,101,120,116,114,97,46,84,73,84,76,69,0,21,97,110,100,114,111,105,100,
+    46,119,105,100,103,101,116,46,66,117,116,116,111,110,0,23,97,110,100,114,111,105,100,46,
+    119,105,100,103,101,116,46,67,104,101,99,107,66,111,120,0,23,97,110,100,114,111,105,100,
+    46,119,105,100,103,101,116,46,69,100,105,116,84,101,120,116,0,24,97,110,100,114,111,105,
+    100,46,119,105,100,103,101,116,46,73,109,97,103,101,86,105,101,119,0,26,97,110,100,114,
+    111,105,100,46,119,105,100,103,101,116,46,82,97,100,105,111,66,117,116,116,111,110,0,22,
+    97,110,100,114,111,105,100,46,119,105,100,103,101,116,46,83,101,101,107,66,97,114,0,22,
+    97,110,100,114,111,105,100,46,119,105,100,103,101,116,46,83,112,105,110,110,101,114,0,23,
+    97,110,100,114,111,105,100,46,119,105,100,103,101,116,46,84,101,120,116,86,105,101,119,0,
+    8,97,110,110,111,117,110,99,101,0,24,97,110,110,111,117,110,99,101,70,111,114,65,99,
+    99,101,115,115,105,98,105,108,105,116,121,0,6,97,112,112,101,110,100,0,24,97,112,112,
+    108,105,99,97,116,105,111,110,47,111,99,116,101,116,45,115,116,114,101,97,109,0,5,97,
+    112,112,108,121,0,5,97,115,107,101,100,0,16,98,101,103,105,110,84,114,97,110,115,97,
+    99,116,105,111,110,0,14,99,101,101,115,97,102,101,45,112,105,99,107,101,100,0,14,99,
+    101,101,115,97,102,101,45,112,105,99,107,101,114,0,5,99,108,101,97,114,0,5,99,108,
+    111,115,101,0,23,99,111,109,109,105,116,65,108,108,111,119,105,110,103,83,116,97,116,101,
+    76,111,115,115,0,10,99,111,109,109,105,116,84,101,120,116,0,9,99,111,109,112,111,115,
+    105,110,103,0,11,99,111,110,116,97,105,110,115,75,101,121,0,4,99,111,112,121,0,6,
+    99,111,112,121,79,102,0,27,99,114,101,97,116,101,65,99,99,101,115,115,105,98,105,108,
+    105,116,121,78,111,100,101,73,110,102,111,0,21,100,101,108,101,116,101,83,117,114,114,111,
+    117,110,100,105,110,103,84,101,120,116,0,18,100,105,115,112,97,116,99,104,72,111,118,101,
+    114,69,118,101,110,116,0,8,100,111,99,117,109,101,110,116,0,7,101,110,97,98,108,101,
+    100,0,6,101,113,117,97,108,115,0,26,101,120,101,99,117,116,101,80,101,110,100,105,110,
+    103,84,114,97,110,115,97,99,116,105,111,110,115,0,9,101,120,112,111,114,116,105,110,103,
+    0,17,102,105,110,100,70,114,97,103,109,101,110,116,66,121,84,97,103,0,6,102,105,110,
+    105,115,104,0,19,102,105,110,105,115,104,67,111,109,112,111,115,105,110,103,84,101,120,116,
+    0,5,102,108,97,103,115,0,7,102,111,99,117,115,101,100,0,3,103,101,116,0,15,103,
+    101,116,65,98,115,111,108,117,116,101,80,97,116,104,0,28,103,101,116,65,99,99,101,115,
+    115,105,98,105,108,105,116,121,78,111,100,101,80,114,111,118,105,100,101,114,0,9,103,101,
+    116,65,99,116,105,111,110,0,11,103,101,116,65,99,116,105,118,105,116,121,0,8,103,101,
+    116,66,121,116,101,115,0,11,103,101,116,67,97,99,104,101,68,105,114,0,11,103,101,116,
+    67,108,105,112,68,97,116,97,0,18,103,101,116,67,111,110,116,101,110,116,82,101,115,111,
+    108,118,101,114,0,10,103,101,116,67,111,110,116,101,120,116,0,7,103,101,116,68,97,116,
+    97,0,9,103,101,116,68,111,117,98,108,101,0,8,103,101,116,70,108,111,97,116,0,18,
+    103,101,116,70,114,97,103,109,101,110,116,77,97,110,97,103,101,114,0,6,103,101,116,73,
+    110,116,0,9,103,101,116,73,116,101,109,65,116,0,12,103,101,116,73,116,101,109,67,111,
+    117,110,116,0,10,103,101,116,75,101,121,67,111,100,101,0,18,103,101,116,76,97,115,116,
+    80,97,116,104,83,101,103,109,101,110,116,0,19,103,101,116,76,111,99,97,116,105,111,110,
+    79,110,83,99,114,101,101,110,0,7,103,101,116,76,111,110,103,0,24,103,101,116,77,105,
+    109,101,84,121,112,101,70,114,111,109,69,120,116,101,110,115,105,111,110,0,14,103,101,116,
+    80,97,99,107,97,103,101,78,97,109,101,0,9,103,101,116,80,97,114,101,110,116,0,12,
+    103,101,116,83,105,110,103,108,101,116,111,110,0,9,103,101,116,83,116,114,105,110,103,0,
+    16,103,101,116,83,121,115,116,101,109,83,101,114,118,105,99,101,0,14,103,101,116,85,110,
+    105,99,111,100,101,67,104,97,114,0,6,103,101,116,85,114,105,0,9,103,101,116,87,105,
+    110,100,111,119,0,14,103,101,116,87,105,110,100,111,119,84,111,107,101,110,0,4,103,101,
+    116,88,0,4,103,101,116,89,0,23,104,105,100,101,83,111,102,116,73,110,112,117,116,70,
+    114,111,109,87,105,110,100,111,119,0,7,104,111,118,101,114,101,100,0,3,105,100,115,0,
+    10,105,109,101,79,112,116,105,111,110,115,0,7,105,110,100,101,120,79,102,0,13,105,110,
+    105,116,105,97,108,83,101,108,69,110,100,0,15,105,110,105,116,105,97,108,83,101,108,83,
+    116,97,114,116,0,9,105,110,112,117,116,84,121,112,101,0,12,105,110,112,117,116,95,109,
+    101,116,104,111,100,0,8,105,110,116,86,97,108,117,101,0,10,105,110,118,97,108,105,100,
+    97,116,101,0,7,105,115,69,109,112,116,121,0,9,105,115,69,110,97,98,108,101,100,0,
+    3,107,101,121,0,6,108,97,98,101,108,115,0,11,108,97,115,116,73,110,100,101,120,79,
+    102,0,6,108,101,110,103,116,104,0,4,109,105,109,101,0,5,109,105,109,101,115,0,6,
+    109,107,100,105,114,115,0,11,109,111,118,101,84,111,70,105,114,115,116,0,4,110,97,109,
+    101,0,5,110,97,109,101,115,0,8,110,97,110,111,84,105,109,101,0,12,110,97,116,105,
+    118,101,65,99,99,101,115,115,0,18,110,97,116,105,118,101,65,99,99,101,115,115,65,99,
+    116,105,118,101,0,12,110,97,116,105,118,101,73,110,115,101,116,115,0,9,110,97,116,105,
+    118,101,75,101,121,0,12,110,97,116,105,118,101,80,105,99,107,101,100,0,10,110,97,116,
+    105,118,101,84,101,120,116,0,6,111,98,116,97,105,110,0,6,111,102,102,115,101,116,0,
+    18,111,102,102,115,101,116,66,121,67,111,100,101,80,111,105,110,116,115,0,16,111,110,65,
+    99,116,105,118,105,116,121,82,101,115,117,108,116,0,19,111,110,65,112,112,108,121,87,105,
+    110,100,111,119,73,110,115,101,116,115,0,19,111,110,67,104,101,99,107,73,115,84,101,120,
+    116,69,100,105,116,111,114,0,23,111,110,67,114,101,97,116,101,73,110,112,117,116,67,111,
+    110,110,101,99,116,105,111,110,0,30,111,110,73,110,105,116,105,97,108,105,122,101,65,99,
+    99,101,115,115,105,98,105,108,105,116,121,69,118,101,110,116,0,33,111,110,73,110,105,116,
+    105,97,108,105,122,101,65,99,99,101,115,115,105,98,105,108,105,116,121,78,111,100,101,73,
+    110,102,111,0,9,111,110,75,101,121,68,111,119,110,0,15,111,112,101,110,73,110,112,117,
+    116,83,116,114,101,97,109,0,16,111,112,101,110,79,117,116,112,117,116,83,116,114,101,97,
+    109,0,5,111,114,100,101,114,0,25,111,114,103,46,99,101,101,115,97,102,101,46,119,105,
+    110,100,111,119,46,80,105,99,107,101,114,0,26,112,101,114,102,111,114,109,65,99,99,101,
+    115,115,105,98,105,108,105,116,121,65,99,116,105,111,110,0,13,112,101,114,102,111,114,109,
+    65,99,116,105,111,110,0,19,112,101,114,102,111,114,109,69,100,105,116,111,114,65,99,116,
+    105,111,110,0,8,112,114,111,118,105,100,101,114,0,3,112,117,116,0,6,112,117,116,65,
+    108,108,0,8,112,117,116,69,120,116,114,97,0,5,113,117,101,114,121,0,6,114,97,110,
+    103,101,115,0,4,114,101,97,100,0,5,114,101,99,116,115,0,12,114,101,113,117,101,115,
+    116,70,111,99,117,115,0,29,114,101,113,117,101,115,116,83,101,110,100,65,99,99,101,115,
+    115,105,98,105,108,105,116,121,69,118,101,110,116,0,12,114,101,115,116,97,114,116,73,110,
+    112,117,116,0,5,114,111,108,101,115,0,5,114,111,117,110,100,0,3,114,117,110,0,4,
+    115,101,110,100,0,7,115,101,110,100,70,111,114,0,12,115,101,110,100,75,101,121,69,118,
+    101,110,116,0,23,115,101,116,65,99,99,101,115,115,105,98,105,108,105,116,121,70,111,99,
+    117,115,101,100,0,17,115,101,116,66,111,117,110,100,115,73,110,80,97,114,101,110,116,0,
+    17,115,101,116,66,111,117,110,100,115,73,110,83,99,114,101,101,110,0,12,115,101,116,67,
+    104,101,99,107,97,98,108,101,0,10,115,101,116,67,104,101,99,107,101,100,0,12,115,101,
+    116,67,108,97,115,115,78,97,109,101,0,12,115,101,116,67,108,105,99,107,97,98,108,101,
+    0,16,115,101,116,67,111,109,112,111,115,105,110,103,84,101,120,116,0,21,115,101,116,67,
+    111,110,116,101,110,116,67,104,97,110,103,101,84,121,112,101,115,0,21,115,101,116,67,111,
+    110,116,101,110,116,68,101,115,99,114,105,112,116,105,111,110,0,11,115,101,116,69,100,105,
+    116,97,98,108,101,0,10,115,101,116,69,110,97,98,108,101,100,0,12,115,101,116,70,111,
+    99,117,115,97,98,108,101,0,23,115,101,116,70,111,99,117,115,97,98,108,101,73,110,84,
+    111,117,99,104,77,111,100,101,0,28,115,101,116,73,109,112,111,114,116,97,110,116,70,111,
+    114,65,99,99,101,115,115,105,98,105,108,105,116,121,0,14,115,101,116,80,97,99,107,97,
+    103,101,78,97,109,101,0,9,115,101,116,80,97,114,101,110,116,0,11,115,101,116,80,97,
+    115,115,119,111,114,100,0,12,115,101,116,82,97,110,103,101,73,110,102,111,0,11,115,101,
+    116,83,101,108,101,99,116,101,100,0,16,115,101,116,83,111,102,116,73,110,112,117,116,77,
+    111,100,101,0,9,115,101,116,83,111,117,114,99,101,0,7,115,101,116,84,101,120,116,0,
+    7,115,101,116,84,121,112,101,0,16,115,101,116,86,105,115,105,98,108,101,84,111,85,115,
+    101,114,0,14,115,101,116,87,105,108,108,78,111,116,68,114,97,119,0,13,115,104,111,119,
+    83,111,102,116,73,110,112,117,116,0,5,115,104,111,119,110,0,4,115,105,122,101,0,5,
+    115,112,108,105,116,0,5,115,116,97,114,116,0,22,115,116,97,114,116,65,99,116,105,118,
+    105,116,121,70,111,114,82,101,115,117,108,116,0,10,115,116,97,114,116,115,87,105,116,104,
+    0,9,115,117,98,115,116,114,105,110,103,0,4,116,101,120,116,0,29,116,104,101,32,100,
+    111,99,117,109,101,110,116,32,99,97,110,110,111,116,32,98,101,32,111,112,101,110,101,100,
+    0,6,116,104,105,115,36,48,0,7,116,111,65,114,114,97,121,0,11,116,111,66,121,116,
+    101,65,114,114,97,121,0,7,116,111,67,104,97,114,115,0,11,116,111,76,111,119,101,114,
+    67,97,115,101,0,8,116,111,83,116,114,105,110,103,0,6,117,112,100,97,116,101,0,9,
+    118,97,108,36,99,97,99,104,101,0,8,118,97,108,36,102,114,111,109,0,8,118,97,108,
+    36,107,105,110,100,0,12,118,97,108,36,114,101,115,111,108,118,101,114,0,8,118,97,108,
+    36,117,114,105,115,0,5,118,97,108,117,101,0,7,118,97,108,117,101,79,102,0,6,118,
+    97,108,117,101,115,0,4,118,105,101,119,0,7,118,105,114,116,117,97,108,0,4,119,114,
+    97,112,0,5,119,114,105,116,101,0,2,119,116,0,158,1,126,126,68,56,123,34,98,97,
+    99,107,101,110,100,34,58,34,100,101,120,34,44,34,99,111,109,112,105,108,97,116,105,111,
+    110,45,109,111,100,101,34,58,34,114,101,108,101,97,115,101,34,44,34,104,97,115,45,99,
+    104,101,99,107,115,117,109,115,34,58,102,97,108,115,101,44,34,109,105,110,45,97,112,105,
+    34,58,50,56,44,34,115,104,97,45,49,34,58,34,48,56,52,97,56,57,49,50,54,97,
+    101,48,53,57,54,99,53,57,57,49,52,51,100,102,53,55,97,54,53,52,54,52,54,97,
+    102,50,56,51,49,51,34,44,34,118,101,114,115,105,111,110,34,58,34,57,46,50,46,52,
+    45,100,101,118,34,125,0,2,39,2,205,1,28,1,36,16,16,184,2,28,1,30,2,37,
+    2,205,1,4,18,183,2,23,159,2,35,1,146,3,24,73,2,40,1,146,3,28,4,23,
+    148,23,130,23,130,23,35,2,38,1,146,3,28,1,24,71,2,37,2,205,1,4,26,183,
+    2,23,50,2,35,1,146,3,24,75,2,38,1,146,3,28,1,24,74,2,39,2,205,1,
+    28,6,68,16,128,0,36,16,16,36,16,16,36,16,16,36,16,16,36,16,16,184,2,28,
+    6,30,30,30,30,30,30,2,40,1,146,3,28,1,23,1,2,36,1,146,3,26,228,2,
+    37,2,205,1,4,0,183,2,30,2,41,1,146,3,28,1,24,46,0,1,2,2,11,144,
+    32,143,1,130,128,4,136,60,1,128,160,4,164,60,145,1,1,252,48,1,1,180,56,19,
+    13,25,4,12,26,1,26,1,26,1,26,1,26,1,26,1,26,1,26,1,26,1,26,1,
+    26,1,26,1,26,1,26,1,26,1,26,1,26,1,26,1,26,31,2,1,2,1,2,1,
+    2,1,2,1,18,1,2,1,18,1,2,1,2,1,2,1,2,1,2,147,1,200,32,212,
+    60,1,200,32,208,63,1,200,32,184,63,1,200,32,172,65,1,200,32,148,65,1,200,32,
+    204,64,1,200,32,136,63,1,200,32,160,63,1,200,32,232,63,1,200,32,228,64,1,200,
+    32,128,64,1,200,32,196,65,1,200,32,220,65,1,200,32,244,65,1,200,32,252,64,1,
+    200,32,140,66,1,200,32,164,66,1,136,128,4,188,66,1,129,128,4,136,67,4,2,200,
+    62,6,138,2,0,1,138,2,0,4,2,192,68,1,2,228,68,3,10,152,64,166,1,1,
+    152,68,2,1,236,60,2,1,188,60,15,1,252,69,0,1,1,6,44,18,186,1,128,128,
+    4,216,76,187,1,1,200,74,1,1,136,75,1,1,176,75,1,1,208,75,1,1,244,75,
+    1,1,148,76,6,4,13,5,45,26,1,26,1,26,1,26,1,26,1,26,51,2,1,2,
+    1,2,1,2,193,1,200,32,180,80,1,200,32,204,80,1,200,32,228,80,1,200,32,220,
+    77,1,200,32,252,80,1,200,32,148,81,1,136,128,4,172,81,1,129,128,4,156,82,2,
+    2,200,84,3,2,248,77,1,138,2,0,1,138,2,0,1,138,2,0,201,1,1,252,82,
+    8,1,248,76,1,1,232,79,1,1,152,77,1,1,252,79,0,6,1,1,55,144,32,1,
+    144,32,1,144,32,1,144,32,1,144,32,1,144,32,216,1,128,128,4,140,85,217,1,1,
+    188,85,7,1,10,1,61,26,1,26,1,26,1,26,1,26,1,26,1,26,68,2,218,1,
+    200,32,236,94,1,200,32,200,90,1,200,32,132,95,1,129,128,4,156,95,1,10,180,95,
+    2,10,228,90,1,10,196,93,1,10,180,91,1,138,2,0,2,9,216,97,228,1,1,252,
+    95,19,4,1,4,2,4,1,30,4,3,4,8,4,9,4,10,4,2,4,7,4,8,4,
+    0,4,3,4,32,4,2,4,5,4,6,4,0,4,4,5,30,4,0,4,0,4,1,4,
+    1,7,4,0,4,4,4,255,4,0,4,1,4,1,55,77,1,0,0,0,1,0,0,0,
+    79,78,0,0,2,0,0,0,105,78,0,0,94,78,0,0,1,0,0,0,112,78,0,0,
+    1,0,0,0,127,78,0,0,2,0,0,0,147,78,0,0,136,78,0,0,1,0,0,0,
+    154,78,0,0,2,0,0,0,163,78,0,0,199,78,0,0,2,0,0,0,208,78,0,0,
+    215,78,0,0,1,0,0,0,225,78,0,0,28,81,0,0,0,0,0,0,1,0,0,0,
+    0,0,0,0,143,0,0,0,20,81,0,0,48,81,0,0,1,0,0,0,0,0,0,0,
+    0,0,0,0,36,0,0,0,40,81,0,0,56,81,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,68,81,0,0,0,0,0,0,0,0,0,0,0,0,0,0,88,81,0,0,
+    0,0,0,0,1,0,0,0,0,0,0,0,216,0,0,0,76,81,0,0,0,0,0,0,
+    0,0,0,0,1,0,0,0,0,0,0,0,222,0,0,0,100,81,0,0,16,0,0,0,
+    0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,155,1,0,0,112,0,0,0,
+    2,0,0,0,88,0,0,0,220,6,0,0,3,0,0,0,128,0,0,0,60,8,0,0,
+    4,0,0,0,69,0,0,0,60,14,0,0,5,0,0,0,231,0,0,0,100,16,0,0,
+    6,0,0,0,7,0,0,0,156,23,0,0,1,32,0,0,65,0,0,0,124,24,0,0,
+    1,16,0,0,71,0,0,0,208,49,0,0,2,32,0,0,155,1,0,0,54,52,0,0,
+    4,32,0,0,13,0,0,0,79,78,0,0,0,32,0,0,6,0,0,0,234,78,0,0,
+    5,32,0,0,3,0,0,0,209,80,0,0,3,16,0,0,9,0,0,0,20,81,0,0,
+    6,32,0,0,6,0,0,0,108,81,0,0,0,16,0,0,1,0,0,0,236,81,0,0,
 };
 /* END android dex */
 
@@ -7240,6 +9175,30 @@ static void JNICALL cee_android_native_key(JNIEnv *env, jclass type, jint key) {
     cee_android_typed(2, &which, 1);
 }
 
+/* AccessView.nativeAccess: TalkBack asks `action` of element `id` (ADR 0164): kept for the program, which is woken.
+   A full list drops the request. */
+static void JNICALL cee_android_native_access(JNIEnv *env, jclass type, jlong id, jint action) {
+    (void)env;
+    (void)type;
+    pthread_mutex_lock(&cee_android.lock);
+    if (cee_android.access_asked_count < CEE_ACCESS_QUEUE && action >= 0 && action <= 3) {
+        cee_android.access_asked[cee_android.access_asked_count].id = (uint64_t)id;
+        cee_android.access_asked[cee_android.access_asked_count].action = (int32_t)action;
+        cee_android.access_asked_count++;
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    cee_android_wake_program();
+}
+
+/* AccessView.nativeAccessActive: something asked for the window's elements. */
+static void JNICALL cee_android_native_access_active(JNIEnv *env, jclass type) {
+    (void)env;
+    (void)type;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.access_active = 1;
+    pthread_mutex_unlock(&cee_android.lock);
+}
+
 /* InputView.nativeInsets: the window's insets were applied again, the keyboard's among them. */
 static void JNICALL cee_android_native_insets(JNIEnv *env, jclass type) {
     (void)env;
@@ -7329,7 +9288,8 @@ static int cee_android_classes(ANativeActivity *activity) {
     }
     jclass view_class = cee_android_class(env, parent, loader, "org.ceesafe.window.InputView");
     jclass picker_class = cee_android_class(env, parent, loader, "org.ceesafe.window.Picker");
-    if (view_class != NULL && picker_class != NULL) {
+    jclass access_class = cee_android_class(env, parent, loader, "org.ceesafe.window.AccessView");
+    if (view_class != NULL && picker_class != NULL && access_class != NULL) {
         /* ISO C has no function-to-object pointer conversion; a JNINativeMethod's fnPtr is a void *. */
         void (JNICALL *text)(JNIEnv *, jclass, jint, jbyteArray) = cee_android_native_text;
         void (JNICALL *key)(JNIEnv *, jclass, jint) = cee_android_native_key;
@@ -7338,15 +9298,23 @@ static int cee_android_classes(ANativeActivity *activity) {
         JNINativeMethod natives[3] = {{"nativeText", "(I[B)V", NULL}, {"nativeKey", "(I)V", NULL},
                                       {"nativeInsets", "()V", NULL}};
         JNINativeMethod answer[1] = {{"nativePicked", "(I[B)V", NULL}};
+        void (JNICALL *asked)(JNIEnv *, jclass, jlong, jint) = cee_android_native_access;
+        void (JNICALL *active)(JNIEnv *, jclass) = cee_android_native_access_active;
+        JNINativeMethod access[2] = {{"nativeAccess", "(JI)V", NULL}, {"nativeAccessActive", "()V", NULL}};
+        memcpy(&access[0].fnPtr, &asked, sizeof asked);
+        memcpy(&access[1].fnPtr, &active, sizeof active);
         memcpy(&natives[0].fnPtr, &text, sizeof text);
         memcpy(&natives[1].fnPtr, &key, sizeof key);
         memcpy(&natives[2].fnPtr, &applied, sizeof applied);
         memcpy(&answer[0].fnPtr, &picked, sizeof picked);
         if ((*env)->RegisterNatives(env, view_class, natives, 3) == 0 &&
-            (*env)->RegisterNatives(env, picker_class, answer, 1) == 0) {
+            (*env)->RegisterNatives(env, picker_class, answer, 1) == 0 &&
+            (*env)->RegisterNatives(env, access_class, access, 2) == 0) {
             cee_android.input_class = (jclass)(*env)->NewGlobalRef(env, view_class);
             cee_android.picker_class = (jclass)(*env)->NewGlobalRef(env, picker_class);
-            if (cee_android.input_class != NULL && cee_android.picker_class != NULL) {
+            cee_android.access_class = (jclass)(*env)->NewGlobalRef(env, access_class);
+            if (cee_android.input_class != NULL && cee_android.picker_class != NULL &&
+                cee_android.access_class != NULL) {
                 cee_android.classes = 1;
             }
         }
@@ -7435,6 +9403,90 @@ static void cee_android_pick_start(ANativeActivity *activity) {
 }
 
 /* The activity's looper's callback for `ui_pipe`: applies what the program wants of text input. */
+/* The access view (ADR 0164), made when the program first gives a list: a view the size of the window, which draws
+   nothing. A failure is final for the activity: no reader is told then. */
+static int cee_android_access_load(ANativeActivity *activity) {
+    JNIEnv *env = activity->env;
+    if (cee_android.access_view != NULL) {
+        return 1;
+    }
+    if (cee_android.access_failed || !cee_android_classes(activity) || (*env)->PushLocalFrame(env, 16) != 0) {
+        (void)cee_android_failed(env);
+        return 0;
+    }
+    cee_android.access_failed = 1;
+    jclass view_class = cee_android.access_class;
+    jmethodID create = (*env)->GetMethodID(env, view_class, "<init>", "(Landroid/content/Context;)V");
+    jmethodID update = (*env)->GetMethodID(env, view_class, "update", "([B)V");
+    jmethodID announce = (*env)->GetMethodID(env, view_class, "announce", "([B)V");
+    jclass params_class = (*env)->FindClass(env, "android/view/ViewGroup$LayoutParams");
+    jmethodID params_make = params_class != NULL ? (*env)->GetMethodID(env, params_class, "<init>", "(II)V") : NULL;
+    jmethodID add = (*env)->GetMethodID(env, (*env)->GetObjectClass(env, activity->clazz), "addContentView",
+                                        "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
+    if (!cee_android_failed(env) && create != NULL && update != NULL && announce != NULL && params_make != NULL &&
+        add != NULL) {
+        jobject view = (*env)->NewObject(env, view_class, create, activity->clazz);
+        jobject params = (*env)->NewObject(env, params_class, params_make, (jint)-1, (jint)-1); /* MATCH_PARENT */
+        if (!cee_android_failed(env) && view != NULL && params != NULL) {
+            (*env)->CallVoidMethod(env, activity->clazz, add, view, params);
+            if (!cee_android_failed(env)) {
+                cee_android.access_view = (*env)->NewGlobalRef(env, view);
+                cee_android.access_update = update;
+                cee_android.access_announce = announce;
+                cee_android.access_failed = cee_android.access_view == NULL;
+            }
+        }
+    }
+    (void)cee_android_failed(env);
+    (void)(*env)->PopLocalFrame(env, NULL);
+    if (cee_android.access_failed) {
+        __android_log_write(ANDROID_LOG_WARN, "ceesafe", "accessibility: the access view could not be made");
+    }
+    return !cee_android.access_failed;
+}
+
+/* On the activity's thread: the program's list goes to the access view if it changed, and a text to say is said. */
+static void cee_android_access_give(ANativeActivity *activity) {
+    JNIEnv *env = activity->env;
+    pthread_mutex_lock(&cee_android.lock);
+    int wanted = (cee_android.access_dirty && cee_android.access_packed != NULL) || cee_android.access_said != NULL;
+    pthread_mutex_unlock(&cee_android.lock);
+    if (!wanted || !cee_android_access_load(activity) || (*env)->PushLocalFrame(env, 8) != 0) {
+        (void)cee_android_failed(env);
+        return;
+    }
+    pthread_mutex_lock(&cee_android.lock);
+    jbyteArray packed = NULL, said = NULL;
+    if (cee_android.access_dirty && cee_android.access_packed != NULL) {
+        packed = (*env)->NewByteArray(env, (jsize)cee_android.access_length);
+        if (packed != NULL) {
+            (*env)->SetByteArrayRegion(env, packed, 0, (jsize)cee_android.access_length,
+                                       (const jbyte *)cee_android.access_packed);
+            cee_android.access_dirty = 0;
+        }
+    }
+    if (cee_android.access_said != NULL) {
+        said = (*env)->NewByteArray(env, (jsize)cee_android.access_said_length);
+        if (said != NULL) {
+            (*env)->SetByteArrayRegion(env, said, 0, (jsize)cee_android.access_said_length,
+                                       (const jbyte *)cee_android.access_said);
+        }
+        ceesafe_platform_free(cee_android.access_said);
+        cee_android.access_said = NULL;
+        cee_android.access_said_length = 0;
+    }
+    pthread_mutex_unlock(&cee_android.lock);
+    if (packed != NULL) {
+        (*env)->CallVoidMethod(env, cee_android.access_view, cee_android.access_update, packed);
+        (void)cee_android_failed(env);
+    }
+    if (said != NULL) {
+        (*env)->CallVoidMethod(env, cee_android.access_view, cee_android.access_announce, said);
+        (void)cee_android_failed(env);
+    }
+    (void)(*env)->PopLocalFrame(env, NULL);
+}
+
 static int cee_android_ui(int fd, int events, void *data) {
     (void)events;
     (void)data;
@@ -7453,6 +9505,7 @@ static int cee_android_ui(int fd, int events, void *data) {
     if (pick) {
         cee_android_pick_start(activity);
     }
+    cee_android_access_give(activity);
     if (!on && cee_android.input_view == NULL) {
         return 1;
     }
@@ -7473,6 +9526,15 @@ static void cee_android_input_drop(ANativeActivity *activity) {
     cee_android.input_view = NULL;
     cee_android.input_apply = NULL;
     cee_android.input_failed = 0;
+    /* The access view goes too (ADR 0164): a new activity's is given the list again. */
+    if (env != NULL && cee_android.access_view != NULL) {
+        (*env)->DeleteGlobalRef(env, cee_android.access_view);
+    }
+    cee_android.access_view = NULL;
+    cee_android.access_failed = 0;
+    pthread_mutex_lock(&cee_android.lock);
+    cee_android.access_dirty = cee_android.access_packed != NULL;
+    pthread_mutex_unlock(&cee_android.lock);
     /* A file dialog the activity will not answer now is cancelled (ADR 0158). The classes stay loaded. */
     pthread_mutex_lock(&cee_android.lock);
     if (cee_android.pick_state == 1 || cee_android.pick_state == 2) {
@@ -7828,6 +9890,13 @@ static int cee_android_event(struct cee_window *w, AInputEvent *event) {
         }
         int32_t action = AMotionEvent_getAction(event);
         int32_t kind = action & AMOTION_EVENT_ACTION_MASK;
+        if (touchscreen && (kind == AMOTION_EVENT_ACTION_HOVER_ENTER || kind == AMOTION_EVENT_ACTION_HOVER_MOVE ||
+                            kind == AMOTION_EVENT_ACTION_HOVER_EXIT)) {
+            /* A finger exploring the screen with TalkBack on (ADR 0164): not taken, so the views get it, and the
+               access view says what is under the finger. */
+            w->touches_on = on;
+            return 0;
+        }
         size_t index = (size_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
                                 AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
         size_t count = AMotionEvent_getPointerCount(event);
@@ -7900,6 +9969,11 @@ static void cee_native_pump(struct cee_window *w) {
     unsigned told_count = cee_android_life.told_count;
     memcpy(told, cee_android_life.told, told_count);
     cee_android_life.told_count = 0;
+    struct cee_access_request asked[CEE_ACCESS_QUEUE]; /* what TalkBack asked (ADR 0164) */
+    unsigned asked_count = cee_android.access_asked_count;
+    memcpy(asked, cee_android.access_asked, asked_count * sizeof asked[0]);
+    cee_android.access_asked_count = 0;
+    int access_active = cee_android.access_active;
     char *typed = cee_android.typed;
     size_t typed_length = cee_android.typed_length;
     cee_android.typed = NULL; /* taken: the activity's thread starts a new queue */
@@ -7925,6 +9999,12 @@ static void cee_native_pump(struct cee_window *w) {
     if (cee_android_again) {
         cee_android_again = 0;
         cee_android_wish(1, cee_android_kind(w));
+    }
+    for (unsigned k = 0; k < asked_count; k++) {
+        cee_access_ask(w, asked[k].id, asked[k].action);
+    }
+    if (access_active) {
+        w->access_active = 1;
     }
     /* What the input method typed (ADR 0157): committed text, the composition, Backspace and Enter. */
     for (size_t at = 0; at + 3u <= typed_length;) {
@@ -8012,6 +10092,84 @@ static void cee_native_cursor(struct cee_window *w) { (void)w; }
 static void cee_native_title(struct cee_window *w, const char *title) { (void)w; (void)title; }
 /* Text input on shows the soft keyboard on the window's input view, off hides it; a new kind of text shows the
    keyboard for it (ADR 0157). */
+/* ---- Accessibility on Android (ADR 0164) ---- */
+#define CEE_WINDOW_ACCESS 1
+
+static void cee_access_put(char **at, const void *bytes, size_t length) {
+    memcpy(*at, bytes, length);
+    *at += length;
+}
+
+/* The window's list changed: packed for AccessView.update (a count; then each node's id, role, flags, rectangle in
+   pixels, range, and its label and value with their lengths before them, little-endian as every Android is), and
+   the activity's thread asked to give it to the view. Out of memory, the view keeps the last list. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    (void)old;
+    (void)old_count;
+    (void)old_text;
+    size_t length = 4u;
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        length += 8u + 4u + 4u + 16u + 24u + 4u + w->access[k].label_length + 4u + w->access[k].value_length;
+    }
+    char *packed = (char *)ceesafe_platform_alloc(length);
+    if (packed == NULL) {
+        return;
+    }
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    char *at = packed;
+    cee_access_put(&at, &w->access_count, 4u);
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        float box[4] = {n->x * scale, n->y * scale, n->width * scale, n->height * scale};
+        double range[3] = {n->min, n->max, n->now};
+        cee_access_put(&at, &n->id, 8u);
+        cee_access_put(&at, &n->role, 4u);
+        cee_access_put(&at, &n->flags, 4u);
+        cee_access_put(&at, box, 16u);
+        cee_access_put(&at, range, 24u);
+        cee_access_put(&at, &n->label_length, 4u);
+        cee_access_put(&at, w->access_text + n->label_start, n->label_length);
+        cee_access_put(&at, &n->value_length, 4u);
+        cee_access_put(&at, w->access_text + n->value_start, n->value_length);
+    }
+    pthread_mutex_lock(&cee_android.lock);
+    ceesafe_platform_free(cee_android.access_packed);
+    cee_android.access_packed = packed;
+    cee_android.access_length = length;
+    cee_android.access_dirty = 1;
+    int fd = cee_android.ui_pipe[1];
+    pthread_mutex_unlock(&cee_android.lock);
+    if (fd >= 0) {
+        char byte = 1;
+        if (write(fd, &byte, 1) < 0) {
+            /* the pipe is full: the activity's thread will come by */
+        }
+    }
+}
+
+/* Says `text` through TalkBack: the latest text not yet said, on the activity's thread. */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    char *copy = (char *)ceesafe_platform_alloc(length);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, text, length);
+    pthread_mutex_lock(&cee_android.lock);
+    ceesafe_platform_free(cee_android.access_said);
+    cee_android.access_said = copy;
+    cee_android.access_said_length = length;
+    int fd = cee_android.ui_pipe[1];
+    pthread_mutex_unlock(&cee_android.lock);
+    if (fd >= 0) {
+        char byte = 1;
+        if (write(fd, &byte, 1) < 0) {
+            /* the pipe is full: the activity's thread will come by */
+        }
+    }
+}
+
 static void cee_native_text_input(struct cee_window *w, int on) { cee_android_wish(on, cee_android_kind(w)); }
 static void cee_native_text_kind(struct cee_window *w) { cee_android_wish(w->text_input == 1, cee_android_kind(w)); }
 static void cee_native_text_area(struct cee_window *w) { (void)w; } /* the input view has no place of its own */

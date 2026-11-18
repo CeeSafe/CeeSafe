@@ -173,3 +173,80 @@ Each system is its own step and its own release, in this order; the API is relea
     `1+1`, "l").
 - **Open**: a reader setting a field's selection or value itself; dragging; containers and tables (§2.3); the
   owner's own pass with VoiceOver.
+
+## 7. Step 2 as implemented: iOS (2026-11-18)
+
+`runtime/hosted/ceesafe_rt_window.c` (the UIKit part), type-system.md §26.13. The owner: "continue".
+
+- Each node is a `UIAccessibilityElement` in the window's view; the view's `accessibilityElements` are the list.
+  iOS has traits and no roles, so several roles are one thing to VoiceOver (type-system.md §26.13 has the table):
+  a tab, a radio button, a list's row and a menu's item are buttons, selected when they are.
+- **`accessActive` is whether VoiceOver runs**, not whether something asked: UIKit does not say when it reads the
+  elements.
+- **`Focus` is never asked**: VoiceOver's own cursor is not the keyboard's, and activating a field is a `Press`.
+- **A field's caret and anchor are not used**: reading by character in a field needs `UITextInput` on the element,
+  which is not here.
+- **Checked in the iOS Simulator, in the process**: a program with one element of each role and a C file that asks
+  UIKit for the view's `accessibilityElements`. UIKit reports the eleven names, values, traits and frames;
+  `accessibilityActivate`, `…Increment` and `…Decrement` arrive from `takeAccessAction`; the disabled element
+  refuses; after a second list all eleven are the same objects and the slider says its new value. It is not in
+  `window_check`, which builds for the system it runs on.
+- **Not checked yet**: VoiceOver on a phone, which the Simulator does not have.
+
+## 8. Step 3 as implemented: Android (2026-11-18)
+
+`runtime/android/org/ceesafe/window/AccessView.java` and its dex, `runtime/hosted/ceesafe_rt_window.c` (the Android
+part), type-system.md §26.13. The owner: "Moto is connected. Go ahead install and perform tests on it."
+
+- A view the size of the window with an `AccessibilityNodeProvider`: the list's elements are its virtual views.
+  The list crosses from the program's thread to the activity's packed in bytes; what TalkBack asks comes back
+  under the runtime's lock and is taken by the program's next poll.
+- **`Focus` is never asked**, as on iOS; **a field's caret and anchor are not used**.
+- **TalkBack's focus rectangle is not drawn**: a NativeActivity's window surface is the program's, so the view
+  system that paints the rectangle paints nothing. What is spoken and what is done are not affected. A program
+  could draw one if the runtime told it where TalkBack's cursor is, which it does not.
+- **Checked on a moto g35 5G, Android 15, TalkBack 17**:
+  - `uiautomator dump` (the system's own reading of the node tree): the component demo's 75 elements of its first
+    screen with their widget, name, selected state, clickability and bounds.
+  - TalkBack reads the list and puts its cursor on the first element when it starts.
+  - **Touches injected with `adb` go round TalkBack**, so its gestures cannot be scripted. The owner made them, with
+    the view's requests logged for the session: a finger exploring the screen moved TalkBack's cursor from element
+    to element (180 hover events, the cursor on ten elements in turn), and a double tap activated one. The owner:
+    "It's working fine without issues."
+- **Not checked**: a slider's steps through TalkBack; `announce`; a second activity after the first ends.
+
+## 9. Step 4 as implemented: Windows (2026-11-18)
+
+`runtime/hosted/ceesafe_rt_window.c` (the Win32 part), type-system.md §26.13. The owner: "Do Windows and release
+all together".
+
+- UI Automation providers in C: a fragment root for the window, answering `WM_GETOBJECT`, and a provider for each
+  element, with the pattern its role has. The interfaces are their vtables written out, and nothing is linked:
+  `uiautomationcore.dll` and `oleaut32.dll` are loaded at first use.
+- **A slider is set by steps**: `IRangeValueProvider::SetValue` above the value asks `Increment`, below it
+  `Decrement`. **A field's value cannot be set by a client**; `SetFocus` on it asks `Focus`, and the keyboard types.
+- **Checked on Windows 11 with a UI Automation client** (`System.Windows.Automation` from PowerShell, run in the
+  desktop session), on ClayWind's component demo:
+  - the first screen's 77 elements with their control type, name, bounds and patterns; a disabled button says so;
+  - `Invoke` on "Clicked 0" makes it "Clicked 1"; `Select` on a tab opens its page;
+  - a slider: 0.5, a step up 0.6, a step down 0.5; `SetFocus` on a field gives it the focus, and typed keys are its
+    value; a checkbox toggles Off to On; a radio button is selected and the other is not; a dropdown expands, an
+    item of it is invoked, and the dropdown says the new value, collapsed.
+  - `window_check` on the same laptop: 63 checks, 0 problems.
+- **NVDA, the same day** (the owner: "Go ahead install it"; NVDA 2026.3, its speech read from its log while a
+  script moved the pointer over the demo, pressed Tab and typed). What it says: "ClayWind — CeeSafe, window";
+  under the pointer "Clicked 0", "Reset", "Dashboard", "Volume 50", "Quantity 3", "Save", "Subscribe to updates",
+  "Dark", "Priority Medium", "README.md"; "Controls, tab, selected" when its page is opened; with Tab, "Name,
+  edit", then the typed letters, "Note, edit", "Quantity, slider, 3". Four things it found, each fixed:
+  - **No event reached any client**: the providers said they were client-side ones (`ProviderOptions` 1, where a
+    server-side one is 2). Questions were answered all the same, which is why the first check passed.
+  - **The focus was never told**, so NVDA went on believing the desktop was in front ("Foreground took too long to
+    change") and said nothing of the window: UI Automation does not watch a window that has a provider of its own.
+    The window's getting the focus and an element's taking it are now events.
+  - **A deadlock**, once events were delivered: they were raised under the lock, and a client's question on
+    another thread waited for it. They are raised with the lock let go.
+  - **"Volume 0"** for a slider at 0.5 of 0 to 1: a reader says a slider's value as a whole number, so a slider
+    that gives no value text is given as a percentage.
+  And one that is the check's own: the name of plain text that changes each frame (a clock) raised an event each
+  time; only a control's name does now.
+- **Not checked**: Narrator; `announce`.

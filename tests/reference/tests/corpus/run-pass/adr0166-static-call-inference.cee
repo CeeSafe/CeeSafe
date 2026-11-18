@@ -1,0 +1,64 @@
+// ADR 0166: in a static call of a generic struct or enum written without type arguments, the type's arguments are
+// inferred from the call's arguments, as a generic function's are.
+struct Cache<K, V> {
+    keys: Vector<K>;
+    values: Vector<V>;
+}
+
+impl<K, V> Cache<K, V> {
+    fn of(key: K, value: V) -> Cache<K, V> {
+        var c = Cache<K, V> { keys: Vector<K>.create(), values: Vector<V>.create() };
+        c.keys.push(key)!;
+        c.values.push(value)!;
+        return c;
+    }
+
+    fn filled(keys: Vector<K>, value: V) -> Cache<K, V> {
+        var c = Cache<K, V> { keys: keys, values: Vector<V>.create() };
+        c.values.push(value)!;
+        return c;
+    }
+
+    fn count(borrow this) -> usize => this.keys.length;
+}
+
+enum Maybe<T> {
+    Nothing,
+    Just(T),
+}
+
+impl<T> Maybe<T> {
+    fn wrap(value: T) -> Maybe<T> => Maybe<T>.Just(value);
+}
+
+fn size(m: Maybe<u16>) -> u64 => match (m) {
+    Maybe.Just(v) => v as u64,
+    Maybe.Nothing => 0,
+};
+
+fn main() {
+    // lib/std's own.
+    let shared = Arc.create(AtomicU64.create(7))!;
+    Console.writeLine(shared.get().load());
+    let locked = Mutex.create(Vector<u8>.create())!;
+    // A program's struct: both parameters from the arguments, one of them through a nested type.
+    let c = Cache.of(3u8, 300u32);
+    Console.writeLine(c.count() as u64);
+    Console.writeLine(c.values[0] as u64);
+    var keys = Vector<u16>.create();
+    keys.push(1)!;
+    keys.push(2)!;
+    let f = Cache.filled(keys, true);
+    Console.writeLine(f.count() as u64);
+    // The written form is unchanged, and gives the same instance.
+    let d = Cache<u8, u32>.of(4u8, 400u32);
+    Console.writeLine(d.values[0] as u64);
+    // An enum's own function.
+    Console.writeLine(size(Maybe.wrap(9u16)));
+}
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 300
+// expect-stdout: 2
+// expect-stdout: 400
+// expect-stdout: 9

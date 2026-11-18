@@ -1753,7 +1753,12 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 - **Values:** `Pair { first: 1, second: 2 }` infers `T` from the field values, or takes it from the
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.
-- **Static functions:** `Pair<i32>.make(…)`.
+- **Static functions:** `Pair<i32>.make(…)` gives the type's arguments explicitly. `Pair.make(1u8, 2u8)`, without
+  them, infers them from the call's arguments as a generic function's are (ADR 0166): each parameter type of `make`
+  is matched against its argument's type, with the type's parameters as the unknowns. So `Arc.create(v)` is
+  `Arc<T>.create(v)` for `v`'s type. A parameter the arguments do not determine is N0265, and the expected type is
+  not used: `Vector<u8>.create()`, `Cache<K, V>.empty()`. All of the arguments are written or none (N0204). It holds
+  for a generic struct's static functions and a generic enum's own (ADR 0107).
 
 - **Inference from a bound** (ADR 0086 §2.7). A type parameter that the arguments do not determine is inferred from a
   bound `I: J<…T…>` when `I`'s argument implements exactly one instantiation of `J` (its impls; for a `dyn` type, its

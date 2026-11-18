@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S15, second part). Not implemented yet: nothing of it is in the compiler.
+  S15, second part). Implemented 2026-11-18 (§6); not released.
 - Scope: the checker's static calls (`src/check/generics.cee`, `staticOwner`; `src/check/inherent.cee`,
   `enumStaticOwner`; the call that follows them); type-system.md §20.2, diagnostics.md (N0265), the guide's generics
   page. No change to the grammar, to the backends, to a library or to the runtime.
@@ -99,3 +99,22 @@ parameters are inferred from the call's arguments, as a generic function's are.*
      argument that does not fit any instance, an unmet bound on what was inferred, a member constant;
    - the contract suite; the corpus and the libraries build unchanged.
 4. ROADMAP §10.
+
+## 6. Implementation notes (2026-11-18)
+
+- `inferredStaticOwner` and `inferredEnumOwner` (`src/check/generics.cee`) take the declaration's own function
+  (the template's, whose parameter types mention the type's parameters as they are declared), pair each of its
+  parameters with the call's argument, and call `typeArgumentsFor` with no written and no expected arguments, as
+  `checkGenericCall` does. What it finds instantiates the struct or the enum (`instantiateStruct`,
+  `instantiateEnum`, which check the bounds), and the call goes on as the written form does. They are tried in
+  `src/check/expr.cee` only when the name has no arguments and the declaration is generic.
+- **Where nothing is inferred.** A name with no such static function (`Cache.nothing(…)`), or one that is a method,
+  is left to `staticOwner`, which reports N0265 "is generic: write its type arguments" as before. `Vector`, `Box`
+  and the other built-in types keep their own rules (`Vector.create()` is N0260).
+- **Messages.** A parameter not determined is the generic call's N0265: "cannot infer 'V' for 'Cache' here; write
+  the type arguments: 'Cache<…>'". §2.1's wording ("write 'Cache<…>.empty()'") was not added.
+- **A member constant** of a generic type was not touched.
+- **Tests:** run-pass/adr0166-static-call-inference (`Arc`, `Mutex`, a struct with two parameters, one through a
+  nested type, the written form beside it, an enum's own function) and check-fail/adr0166-static-call-inference
+  (nothing determined, one of two, the expected type not used, a partly written list, no such function, an unmet
+  bound on what was inferred). The corpus: 0 failures.

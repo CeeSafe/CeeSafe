@@ -1,0 +1,29 @@
+// ADR 0166: what the call's arguments do not determine is N0265, naming the parameter; the expected type is not
+// used, as for a generic function; a partly written list is N0204; a type with no such function is as before.
+struct Cache<K, V> {
+    keys: Vector<K>;
+    values: Vector<V>;
+}
+
+impl<K, V> Cache<K, V> {
+    fn keyed(key: K) -> Cache<K, V> => Cache<K, V> { keys: Vector<K>.create(), values: Vector<V>.create() };
+    fn empty() -> Cache<K, V> => Cache<K, V> { keys: Vector<K>.create(), values: Vector<V>.create() };
+    fn of(key: K, value: V) -> Cache<K, V> => Cache<K, V> { keys: Vector<K>.create(), values: Vector<V>.create() };
+}
+
+struct Sized<T: Copy> {
+    value: T;
+}
+
+impl<T: Copy> Sized<T> {
+    fn of(value: T) -> Sized<T> => Sized<T> { value: value };
+}
+
+fn main() {
+    let a = Cache.empty(); // error[N0265]
+    let b = Cache.keyed(1u8); // error[N0265]
+    let c: Cache<u8, u8> = Cache.empty(); // error[N0265]
+    let d = Cache<u8>.of(1u8, 2u8); // error[N0204]
+    let e = Cache.nothing(1u8); // error[N0265]
+    let f = Sized.of(Vector<u8>.create()); // error[N0268]
+}

@@ -1641,6 +1641,112 @@ fn addInstance(map: borrow mut Map<Word, Vector<u32>>, template: u32, index: u32
 /// Is the struct or enum entry a generic declaration (its syntax has type parameters)?
 fn isGenericItem(c: borrow Checker, item: u32) -> bool => item != none() && itemTypeParameters(c, item).count > 0;
 
+/// The instance of generic struct `index` that the static call `S.f(arguments)`, written without type arguments,
+/// names (ADR 0166): the struct's type parameters inferred from the call's arguments against `f`'s parameter types,
+/// as a generic function's are. None if `S` has no static function `f` to infer with (the caller reports as
+/// before) and `reported` is false; none with `reported` true after an inference error.
+fn inferredStaticOwner(
+    c: borrow mut Checker,
+    index: u32,
+    nameSymbol: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+    reported: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let entry = c.structs[index as usize];
+    let definition = c.types.info(entry.typ).structDef;
+    let function = findStructFunction(c, definition, c.front.ast.idents[member as usize].symbol);
+    if (function == none() || isMethod(c, function)) {
+        return Ok(none());
+    }
+    var parameterTypes = Vector<u32>.create();
+    listTypes(c, c.types.structs[definition as usize].typeArguments, mut parameterTypes)?;
+    var pairs = Vector<InferencePair>.create();
+    let declared = c.hir.functions[function as usize].parameters.length;
+    for (k in 0..arguments.count) {
+        if ((k as usize) < declared) {
+            let local = c.hir.functions[function as usize].parameters[k as usize];
+            pairs.push(
+                InferencePair { declared: c.hir.locals[local as usize].typ, value: c.front.ast.at(arguments, k) },
+            )?;
+        }
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(nameSymbol))?;
+    var found = Vector<u32>.create();
+    let ok = typeArgumentsFor(
+        c,
+        text.view(),
+        parameterTypes.view(),
+        emptyRange(),
+        emptyRange(),
+        false,
+        pairs.view(),
+        span,
+        mut found,
+    )?;
+    if (!ok) {
+        reported = true;
+        return Ok(none());
+    }
+    let instance = instantiateStruct(c, index, found.view(), span)?;
+    if (instance == none()) {
+        reported = true;
+    }
+    return Ok(instance);
+}
+
+/// `inferredStaticOwner` for a generic enum's own function (ADR 0107): the instance's type, or none.
+fn inferredEnumOwner(
+    c: borrow mut Checker,
+    index: u32,
+    nameSymbol: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+    reported: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let entry = c.enums[index as usize];
+    let definition = c.types.info(entry.typ).enumDef;
+    let function = implMethodFor(c, entry.typ, c.front.ast.idents[member as usize].symbol);
+    if (function == none() || isMethod(c, function)) {
+        return Ok(none());
+    }
+    var parameterTypes = Vector<u32>.create();
+    listTypes(c, c.types.enums[definition as usize].typeArguments, mut parameterTypes)?;
+    var pairs = Vector<InferencePair>.create();
+    let declared = c.hir.functions[function as usize].parameters.length;
+    for (k in 0..arguments.count) {
+        if ((k as usize) < declared) {
+            let local = c.hir.functions[function as usize].parameters[k as usize];
+            pairs.push(
+                InferencePair { declared: c.hir.locals[local as usize].typ, value: c.front.ast.at(arguments, k) },
+            )?;
+        }
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(nameSymbol))?;
+    var found = Vector<u32>.create();
+    let ok = typeArgumentsFor(
+        c,
+        text.view(),
+        parameterTypes.view(),
+        emptyRange(),
+        emptyRange(),
+        false,
+        pairs.view(),
+        span,
+        mut found,
+    )?;
+    if (!ok) {
+        reported = true;
+        return Ok(none());
+    }
+    let instance = instantiateEnum(c, index, found.view(), span)?;
+    return Ok(c.enums[instance as usize].typ);
+}
+
 /// The struct whose static function `S.f(…)` or `S<T>.f(…)` names (StaticOwner, §20.2); none after an error.
 fn staticOwner(
     c: borrow mut Checker,

@@ -1149,6 +1149,26 @@ fn synthCall(
                         }
                         Entity.Struct(index) => {
                             let nameSymbol = c.front.ast.idents[targetName as usize].symbol;
+                            if (typeArguments.count == 0 && isGenericItem(c, c.structs[index as usize].item)) {
+                                // `Arc.create(v)`: the type's arguments from the call's (ADR 0166).
+                                var reported = false;
+                                let inferred = inferredStaticOwner(
+                                    c,
+                                    index,
+                                    nameSymbol,
+                                    member,
+                                    arguments,
+                                    span,
+                                    mut reported,
+                                )?;
+                                if (inferred != none()) {
+                                    return checkStaticCall(c, inferred, member, arguments, calleeSpan, span);
+                                }
+                                if (reported) {
+                                    checkArgumentsLoosely(c, arguments)?;
+                                    return c.errorResult(span.start, span.end);
+                                }
+                            }
                             let owner = staticOwner(c, index, target, nameSymbol, typeArguments)?;
                             if (owner == none()) {
                                 checkArgumentsLoosely(c, arguments)?;
@@ -1161,6 +1181,35 @@ fn synthCall(
                             let memberSymbol = c.front.ast.idents[member as usize].symbol;
                             if (enumMethodNamed(c, c.enums[index as usize].item, memberSymbol) != none()) {
                                 // A function of the enum's own (ADR 0107): `E.f(…)`, or `E<A>.f(…)` of a generic one.
+                                if (typeArguments.count == 0 && isGenericItem(c, c.enums[index as usize].item)) {
+                                    // The enum's arguments from the call's (ADR 0166).
+                                    var reported = false;
+                                    let inferred = inferredEnumOwner(
+                                        c,
+                                        index,
+                                        targetSymbol,
+                                        member,
+                                        arguments,
+                                        span,
+                                        mut reported,
+                                    )?;
+                                    if (inferred != none()) {
+                                        return checkTypeCall(
+                                            c,
+                                            inferred,
+                                            target,
+                                            member,
+                                            arguments,
+                                            expected,
+                                            calleeSpan,
+                                            span,
+                                        );
+                                    }
+                                    if (reported) {
+                                        checkArgumentsLoosely(c, arguments)?;
+                                        return c.errorResult(span.start, span.end);
+                                    }
+                                }
                                 let owner = enumStaticOwner(c, index, target, targetSymbol, typeArguments)?;
                                 if (owner == none()) {
                                     checkArgumentsLoosely(c, arguments)?;

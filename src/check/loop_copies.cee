@@ -1,0 +1,292 @@
+// N0407 (ADR 0167): a `for` loop over an iterator that is Copy and held in a place walks a copy of it, so the place
+// does not advance. Where the place is read after the loop, the reader most likely meant the place itself, and is
+// told. `checkFor` notes each such loop while it has the types (`noteLoopCopy`); after every body is checked the
+// function around the loop is searched, in source order, for a read of the place after the loop's end.
+
+fn n0407() -> u32 => 407;
+
+/// A loop that walks a copy of the place written at `iterated`.
+struct LoopCopy {
+    file: u32;
+    function: u32; // the function declaration the loop is in
+    iterated: u32; // the expression after `in`
+    loopEnd: u32;  // where the `for` statement ends
+}
+
+/// What the search of one function has found so far.
+struct LoopCopySearch {
+    place: u32;  // the loop's iterated expression: what a read is compared with
+    after: u32;  // only expressions that start at or after this are reads after the loop
+    ended: bool; // the place was assigned whole: what follows reads the new value
+    read: bool;
+}
+
+/// The expression without its parentheses.
+fn loopCopyBare(c: borrow Checker, e: u32) -> u32 => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Paren(inner) => loopCopyBare(c, inner),
+    _ => e,
+};
+
+/// Is `e` written as a place a loop could copy: a name, `this`, or fields of one?
+fn isLoopCopyPlace(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[loopCopyBare(c, e) as usize]) {
+    ExprNode.Name(_, typeArguments) => typeArguments.count == 0,
+    ExprNode.This => true,
+    ExprNode.Member(target, _) => isLoopCopyPlace(c, target),
+    _ => false,
+};
+
+/// Are `a` and `b` the same place as written: the same name, `this`, or the same field of the same place?
+fn sameLoopCopyPlace(c: borrow Checker, a: u32, b: u32) -> bool {
+    let x = loopCopyBare(c, a);
+    let y = loopCopyBare(c, b);
+    match (c.front.ast.exprs[x as usize]) {
+        ExprNode.Name(name, _) => {
+            match (c.front.ast.exprs[y as usize]) {
+                ExprNode.Name(other, typeArguments) => {
+                    return typeArguments.count == 0 &&
+                        c.front.ast.idents[name as usize].symbol == c.front.ast.idents[other as usize].symbol;
+                }
+                _ => { return false; }
+            }
+        }
+        ExprNode.This => {
+            match (c.front.ast.exprs[y as usize]) {
+                ExprNode.This => { return true; }
+                _ => { return false; }
+            }
+        }
+        ExprNode.Member(target, member) => {
+            match (c.front.ast.exprs[y as usize]) {
+                ExprNode.Member(otherTarget, otherMember) => {
+                    return c.front.ast.idents[member as usize].symbol ==
+                        c.front.ast.idents[otherMember as usize].symbol && sameLoopCopyPlace(c, target, otherTarget);
+                }
+                _ => { return false; }
+            }
+        }
+        _ => { return false; }
+    }
+}
+
+/// `checkFor`, for a loop over an iterator: notes the loop if what it walks is a Copy value written as a place (not
+/// a reference to one, which is walked itself, and not a call's result, which nothing else can read).
+fn noteLoopCopy(c: borrow mut Checker, iterated: u32, sequenceType: u32, span: Span) -> Result<void, AllocError> {
+    if (!isLoopCopyPlace(c, iterated) || c.types.is(sequenceType, TypeKind.Reference) ||
+        c.types.is(sequenceType, TypeKind.Box) || !c.types.isCopy(sequenceType)) {
+        return Ok();
+    }
+    // `this` alone is a reference; a name may be a type or a constant, which no loop copies an iterator from in a
+    // way a later read would notice.
+    match (c.front.ast.exprs[loopCopyBare(c, iterated) as usize]) {
+        ExprNode.This => { return Ok(); }
+        _ => {}
+    }
+    // The declaration whose body is being checked: a closure's loop is searched for in the function it is written in.
+    if (c.function == none()) {
+        return Ok();
+    }
+    let function = c.hir.functions[c.function as usize].syntax;
+    if (function == none()) {
+        return Ok();
+    }
+    return c.loopCopies.push(LoopCopy { file: c.file, function: function, iterated: iterated, loopEnd: span.end });
+}
+
+fn loopCopyStmts(c: borrow Checker, search: borrow mut LoopCopySearch, list: Range) {
+    for (k in 0..list.count) {
+        loopCopyStmt(c, search, c.front.ast.at(list, k));
+    }
+}
+
+fn loopCopyExprs(c: borrow Checker, search: borrow mut LoopCopySearch, list: Range) {
+    for (k in 0..list.count) {
+        loopCopyExpr(c, search, c.front.ast.at(list, k));
+    }
+}
+
+fn loopCopyStmt(c: borrow Checker, search: borrow mut LoopCopySearch, s: u32) {
+    if (s == none() || search.read || search.ended) {
+        return;
+    }
+    match (c.front.ast.stmts[s as usize]) {
+        StmtNode.Block(statements) => { loopCopyStmts(c, search, statements); }
+        StmtNode.Local(_, _, _, initializer) => { loopCopyExpr(c, search, initializer); }
+        StmtNode.LetElse(_, value, otherwise) => {
+            loopCopyExpr(c, search, value);
+            loopCopyStmt(c, search, otherwise);
+        }
+        StmtNode.Defer(body) => { loopCopyStmt(c, search, body); }
+        StmtNode.Match(scrutinee, arms) => {
+            loopCopyExpr(c, search, scrutinee);
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
+                loopCopyExpr(c, search, arm.guard);
+                loopCopyStmt(c, search, arm.body);
+            }
+        }
+        StmtNode.If(condition, then, otherwise) => {
+            loopCopyExpr(c, search, condition);
+            loopCopyStmt(c, search, then);
+            loopCopyStmt(c, search, otherwise);
+        }
+        StmtNode.While(condition, body) => {
+            loopCopyExpr(c, search, condition);
+            loopCopyStmt(c, search, body);
+        }
+        StmtNode.For(_, start, end, body) => {
+            // Another loop over the same place walks a copy again, from the start: the use the copy is for.
+            if (!(end == none() && sameLoopCopyPlace(c, search.place, start))) {
+                loopCopyExpr(c, search, start);
+            }
+            loopCopyExpr(c, search, end);
+            loopCopyStmt(c, search, body);
+        }
+        StmtNode.Loop(body) => { loopCopyStmt(c, search, body); }
+        StmtNode.Return(value) => { loopCopyExpr(c, search, value); }
+        StmtNode.Assign(target, operator, value) => {
+            loopCopyExpr(c, search, value);
+            let whole = sameLoopCopyPlace(c, search.place, target);
+            let plain = match (operator) {
+                AssignOp.Assign => true,
+                _ => false,
+            };
+            if (whole && plain) {
+                // The place has a new value from here on, if this is after the loop.
+                if (c.front.ast.exprSpans[target as usize].start >= search.after) {
+                    search.ended = true;
+                }
+            } else {
+                loopCopyExpr(c, search, target);
+            }
+        }
+        StmtNode.Expression(e) => { loopCopyExpr(c, search, e); }
+        StmtNode.Value(e) => { loopCopyExpr(c, search, e); }
+        StmtNode.Unsafe(body) => { loopCopyStmt(c, search, body); }
+        _ => {}
+    }
+}
+
+fn loopCopyExpr(c: borrow Checker, search: borrow mut LoopCopySearch, e: u32) {
+    if (e == none() || search.read || search.ended) {
+        return;
+    }
+    if (c.front.ast.exprSpans[e as usize].start >= search.after && sameLoopCopyPlace(c, search.place, e)) {
+        search.read = true;
+        return;
+    }
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Member(target, _) => { loopCopyExpr(c, search, target); }
+        ExprNode.Paren(inner) => { loopCopyExpr(c, search, inner); }
+        ExprNode.Unary(_, operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Binary(left, _, right) => {
+            loopCopyExpr(c, search, left);
+            loopCopyExpr(c, search, right);
+        }
+        ExprNode.Cast(operand, _) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Call(callee, arguments) => {
+            loopCopyExpr(c, search, callee);
+            loopCopyExprs(c, search, arguments);
+        }
+        ExprNode.Unsafe(inner) => { loopCopyExpr(c, search, inner); }
+        ExprNode.If(condition, then, otherwise) => {
+            loopCopyExpr(c, search, condition);
+            loopCopyExpr(c, search, then);
+            loopCopyExpr(c, search, otherwise);
+        }
+        ExprNode.Match(scrutinee, arms) => {
+            loopCopyExpr(c, search, scrutinee);
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
+                loopCopyExpr(c, search, arm.guard);
+                loopCopyExpr(c, search, arm.value);
+            }
+        }
+        ExprNode.Closure(index) => {
+            let closure = c.front.ast.closures[index as usize];
+            loopCopyStmt(c, search, closure.block);
+            loopCopyExpr(c, search, closure.body);
+        }
+        ExprNode.Block(statement) => { loopCopyStmt(c, search, statement); }
+        ExprNode.Borrow(_, operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Move(operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Deref(operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.MutArg(operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.StructLiteral(_, fields, _) => {
+            for (k in 0..fields.count) {
+                loopCopyExpr(c, search, c.front.ast.fieldInits[c.front.ast.at(fields, k) as usize].value);
+            }
+        }
+        ExprNode.ArrayLiteral(elements) => { loopCopyExprs(c, search, elements); }
+        ExprNode.ArrayIndexed(pairs) => { loopCopyExprs(c, search, pairs); }
+        ExprNode.ArrayRepeat(value, count) => {
+            loopCopyExpr(c, search, value);
+            loopCopyExpr(c, search, count);
+        }
+        ExprNode.Index(target, index) => {
+            loopCopyExpr(c, search, target);
+            loopCopyExpr(c, search, index);
+        }
+        ExprNode.Slice(target, low, high) => {
+            loopCopyExpr(c, search, target);
+            loopCopyExpr(c, search, low);
+            loopCopyExpr(c, search, high);
+        }
+        ExprNode.Try(operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Unwrap(operand) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Is(operand, _) => { loopCopyExpr(c, search, operand); }
+        ExprNode.Await(operand) => { loopCopyExpr(c, search, operand); }
+        _ => {}
+    }
+}
+
+/// The text of the place as it was written.
+fn loopCopyText(c: borrow Checker, e: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    match (c.front.ast.exprs[loopCopyBare(c, e) as usize]) {
+        ExprNode.Name(name, _) => { return appendBytes(out, c.name(c.front.ast.idents[name as usize].symbol)); }
+        ExprNode.This => { return appendText(out, "this"); }
+        ExprNode.Member(target, member) => {
+            loopCopyText(c, target, out)?;
+            appendText(out, ".")?;
+            return appendBytes(out, c.name(c.front.ast.idents[member as usize].symbol));
+        }
+        _ => { return Ok(); }
+    }
+}
+
+/// N0407 for each noted loop whose place is read after it, in the function the loop is in. Run once after checking,
+/// for the files the lints read.
+fn warnLoopCopies(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.loopCopies.length) {
+        let noted = c.loopCopies[k];
+        if (!isLintedFile(c, noted.file)) {
+            continue;
+        }
+        let span = c.front.ast.exprSpans[noted.iterated as usize];
+        let body = c.front.ast.functions[noted.function as usize].body;
+        let expressionBody = c.front.ast.functions[noted.function as usize].expressionBody;
+        var search = LoopCopySearch { place: noted.iterated, after: noted.loopEnd, ended: false, read: false };
+        loopCopyStmt(c, mut search, body);
+        loopCopyExpr(c, mut search, expressionBody);
+        if (!search.read) {
+            continue;
+        }
+        var place = Vector<u8>.create();
+        loopCopyText(c, noted.iterated, mut place)?;
+        var message = Vector<u8>.create();
+        appendText(mut message, "the loop walks a copy of '")?;
+        appendBytes(mut message, place.view())?;
+        appendText(mut message, "': '")?;
+        appendBytes(mut message, place.view())?;
+        appendText(
+            mut message,
+            "' itself does not advance, and is read after the loop; write 'for (… in borrow mut ",
+        )?;
+        appendBytes(mut message, place.view())?;
+        appendText(mut message, ")' to walk it itself, or copy it into a 'let' first if the copy is meant")?;
+        c.setFile(noted.file);
+        c.front.diagnostics.warning(n0407(), noted.file, span.start, span.end, message)?;
+    }
+    c.setFile(saved);
+    return Ok();
+}

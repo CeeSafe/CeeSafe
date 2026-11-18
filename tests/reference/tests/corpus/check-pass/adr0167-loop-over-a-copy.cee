@@ -1,0 +1,123 @@
+// ADR 0167: a `for` loop over a Copy iterator held in a place walks a copy. N0407 where the place is read after
+// the loop, other than by another loop over it; nothing where the copy cannot have been mistaken for the place.
+struct Count {
+    at: u32;
+    end: u32;
+}
+
+impl Count {
+    fn next(borrow mut this) -> u32? {
+        if (this.at >= this.end) {
+            return null;
+        }
+        this.at += 1;
+        return Some(this.at);
+    }
+
+    fn done(borrow this) -> bool => this.at >= this.end;
+}
+
+struct Holder {
+    counter: Count;
+}
+
+impl Holder {
+    fn total(borrow mut this) -> u32 {
+        var sum: u32 = 0;
+        for (x in this.counter) { // warning[N0407]
+            sum += x;
+        }
+        return if (this.counter.done()) sum else 0;
+    }
+}
+
+fn readAfter() -> bool {
+    var c = Count { at: 0, end: 3 };
+    for (x in c) { // warning[N0407]
+        let seen = x;
+    }
+    return c.done();
+}
+
+fn readOnOnePath(flag: bool) -> u32 {
+    var c = Count { at: 0, end: 3 };
+    for (x in (c)) { // warning[N0407]
+        let seen = x;
+    }
+    if (flag) {
+        return c.at;
+    }
+    return 0;
+}
+
+fn walkedTwice() -> u32 {
+    let c = Count { at: 0, end: 3 };
+    var sum: u32 = 0;
+    for (x in c) {
+        sum += x;
+    }
+    for (x in c) {
+        sum += x;
+    }
+    return sum;
+}
+
+fn assignedFirst() -> bool {
+    var c = Count { at: 0, end: 3 };
+    for (x in c) {
+        let seen = x;
+    }
+    c = Count { at: 0, end: 1 };
+    return c.done();
+}
+
+fn readInTheBody() -> u32 {
+    let c = Count { at: 0, end: 3 };
+    var sum: u32 = 0;
+    for (x in c) {
+        sum += x + c.end;
+    }
+    return sum;
+}
+
+fn walkedItself() -> bool {
+    var c = Count { at: 0, end: 3 };
+    for (x in borrow mut c) {
+        let seen = x;
+    }
+    return c.done();
+}
+
+fn copyMeant() -> bool {
+    let c = Count { at: 0, end: 3 };
+    let first = c;
+    for (x in first) {
+        let seen = x;
+    }
+    return c.done();
+}
+
+fn make() -> Count => Count { at: 0, end: 2 };
+
+fn temporary() -> u32 {
+    var sum: u32 = 0;
+    for (x in make()) {
+        sum += x;
+    }
+    let words = "a,b";
+    for (w in words.split(",")) {
+        sum += 1;
+    }
+    let values = [1u32, 2u32];
+    for (v in values) {
+        sum += v;
+    }
+    return sum + values[0];
+}
+
+fn main() {
+    var h = Holder { counter: Count { at: 0, end: 2 } };
+    let t = h.total();
+    let a = readAfter() || assignedFirst() || walkedItself() || copyMeant();
+    let n = readOnOnePath(a) + walkedTwice() + readInTheBody() + temporary() + t;
+}

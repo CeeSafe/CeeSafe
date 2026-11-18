@@ -710,6 +710,7 @@ fn checkFor(
     if (endSyntax == none()) {
         let sequence = synth(c, startSyntax, none())?;
         if (isIteratorType(c, c.typeOf(sequence))) {
+            noteLoopCopy(c, startSyntax, c.typeOf(sequence), span)?;
             return checkForIterator(c, variable, sequence, body, span);
         }
         start = forSequence(c, startSyntax, sequence, mut variableType)?;

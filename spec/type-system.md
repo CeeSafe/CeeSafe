@@ -1150,7 +1150,9 @@ struct literal.
   `next` until it returns `null`:
   - `e` is evaluated once, before the first pass, into a hidden local of the loop's header. That local and `e`'s
     temporaries live until the loop exits (ADR 0073 §2.1), and are destroyed then, the iterator first. A value `e`
-    moves into the loop; a `borrow mut` `e` is reborrowed, and the iterator keeps its state after the loop.
+    moves into the loop; a `borrow mut` `e` is reborrowed, and the iterator keeps its state after the loop. A
+    value `e` whose type is Copy is copied, so a place written there does not advance: where the place is read
+    after the loop, the loop is warned about (N0407, ADR 0167), and `for (x in borrow mut e)` is what walks it.
   - Each pass borrows the iterator mutably only for the call to `next`, whose temporaries end before the body. The
     body may use what the iterator borrows as a shared borrow (`text` in `for (part in text.split(",")) { … }`), but
     not change it while the iterator lives (N0241).

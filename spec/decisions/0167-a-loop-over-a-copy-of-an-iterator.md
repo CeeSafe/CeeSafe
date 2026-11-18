@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S11). Not implemented yet: nothing of it is in the compiler.
+  S11). Implemented 2026-11-18 (§6), not as §5 planned; not released.
 - Scope: a new warning, N0407, reported where uses after a move are (`src/nir/move_check.cee`); type-system.md
   §16.4 (iterators), diagnostics.md, the guide's loops page. No change to what a program means, to the grammar, to
   the backends, to a library or to the runtime.
@@ -100,3 +100,27 @@ No fix is applied: the compiler cannot know which of the two was meant (§2.2). 
      arrays, slices and ranges;
    - the corpus, the libraries and the compiler's sources without new warnings, or each one listed and decided.
 4. ROADMAP §10.
+
+## 6. Implementation notes (2026-11-18)
+
+- **Where, and why not where §5 said.** §5 put the warning in the move checker. It is a pass over the syntax
+  instead (`src/check/loop_copies.cee`), as N0400, N0401 and N0402 are: `checkFor` notes each loop over an
+  iterator whose iterated expression is written as a place and whose type is Copy (`noteLoopCopy`: not a
+  reference, not a box, not `this` alone), and after every body is checked `warnLoopCopies` walks the function the
+  loop is in, in source order. The move checker follows values that are moved; a Copy value has no move path, and
+  making one for this would have changed what it tracks for every program.
+- **"After the loop" is the source's order, not the control flow's** (§2.1 said "on some path"). A read is any
+  expression that is the same place as written and starts at or after the loop statement's end; the search stops
+  at an assignment to the whole place after the loop. A local cannot be shadowed (N0203), so the same name in the
+  same function is the same variable. What this misses: a read that comes earlier in the source and later in time,
+  in an enclosing loop's body before the `for`. What it adds: nothing, since code after the loop in the source
+  that cannot run after it does not exist without `goto`.
+- **The message carries no note.** `diagnostics.warning` takes no notes, so the line of the read is not shown;
+  the message says the place is read after the loop and gives both ways out (§2.1's help and §2.2).
+- **A loop in a closure** is searched for in the function declaration it is written in, with the rest.
+- **What was found before it landed** (§3): no N0407 in lib/core, lib/std, lib/kernel, the compiler's sources,
+  CeeSafe.Web's packages, httpclient or httpserver (whose `Multipart` is `@noncopy` since its S11).
+- **Tests:** check-pass/adr0167-loop-over-a-copy, with its HIR snapshot as the family asks: three loops warned (a
+  local read after, a read on one path through parentheses, a field of `this`), and none for a second loop over
+  the place, the place assigned first, a read in the body, `borrow mut`, a `let` copy, a call's result, a text
+  split, an array. The corpus: 0 failures.

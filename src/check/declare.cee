@@ -221,6 +221,7 @@ fn checkProgramWith(
         membersReady: false,
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
+        loopCopies: Vector<LoopCopy>.create(),
         pendingDynInstances: Vector<PendingDynInstance>.create(),
         letKeywords: Vector<LetKeyword>.create(),
         effectAttributes: Vector<EffectAttributes>.create(),
@@ -472,6 +473,7 @@ fn checkProgramWith(
     checkMain(mut c)?;
     warnStringBraces(mut c)?;    // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
     warnShadowedMembers(mut c)?; // ADR 0074 §2.10
+    warnLoopCopies(mut c)?;      // ADR 0167
     warnUnusedResults(mut c)?;   // ADR 0105
     warnCopiedChanges(mut c)?;   // ADR 0113
     foldStatics(mut c)?;

@@ -1,0 +1,167 @@
+(program
+  (fn readAfter () -> bool
+    (block
+      (var c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var iterator#1: Count = c#0)
+      (for x#2 in next (call Count.next (borrow-mut iterator#1)):u32?
+        (block
+          (let seen#3: u32 = x#2)
+        )
+      )
+      (return (call Count.done (borrow c#0)):bool)
+    )
+  )
+  (fn readOnOnePath ((flag#0: bool)) -> u32
+    (block
+      (var c#1: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var iterator#2: Count = c#1)
+      (for x#3 in next (call Count.next (borrow-mut iterator#2)):u32?
+        (block
+          (let seen#4: u32 = x#3)
+        )
+      )
+      (if flag#0
+        (block
+          (return (. c#1 at):u32)
+        )
+      )
+      (return 0:u32)
+    )
+  )
+  (fn walkedTwice () -> u32
+    (block
+      (let c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var sum#1: u32 = 0:u32)
+      (var iterator#2: Count = c#0)
+      (for x#3 in next (call Count.next (borrow-mut iterator#2)):u32?
+        (block
+          (+= sum#1 x#3)
+        )
+      )
+      (var iterator#4: Count = c#0)
+      (for x#5 in next (call Count.next (borrow-mut iterator#4)):u32?
+        (block
+          (+= sum#1 x#5)
+        )
+      )
+      (return sum#1)
+    )
+  )
+  (fn assignedFirst () -> bool
+    (block
+      (var c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var iterator#1: Count = c#0)
+      (for x#2 in next (call Count.next (borrow-mut iterator#1)):u32?
+        (block
+          (let seen#3: u32 = x#2)
+        )
+      )
+      (= c#0 (new Count (at 0:u32) (end 1:u32)))
+      (return (call Count.done (borrow c#0)):bool)
+    )
+  )
+  (fn readInTheBody () -> u32
+    (block
+      (let c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var sum#1: u32 = 0:u32)
+      (var iterator#2: Count = c#0)
+      (for x#3 in next (call Count.next (borrow-mut iterator#2)):u32?
+        (block
+          (+= sum#1 (+ x#3 (. c#0 end):u32):u32)
+        )
+      )
+      (return sum#1)
+    )
+  )
+  (fn walkedItself () -> bool
+    (block
+      (var c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (var iterator#1: borrow mut Count = (borrow-mut c#0))
+      (for x#2 in next (call Count.next (reborrow-mut iterator#1)):u32?
+        (block
+          (let seen#3: u32 = x#2)
+        )
+      )
+      (return (call Count.done (borrow c#0)):bool)
+    )
+  )
+  (fn copyMeant () -> bool
+    (block
+      (let c#0: Count = (new Count (at 0:u32) (end 3:u32)))
+      (let first#1: Count = c#0)
+      (var iterator#2: Count = first#1)
+      (for x#3 in next (call Count.next (borrow-mut iterator#2)):u32?
+        (block
+          (let seen#4: u32 = x#3)
+        )
+      )
+      (return (call Count.done (borrow c#0)):bool)
+    )
+  )
+  (fn make () -> Count
+    (block
+      (return (new Count (at 0:u32) (end 2:u32)))
+    )
+  )
+  (fn temporary () -> u32
+    (block
+      (var sum#0: u32 = 0:u32)
+      (var iterator#1: Count = (call make):Count)
+      (for x#2 in next (call Count.next (borrow-mut iterator#1)):u32?
+        (block
+          (+= sum#0 x#2)
+        )
+      )
+      (let words#3: StringView = "a,b")
+      (var iterator#4: TextSplit = (call TextSearch.split words#3 ","):TextSplit)
+      (for w#5 in next (call TextSplit.next (borrow-mut iterator#4)):StringView?
+        (block
+          (+= sum#0 1:u32)
+        )
+      )
+      (let values#6: [u32; 2] = (array 1:u32 2:u32):[u32; 2])
+      (for v#7 in values#6
+        (block
+          (+= sum#0 v#7)
+        )
+      )
+      (return (+ sum#0 (index values#6 0:usize):u32):u32)
+    )
+  )
+  (fn main () -> void
+    (block
+      (var h#0: Holder = (new Holder (counter (new Count (at 0:u32) (end 2:u32)))))
+      (let t#1: u32 = (call Holder.total (borrow-mut h#0)):u32)
+      (let a#2: bool = (|| (|| (|| (call readAfter):bool (call assignedFirst):bool):bool (call walkedItself):bool):bool (call copyMeant):bool):bool)
+      (let n#3: u32 = (+ (+ (+ (+ (call readOnOnePath a#2):u32 (call walkedTwice):u32):u32 (call readInTheBody):u32):u32 (call temporary):u32):u32 t#1):u32)
+    )
+  )
+  (fn Count.next ((this#0: borrow mut Count)) -> u32?
+    (block
+      (if (>= (. (deref this#0):Count at):u32 (. (deref this#0):Count end):u32):bool
+        (block
+          (return (u32?.null))
+        )
+      )
+      (+= (*this#0).at 1:u32)
+      (return (u32?.Some (. (deref this#0):Count at):u32))
+    )
+  )
+  (fn Count.done ((this#0: borrow Count)) -> bool
+    (block
+      (return (>= (. (deref this#0):Count at):u32 (. (deref this#0):Count end):u32):bool)
+    )
+  )
+  (fn Holder.total ((this#0: borrow mut Holder)) -> u32
+    (block
+      (var sum#1: u32 = 0:u32)
+      (var iterator#2: Count = (. (deref this#0):Holder counter):Count)
+      (for x#3 in next (call Count.next (borrow-mut iterator#2)):u32?
+        (block
+          (+= sum#1 x#3)
+        )
+      )
+      (return (value (if (call Count.done (borrow (*this#0).counter)):bool (block (yield sum#1)) (else (block (yield 0:u32))))):u32)
+    )
+  )
+)

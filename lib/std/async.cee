@@ -279,6 +279,12 @@ public struct AsyncTcpListener {
         return Ok(AsyncTcpListener { fd: truncate<i32>(r) });
     }
 
+    /// The runtime's descriptor, for `Handover` (ADR 0173).
+    fn descriptor(borrow this) -> i32 => this.fd;
+
+    /// The listener of a descriptor this process was handed: `Inherited.listener` (ADR 0173).
+    fn adopt(fd: i32) -> AsyncTcpListener => AsyncTcpListener { fd: fd };
+
     /// Listens on `address` with `options` (ADR 0044 §3.2).
     /// Safety: the runtime reads the address only during the call.
     public fn bindWith(address: SocketAddress, options: ListenOptions) -> Result<AsyncTcpListener, IoError> {
@@ -549,6 +555,13 @@ public struct AsyncUdpSocket {
     private fd: i32;
     private family: u32; // 4 or 6: an IPv4 destination of an IPv6 socket is sent IPv4-mapped
     private port: u16;   // the bound port, for `UdpReceived.to`
+
+    /// The runtime's descriptor, for `Handover` (ADR 0173).
+    fn descriptor(borrow this) -> i32 => this.fd;
+
+    /// The socket of a descriptor this process was handed: `Inherited.datagrams` (ADR 0173).
+    fn adopt(fd: i32, family: u32, port: u16) -> AsyncUdpSocket =>
+        AsyncUdpSocket { fd: fd, family: family, port: port };
 
     /// A socket bound to `address` (port 0: the system chooses), with `options`.
     /// Safety: the runtime reads the address only during the call; the descriptor becomes the socket's at once, so an

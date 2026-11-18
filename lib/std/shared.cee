@@ -31,7 +31,8 @@ public struct SharedMemory {
     /// The mapping's address, as a number: the value is Send and Share, since what it gives safely is atomics.
     private base: usize;
     private size: usize;
-    /// What the system needs to let go of it (Windows: the mapping's handle).
+    /// What the system needs to let go of it, and to hand it to a child (POSIX: its descriptor plus one; Windows:
+    /// the mapping's handle).
     private handle: u64;
     /// The name, kept by the value `create` returned, which removes it.
     private made: [u8; 30];
@@ -90,6 +91,33 @@ public struct SharedMemory {
     /// `InvalidInput` for a name that is not one, or for no bytes.
     public fn create(name: StringView, bytes: usize) -> Result<SharedMemory, IoError> =>
         SharedMemory.map(name, bytes, true);
+
+    /// Memory of at least `bytes` bytes, zeroed, with no name: for a child to be handed (`Handover.memory`, ADR
+    /// 0173), which is the only way another process reaches it. `InvalidInput` for no bytes.
+    /// Safety: the runtime writes the three words of `out`.
+    public fn anonymous(bytes: usize) -> Result<SharedMemory, IoError> {
+        if (bytes == 0) {
+            return Err(IoError.InvalidInput);
+        }
+        var out = [0u64; 3];
+        let status = unsafe { ceesafe_host_shared_map(0 as *u8, 0, bytes as u64, 2u32, borrow mut out[0] as *mut u64) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        return Ok(SharedMemory.adopt(out));
+    }
+
+    /// What the system holds the memory by, for `Handover` (ADR 0173).
+    fn held(borrow this) -> u64 => this.handle;
+
+    /// The memory of what the runtime gave: its address, its length and what unmapping needs.
+    fn adopt(out: [u64; 3]) -> SharedMemory => SharedMemory {
+        base: truncate<usize>(out[0]),
+        size: truncate<usize>(out[1]),
+        handle: out[2],
+        made: [0u8; 30],
+        madeLength: 0,
+    };
 
     /// Maps the memory made under `name`, all of it. `NotFound` if there is none.
     public fn open(name: StringView) -> Result<SharedMemory, IoError> => SharedMemory.map(name, 0, false);

@@ -78,6 +78,28 @@
 #if !defined(COSMO_AF_INET) && !defined(_WIN32)
 extern char **environ;
 #endif
+#if !defined(_WIN32) && !defined(COSMO_AF_INET) && !defined(CEE_COSMOOS)
+/* Defined with what a child is handed (ADR 0173), further down. */
+static char **cee_child_environment(char *word);
+static int cee_spawn_only(posix_spawn_file_actions_t *actions, posix_spawnattr_t *attributes, int keep);
+static void cee_handover_read(void);
+#endif
+#if !defined(_WIN32)
+/* Every descriptor the runtime opens is closed in a program this one starts (ADR 0169 §2.2, ADR 0173 §3.2): a
+   child gets what it is handed and nothing else. Where the call that makes a descriptor cannot say so itself
+   (socket, accept, pipe), this does, at once. */
+static void cee_cloexec(int fd) {
+#if defined(FD_CLOEXEC) && !defined(CEE_COSMOOS) && !defined(COSMO_AF_INET)
+    if (fd >= 0) {
+        int saved = errno;
+        (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+        errno = saved;
+    }
+#else
+    (void)fd;
+#endif
+}
+#endif
 #if !defined(_WIN32) && !defined(O_NOCTTY)
 #define O_NOCTTY 0 /* a system without controlling terminals (ADR 0078's File.openRegular) */
 #endif
@@ -1402,6 +1424,7 @@ static bool cee_endpoint_from(const cee_sockaddr *a, ceesafe_endpoint *e) {
 int64_t ceesafe_tcp_socket_for(const ceesafe_endpoint *e) {
     int fd = socket(e->family == 6u ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -(int64_t)errno;
+    cee_cloexec(fd);
 #ifdef SO_NOSIGPIPE
     int one = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
@@ -1532,6 +1555,7 @@ cee_io_result ceesafe_tcp_accept(int32_t fd) {
     do {
         peer = accept(fd, NULL, NULL);
     } while (peer < 0 && errno == EINTR);
+    cee_cloexec(peer);
     if (peer < 0) return ceesafe_io_errno();
 #else
     /* ADR 0126: wait for a connection and for the listener's shutdown together. A connection that was reset before
@@ -1549,6 +1573,7 @@ cee_io_result ceesafe_tcp_accept(int32_t fd) {
             if (waits[1].revents != 0) return ceesafe_io_fail(ECONNABORTED);
         }
         peer = accept(fd, NULL, NULL);
+        cee_cloexec(peer);
         if (peer >= 0) break;
         if (errno == EINTR) continue;
         if (watched && (cee_listener_would_block(errno) || errno == ECONNABORTED)) continue;
@@ -1697,6 +1722,7 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) {
     do {
         peer = accept(fd, NULL, NULL);
     } while (peer < 0 && errno == EINTR);
+    cee_cloexec(peer);
     if (peer < 0) {
         return cee_async_errno();
     }
@@ -2920,7 +2946,19 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             started = posix_spawn_file_actions_addopen(&actions, 0, in_name, O_RDONLY, 0);
             if (started == 0) started = posix_spawn_file_actions_addopen(&actions, 1, out_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
             if (started == 0) started = posix_spawn_file_actions_addopen(&actions, 2, err_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-            if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+            /* As a child that runs beside its parent (ADR 0173 §3.2): no descriptor of this process but the
+               three, and no word of what this process was handed. */
+            posix_spawnattr_t attributes;
+            cee_handover_read();
+            char **environment = cee_child_environment(NULL);
+            if (started == 0 && environment == NULL) started = ENOMEM;
+            if (started == 0) started = posix_spawnattr_init(&attributes);
+            if (started == 0) {
+                started = cee_spawn_only(&actions, &attributes, 3);
+                if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, &attributes, argv, environment);
+                (void)posix_spawnattr_destroy(&attributes);
+            }
+            if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
             (void)posix_spawn_file_actions_destroy(&actions);
         }
 #endif
@@ -2940,6 +2978,8 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     ceesafe_free(argv, CEE_ALLOC_SYSTEM);
     return result;
 }
+
+int64_t ceesafe_host_child_wait(uint64_t handle) { return ceesafe_host_child_poll(handle, 1u); }
 
 /* ---- Named shared memory (ADR 0172; type-system.md §26.17; lib/std's SharedMemory) ----
  * ceesafe_host_shared_map maps the memory under `name` (1 to 30 bytes of letters, digits, '.', '_', '-': the caller
@@ -3010,19 +3050,14 @@ static bool cee_shared_path(const uint8_t *name, uint64_t name_length, char *pat
     return true;
 }
 
-int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
-    char path[32];
-    if (!cee_shared_path(name, name_length, path)) return -(int64_t)EINVAL;
+static uint32_t cee_shared_unnamed; /* counts this process's unnamed memories, for their short-lived names */
+
+/* Maps the shared object `fd`, which becomes the mapping's: out[2] is the descriptor plus one (0 says none), kept
+   open while the memory is mapped so that it can be handed to a child (ADR 0173). `length` 0: all of it. */
+static int64_t cee_shared_view(int fd, uint64_t length, uint64_t *out) {
     uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
-    int fd = create != 0u ? shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600) : shm_open(path, O_RDWR, 0);
-    if (fd < 0) return -(int64_t)errno;
-    uint64_t length = 0u;
     int error = 0;
-    if (create != 0u) {
-        length = bytes > UINT64_MAX - page ? 0u : (bytes + page - 1u) / page * page;
-        if (length == 0u || length > (uint64_t)INT64_MAX) error = EINVAL;
-        else if (ftruncate(fd, (off_t)length) != 0) error = errno;
-    } else {
+    if (length == 0u) {
         struct stat st;
         if (fstat(fd, &st) != 0) error = errno;
         else if (st.st_size <= 0) error = EINVAL; /* made, and not yet given its size */
@@ -3033,24 +3068,59 @@ int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint6
         view = mmap(NULL, (size_t)length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (view == MAP_FAILED) error = errno;
     }
-    (void)close(fd);
     if (error != 0) {
-        if (create != 0u) (void)shm_unlink(path);
+        (void)close(fd);
         return -(int64_t)error;
     }
+    cee_cloexec(fd);
     out[0] = (uint64_t)(uintptr_t)view;
     out[1] = length;
-    out[2] = 0u;
+    out[2] = (uint64_t)fd + 1u;
     return 0;
 }
 
+int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out) {
+    char path[48];
+    if (create == 2u) {
+        /* No name: one of this process's own for the moment between the two calls (ADR 0173 §3.3). */
+        (void)snprintf(path, sizeof path, "/cee-%lu-%lu", (unsigned long)getpid(),
+                       (unsigned long)ceesafe_atomic_add_u32(&cee_shared_unnamed, 1u));
+    } else if (!cee_shared_path(name, name_length, path)) {
+        return -(int64_t)EINVAL;
+    }
+    uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
+    int fd = create != 0u ? shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600) : shm_open(path, O_RDWR, 0);
+    if (fd < 0 && create == 2u && errno == EEXIST) {
+        /* left by a process of this id that was killed between the two calls */
+        (void)shm_unlink(path);
+        fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
+    }
+    if (fd < 0) return -(int64_t)errno;
+    uint64_t length = 0u;
+    if (create != 0u) {
+        int error = 0;
+        length = bytes > UINT64_MAX - page ? 0u : (bytes + page - 1u) / page * page;
+        if (length == 0u || length > (uint64_t)INT64_MAX) error = EINVAL;
+        else if (ftruncate(fd, (off_t)length) != 0) error = errno;
+        if (create == 2u) (void)shm_unlink(path);
+        if (error != 0) {
+            (void)close(fd);
+            if (create == 1u) (void)shm_unlink(path);
+            return -(int64_t)error;
+        }
+    }
+    int64_t mapped = cee_shared_view(fd, length, out);
+    if (mapped < 0 && create == 1u) (void)shm_unlink(path);
+    return mapped;
+}
+
 void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle) {
-    (void)handle;
     (void)munmap((void *)(uintptr_t)address, (size_t)length);
+    if (handle != 0u) (void)close((int)(handle - 1u));
 }
 
 int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
-    char path[32];
+    char path[48];
     if (!cee_shared_path(name, name_length, path)) return -(int64_t)EINVAL;
     return shm_unlink(path) == 0 ? 0 : -(int64_t)errno;
 }
@@ -3074,12 +3144,40 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
     (void)arguments; (void)count; (void)streams; (void)handle;
     return -(int64_t)EOPNOTSUPP;
 }
+int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
+                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
+    (void)arguments; (void)count; (void)streams; (void)handles; (void)kinds; (void)handed; (void)handle;
+    return -(int64_t)EOPNOTSUPP;
+}
+int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) { (void)kind; (void)handle; return -(int64_t)EOPNOTSUPP; }
+void ceesafe_host_handover_release(uint32_t kind, uint64_t held) { (void)kind; (void)held; }
+int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) { (void)kinds; (void)capacity; return 0; }
+int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
+    (void)place; (void)kind; (void)out;
+    return -(int64_t)ENOENT;
+}
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) { (void)handle; (void)wait; return -(int64_t)EOPNOTSUPP; }
 int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it) { (void)handle; (void)kill_it; return -(int64_t)EOPNOTSUPP; }
 void ceesafe_host_child_forget(uint64_t handle, uint32_t ended) { (void)handle; (void)ended; }
 int64_t ceesafe_host_pid(void) { return 0; }
 int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity) { (void)buffer; (void)capacity; return -(int64_t)EOPNOTSUPP; }
 #elif defined(_WIN32)
+/*WINDOWS-HANDOVER-BEGIN*/
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle);
+int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
+                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
+    (void)handles; (void)kinds;
+    if (handed != 0u) return -(int64_t)EOPNOTSUPP;
+    return ceesafe_host_child_start(arguments, count, streams, handle);
+}
+int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) { (void)kind; (void)handle; return -(int64_t)EOPNOTSUPP; }
+void ceesafe_host_handover_release(uint32_t kind, uint64_t held) { (void)kind; (void)held; }
+int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) { (void)kinds; (void)capacity; return 0; }
+int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
+    (void)place; (void)kind; (void)out;
+    return -(int64_t)ENOENT;
+}
+/*WINDOWS-HANDOVER-END*/
 int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
     const cee_str *texts = (const cee_str *)arguments;
     if (count == 0u || count > 4097u || handle == NULL) return -(int64_t)EINVAL;
@@ -3207,10 +3305,133 @@ static void cee_forgotten_reap(pid_t add) {
     ceesafe_atomic_store_u32(&cee_forgotten_lock, 0u);
 }
 
-int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+/* ---- What a child is handed (ADR 0173; type-system.md §26.18) ----
+ * The parent lists up to CEE_HANDOVER_PLACES descriptors, each with its kind (1 a TCP listener, 2 a UDP socket,
+ * 3 shared memory). The child has them as descriptors 3, 4, ... in that order, and CEESAFE_HANDOVER in its environment
+ * says their kinds, a letter each (L, D, M). Every other descriptor of the parent is closed in the child: by the
+ * system where it can be asked to (macOS: POSIX_SPAWN_CLOEXEC_DEFAULT; glibc 2.34 and FreeBSD: closefrom as a file
+ * action), and elsewhere because the runtime's descriptors are close-on-exec (cee_cloexec). */
+#define CEE_HANDOVER_PLACES 16u
+#define CEE_HANDOVER_NAME "CEESAFE_HANDOVER"
+
+static uint32_t cee_handover_lock;                 /* guards the three below (ceesafe_atomic_*) */
+static int cee_handover_count = -1;                /* -1: the environment has not been read yet */
+static uint8_t cee_handover_kinds[CEE_HANDOVER_PLACES]; /* 0 once a place is taken */
+
+/* Reads what this process was handed, once: the kinds, and each descriptor made close-on-exec, so that it is this
+   process's alone. A program this one starts is told nothing: its environment is made without the name. */
+static void cee_handover_read(void) {
+    while (ceesafe_atomic_cas_u32(&cee_handover_lock, 0u, 1u) != 0u) {}
+    if (cee_handover_count < 0) {
+        int count = 0;
+        const char *text = getenv(CEE_HANDOVER_NAME);
+        for (; text != NULL && text[count] != '\0' && (uint32_t)count < CEE_HANDOVER_PLACES; count++) {
+            char letter = text[count];
+            uint8_t kind = letter == 'L' ? 1u : letter == 'D' ? 2u : letter == 'M' ? 3u : 0u;
+            struct stat st;
+            if (kind == 0u || fstat(3 + count, &st) != 0) break; /* not ours, or not what it says */
+            cee_handover_kinds[count] = kind;
+            cee_cloexec(3 + count);
+        }
+        cee_handover_count = count;
+    }
+    ceesafe_atomic_store_u32(&cee_handover_lock, 0u);
+}
+
+/* A hold of the handover's own on what `handle` names (a socket's descriptor; memory's as ceesafe_host_shared_map gave
+   it): a duplicate at 64 or above, close-on-exec, or a negated errno. ceesafe_host_handover_release lets go of it. */
+int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) {
+    int source = kind == 3u ? (int)handle - 1 : (int)handle;
+    if (kind < 1u || kind > 3u || source < 0) return -(int64_t)EINVAL;
+#if defined(F_DUPFD_CLOEXEC)
+    int held = fcntl(source, F_DUPFD_CLOEXEC, 64);
+#else
+    int held = fcntl(source, F_DUPFD, 64);
+    cee_cloexec(held);
+#endif
+    return held < 0 ? -(int64_t)errno : (int64_t)held;
+}
+
+void ceesafe_host_handover_release(uint32_t kind, uint64_t held) {
+    (void)kind;
+    (void)close((int)held);
+}
+
+/* How many places this process was handed, with their kinds in `kinds` (0: taken). */
+int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) {
+    cee_handover_read();
+    for (int i = 0; i < cee_handover_count && (uint64_t)i < capacity; i++) kinds[i] = cee_handover_kinds[i];
+    return (int64_t)cee_handover_count;
+}
+
+/* Takes place `place`, which must be of `kind` and not yet taken (else ENOENT). A socket: out[0] its descriptor,
+   out[1] its family (4 or 6), out[2] the port it is bound to. Memory: out as ceesafe_host_shared_map gives it. */
+int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
+    cee_handover_read();
+    while (ceesafe_atomic_cas_u32(&cee_handover_lock, 0u, 1u) != 0u) {}
+    bool mine = (int)place < cee_handover_count && kind != 0u && cee_handover_kinds[place] == kind;
+    if (mine) cee_handover_kinds[place] = 0u;
+    ceesafe_atomic_store_u32(&cee_handover_lock, 0u);
+    if (!mine) return -(int64_t)ENOENT;
+    int fd = 3 + (int)place;
+#if defined(__ANDROID__)
+    if (kind == 3u) return -(int64_t)EOPNOTSUPP; /* no shared memory by name there (ADR 0172) */
+#else
+    if (kind == 3u) return cee_shared_view(fd, 0u, out);
+#endif
+    struct sockaddr_storage local;
+    socklen_t length = (socklen_t)sizeof local;
+    if (getsockname(fd, (struct sockaddr *)&local, &length) != 0) {
+        int error = errno;
+        (void)close(fd);
+        return -(int64_t)error;
+    }
+    out[0] = (uint64_t)fd;
+    out[1] = local.ss_family == AF_INET6 ? 6u : 4u;
+    out[2] = local.ss_family == AF_INET6 ? (uint64_t)ntohs(((struct sockaddr_in6 *)&local)->sin6_port)
+                                         : (uint64_t)ntohs(((struct sockaddr_in *)&local)->sin_port);
+    return 0;
+}
+
+/* The environment for a child: this process's without CEESAFE_HANDOVER, and with `word` (or nothing, if NULL) in its
+   place. The array is the caller's to free; its strings are not. NULL: no memory. */
+static char **cee_child_environment(char *word) {
+    size_t count = 0;
+    while (environ != NULL && environ[count] != NULL) count++;
+    char **made = (char **)ceesafe_alloc((count + 2u) * sizeof(char *), CEE_ALLOC_SYSTEM);
+    if (made == NULL) return NULL;
+    size_t kept = 0;
+    size_t name = strlen(CEE_HANDOVER_NAME);
+    for (size_t i = 0; i < count; i++) {
+        if (strncmp(environ[i], CEE_HANDOVER_NAME, name) == 0 && environ[i][name] == '=') continue;
+        made[kept++] = environ[i];
+    }
+    if (word != NULL) made[kept++] = word;
+    made[kept] = NULL;
+    return made;
+}
+
+/* Has the child of `actions` and `attributes` keep descriptors 0 to `keep` - 1 and no other of this process's. */
+static int cee_spawn_only(posix_spawn_file_actions_t *actions, posix_spawnattr_t *attributes, int keep) {
+    int failed = 0;
+#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+    failed = posix_spawnattr_setflags(attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    for (int fd = 0; failed == 0 && fd < keep; fd++) failed = posix_spawn_file_actions_addinherit_np(actions, fd);
+#elif (defined(__GLIBC__) && defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 34)) || (defined(__FreeBSD__) && __FreeBSD__ >= 14)
+    (void)attributes;
+    failed = posix_spawn_file_actions_addclosefrom_np(actions, keep);
+#else
+    (void)actions; (void)attributes; (void)keep; /* the runtime's descriptors are close-on-exec */
+#endif
+    return failed;
+}
+
+int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
+                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
     const cee_str *texts = (const cee_str *)arguments;
-    if (count == 0u || count > 4097u || handle == NULL) return -(int64_t)EINVAL;
+    if (count == 0u || count > 4097u || handle == NULL || handed > CEE_HANDOVER_PLACES) return -(int64_t)EINVAL;
     cee_forgotten_reap(0);
+    cee_handover_read(); /* what this process was handed is its own before it starts another */
     char **argv = (char **)ceesafe_alloc((size_t)(count + 1u) * sizeof(char *), CEE_ALLOC_SYSTEM);
     if (argv == NULL) return -(int64_t)ENOMEM;
     int32_t error = 0;
@@ -3219,6 +3440,21 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
         argv[made] = ceesafe_c_string(texts[made], &error);
         if (argv[made] == NULL) break;
     }
+    /* What is handed is the handover's own holds (ceesafe_host_handover_hold): descriptors at 64 or above, so moving
+       them to 3, 4, ... in the child overwrites none that is still to be moved, and close-on-exec, so the child has
+       them only where they are moved to. */
+    char word[sizeof(CEE_HANDOVER_NAME) + 1u + CEE_HANDOVER_PLACES + 1u];
+    size_t written = (size_t)snprintf(word, sizeof word, "%s=", CEE_HANDOVER_NAME);
+    for (uint32_t i = 0; error == 0 && i < handed; i++) {
+        if (kinds[i] < 1u || kinds[i] > 3u || handles[i] < 64u) {
+            error = EINVAL;
+            break;
+        }
+        word[written++] = kinds[i] == 1u ? 'L' : kinds[i] == 2u ? 'D' : 'M';
+    }
+    word[written] = '\0';
+    char **environment = error == 0 ? cee_child_environment(handed != 0u ? word : NULL) : NULL;
+    if (error == 0 && environment == NULL) error = ENOMEM;
     int64_t result = 0;
     if (error != 0) {
         result = -(int64_t)error;
@@ -3227,16 +3463,25 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
         (void)fflush(stdout);
         pid_t pid = -1;
         posix_spawn_file_actions_t actions;
+        posix_spawnattr_t attributes;
         int started = posix_spawn_file_actions_init(&actions);
         if (started == 0) {
-            if ((streams & 3u) == 1u) started = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
-            if (started == 0 && ((streams >> 2) & 3u) == 1u) {
-                started = posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+            started = posix_spawnattr_init(&attributes);
+            if (started == 0) {
+                if ((streams & 3u) == 1u) started = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+                if (started == 0 && ((streams >> 2) & 3u) == 1u) {
+                    started = posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+                }
+                if (started == 0 && ((streams >> 4) & 3u) == 1u) {
+                    started = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
+                }
+                for (uint32_t i = 0; started == 0 && i < handed; i++) {
+                    started = posix_spawn_file_actions_adddup2(&actions, (int)handles[i], 3 + (int)i);
+                }
+                if (started == 0) started = cee_spawn_only(&actions, &attributes, 3 + (int)handed);
+                if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, &attributes, argv, environment);
+                (void)posix_spawnattr_destroy(&attributes);
             }
-            if (started == 0 && ((streams >> 4) & 3u) == 1u) {
-                started = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
-            }
-            if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
             (void)posix_spawn_file_actions_destroy(&actions);
         }
         if (started != 0) {
@@ -3246,9 +3491,14 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
             result = (int64_t)pid;
         }
     }
+    if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
     for (uint64_t i = 0; i < made; i++) ceesafe_free(argv[i], CEE_ALLOC_SYSTEM);
     ceesafe_free(argv, CEE_ALLOC_SYSTEM);
     return result;
+}
+
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, handle);
 }
 
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {
@@ -4213,6 +4463,9 @@ int64_t ceesafe_async_udp_bind(uint32_t family, const uint8_t *bytes, uint16_t p
     bool v6 = e.family == 6u;
     cee_udp_socket s = socket(v6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == CEE_UDP_INVALID) return -(int64_t)cee_udp_error();
+#if !defined(_WIN32)
+    cee_cloexec(s);
+#endif
     int failure = 0;
 #if !defined(_WIN32)
     if ((flags & CEE_UDP_REUSE_ADDRESS) != 0u) failure = cee_udp_flag(s, SOL_SOCKET, SO_REUSEADDR, 1);

@@ -1417,11 +1417,20 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
 /* Child processes that run beside their parent (ADR 0169; runtime/hosted/ceesafe_rt_io.c says what each returns). */
 int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle);
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait);
+/* ceesafe_host_child_poll(handle, 1) under a name of its own: the one of the two that blocks (ADR 0173 §8). */
+int64_t ceesafe_host_child_wait(uint64_t handle);
 int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it);
 void ceesafe_host_child_forget(uint64_t handle, uint32_t ended);
 int64_t ceesafe_host_pid(void);
 int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity);
 /* Named shared memory (ADR 0172; lib/std's SharedMemory; runtime/hosted/ceesafe_rt_io.c says what each does). */
+/* What a child is handed (ADR 0173; runtime/hosted/ceesafe_rt_io.c says what each does). */
+int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
+                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle);
+int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle);
+void ceesafe_host_handover_release(uint32_t kind, uint64_t held);
+int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity);
+int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out);
 int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out);
 void ceesafe_host_shared_unmap(uint64_t address, uint64_t length, uint64_t handle);
 int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length);

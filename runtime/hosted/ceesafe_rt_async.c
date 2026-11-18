@@ -520,6 +520,9 @@ static bool cee_reactor_open(void) {
     }
 #if defined(CEE_KQUEUE)
     cee_exec.reactor = kqueue();
+    if (cee_exec.reactor >= 0) {
+        (void)fcntl(cee_exec.reactor, F_SETFD, FD_CLOEXEC);
+    }
 #elif defined(CEE_EPOLL)
     cee_exec.reactor = epoll_create1(EPOLL_CLOEXEC);
 #endif
@@ -1462,6 +1465,8 @@ static void cee_open_wake_pipe(void) {
             /* Non-blocking: a full pipe already says "wake up", and a busy worker drains it only when it waits. */
             (void)fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
             (void)fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL) | O_NONBLOCK);
+            (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC); /* not a child's (ADR 0173 §3.2) */
+            (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
             cee_exec.wake_pipe[0] = fds[0];
             cee_exec.wake_pipe[1] = fds[1];
         }

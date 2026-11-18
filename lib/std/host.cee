@@ -70,10 +70,30 @@ extern "C" {
         errors: *u8,
         errorsLength: u64,
     ) -> i64;
-    @effects(sleep, alloc)
+    @effects(alloc)
     fn ceesafe_host_child_start(arguments: *void, count: u64, streams: u32, handle: *mut u64) -> i64;
-    @effects(sleep)
+    @effects(alloc)
+    fn ceesafe_host_child_start_with(
+        arguments: *void,
+        count: u64,
+        streams: u32,
+        handles: *u64,
+        kinds: *u8,
+        handed: u32,
+        handle: *mut u64,
+    ) -> i64;
+    @effects()
+    fn ceesafe_host_handover_hold(kind: u32, handle: u64) -> i64;
+    @effects()
+    fn ceesafe_host_handover_release(kind: u32, held: u64);
+    @effects()
+    fn ceesafe_host_inherited(kinds: *mut u8, capacity: u64) -> i64;
+    @effects()
+    fn ceesafe_host_inherited_take(place: u32, kind: u32, out: *mut u64) -> i64;
+    @effects()
     fn ceesafe_host_child_poll(handle: u64, wait: u32) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_child_wait(handle: u64) -> i64;
     @effects()
     fn ceesafe_host_child_signal(handle: u64, kill: u32) -> i64;
     @effects()
@@ -107,6 +127,145 @@ public enum ChildStream {
     Inherit,
     /// Nothing: the null device.
     Null,
+}
+
+/// What a place of a handover holds (type-system.md §26.18, ADR 0173).
+public enum InheritedKind {
+    /// A TCP listener: `Inherited.listener`.
+    Listener,
+    /// A UDP socket: `Inherited.datagrams`.
+    Datagrams,
+    /// Shared memory: `Inherited.memory`.
+    Memory,
+}
+
+/// What a child is to have of its parent's: listeners, UDP sockets and shared memory, in the order they are listed
+/// (type-system.md §26.18, ADR 0173).
+///
+/// ```
+/// var handover = Handover.create();
+/// let socket = handover.listener(listener)?;       // place 0
+/// let counters = handover.memory(shared)?;         // place 1
+/// let child = Process.spawnWith(me.view(), arguments, ChildOptions.inherit(), handover)?;
+/// ```
+///
+/// Listing a thing gives the handover a hold of its own on it, which it lets go of when it is dropped: the parent
+/// keeps what it listed, may drop it, and one handover serves every child that is to have the same things. What
+/// is shared is the thing itself: both processes accept from the one socket and map the one memory, and closing
+/// it in one does not close it in the other. The child has nothing else of its parent's but the three standard
+/// streams. At most 16 places.
+@noncopy
+public struct Handover {
+    /// Each place: the runtime's hold on it, and its kind (1 a listener, 2 a UDP socket, 3 memory).
+    private held: [u64; 16];
+    private kinds: [u8; 16];
+    private count: u32;
+
+    /// A handover of nothing.
+    public fn create() -> Handover => Handover { held: [0u64; 16], kinds: [0u8; 16], count: 0 };
+
+    /// How many places it has.
+    public fn length(borrow this) -> u32 => this.count;
+
+    /// Safety: the runtime duplicates what `handle` names, or says why not.
+    fn hold(borrow mut this, kind: u8, handle: u64) -> Result<u32, IoError> {
+        if (this.count >= 16) {
+            return Err(IoError.InvalidInput);
+        }
+        let held = unsafe { ceesafe_host_handover_hold(kind as u32, handle) };
+        if (held < 0) {
+            return Err(HostServices.hostError(held));
+        }
+        let at = this.count;
+        this.held[at as usize] = truncate<u64>(held);
+        this.kinds[at as usize] = kind;
+        this.count = at + 1;
+        return Ok(at);
+    }
+
+    /// Lists a TCP listener: its place. `InvalidInput` past 16 places.
+    public fn listener(borrow mut this, listener: borrow AsyncTcpListener) -> Result<u32, IoError> =>
+        this.hold(1, truncate<u64>(listener.descriptor() as i64));
+
+    /// Lists a UDP socket: its place. `InvalidInput` past 16 places.
+    public fn datagrams(borrow mut this, socket: borrow AsyncUdpSocket) -> Result<u32, IoError> =>
+        this.hold(2, truncate<u64>(socket.descriptor() as i64));
+
+    /// Lists shared memory: its place. `InvalidInput` past 16 places.
+    public fn memory(borrow mut this, memory: borrow SharedMemory) -> Result<u32, IoError> =>
+        this.hold(3, memory.held());
+
+    /// Lets go of what it holds.
+    /// Safety: each hold is the runtime's, given back once.
+    drop {
+        for (i in 0..this.count as usize) {
+            unsafe { ceesafe_host_handover_release(this.kinds[i] as u32, this.held[i]); }
+        }
+    }
+}
+
+/// What this process was handed by the one that started it (type-system.md §26.18, ADR 0173): `Process.inherited()`.
+///
+/// ```
+/// var given = Process.inherited();
+/// let listener = given.listener(0)?;      // the same socket as the parent's
+/// let shared = given.memory(1)?;          // the same memory
+/// ```
+///
+/// Each place is taken once: asking again, for another kind, or past the end is `Err(IoError.NotFound)`. In a
+/// program that was started with nothing handed over it is empty. A program this one starts is handed nothing of
+/// it.
+public struct Inherited {
+    private places: u32;
+
+    /// How many places there are.
+    public fn count(borrow this) -> u32 => this.places;
+
+    /// What place `place` holds; null if it is past the end or was taken.
+    /// Safety: the runtime writes at most the 16 bytes of `kinds`.
+    public fn kind(borrow this, place: u32) -> InheritedKind? {
+        var kinds = [0u8; 16];
+        let count = unsafe { ceesafe_host_inherited(borrow mut kinds[0] as *mut u8, 16) };
+        if (place as i64 >= count || place >= 16) {
+            return null;
+        }
+        return match (kinds[place as usize]) {
+            1 => Some(InheritedKind.Listener),
+            2 => Some(InheritedKind.Datagrams),
+            3 => Some(InheritedKind.Memory),
+            _ => null,
+        };
+    }
+
+    /// Safety: the runtime writes the three words of `out`.
+    fn take(place: u32, kind: u32) -> Result<[u64; 3], IoError> {
+        var out = [0u64; 3];
+        let status = unsafe { ceesafe_host_inherited_take(place, kind, borrow mut out[0] as *mut u64) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        return Ok(out);
+    }
+
+    /// Takes the TCP listener at `place`.
+    public fn listener(borrow mut this, place: u32) -> Result<AsyncTcpListener, IoError> {
+        let out = Inherited.take(place, 1)?;
+        return Ok(AsyncTcpListener.adopt(truncate<i32>(truncate<i64>(out[0]))));
+    }
+
+    /// Takes the UDP socket at `place`.
+    public fn datagrams(borrow mut this, place: u32) -> Result<AsyncUdpSocket, IoError> {
+        let out = Inherited.take(place, 2)?;
+        return Ok(AsyncUdpSocket.adopt(
+            truncate<i32>(truncate<i64>(out[0])),
+            truncate<u32>(out[1]),
+            truncate<u16>(out[2]),
+        ));
+    }
+
+    /// Takes the shared memory at `place`.
+    public fn memory(borrow mut this, place: u32) -> Result<SharedMemory, IoError> =>
+        Ok(SharedMemory.adopt(Inherited.take(place, 3)?));
 }
 
 /// How `Process.spawn` starts a program (type-system.md §26.16, ADR 0169).
@@ -161,7 +320,7 @@ public struct ChildProcess {
             Some(exit) => { return Ok(exit); }
             null => {}
         }
-        let status = unsafe { ceesafe_host_child_poll(this.handle, 1) };
+        let status = unsafe { ceesafe_host_child_wait(this.handle) };
         return match (this.seen(status)?) {
             Some(exit) => Ok(exit),
             null => Err(IoError.Other(0)),
@@ -251,9 +410,7 @@ public struct ProcessLimits {
     public fn openFiles() -> Result<OpenFileLimit, IoError> {
         var current: u64 = 0;
         var maximum: u64 = 0;
-        let result = unsafe {
-            ceesafe_host_open_files(borrow mut current as *mut u64, borrow mut maximum as *mut u64)
-        };
+        let result = unsafe { ceesafe_host_open_files(borrow mut current as *mut u64, borrow mut maximum as *mut u64) };
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
@@ -389,15 +546,13 @@ public struct Directory {
         var total: u64 = 0;
         var free: u64 = 0;
         var available: u64 = 0;
-        let result = unsafe {
-            ceesafe_host_space(
-                path.ptr,
-                path.length as u64,
-                borrow mut total as *mut u64,
-                borrow mut free as *mut u64,
-                borrow mut available as *mut u64,
-            )
-        };
+        let result = unsafe { ceesafe_host_space(
+            path.ptr,
+            path.length as u64,
+            borrow mut total as *mut u64,
+            borrow mut free as *mut u64,
+            borrow mut available as *mut u64,
+        ) };
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
@@ -478,7 +633,12 @@ public struct Directory {
     /// Safety: the runtime reads the name's bytes during the call only, and writes at most the buffer's length.
     public fn appData(name: StringView) -> Result<String, IoError> {
         var buffer = [0u8; 4096];
-        let length = unsafe { ceesafe_host_app_data(name.ptr, name.length as u64, borrow mut buffer[0] as *mut u8, 4096) };
+        let length = unsafe { ceesafe_host_app_data(
+            name.ptr,
+            name.length as u64,
+            borrow mut buffer[0] as *mut u8,
+            4096,
+        ) };
         return HostServices.textOf(buffer, length);
     }
 
@@ -543,6 +703,50 @@ public struct HostServices {
             return Err(HostServices.hostError(pid));
         }
         return Ok(ChildProcess { handle: handle, pid: truncate<u64>(pid), ended: null });
+    }
+
+    /// `Process.spawnWith(program, arguments, options, handover)` (type-system.md §26.18, ADR 0173): `spawn`, and
+    /// the child has what `handover` lists, which `Process.inherited()` gives it.
+    /// Safety: as `spawn`; the runtime reads the handles and kinds during the call only.
+    public fn spawnWith(
+        program: StringView,
+        arguments: borrow Vector<StringView>,
+        options: ChildOptions,
+        handover: borrow Handover,
+    ) -> Result<ChildProcess, IoError> {
+        var texts = Vector<HostServicesText>.create();
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length as u64 } }))?;
+        for (argument in arguments) {
+            HostServices.pushed(
+                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length as u64 } }),
+            )?;
+        }
+        let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
+            (HostServices.streamBits(options.error) << 4);
+        let handles = handover.held;
+        let kinds = handover.kinds;
+        var handle: u64 = 0;
+        let pid = unsafe { ceesafe_host_child_start_with(
+            texts.view().ptr as *void,
+            texts.length as u64,
+            streams,
+            borrow handles[0] as *u64,
+            borrow kinds[0] as *u8,
+            handover.count,
+            borrow mut handle as *mut u64,
+        ) };
+        if (pid < 0) {
+            return Err(HostServices.hostError(pid));
+        }
+        return Ok(ChildProcess { handle: handle, pid: truncate<u64>(pid), ended: null });
+    }
+
+    /// `Process.inherited()` (type-system.md §26.18, ADR 0173): what this process was handed.
+    /// Safety: the runtime writes at most the 16 bytes of `kinds`.
+    public fn inherited() -> Inherited {
+        var kinds = [0u8; 16];
+        let count = unsafe { ceesafe_host_inherited(borrow mut kinds[0] as *mut u8, 16) };
+        return Inherited { places: if (count < 0) 0u32 else truncate<u32>(count) };
     }
 
     fn streamBits(stream: ChildStream) -> u32 => match (stream) {
@@ -643,14 +847,12 @@ public struct HostServices {
     public fn modified(path: StringView) -> Result<UnixTime, IoError> {
         var seconds: i64 = 0;
         var nanoseconds: u32 = 0;
-        let result = unsafe {
-            ceesafe_host_modified(
-                path.ptr,
-                path.length as u64,
-                borrow mut seconds as *mut i64,
-                borrow mut nanoseconds as *mut u32,
-            )
-        };
+        let result = unsafe { ceesafe_host_modified(
+            path.ptr,
+            path.length as u64,
+            borrow mut seconds as *mut i64,
+            borrow mut nanoseconds as *mut u32,
+        ) };
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
@@ -851,13 +1053,11 @@ public struct FileMetadata {
     public fn modified(file: borrow File) -> Result<UnixTime, IoError> {
         var seconds: i64 = 0;
         var nanoseconds: u32 = 0;
-        let result = unsafe {
-            ceesafe_host_file_modified(
-                file as *File as *void,
-                borrow mut seconds as *mut i64,
-                borrow mut nanoseconds as *mut u32,
-            )
-        };
+        let result = unsafe { ceesafe_host_file_modified(
+            file as *File as *void,
+            borrow mut seconds as *mut i64,
+            borrow mut nanoseconds as *mut u32,
+        ) };
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }

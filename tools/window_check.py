@@ -1981,6 +1981,100 @@ ACCESS_EXPECTED = ["active false", "asked 2 press", "asked 6 increment", "asked 
                    "asked 9 press"]
 
 
+# A resize that comes inside the program's wait with no event behind it (another program's: an accessibility
+# client's, a window manager's, a script's) ends that wait with Resized, as an input does. RESIZE_C resizes the window
+# from a run loop timer, in AppKit's wait, as such a resize arrives; the wait is three seconds.
+RESIZE = r"""extern "C" {
+    @effects()
+    fn resize_later(width: f64, height: f64) -> i32;
+}
+
+/// Safety: the helper only resizes this process's window, from its run loop.
+fn main() -> i32 {
+    var window = match (Window.open("resize check", 320, 240)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let pixels = [0xFF202020u32; 76800];
+    // What opening it brings (the focus, the first size) is taken first.
+    for (frame in 0..3) {
+        match (window.present(pixels[..], 320, 240)) {
+            Ok() => {}
+            Err(_) => { Console.writeLine("present failed"); return 1; }
+        }
+        window.waitEvent(150);
+        loop {
+            match (window.nextEvent()) {
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+    }
+    if (unsafe { resize_later(200.0, 150.0) } != 1) {
+        Console.writeLine("no timer");
+        return 1;
+    }
+    let start = Timer.now();
+    var found = false;
+    while (!found && Timer.now() - start < 3000) {
+        window.waitEvent(truncate<u32>(3000 - (Timer.now() - start).min(3000)));
+        loop {
+            match (window.nextEvent()) {
+                Some(WindowEvent.Resized(size)) => { found = found || (size.width == 200 && size.height == 150); }
+                Some(_) => {}
+                null => { break; }
+            }
+        }
+    }
+    let waited = Timer.now() - start;
+    Console.writeLine(if (!found) "no resize" else if (waited < 1500) "resized in the wait" else "resized late");
+    return 0;
+}
+"""
+
+RESIZE_C = r"""/* Resizes the key window's content from a run loop timer: inside AppKit's wait, with no event behind it. */
+#include <stddef.h>
+#include <stdint.h>
+#if defined(__APPLE__)
+#include <dlfcn.h>
+typedef void *id;
+typedef void *SEL;
+static void *sym(const char *name) { return dlsym(RTLD_DEFAULT, name); }
+static SEL sel(const char *n) { return ((SEL(*)(const char *))sym("sel_registerName"))(n); }
+static id cls(const char *n) { return ((id(*)(const char *))sym("objc_getClass"))(n); }
+typedef struct { double w, h; } size;
+static size wanted;
+static void fire(void *timer, void *info) {
+    (void)timer;
+    (void)info;
+    void *send = sym("objc_msgSend");
+    id app = ((id(*)(id, SEL))send)(cls("NSApplication"), sel("sharedApplication"));
+    id windows = ((id(*)(id, SEL))send)(app, sel("windows"));
+    id window = ((id(*)(id, SEL, unsigned long))send)(windows, sel("objectAtIndex:"), 0ul);
+    ((void (*)(id, SEL, size))send)(window, sel("setContentSize:"), wanted);
+}
+int32_t resize_later(double width, double height);
+int32_t resize_later(double width, double height) {
+    wanted.w = width;
+    wanted.h = height;
+    void *(*create)(void *, double, double, unsigned long, long, void (*)(void *, void *), void *) =
+        (void *(*)(void *, double, double, unsigned long, long, void (*)(void *, void *), void *))sym("CFRunLoopTimerCreate");
+    double (*now)(void) = (double (*)(void))sym("CFAbsoluteTimeGetCurrent");
+    void *(*main_loop)(void) = (void *(*)(void))sym("CFRunLoopGetMain");
+    void (*add)(void *, void *, void *) = (void (*)(void *, void *, void *))sym("CFRunLoopAddTimer");
+    void **common = (void **)sym("kCFRunLoopCommonModes");
+    if (create == NULL || now == NULL || main_loop == NULL || add == NULL || common == NULL) return 0;
+    void *timer = create(NULL, now() + 0.3, 0.0, 0, 0, fire, NULL);
+    if (timer == NULL) return 0;
+    add(main_loop(), timer, *common);
+    return 1;
+}
+#else
+int32_t resize_later(double width, double height) { (void)width; (void)height; return 0; }
+#endif
+"""
+
+
 def access_real_expected():
     """What ACCESS prints with "real" on macOS: the list as AppKit reports it, the actions, the changed list."""
     rows = [("AXStaticText -", "-", "Heading", 1, 0), ("AXButton -", "Save", "-", 1, 0),
@@ -3459,6 +3553,12 @@ def main():
                 problems.append(f"a real desktop window's keyboard inset: expected 'keyboard 0', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             if sys.platform == "darwin":
+                resize = build_package(compiler, RESIZE, RESIZE_C, work, "window_check_resize")
+                r = run([resize], {}, work)
+                checks += 1
+                if r.returncode != 0 or r.stdout.strip() != "resized in the wait":
+                    problems.append("a resize inside the wait, with no event behind it: expected 'resized in the "
+                                    f"wait', got {r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
                 r = run([access, "real"], {}, work)
                 checks += 1
                 want = access_real_expected()

@@ -3563,12 +3563,23 @@ static signed char cee_mac_should_close(cee_id self, cee_sel cmd, cee_id sender)
     return 0; /* the program closes it, by dropping the Window */
 }
 
+static void cee_mac_wake_perform(void *info);
+
+/* The delegate's notifications come inside AppKit's run loop, often with no event of their own behind them: a resize
+   by another program (an accessibility client's, a window manager's, a script's) or the window's being brought to
+   the front. Each posts the wake event (ADR 0142) when it queued one of the program's, so that a wait it came in
+   returns and the program draws for it; without that, the window kept the old frame stretched to the new size until
+   the next input. */
 static void cee_mac_did_resize(cee_id self, cee_sel cmd, cee_id notification) {
     (void)self;
     (void)cmd;
     struct cee_window *w = cee_mac_owner(cee_send(notification, "object"));
     if (w != NULL) {
+        unsigned queued = w->count;
         cee_mac_update_size(w);
+        if (w->count != queued) {
+            cee_mac_wake_perform(NULL);
+        }
     }
 }
 
@@ -3577,7 +3588,11 @@ static void cee_mac_did_focus(cee_id self, cee_sel cmd, cee_id notification) {
     (void)cmd;
     struct cee_window *w = cee_mac_owner(cee_send(notification, "object"));
     if (w != NULL) {
+        unsigned queued = w->count;
         cee_window_focus(w, 1);
+        if (w->count != queued) {
+            cee_mac_wake_perform(NULL);
+        }
     }
 }
 
@@ -3586,7 +3601,11 @@ static void cee_mac_did_unfocus(cee_id self, cee_sel cmd, cee_id notification) {
     (void)cmd;
     struct cee_window *w = cee_mac_owner(cee_send(notification, "object"));
     if (w != NULL) {
+        unsigned queued = w->count;
         cee_window_focus(w, 0);
+        if (w->count != queued) {
+            cee_mac_wake_perform(NULL);
+        }
     }
 }
 

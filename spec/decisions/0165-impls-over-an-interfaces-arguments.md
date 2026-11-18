@@ -3,7 +3,8 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S7). **Not implemented, and not implementable as written** (§7, 2026-11-18): the owner decides how to go on.
+  S7). Not implementable as written (§7); the owner chose B ("take B now", 2026-11-18): **implemented for one argument
+  list a type** (§8); not released.
 - Scope: the checker's impls (`src/check/interfaces.cee`: `processImpl`, `implements`, `implMethodFor`), the lookup
   of a method on a concrete type, the `dyn` tables; type-system.md §21 and §20.4, diagnostics.md (N0265, N0267), the
   guide's generics page. No change to the grammar, to the backends, to a library or to the runtime.
@@ -182,3 +183,39 @@ Two ways on, for the owner:
   one application state type, so httpserver's `Filter` could still go; a test that builds applications of two
   state types with one filter could not be written. It needs nothing the compiler lacks, and A can lift the
   limit later without changing a program that compiles under B.
+
+## 8. Implementation notes: B (2026-11-18)
+
+The owner: "take B now". What §2 says holds, with §7's limit: **a type has the impl for one argument list.**
+
+- **Declaring.** `processImpl` accepts a parameter that the interface's arguments name (`byInterface` in the
+  `ImplTemplate`); one in neither place is N0267 with both named. The impl is checked once with its parameters
+  opaque, as any generic impl is, by `implementFor`. The methods that check registers are then moved from
+  `Checker.implMethods` to `openImplMethods`: they are not the type's methods, so the instance's do not collide
+  with them.
+- **Making it** (`implementsOpen`, `src/check/interfaces.cee`). Asked where `implements` is asked with the checker
+  in hand: a bound of a call or an instance (`checkBounds`, `boundsHold`) and a coercion to `dyn` (`coerceToDyn`).
+  The template's target is unified with the type and its interface's arguments with those asked for; the bounds
+  are checked quietly; `implementFor` declares the methods for the pair, as `attachGenericImpls` does for an
+  instance of a generic struct. Asked with arguments that are type parameters (generic code), it answers yes and
+  makes nothing.
+- **The limit.** `openImplInstances` holds what was made. A second, different argument list for the same type and
+  template is N0267 at the place that asks: "'Cors' implements 'Middleware<u64>' in this program, so it cannot
+  also be a 'Middleware<bool>'".
+- **A call on the type** (`openMethodFor`, from `checkMethodCall` when the type has no such method): the impl's
+  parameters are inferred from the call's arguments against the opaque method's parameter types
+  (`typeArgumentsFor`), the impl is made, and the method is the instance's. A method that does not mention the
+  parameter is N0265, "cannot infer 'S'". A parameter that the target chooses is not seeded from the receiver, so
+  for `impl<T, S> I<S> for W<T>` a direct call must determine `T` from its arguments too: through a bound or `dyn`
+  it needs nothing.
+- **Overlap.** A concrete `impl Middleware<u8> for Cors` beside the general one is N0267: the overlap test counts
+  an impl whose arguments name a type parameter as generic.
+- **Not done:** §2.3's wording for the N0265 message; a static function or a constant of such an impl called on
+  the type (`Cors.make()`), which finds nothing and says so as before.
+- **Tests:** run-pass/adr0165-impl-for-every-argument (through a bound, in a `dyn` list beside an impl for one
+  state, and on the type; native and interpreted), run-pass/adr0165-direct-call-first (a call on the type before
+  anything asked; generic code that boxes the impl for its own parameter), check-fail/adr0165-impl-for-every-argument
+  (a parameter in neither place, a concrete impl beside it, a second argument list through a bound and through
+  `dyn`, a call that does not determine the parameter). The corpus: 0 failures. httpserver's `Cors`, written
+  `impl<S: Send + Share> Middleware<S> for Cors` in a copy and added with `App.use`, passes its two tests byte for
+  byte.

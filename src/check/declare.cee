@@ -222,6 +222,8 @@ fn checkProgramWith(
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
         loopCopies: Vector<LoopCopy>.create(),
+        openImplMethods: Vector<OpenImplMethod>.create(),
+        openImplInstances: Vector<OpenImplInstance>.create(),
         pendingDynInstances: Vector<PendingDynInstance>.create(),
         letKeywords: Vector<LetKeyword>.create(),
         effectAttributes: Vector<EffectAttributes>.create(),

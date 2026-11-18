@@ -1,0 +1,59 @@
+// ADR 0165 §2.3: a call on the type itself, before anything else has asked for the impl, infers the impl's parameter
+// from its arguments; generic code that names the impl with its own parameter makes no instance of its own.
+struct Ctx<S: Send + Share> {
+    state: S;
+    seen: u32;
+}
+
+interface Middleware<S: Send + Share> {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32;
+    fn label(borrow this) -> u32;
+}
+
+struct Cors {
+    add: u32;
+}
+
+impl<S: Send + Share> Middleware<S> for Cors {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32 {
+        ctx.seen += this.add;
+        return ctx.seen;
+    }
+
+    fn label(borrow this) -> u32 => this.add * 10;
+}
+
+struct App<S: Send + Share> {
+    state: S;
+    chain: Vector<Box<dyn Middleware<S>>>;
+}
+
+impl<S: Send + Share> App<S> {
+    // Generic code: `Cors` is a `Middleware<S>` for this `S`, whatever it is.
+    fn stock(borrow mut this) {
+        let m: Box<dyn Middleware<S>> = Box.create(Cors { add: 4 })!;
+        this.chain.push(m)!;
+    }
+
+    fn labels(borrow this) -> u32 {
+        var sum: u32 = 0;
+        for (i in 0..this.chain.length) {
+            sum += this.chain[i].label();
+        }
+        return sum;
+    }
+}
+
+fn main() {
+    let cors = Cors { add: 2 };
+    var ctx = Ctx { state: true, seen: 0 };
+    Console.writeLine(cors.before(mut ctx) as u64);
+    Console.writeLine(cors.label() as u64);
+    var app = App { state: false, chain: Vector<Box<dyn Middleware<bool>>>.create() };
+    app.stock();
+    app.stock();
+    Console.writeLine(app.labels() as u64);
+}
+// expect-stdout: 2
+// expect-stdout: 20
+// expect-stdout: 80

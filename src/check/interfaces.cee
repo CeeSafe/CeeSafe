@@ -412,6 +412,7 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         return Ok();
     }
     let span = c.front.ast.typeSpans[forSyntax as usize];
+    var byInterface = false; // a parameter is chosen by the interface's arguments, not the target (ADR 0165)
     if (parameters.length > 0) {
         if (declarationOf(c, forType) == none()) {
             var message = Vector<u8>.create();
@@ -426,16 +427,30 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         }
         var found = Vector<Found>.create();
         unify(c, forType, forType, parameters.view(), mut found)?;
+        // A parameter the target does not name may be named by the interface's arguments, which then choose it
+        // (ADR 0165): `impl<S> Middleware<S> for Cors`.
+        var inInterface = Vector<Found>.create();
+        {
+            let named = c.types.bounds[bound as usize];
+            for (a in 0..named.arguments.count) {
+                let argumentType = c.types.listAt(named.arguments, a);
+                unify(c, argumentType, argumentType, parameters.view(), mut inInterface)?;
+            }
+        }
         for (k in 0..parameters.length) {
-            if (foundFor(found, parameters[k]) == none()) {
+            if (foundFor(found, parameters[k]) == none() && foundFor(inInterface, parameters[k]) != none()) {
+                byInterface = true;
+            } else if (foundFor(found, parameters[k]) == none()) {
                 let p = c.front.ast.typeParameters[c.front.ast.at(typeSyntax, truncate<u32>(k)) as usize];
                 let ident = c.front.ast.idents[p.name as usize];
                 var message = Vector<u8>.create();
                 appendText(mut message, "type parameter ")?;
                 appendQuotedName(mut message, c, ident.symbol)?;
-                appendText(mut message, " does not appear in ")?;
+                appendText(mut message, " appears neither in ")?;
                 appendQuotedType(mut message, c, forType)?;
-                appendText(mut message, ", so no instance could choose it (ADR 0054)")?;
+                appendText(mut message, " nor in ")?;
+                quotedBound(mut message, c, bound)?;
+                appendText(mut message, ", so nothing could choose it (ADR 0054, ADR 0165)")?;
                 return c.error(implMismatch(), ident.start, ident.end, message);
             }
         }
@@ -504,7 +519,10 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
                 c,
                 other.typ,
             ) == constructor;
-            let eitherGeneric = parameters.length > 0 || c.types.isGeneric(other.typ);
+            // An impl whose parameter the interface's arguments choose is generic too, though its target is not
+            // (ADR 0165): its arguments name a type parameter.
+            let eitherGeneric = parameters.length > 0 || c.types.isGeneric(other.typ) ||
+                listIsGeneric(c, other.arguments);
             let argumentsMayMeet = sameLists(c, other.arguments, b.arguments) || listIsGeneric(c, other.arguments) ||
                 listIsGeneric(c, b.arguments);
             if (sameDeclaration && eitherGeneric && argumentsMayMeet) {
@@ -526,7 +544,14 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     if (parameters.length > 0) {
         let list = c.types.addList(parameters.view())?;
         c.implTemplates.push(
-            ImplTemplate { item: item, file: c.file, target: forType, bound: bound, parameters: list },
+            ImplTemplate {
+                item: item,
+                file: c.file,
+                target: forType,
+                bound: bound,
+                parameters: list,
+                byInterface: byInterface,
+            },
         )?;
         let constructorKey = Word { value: declarationOf(c, forType) as u64 };
         let index = truncate<u32>(c.implTemplates.length - 1);
@@ -544,7 +569,223 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
             c.templatesOf.put(constructorKey, templates)?;
         }
     }
-    return implementFor(c, item, forType, bound, implEnvironment, true);
+    let methodsBefore = c.implMethods.length;
+    implementFor(c, item, forType, bound, implEnvironment, true)?;
+    if (byInterface) {
+        // Checked once here with its parameters opaque, as any generic impl is; its methods become the type's when
+        // the impl is made for the arguments a bound or a `dyn` type asks for.
+        let template = truncate<u32>(c.implTemplates.length - 1);
+        var k = methodsBefore;
+        while (k < c.implMethods.length) {
+            let m = c.implMethods[k];
+            c.openImplMethods.push(
+                OpenImplMethod { typ: m.typ, name: m.name, function: m.function, template: template },
+            )?;
+            k += 1;
+        }
+        c.implMethods.truncate(methodsBefore);
+    }
+    return Ok();
+}
+
+/// Does `typ` implement `bound`, making the impl for it if an impl whose parameters the interface's arguments choose
+/// answers (ADR 0165)? Where `implements` is asked with the checker in hand: a bound of a call or an instance, a
+/// coercion to `dyn`. In generic code, whose arguments are type parameters, such an impl answers without being made:
+/// each instance of that code asks again with its own arguments. A type has the impl for one argument list (§7, B):
+/// a second, different one is N0267 at `span`.
+fn implementsOpen(c: borrow mut Checker, typ: u32, bound: u32, span: Span) -> Result<bool, AllocError> {
+    if (implements(c, typ, bound)) {
+        return Ok(true);
+    }
+    let constructor = declarationOf(c, typ);
+    if (constructor == none()) {
+        return Ok(false);
+    }
+    var candidates = Vector<u32>.create();
+    match (c.templatesOf.get(Word { value: constructor as u64 })) {
+        Some(list) => {
+            for (t in list.view()) {
+                candidates.push(t)?;
+            }
+        }
+        null => {}
+    }
+    let asked = c.types.bounds[bound as usize];
+    for (t in candidates.view()) {
+        let template = c.implTemplates[t as usize];
+        let original = c.types.bounds[template.bound as usize];
+        if (!template.byInterface || original.interfaceEntry != asked.interfaceEntry ||
+            original.arguments.count != asked.arguments.count) {
+            continue;
+        }
+        var parameters = Vector<u32>.create();
+        listTypes(c, template.parameters, mut parameters)?;
+        var found = Vector<Found>.create();
+        unify(c, template.target, typ, parameters.view(), mut found)?;
+        for (a in 0..original.arguments.count) {
+            let declared = c.types.listAt(original.arguments, a);
+            let actual = c.types.listAt(asked.arguments, a);
+            unify(c, declared, actual, parameters.view(), mut found)?;
+        }
+        var arguments = Vector<u32>.create();
+        var map = Vector<TypeMapping>.create();
+        var complete = true;
+        for (p in parameters.view()) {
+            let a = foundFor(found, p);
+            if (a == none()) {
+                complete = false;
+            } else {
+                arguments.push(a)?;
+                map.push(TypeMapping { from: p, to: a })?;
+            }
+        }
+        if (!complete || substitute(c, template.target, map.view())? != typ) {
+            continue;
+        }
+        var fits = true;
+        for (a in 0..original.arguments.count) {
+            let declared = c.types.listAt(original.arguments, a);
+            if (substitute(c, declared, map.view())? != c.types.listAt(asked.arguments, a)) {
+                fits = false;
+            }
+        }
+        if (!fits) {
+            continue;
+        }
+        if (listIsGeneric(c, asked.arguments)) {
+            return Ok(true); // generic code: its instances ask with their own arguments
+        }
+        var other = none();
+        for (k in 0..c.openImplInstances.length) {
+            if (c.openImplInstances[k].template == t && c.openImplInstances[k].typ == typ) {
+                other = c.openImplInstances[k].bound;
+            }
+        }
+        if (other != none()) {
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, typ)?;
+            appendText(mut message, " implements ")?;
+            quotedBound(mut message, c, other)?;
+            appendText(mut message, " in this program, so it cannot also be a ")?;
+            quotedBound(mut message, c, bound)?;
+            appendText(
+                mut message,
+                ": an impl whose parameter the interface chooses is made for one argument list a type (ADR 0165)",
+            )?;
+            c.error(implMismatch(), span.start, span.end, message)?;
+            return Ok(false);
+        }
+        let mark = diagnosticsMark(c);
+        let pending = c.pendingBounds.length;
+        let pendingThread = c.pendingThreadBounds.length;
+        checkBounds(c, parameters.view(), arguments.view(), Span { start: 0, end: 0 })?;
+        let met = diagnosticsMark(c) == mark;
+        dropDiagnosticsSince(c, mark);
+        if (c.pendingBounds.length != pending || c.pendingThreadBounds.length != pendingThread) {
+            c.pendingBounds.truncate(pending);
+            c.pendingThreadBounds.truncate(pendingThread);
+            continue; // put off: asked again once the fields are known, as for a generic impl
+        }
+        if (!met) {
+            continue;
+        }
+        let savedFile = c.file;
+        {
+            let fileToSet = template.file;
+            c.setFile(fileToSet);
+        }
+        let typeSyntax = match (c.front.ast.items[template.item as usize].kind) {
+            ItemKind.Impl(_, _, _, ts, _) => ts,
+            _ => emptyRange(),
+        };
+        var pairs = Vector<EnvPair>.create();
+        zipEnvironment(c, typeSyntax, arguments.view(), mut pairs)?;
+        let environment = storeEnvironment(c, pairs.view())?;
+        let firstFunction = c.hir.functions.length;
+        implementFor(c, template.item, typ, bound, environment, false)?;
+        markRepeatsOf(c, typ, firstFunction);
+        c.front.diagnostics.keepSince(mark, instantiationTooDeep(), false, mark);
+        c.setFile(savedFile);
+        c.openImplInstances.push(OpenImplInstance { template: t, typ: typ, bound: bound })?;
+        return Ok(true);
+    }
+    return Ok(false);
+}
+
+/// The method `name` of `typ` that a call on the type itself names, where `typ` has it only through an impl whose
+/// parameters the interface's arguments choose (ADR 0165 §2.3): they are inferred from the call's arguments, as a
+/// generic function's are, the impl is made for them, and the method is that instance's. None if `typ` has no such
+/// impl with a method of that name, or, with `reported` set, after an error.
+fn openMethodFor(
+    c: borrow mut Checker,
+    typ: u32,
+    name: u32,
+    arguments: Range,
+    span: Span,
+    reported: borrow mut bool,
+) -> Result<u32, AllocError> {
+    var open = none();
+    for (k in 0..c.openImplMethods.length) {
+        if (c.openImplMethods[k].typ == typ && c.openImplMethods[k].name == name) {
+            open = truncate<u32>(k);
+            break;
+        }
+    }
+    if (open == none()) {
+        return Ok(none());
+    }
+    let method = c.openImplMethods[open as usize];
+    let template = c.implTemplates[method.template as usize];
+    var parameters = Vector<u32>.create();
+    listTypes(c, template.parameters, mut parameters)?;
+    var pairs = Vector<InferencePair>.create();
+    let declared = c.hir.functions[method.function as usize].parameters.length;
+    for (k in 0..arguments.count) {
+        // The first parameter is the receiver.
+        if ((k as usize) + 1 < declared) {
+            let local = c.hir.functions[method.function as usize].parameters[(k as usize) + 1];
+            pairs.push(
+                InferencePair { declared: c.hir.locals[local as usize].typ, value: c.front.ast.at(arguments, k) },
+            )?;
+        }
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(name))?;
+    var found = Vector<u32>.create();
+    let ok = typeArgumentsFor(
+        c,
+        text.view(),
+        parameters.view(),
+        emptyRange(),
+        emptyRange(),
+        false,
+        pairs.view(),
+        span,
+        mut found,
+    )?;
+    if (!ok) {
+        reported = true;
+        return Ok(none());
+    }
+    var map = Vector<TypeMapping>.create();
+    for (k in 0..parameters.length) {
+        map.push(TypeMapping { from: parameters[k], to: found[k] })?;
+    }
+    let original = c.types.bounds[template.bound as usize];
+    var substituted = Vector<u32>.create();
+    for (a in 0..original.arguments.count) {
+        let argumentType = c.types.listAt(original.arguments, a);
+        substituted.push(substitute(c, argumentType, map.view())?)?;
+    }
+    var boundName = Vector<u8>.create();
+    appendBytes(mut boundName, c.types.rangeText(original.name))?;
+    let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
+    let mark = diagnosticsMark(c);
+    if (!implementsOpen(c, typ, required, span)?) {
+        reported = diagnosticsMark(c) != mark;
+        return Ok(none());
+    }
+    return Ok(implMethodFor(c, typ, name));
 }
 
 /// A generic impl (ADR 0054): its target names the impl's type parameters.
@@ -554,6 +795,24 @@ struct ImplTemplate {
     target: u32;
     bound: u32;        // the interface, whose arguments may name the parameters
     parameters: Range; // the impl's type parameters, in TypeTable.lists
+    byInterface: bool; // a parameter is chosen by the interface's arguments, not by the target (ADR 0165)
+}
+
+/// A method of an impl whose parameters the interface's arguments choose (ADR 0165), as it was checked with them
+/// opaque. It is no method of the type until the impl is made for an argument list (`implementsOpen`): kept apart
+/// from `implMethods`, it does not collide with that instance's.
+struct OpenImplMethod {
+    typ: u32;
+    name: u32; // a symbol
+    function: u32;
+    template: u32;
+}
+
+/// An instance of such an impl: the one argument list its type implements the interface for (ADR 0165 §7, B).
+struct OpenImplInstance {
+    template: u32;
+    typ: u32;
+    bound: u32;
 }
 
 /// The AST item of a user struct's or enum's declaration (a generic one's instances share it), or none.

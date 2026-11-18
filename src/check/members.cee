@@ -606,7 +606,16 @@ fn checkMethodCall(
     }
     // Own methods, impl methods, or a type parameter's bound methods (§21).
     let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
-    let function = findMethod(c, structType, memberIdent.symbol, memberSpan)?;
+    var function = findMethod(c, structType, memberIdent.symbol, memberSpan)?;
+    if (function == none()) {
+        // A method of an impl whose parameters the interface's arguments choose (ADR 0165 §2.3).
+        var reported = false;
+        function = openMethodFor(c, structType, memberIdent.symbol, arguments, memberSpan, mut reported)?;
+        if (reported) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+    }
     let definition = c.types.info(structType).structDef;
     if (function == none() && (!c.types.is(readType, TypeKind.Struct) || c.types.info(readType).structDef == none())) {
         return checkNonStructMethod(c, receiver, readType, member, arguments, span);

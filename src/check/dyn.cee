@@ -326,7 +326,11 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
         c.error(boundNotSatisfied(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
-    if (!implements(c, implementation, bound)) {
+    let mark = diagnosticsMark(c);
+    if (!implementsOpen(c, implementation, bound, span)?) {
+        if (diagnosticsMark(c) != mark) {
+            return c.errorResult(span.start, span.end); // told why already (ADR 0165: one argument list a type)
+        }
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, implementation)?;
         appendText(mut message, " does not implement ")?;

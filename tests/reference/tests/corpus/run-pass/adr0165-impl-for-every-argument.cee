@@ -1,0 +1,57 @@
+// ADR 0165: an impl whose type parameter is chosen by the interface's arguments, not the target. It is made for the
+// argument list a bound, a `dyn` type or a call on the type asks for: one argument list a type (§7, B).
+struct Ctx<S: Send + Share> {
+    state: S;
+    seen: u32;
+}
+
+interface Middleware<S: Send + Share> {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32;
+}
+
+struct Cors {
+    add: u32;
+}
+
+// For every application state.
+impl<S: Send + Share> Middleware<S> for Cors {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32 {
+        ctx.seen += this.add;
+        return ctx.seen;
+    }
+}
+
+struct Own {
+    by: u32;
+}
+
+impl Middleware<u64> for Own {
+    fn before(borrow this, ctx: borrow mut Ctx<u64>) -> u32 {
+        ctx.seen += this.by + truncate<u32>(ctx.state);
+        return ctx.seen;
+    }
+}
+
+fn through<S: Send + Share, M: Middleware<S>>(m: borrow M, ctx: borrow mut Ctx<S>) -> u32 => m.before(mut ctx);
+
+fn main() {
+    var ctx = Ctx { state: 40u64, seen: 0 };
+    let cors = Cors { add: 2 };
+    // Through a bound.
+    Console.writeLine(through(cors, mut ctx) as u64);
+    // As dyn, in a list with a middleware written for this state alone.
+    var chain = Vector<Box<dyn Middleware<u64>>>.create();
+    let a: Box<dyn Middleware<u64>> = Box.create(Cors { add: 3 })!;
+    let b: Box<dyn Middleware<u64>> = Box.create(Own { by: 1 })!;
+    chain.push(a)!;
+    chain.push(b)!;
+    for (i in 0..chain.length) {
+        Console.writeLine(chain[i].before(mut ctx) as u64);
+    }
+    // On the type itself.
+    Console.writeLine(cors.before(mut ctx) as u64);
+}
+// expect-stdout: 2
+// expect-stdout: 5
+// expect-stdout: 46
+// expect-stdout: 48

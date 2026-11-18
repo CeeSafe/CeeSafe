@@ -2074,8 +2074,8 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
   type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
   `impl<T: B, U> I<…> for C<…T…, …U…> { … }`, implements `I` for every instance of the generic struct or enum `C` that
-  its target matches and whose arguments meet the bounds; each of its type parameters appears in the target (N0267),
-  and the target is a generic struct or enum (N0267). Its methods are checked once, with the parameters opaque, and
+  its target matches and whose arguments meet the bounds; each of its type parameters appears in the target or in
+  the interface's arguments (N0267), and the target is a struct or an enum (N0267). Its methods are checked once, with the parameters opaque, and
   instantiated per instance like a generic struct's: a call on the concrete type, a call through a bound and a `dyn`
   table all use the instance. A type with region parameters is implemented with them named, `impl<region r> I for
   S<r>` (§25.3), and no other scoped type implements an interface (N0267).
@@ -2083,6 +2083,16 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
     with the same receiver kind, parameter types and return type, after the interface's type arguments (and `Self`)
     are substituted (N0267). It may not define other functions.
   - Each type may implement each interface instantiation at most once (N0267).
+  - **A parameter the interface chooses** (ADR 0165). `impl<S: Send + Share> Middleware<S> for Cors` names `S` in
+    the interface's arguments alone: `Cors` is a `Middleware<S>` for whatever `S` is asked of it. The impl is made
+    for the arguments where they are first asked for: a bound (`M: Middleware<St>` with `M = Cors`), a coercion to
+    `dyn Middleware<St>`, or a call on the type itself, which infers them from its arguments as a generic
+    function's are (N0265 if they do not determine them: a method that does not mention the parameter is called
+    through a bound or `dyn`). In generic code that names the impl with its own type parameter
+    (`Box<dyn Middleware<S>>` from a `Cors`, inside `impl<S> App<S>`) nothing is made: each instance of that code
+    asks with its own arguments. **A type has such an impl for one argument list in a program**: a second,
+    different one is N0267, since a type's methods are one set of names (a type implements a generic interface
+    once). A program with one application state type does not meet the limit.
   - **Overlap.** Beside a generic impl, no other impl of the same interface may have a target of the same struct or
     enum, generic or not (N0267): `impl I for Wrap<u8>` and `impl<T> I for Wrap<T>` are refused together. There is no
     specialisation.

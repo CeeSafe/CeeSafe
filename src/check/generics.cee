@@ -755,7 +755,12 @@ fn checkBounds(
             appendBytes(mut boundName, c.types.rangeText(original.name))?;
             let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
             completeMembers(c, argument, span)?; // a bound asked of an instance is a use of it (§20.4)
-            if (!implements(c, argument, required)) {
+            let asked = diagnosticsMark(c);
+            let met = implementsOpen(c, argument, required, span)?;
+            if (!met && diagnosticsMark(c) != asked) {
+                continue; // told why already (ADR 0165: one argument list a type)
+            }
+            if (!met) {
                 var message = Vector<u8>.create();
                 appendQuotedType(mut message, c, argument)?;
                 appendText(mut message, " does not implement ")?;
@@ -1476,7 +1481,7 @@ fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32, span: Span) 
         appendBytes(mut boundName, c.types.rangeText(original.name))?;
         let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
         completeMembers(c, argument, span)?; // the call that asks is the use
-        if (!implements(c, argument, required)) {
+        if (!implementsOpen(c, argument, required, span)?) {
             return Ok(false);
         }
     }

@@ -1,0 +1,50 @@
+// ADR 0165: a parameter in neither the target nor the interface; a concrete impl beside the general one; a second
+// argument list for one type (§7, B); a bound the argument does not meet; a call that does not determine it.
+struct Ctx<S: Send + Share> {
+    state: S;
+    seen: u32;
+}
+
+interface Middleware<S: Send + Share> {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32;
+}
+
+interface Named<S> {
+    fn name(borrow this) -> u32;
+}
+
+struct Cors {
+    add: u32;
+}
+
+impl<S: Send + Share> Middleware<S> for Cors {
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32 => ctx.seen + this.add;
+}
+
+impl<S> Named<S> for Cors {
+    fn name(borrow this) -> u32 => this.add;
+}
+
+struct Other {
+    add: u32;
+}
+
+impl<S: Send + Share, T> Middleware<S> for Other { // error[N0267]
+    fn before(borrow this, ctx: borrow mut Ctx<S>) -> u32 => ctx.seen;
+}
+
+impl Middleware<u8> for Cors { // error[N0267]
+    fn before(borrow this, ctx: borrow mut Ctx<u8>) -> u32 => ctx.seen;
+}
+
+fn through<S: Send + Share, M: Middleware<S>>(m: borrow M, ctx: borrow mut Ctx<S>) -> u32 => m.before(mut ctx);
+
+fn main() {
+    let cors = Cors { add: 2 };
+    var first = Ctx { state: 1u64, seen: 0 };
+    var second = Ctx { state: true, seen: 0 };
+    let a = through(cors, mut first);
+    let b = through(cors, mut second); // error[N0267]
+    let c: borrow dyn Middleware<u16> = borrow cors; // error[N0267]
+    let n = cors.name(); // error[N0265]
+}

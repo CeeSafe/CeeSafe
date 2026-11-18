@@ -179,6 +179,8 @@ struct Checker {
     pendingAllocators: Vector<PendingAllocator>;
     pendingElements: Vector<PendingElement>;
     loopCopies: Vector<LoopCopy>;                    // loops that walk a copy of a place (N0407, ADR 0167)
+    openImplMethods: Vector<OpenImplMethod>;         // ADR 0165: methods of impls the interface's arguments choose
+    openImplInstances: Vector<OpenImplInstance>;     // and the instances made of them
     pendingDynInstances: Vector<PendingDynInstance>; // ADR 0064 §3.1: checked once members are resolved
     letKeywords: Vector<LetKeyword>;
     effectAttributes: Vector<EffectAttributes>;      // `@effects`/`@context` by declaration (_effectAttributes)

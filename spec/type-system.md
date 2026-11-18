@@ -3607,14 +3607,23 @@ Diagnostics: none new.
     `RadioButton`, `Edit`, `Slider`, `TabItem`, `ListItem`, `MenuItem`, `ComboBox` and `Image`. The patterns: a
     `Button`, a `ListItem` and a `MenuItem` are invoked; a `Checkbox` is toggled; a `Radio`, a `Tab` and a
     `ListItem` are selection items (selected when `checked` or `selected`); a `Slider` has a range value, and
-    setting it above or below its value asks one step; a `TextField` and a `Dropdown` have a value, which a client
+    setting it above or below its value asks one step (a slider that gives its value as text, a count, has its own
+    range; any other is given as a percentage, 0 to 100, because a reader says a slider's value as a whole number:
+    NVDA says "0" for 0.5 of 0 to 1); a `TextField` and a `Dropdown` have a value, which a client
     cannot set; a `Dropdown` expands and collapses by a press. `Invoke`, `Toggle`, `Select`, `Expand` and
     `Collapse` queue `Press`, and a fragment's `SetFocus` queues `Focus`; a `disabled` element answers
     `UIA_E_ELEMENTNOTENABLED`, and one that left the list `UIA_E_ELEMENTNOTAVAILABLE`. While a client listens, a
-    changed list raises a structure change of the root, property changes of an element's name, value, range
-    value, toggle state, selection and expansion, and a focus change; `announce` raises a notification (Windows
+    changed list raises a structure change of the root and property changes of a control's name, value, range
+    value, toggle state, selection and expansion (the name of plain text that changes, a clock, is not told).
+    **The focus is told**: when the window gets the keyboard focus, when an element takes it or gives it up, and
+    once after the provider is first given out to a window that has it already, a focus-changed event is raised
+    for the element whose node is `focused`, or else for the window. UI Automation does not watch a window that
+    has a provider of its own, and a reader that hears no such event goes on believing the last window is in
+    front. The providers are server-side ones (`ProviderOptions_ServerSideProvider`, 2: a client-side one's
+    events go nowhere), and every event is raised with the lock let go, since a client's question on another
+    thread may be what the event waits for; `announce` raises a notification (Windows
     10 1709 on). The interfaces are written in the runtime as their vtables and their functions come from
-    `uiautomationcore.dll` and `oleaut32.dll`, loaded at first use. A provider may be called on a thread of UI
+    `uiautomationcore.dll` and `oleaut32.dll`, loaded at first use. A provider is called on threads of UI
     Automation's: the providers and the list are under one lock, and what was asked is queued when the window
     takes its messages. A field's `caret` and `anchor` are not used. Linux and FreeBSD: not
     implemented yet (ADR 0164 §3); the list is kept

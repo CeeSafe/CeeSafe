@@ -5464,6 +5464,7 @@ struct cee_win32 {
     struct cee_access_request uia_asked[CEE_ACCESS_QUEUE];
     unsigned uia_asked_count;
     int uia_active;
+    int uia_focus_told; /* whether clients were told where the focus is since the provider was first given out */
 };
 
 static void cee_win32_drop_open(struct cee_window *w);
@@ -5727,8 +5728,7 @@ static const IID cee_iid_uia_expand = {0xd847d3a5, 0xcab0, 0x4a98, {0x8c, 0x32, 
 
 /* UI Automation's numbers (UIAutomationClient.h). */
 #define CEE_UIA_ROOT_OBJECT (-25)
-#define CEE_UIA_SERVER_SIDE 0x1 /* ProviderOptions_ServerSideProvider */
-#define CEE_UIA_COM_THREADING 0x20 /* ProviderOptions_UseComThreading */
+#define CEE_UIA_SERVER_SIDE 0x2 /* ProviderOptions_ServerSideProvider (0x1 is a client-side one, whose events go nowhere) */
 #define CEE_UIA_E_NOT_ENABLED ((HRESULT)0x80040200L)
 #define CEE_UIA_E_NOT_AVAILABLE ((HRESULT)0x80040201L)
 #define CEE_UIA_PATTERN_INVOKE 10000
@@ -6037,7 +6037,7 @@ static HRESULT STDMETHODCALLTYPE cee_uia_options(void *self, int *out) {
     if (out == NULL) {
         return E_POINTER;
     }
-    *out = CEE_UIA_SERVER_SIDE | CEE_UIA_COM_THREADING;
+    *out = CEE_UIA_SERVER_SIDE; /* called on any thread: the lock is what keeps the list whole */
     return S_OK;
 }
 
@@ -6273,12 +6273,27 @@ static HRESULT STDMETHODCALLTYPE cee_uia_toggle_state(void *self, int *out) {
     return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
 }
 
+/* A slider's numbers as clients are given them. One whose program writes its value (a count: "3") has its own
+   range. Any other is given as a percentage of its range, 0 to 100: readers say a slider's value as a whole
+   number (NVDA says "0" for 0.5 of 0 to 1). Which: 0 its value, 1 its minimum, 2 its maximum, 3 a step. */
+static double cee_uia_range_of(const struct cee_access_node *n, int which) {
+    if (n->value_length > 0) {
+        return which == 0 ? n->now : which == 1 ? n->min : which == 2 ? n->max : (n->max - n->min) / 10.0;
+    }
+    if (which == 0) {
+        double share = n->max > n->min ? (n->now - n->min) / (n->max - n->min) : 0.0;
+        share = share < 0.0 ? 0.0 : share > 1.0 ? 1.0 : share;
+        return (double)(long)(share * 100.0 + 0.5);
+    }
+    return which == 1 ? 0.0 : which == 2 ? 100.0 : 10.0;
+}
+
 /* A slider is set by steps: a value above its own asks one step up, a value below one step down. */
 static HRESULT STDMETHODCALLTYPE cee_uia_range_set(void *self, double value) {
     struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, range, self);
     EnterCriticalSection(&cee_uia.lock);
     const struct cee_access_node *n = cee_uia_node(e);
-    double now = n != NULL ? n->now : 0.0;
+    double now = n != NULL ? cee_uia_range_of(n, 0) : 0.0;
     LeaveCriticalSection(&cee_uia.lock);
     if (n == NULL) {
         return CEE_UIA_E_NOT_AVAILABLE;
@@ -6289,7 +6304,7 @@ static HRESULT STDMETHODCALLTYPE cee_uia_range_set(void *self, double value) {
     return cee_uia_ask(e, value > now ? CEE_ACCESS_INCREMENT : CEE_ACCESS_DECREMENT);
 }
 
-/* Which of a slider's numbers: 0 its value, 1 its minimum, 2 its maximum, 3 a step (a tenth of its range). */
+/* One of a slider's numbers (cee_uia_range_of). */
 static HRESULT cee_uia_range_number(struct cee_uia_element *e, int which, double *out) {
     if (out == NULL) {
         return E_POINTER;
@@ -6298,7 +6313,7 @@ static HRESULT cee_uia_range_number(struct cee_uia_element *e, int which, double
     EnterCriticalSection(&cee_uia.lock);
     const struct cee_access_node *n = cee_uia_node(e);
     if (n != NULL) {
-        *out = which == 0 ? n->now : which == 1 ? n->min : which == 2 ? n->max : (n->max - n->min) / 10.0;
+        *out = cee_uia_range_of(n, which);
     }
     LeaveCriticalSection(&cee_uia.lock);
     return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
@@ -6683,11 +6698,30 @@ static int cee_uia_same_text(const char *a, uint32_t a_start, uint32_t a_length,
     return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
 }
 
-/* Tells listening clients that `property` of `e` is now `value` (the old one is not said: none reads it). */
-static void cee_uia_changed(struct cee_uia_element *e, int property, VARIANT value) {
-    VARIANT none;
-    V_VT(&none) = VT_EMPTY;
-    cee_uia.raise_property(&e->simple, property, none, value);
+static void cee_uia_focused(struct cee_window *w);
+
+/* A property of an element that changed, to tell listening clients once the lock is let go: an event raised
+   under it would wait for a client's question that waits for the lock. The element is held meanwhile. */
+struct cee_uia_change {
+    struct cee_uia_element *element;
+    int property;
+    VARIANT value;
+};
+#define CEE_UIA_CHANGES 64 /* a list's changes told at once; more are not told, and a reader asks when it comes by */
+
+static void cee_uia_changed(struct cee_uia_change *changes, unsigned *count, struct cee_uia_element *e, int property,
+                            VARIANT value) {
+    if (*count == CEE_UIA_CHANGES) {
+        if (V_VT(&value) == VT_BSTR) {
+            cee_uia.string_free(V_BSTR(&value));
+        }
+        return;
+    }
+    InterlockedIncrement(&e->refs);
+    changes[*count].element = e;
+    changes[*count].property = property;
+    changes[*count].value = value;
+    (*count)++;
 }
 
 /* The window's list changed (w->access is the new one; `old` the last, with its text): the providers follow it,
@@ -6698,6 +6732,8 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
     if (m == NULL || !cee_uia_load()) {
         return;
     }
+    struct cee_uia_change changes[CEE_UIA_CHANGES];
+    unsigned change_count = 0;
     EnterCriticalSection(&cee_uia.lock);
     uint32_t count = w->access_count;
     if (old_count > m->uia_count) {
@@ -6710,6 +6746,7 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
     }
     int listening = m->uia_root != NULL && cee_uia.listening();
     int layout = count != old_count;
+    int refocus = 0; /* an element took the focus or gave it up */
     for (uint32_t k = 0; k < count; k++) {
         const struct cee_access_node *n = &w->access[k];
         uint32_t j = old_count;
@@ -6734,13 +6771,14 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
                 continue;
             }
             VARIANT value;
-            if (!cee_uia_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
-                                   o->label_length)) {
+            /* A control's new name is told; text that changes (a clock, a counter) is read when a reader comes
+               by, and not told at each change. */
+            if (n->role != 0 && !cee_uia_same_text(w->access_text, n->label_start, n->label_length, old_text,
+                                                   o->label_start, o->label_length)) {
                 V_BSTR(&value) = cee_uia_text(w->access_text + n->label_start, n->label_length);
                 if (V_BSTR(&value) != NULL) {
                     V_VT(&value) = VT_BSTR;
-                    cee_uia_changed(e, CEE_UIA_PROPERTY_NAME, value);
-                    cee_uia.string_free(V_BSTR(&value));
+                    cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_NAME, value);
                 }
             }
             if ((n->role == 4 || n->role == 9) &&
@@ -6749,38 +6787,40 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
                 V_BSTR(&value) = cee_uia_text(w->access_text + n->value_start, n->value_length);
                 if (V_BSTR(&value) != NULL) {
                     V_VT(&value) = VT_BSTR;
-                    cee_uia_changed(e, CEE_UIA_PROPERTY_VALUE, value);
-                    cee_uia.string_free(V_BSTR(&value));
+                    cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_VALUE, value);
                 }
             }
             if (n->role == 5 && n->now != o->now) {
                 V_VT(&value) = VT_R8;
-                V_R8(&value) = n->now;
-                cee_uia_changed(e, CEE_UIA_PROPERTY_RANGE_VALUE, value);
+                V_R8(&value) = cee_uia_range_of(n, 0);
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_RANGE_VALUE, value);
             }
             uint32_t changed = n->flags ^ o->flags;
             if (n->role == 2 && (changed & CEE_ACCESS_CHECKED) != 0) {
                 V_VT(&value) = VT_I4;
                 V_I4(&value) = (n->flags & CEE_ACCESS_CHECKED) != 0;
-                cee_uia_changed(e, CEE_UIA_PROPERTY_TOGGLE_STATE, value);
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_TOGGLE_STATE, value);
             }
             if ((n->role == 3 || n->role == 6 || n->role == 7) &&
                 (changed & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0) {
                 V_VT(&value) = VT_BOOL;
                 V_BOOL(&value) = (n->flags & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED)) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
-                cee_uia_changed(e, CEE_UIA_PROPERTY_IS_SELECTED, value);
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_IS_SELECTED, value);
             }
             if (n->role == 9 && (changed & CEE_ACCESS_EXPANDED) != 0) {
                 V_VT(&value) = VT_I4;
                 V_I4(&value) = (n->flags & CEE_ACCESS_EXPANDED) != 0;
-                cee_uia_changed(e, CEE_UIA_PROPERTY_EXPAND_STATE, value);
+                cee_uia_changed(changes, &change_count, e, CEE_UIA_PROPERTY_EXPAND_STATE, value);
             }
-            if ((n->flags & CEE_ACCESS_FOCUSED) != 0 && (o->flags & CEE_ACCESS_FOCUSED) == 0) {
-                cee_uia.raise_event(&e->simple, CEE_UIA_EVENT_FOCUS);
+            if ((changed & CEE_ACCESS_FOCUSED) != 0) {
+                refocus = 1;
             }
         } else {
             elements[k] = cee_uia_element_new(w, n->id, k);
             layout = 1;
+            if ((n->flags & CEE_ACCESS_FOCUSED) != 0) {
+                refocus = 1;
+            }
         }
     }
     for (uint32_t j = 0; j < m->uia_count; j++) { /* the elements the new list does not have */
@@ -6794,9 +6834,27 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
     m->uia_elements = elements;
     m->uia_count = count;
     struct cee_uia_root *root = m->uia_root;
+    if (root != NULL) {
+        InterlockedIncrement(&root->refs);
+    }
     LeaveCriticalSection(&cee_uia.lock);
+    for (unsigned k = 0; k < change_count; k++) { /* outside the lock */
+        VARIANT none;
+        V_VT(&none) = VT_EMPTY;
+        cee_uia.raise_property(&changes[k].element->simple, changes[k].property, none, changes[k].value);
+        if (V_VT(&changes[k].value) == VT_BSTR) {
+            cee_uia.string_free(V_BSTR(&changes[k].value));
+        }
+        cee_uia_element_release(changes[k].element);
+    }
     if (layout && listening && root != NULL) {
         cee_uia.raise_structure(&root->simple, CEE_UIA_CHILDREN_INVALIDATED, NULL, 0);
+    }
+    if (root != NULL) {
+        cee_uia_root_release(root);
+    }
+    if (refocus && listening) {
+        cee_uia_focused(w);
     }
 }
 
@@ -6848,6 +6906,48 @@ static void cee_uia_close(struct cee_window *w) {
     }
 }
 
+/* Tells listening clients where the keyboard focus is: the element that says it has it, or else the window. A
+   window with a provider of its own gets no focus event from UI Automation's own watching of windows, and a
+   reader that hears none goes on believing the last window is in front (NVDA: "Foreground took too long to
+   change"). Called when the window gets the focus, when an element takes or gives up the focus, and once after
+   the provider is first given out to a window that has the focus already. */
+static void cee_uia_focused(struct cee_window *w) {
+    struct cee_win32 *m = (struct cee_win32 *)w->native;
+    if (m == NULL || cee_uia.state != 1) {
+        return;
+    }
+    void *target = NULL;
+    struct cee_uia_element *element = NULL;
+    struct cee_uia_root *root = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    if (m->uia_root != NULL && GetFocus() == m->hwnd) {
+        for (uint32_t k = 0; k < m->uia_count && k < w->access_count; k++) {
+            if ((w->access[k].flags & CEE_ACCESS_FOCUSED) != 0 && m->uia_elements[k] != NULL) {
+                element = m->uia_elements[k];
+                InterlockedIncrement(&element->refs);
+                target = &element->simple;
+                break;
+            }
+        }
+        if (target == NULL) {
+            root = m->uia_root;
+            InterlockedIncrement(&root->refs);
+            target = &root->simple;
+        }
+        m->uia_focus_told = 1;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    if (target != NULL) {
+        cee_uia.raise_event(target, CEE_UIA_EVENT_FOCUS); /* outside the lock: a client may call back at once */
+    }
+    if (element != NULL) {
+        cee_uia_element_release(element);
+    }
+    if (root != NULL) {
+        cee_uia_root_release(root);
+    }
+}
+
 /* What clients asked since the last pump, into the window's requests; and whether anything asked at all. */
 static void cee_uia_pump(struct cee_window *w) {
     struct cee_win32 *m = (struct cee_win32 *)w->native;
@@ -6862,7 +6962,11 @@ static void cee_uia_pump(struct cee_window *w) {
     if (m->uia_active) {
         w->access_active = 1;
     }
+    int tell = m->uia_active && !m->uia_focus_told;
     LeaveCriticalSection(&cee_uia.lock);
+    if (tell) {
+        cee_uia_focused(w); /* a reader that came after the window had the focus */
+    }
 }
 
 static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -6903,7 +7007,10 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
     }
-    case WM_SETFOCUS: cee_window_focus(w, 1); return 0;
+    case WM_SETFOCUS:
+        cee_window_focus(w, 1);
+        cee_uia_focused(w); /* a reader is told (ADR 0164) */
+        return 0;
     case WM_KILLFOCUS: cee_window_focus(w, 0); return 0;
     case WM_MOUSEMOVE: cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, x, y); return 0;
     case WM_LBUTTONDOWN:

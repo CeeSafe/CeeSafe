@@ -233,5 +233,20 @@ all together".
     value; a checkbox toggles Off to On; a radio button is selected and the other is not; a dropdown expands, an
     item of it is invoked, and the dropdown says the new value, collapsed.
   - `window_check` on the same laptop: 63 checks, 0 problems.
-- **Not checked**: NVDA and Narrator themselves, which read through these providers; the events' effect on a
-  reader; `announce`.
+- **NVDA, the same day** (the owner: "Go ahead install it"; NVDA 2026.3, its speech read from its log while a
+  script moved the pointer over the demo, pressed Tab and typed). What it says: "ClayWind — CeeSafe, window";
+  under the pointer "Clicked 0", "Reset", "Dashboard", "Volume 50", "Quantity 3", "Save", "Subscribe to updates",
+  "Dark", "Priority Medium", "README.md"; "Controls, tab, selected" when its page is opened; with Tab, "Name,
+  edit", then the typed letters, "Note, edit", "Quantity, slider, 3". Four things it found, each fixed:
+  - **No event reached any client**: the providers said they were client-side ones (`ProviderOptions` 1, where a
+    server-side one is 2). Questions were answered all the same, which is why the first check passed.
+  - **The focus was never told**, so NVDA went on believing the desktop was in front ("Foreground took too long to
+    change") and said nothing of the window: UI Automation does not watch a window that has a provider of its own.
+    The window's getting the focus and an element's taking it are now events.
+  - **A deadlock**, once events were delivered: they were raised under the lock, and a client's question on
+    another thread waited for it. They are raised with the lock let go.
+  - **"Volume 0"** for a slider at 0.5 of 0 to 1: a reader says a slider's value as a whole number, so a slider
+    that gives no value text is given as a percentage.
+  And one that is the check's own: the name of plain text that changes each frame (a clock) raised an event each
+  time; only a control's name does now.
+- **Not checked**: Narrator; `announce`.

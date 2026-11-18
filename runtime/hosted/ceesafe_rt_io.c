@@ -3628,13 +3628,27 @@ static char **cee_child_environment(char *word) {
     return made;
 }
 
+/* Whether closing every descriptor from a number up can be a file action: glibc 2.34 and later, FreeBSD 14. The
+   glibc test is nested: `__GLIBC_PREREQ(2, 34)` in the same condition as its `defined` is an error where the macro
+   does not exist, since a condition is parsed whole before any of it is skipped (0.73.0 did not compile on FreeBSD
+   for it). */
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if __GLIBC_PREREQ(2, 34)
+#define CEE_SPAWN_CLOSEFROM 1
+#endif
+#elif defined(__FreeBSD__)
+#if __FreeBSD__ >= 14
+#define CEE_SPAWN_CLOSEFROM 1
+#endif
+#endif
+
 /* Has the child of `actions` and `attributes` keep descriptors 0 to `keep` - 1 and no other of this process's. */
 static int cee_spawn_only(posix_spawn_file_actions_t *actions, posix_spawnattr_t *attributes, int keep) {
     int failed = 0;
 #if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
     failed = posix_spawnattr_setflags(attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
     for (int fd = 0; failed == 0 && fd < keep; fd++) failed = posix_spawn_file_actions_addinherit_np(actions, fd);
-#elif (defined(__GLIBC__) && defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 34)) || (defined(__FreeBSD__) && __FreeBSD__ >= 14)
+#elif defined(CEE_SPAWN_CLOSEFROM)
     (void)attributes;
     failed = posix_spawn_file_actions_addclosefrom_np(actions, keep);
 #else

@@ -23,6 +23,10 @@
 - [struct HashMap](#struct-hashmap)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
+- [enum ChildStream](#enum-childstream)
+- [struct ChildOptions](#struct-childoptions)
+- [enum ChildExit](#enum-childexit)
+- [struct ChildProcess](#struct-childprocess)
 - [struct Environment](#struct-environment)
 - [struct OpenFileLimit](#struct-openfilelimit)
 - [struct ProcessLimits](#struct-processlimits)
@@ -1419,6 +1423,114 @@ public struct ProcessOutput {
 
 A finished program's exit status and what it wrote (`Process.capture`, type-system.md §26.7).
 
+## enum ChildStream
+
+```ceesafe
+public enum ChildStream {
+    Inherit,
+    Null,
+}
+```
+
+What one of a child's standard streams is (`ChildOptions`, ADR 0169).
+
+## struct ChildOptions
+
+```ceesafe
+public struct ChildOptions {
+    public input: ChildStream;
+    public output: ChildStream;
+    public error: ChildStream;
+}
+```
+
+How `Process.spawn` starts a program (type-system.md §26.16, ADR 0169).
+
+### ChildOptions.inherit
+
+```ceesafe
+public fn inherit() -> ChildOptions
+```
+
+The parent's three streams.
+
+### ChildOptions.quiet
+
+```ceesafe
+public fn quiet() -> ChildOptions
+```
+
+No input and no output: the null device for all three.
+
+## enum ChildExit
+
+```ceesafe
+public enum ChildExit {
+    Status(i32),
+    Signal(i32),
+}
+```
+
+How a child process ended (ADR 0169).
+
+## struct ChildProcess
+
+```ceesafe
+@noncopy
+public struct ChildProcess {
+    drop { … }
+}
+```
+
+A program started by `Process.spawn` that runs beside this one: the parent's hold on it (type-system.md §26.16,
+ADR 0169). Dropping it neither ends the child nor waits for it: a program that wants its children gone ends them.
+
+### ChildProcess.id
+
+```ceesafe
+public fn id(borrow this) -> u64
+```
+
+The system's id of the process.
+
+### ChildProcess.poll
+
+```ceesafe
+public fn poll(borrow mut this) -> Result<ChildExit?, IoError>
+```
+
+How the child ended, if it has: at once, without waiting.
+Safety: the handle is the one the runtime gave for this child, which this value alone holds.
+
+### ChildProcess.wait
+
+```ceesafe
+public fn wait(borrow mut this) -> Result<ChildExit, IoError>
+```
+
+Waits for the child to end, blocking the thread. In async code, `poll` on a timer (N0295).
+Safety: as `poll`.
+
+### ChildProcess.terminate
+
+```ceesafe
+public fn terminate(borrow this) -> Result<void, IoError>
+```
+
+Asks the child to end: SIGTERM, which a `ProcessSignals` subscription in the child receives as `Terminate`; on
+Windows, a console control event to its process group. Nothing, once its exit has been seen.
+Safety: as `poll`; a child whose exit was seen is never signalled, so an id the system has given to another
+process is not.
+
+### ChildProcess.kill
+
+```ceesafe
+public fn kill(borrow this) -> Result<void, IoError>
+```
+
+Ends the child at once: SIGKILL; `TerminateProcess`. Nothing, once its exit has been seen.
+Safety: as `terminate`.
+
 ## struct Environment
 
 ```ceesafe
@@ -1669,6 +1781,39 @@ public fn capture(
 `arguments`, `input` as its standard input (empty if null), and returns its exit status and what it wrote to
 standard output and standard error. The streams go through files in a private temporary directory, removed
 before this returns, so a program that writes much to both cannot block (ADR 0028).
+
+### HostServices.spawn
+
+```ceesafe
+public fn spawn(
+    program: StringView,
+    arguments: borrow Vector<StringView>,
+    options: ChildOptions,
+) -> Result<ChildProcess, IoError>
+```
+
+`Process.spawn(program, arguments, options)` (type-system.md §26.16, ADR 0169): starts `program`, found on
+`PATH`, with `arguments`, and returns: the child runs beside this program, with its environment and working
+directory, and the streams `options` says.
+Safety: the runtime reads the views during the call only, and writes the handle it gives.
+
+### HostServices.id
+
+```ceesafe
+public fn id() -> u64
+```
+
+`Process.id()` (ADR 0169): the system's id of this process.
+Safety: the runtime only asks the system.
+
+### HostServices.executable
+
+```ceesafe
+public fn executable() -> Result<String, IoError>
+```
+
+`Process.executable()` (ADR 0169): the path of the running program, to start it again.
+Safety: the runtime writes at most the buffer's 4096 bytes.
 
 ### HostServices.kind
 

@@ -38,6 +38,11 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/child_check.py` (ADR 0169, in the contract suite; POSIX) builds a program that starts itself again as its
+children with `Process.spawn`: one exits with a status, one subscribes to `ProcessSignals` and is told by
+`terminate`, one is ended by `kill` (`Signal(9)`), one is dropped while it runs and must be gone, not a zombie, after
+its parent; a program that does not exist is an error; and the interpreter answers `Unsupported`.
+
 `tools/signal_check.py` (ADR 0125 and 0126, in the contract suite; POSIX) sends `SIGINT` and `SIGTERM` to programs,
 built and with `run --interp`: a server of tasks with a request half sent stops accepting, answers that request and
 exits 0 (built, with each reactor the host has); a server of threads does the same through `listener.shutdown()`

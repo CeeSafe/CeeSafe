@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S4). Not implemented yet: nothing of it is in the compiler.
+  S4). Implemented 2026-11-18 (§7); not released. **Its Windows half is written and has not been run.**
 - Scope: lib/std (`ChildProcess`, `ChildOptions`, `ChildExit`; `Process.spawn`, `Process.id`), the hosted runtime
   (`runtime/hosted/ceesafe_rt_hosted.c`: POSIX, Windows, CosmoOS), the interpreter's host services; type-system.md
   §26 (a new §26.16), `spec/api/std.md`, the guide's processes page. No change to the language or to the backends.
@@ -153,3 +153,31 @@ share is asked for by name and is not part of this ADR.
    - on Windows the same programs by the release workflow's smoke job; CosmoOS reports `Unsupported`;
    - httpserver's supervisor on `Process.spawn`, with `tools/supervisor_check.py`, as the program that asked.
 4. ROADMAP §10.
+
+## 7. Implementation notes (2026-11-18)
+
+- **The runtime** (`runtime/hosted/ceesafe_rt_io.c`): `ceesafe_host_child_start`, `_child_poll` (with a flag to
+  wait), `_child_signal`, `_child_forget`, `ceesafe_host_pid` and `ceesafe_host_executable`. (§6 named the first
+  `ceesafe_host_spawn`, which is `Process.capture`'s already.)
+  - POSIX: `posix_spawnp`, the null device by file actions; `waitpid` with `WNOHANG` or not; `kill`. A child whose
+    `ChildProcess` is dropped while it runs goes into a list of 256 ids, each tried with `waitpid(WNOHANG)` at the
+    next start or poll of any child; past 256 they are the system's when the parent ends.
+  - `Process.executable()`: `_NSGetExecutablePath` (Apple), `sysctl KERN_PROC_PATHNAME` (FreeBSD), `/proc/self/exe`
+    (the others), then `realpath`.
+  - Windows: `CreateProcessW` with `CREATE_NEW_PROCESS_GROUP`, the command line quoted as `Process.capture` quotes
+    it; `WaitForSingleObject` and `GetExitCodeProcess`; `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` and
+    `TerminateProcess`; `GetModuleFileNameW`. **Compiled by no compiler and run on no machine here**: the release
+    workflow's Windows jobs compile it, and nothing there starts a child.
+  - CosmoOS: `Unsupported`, and 0 for the id.
+- **lib/std** (`lib/std/host.cee`): `ChildStream`, `ChildOptions` (with `inherit()` and `quiet()`, which §2.1 did
+  not have), `ChildExit`, `ChildProcess`, and `HostServices.spawn`, `id` and `executable`, which `Process.spawn`,
+  `Process.id` and `Process.executable` call (`src/check/expr.cee`), as `Process.capture` calls
+  `HostServices.capture`.
+- **The interpreter starts no child** (§2.3 said "as the host, unless sandboxed"): `spawn` and `executable` are
+  `Unsupported` and the id is 0, sandboxed or not. Its host services are written in CeeSafe over lib/std, and the
+  compiler's sources may use only what the release chain's first compilers have, which is not this.
+- **Descriptors.** §2.2 asked that every descriptor the runtime opens be close-on-exec. Not audited: the signal
+  pipe is; a child started with `Process.spawn` inherits whatever the others are, as one started with
+  `Process.run` does today.
+- **Tests:** `tools/child_check.py`, in the contract suite as `children`: the six cases of §6, POSIX only. Run on
+  macOS and on Linux. httpserver's supervisor still uses `fork` (§4: its inherit mode needs it on macOS).

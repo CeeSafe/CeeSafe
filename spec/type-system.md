@@ -3789,6 +3789,37 @@ Diagnostics: none new.
   thread waits in `signals.wait()`, no other thread runs.
 - Hosted only: in freestanding code these types are not defined (N0200).
 
+### 26.16 Child processes (ADR 0169)
+- `Process.spawn(program, arguments, options)`: `Result<ChildProcess, IoError>`. It starts `program` (a
+  `StringView`, found on `PATH` as for `Process.run`) with `arguments: borrow Vector<StringView>` and returns: the
+  child runs beside this program, with its environment and working directory. A program that cannot be started is
+  `NotFound` and the like.
+  - `options: ChildOptions` (lib/std) says what the child's standard `input`, `output` and `error` are, each a
+    `ChildStream`: `Inherit` (the parent's) or `Null` (the null device). `ChildOptions.inherit()` and
+    `ChildOptions.quiet()` are all three of one kind.
+- `ChildProcess` (lib/std) is the parent's hold on the child: a move type that needs drop.
+  - `child.id()`: `u64`, the system's id of the process.
+  - `child.poll()`: `Result<ChildExit?, IoError>`: how the child ended, or `null` at once while it runs.
+  - `child.wait()`: `Result<ChildExit, IoError>`, blocking the thread until it ends (N0295 in async code, which
+    polls on a timer). The exit is kept: `poll` and `wait` give it again.
+  - `child.terminate()`: `Result<void, IoError>`: asks it to end. POSIX: `SIGTERM`, which a `ProcessSignals`
+    subscription in the child receives as `Terminate` (§26.15). Windows: a console control event to the child's
+    process group, which it was started as.
+  - `child.kill()`: ends it at once: `SIGKILL`; `TerminateProcess`.
+  - After its exit has been seen, `terminate` and `kill` do nothing and return `Ok`: an id the system may have
+    given to another process is never signalled.
+  - **Dropping it neither ends the child nor waits for it.** The child goes on; when it has ended the runtime
+    forgets it (POSIX: it is reaped at a later `spawn` or `poll` of any child, so it is no zombie for the parent's
+    life). A program that wants its children gone ends them.
+- `ChildExit` (lib/std): `Status(i32)`, the status it returned or gave `Process.exit`, or `Signal(i32)`, the signal
+  that ended it (POSIX; on Windows a killed child is `Status(1)`).
+- `Process.id()`: `u64`, this process's id. `Process.executable()`: `Result<String, IoError>`, the path of the
+  running program, with which a program starts itself again as a worker.
+- **What the child shares** is what the system gives any new program: the environment, the working directory and
+  the streams above. There is no `fork`: a child is a program started, not a copy of the parent.
+- **Where.** Hosted only. CosmoOS, and the interpreter, which runs one program and starts none: `spawn` and
+  `executable` are `IoError.Unsupported`, and `Process.id()` is 0.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

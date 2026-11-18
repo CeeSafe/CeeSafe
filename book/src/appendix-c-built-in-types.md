@@ -382,6 +382,9 @@ A range is written `lo..hi` and is not a value: it cannot be stored in a variabl
 | `Process.exit(status: i32) -> never` | Ends the program now with the exit status `status`. | Does not return | [12.1](./ch12-01-arguments) |
 | `Process.run(program: StringView, arguments: borrow Vector<StringView>) -> Result<i32, IoError>` | Starts a program found on `PATH`, waits for it, and returns its exit status. | `Err(IoError)` when the program cannot be started | – |
 | `Process.capture(program: StringView, arguments: borrow Vector<StringView>, input: Slice<u8>?) -> Result<ProcessOutput, IoError>` | Runs a program with `input` as its standard input, and returns its `status`, and its `stdout` and `stderr` as byte vectors. | `Err(IoError)` when the program cannot be started | – |
+| `Process.spawn(program: StringView, arguments: borrow Vector<StringView>, options: ChildOptions) -> Result<ChildProcess, IoError>` | Starts a program found on `PATH` and returns: it runs beside this one. The `ChildProcess` has `id`, `poll`, `wait`, `terminate` and `kill`. | `Err(IoError)` when the program cannot be started; `Unsupported` in the interpreter | – |
+| `Process.id() -> u64` | The system's id of this process. | 0 in the interpreter | – |
+| `Process.executable() -> Result<String, IoError>` | The path of the running program, to start it again. | `Err(IoError)` when the system does not say | – |
 
 ## Built-in functions
 

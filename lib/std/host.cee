@@ -70,6 +70,18 @@ extern "C" {
         errors: *u8,
         errorsLength: u64,
     ) -> i64;
+    @effects(sleep, alloc)
+    fn ceesafe_host_child_start(arguments: *void, count: u64, streams: u32, handle: *mut u64) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_child_poll(handle: u64, wait: u32) -> i64;
+    @effects()
+    fn ceesafe_host_child_signal(handle: u64, kill: u32) -> i64;
+    @effects()
+    fn ceesafe_host_child_forget(handle: u64, ended: u32);
+    @effects()
+    fn ceesafe_host_pid() -> i64;
+    @effects(sleep)
+    fn ceesafe_host_executable(buffer: *mut u8, capacity: u64) -> i64;
     @effects()
     fn ceesafe_io_kind(error: i32) -> u32;
 }
@@ -87,6 +99,117 @@ public struct ProcessOutput {
     public status: i32;
     public stdout: Vector<u8>;
     public stderr: Vector<u8>;
+}
+
+/// What one of a child's standard streams is (`ChildOptions`, ADR 0169).
+public enum ChildStream {
+    /// The parent's.
+    Inherit,
+    /// Nothing: the null device.
+    Null,
+}
+
+/// How `Process.spawn` starts a program (type-system.md §26.16, ADR 0169).
+public struct ChildOptions {
+    public input: ChildStream;
+    public output: ChildStream;
+    public error: ChildStream;
+
+    /// The parent's three streams.
+    public fn inherit() -> ChildOptions =>
+        ChildOptions { input: ChildStream.Inherit, output: ChildStream.Inherit, error: ChildStream.Inherit };
+
+    /// No input and no output: the null device for all three.
+    public fn quiet() -> ChildOptions =>
+        ChildOptions { input: ChildStream.Null, output: ChildStream.Null, error: ChildStream.Null };
+}
+
+/// How a child process ended (ADR 0169).
+public enum ChildExit {
+    /// It returned from `main` or called `Process.exit`: its status.
+    Status(i32),
+    /// A signal ended it (POSIX): its number. On Windows a child ended by `kill` is `Status(1)`.
+    Signal(i32),
+}
+
+/// A program started by `Process.spawn` that runs beside this one: the parent's hold on it (type-system.md §26.16,
+/// ADR 0169). Dropping it neither ends the child nor waits for it: a program that wants its children gone ends them.
+@noncopy
+public struct ChildProcess {
+    private handle: u64;
+    private pid: u64;
+    /// The exit, once `poll` or `wait` has seen it: the system reports it once.
+    private ended: ChildExit?;
+
+    /// The system's id of the process.
+    public fn id(borrow this) -> u64 => this.pid;
+
+    /// How the child ended, if it has: at once, without waiting.
+    /// Safety: the handle is the one the runtime gave for this child, which this value alone holds.
+    public fn poll(borrow mut this) -> Result<ChildExit?, IoError> {
+        if (this.ended.isSome()) {
+            return Ok(this.ended);
+        }
+        let status = unsafe { ceesafe_host_child_poll(this.handle, 0) };
+        return this.seen(status);
+    }
+
+    /// Waits for the child to end, blocking the thread. In async code, `poll` on a timer (N0295).
+    /// Safety: as `poll`.
+    public fn wait(borrow mut this) -> Result<ChildExit, IoError> {
+        match (this.ended) {
+            Some(exit) => { return Ok(exit); }
+            null => {}
+        }
+        let status = unsafe { ceesafe_host_child_poll(this.handle, 1) };
+        return match (this.seen(status)?) {
+            Some(exit) => Ok(exit),
+            null => Err(IoError.Other(0)),
+        };
+    }
+
+    /// Asks the child to end: SIGTERM, which a `ProcessSignals` subscription in the child receives as `Terminate`; on
+    /// Windows, a console control event to its process group. Nothing, once its exit has been seen.
+    /// Safety: as `poll`; a child whose exit was seen is never signalled, so an id the system has given to another
+    /// process is not.
+    public fn terminate(borrow this) -> Result<void, IoError> {
+        if (this.ended.isSome()) {
+            return Ok();
+        }
+        let status = unsafe { ceesafe_host_child_signal(this.handle, 0) };
+        return if (status < 0) Err(HostServices.hostError(status)) else Ok();
+    }
+
+    /// Ends the child at once: SIGKILL; `TerminateProcess`. Nothing, once its exit has been seen.
+    /// Safety: as `terminate`.
+    public fn kill(borrow this) -> Result<void, IoError> {
+        if (this.ended.isSome()) {
+            return Ok();
+        }
+        let status = unsafe { ceesafe_host_child_signal(this.handle, 1) };
+        return if (status < 0) Err(HostServices.hostError(status)) else Ok();
+    }
+
+    /// What the runtime's poll said: nothing yet, an exit (kept), or an error.
+    fn seen(borrow mut this, status: i64) -> Result<ChildExit?, IoError> {
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        if (status == 0) {
+            return Ok(null);
+        }
+        let bits = truncate<u64>(status);
+        let value = truncate<i32>(bits & 0xFFFFFFFF);
+        let exit = if ((bits >> 32) == 2) ChildExit.Signal(value) else ChildExit.Status(value);
+        this.ended = Some(exit);
+        return Ok(this.ended);
+    }
+
+    /// Ends the hold. A child that still runs goes on, and the runtime forgets it when it has ended.
+    /// Safety: as `poll`; the handle is not used after this.
+    drop {
+        unsafe { ceesafe_host_child_forget(this.handle, if (this.ended.isSome()) 1u32 else 0u32); }
+    }
 }
 
 /// The environment the program started with (type-system.md §26.9).
@@ -389,6 +512,54 @@ public struct HostServices {
         let result = HostServices.captureIn(directory.view(), program, arguments, input);
         HostServices.clean(directory.view());
         return result;
+    }
+
+    /// `Process.spawn(program, arguments, options)` (type-system.md §26.16, ADR 0169): starts `program`, found on
+    /// `PATH`, with `arguments`, and returns: the child runs beside this program, with its environment and working
+    /// directory, and the streams `options` says.
+    /// Safety: the runtime reads the views during the call only, and writes the handle it gives.
+    public fn spawn(
+        program: StringView,
+        arguments: borrow Vector<StringView>,
+        options: ChildOptions,
+    ) -> Result<ChildProcess, IoError> {
+        var texts = Vector<HostServicesText>.create();
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length as u64 } }))?;
+        for (argument in arguments) {
+            HostServices.pushed(
+                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length as u64 } }),
+            )?;
+        }
+        let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
+            (HostServices.streamBits(options.error) << 4);
+        var handle: u64 = 0;
+        let pid = unsafe { ceesafe_host_child_start(
+            texts.view().ptr as *void,
+            texts.length as u64,
+            streams,
+            borrow mut handle as *mut u64,
+        ) };
+        if (pid < 0) {
+            return Err(HostServices.hostError(pid));
+        }
+        return Ok(ChildProcess { handle: handle, pid: truncate<u64>(pid), ended: null });
+    }
+
+    fn streamBits(stream: ChildStream) -> u32 => match (stream) {
+        ChildStream.Inherit => 0,
+        ChildStream.Null => 1,
+    };
+
+    /// `Process.id()` (ADR 0169): the system's id of this process.
+    /// Safety: the runtime only asks the system.
+    public fn id() -> u64 => truncate<u64>(unsafe { ceesafe_host_pid() });
+
+    /// `Process.executable()` (ADR 0169): the path of the running program, to start it again.
+    /// Safety: the runtime writes at most the buffer's 4096 bytes.
+    public fn executable() -> Result<String, IoError> {
+        var buffer = [0u8; 4096];
+        let length = unsafe { ceesafe_host_executable(borrow mut buffer[0] as *mut u8, 4096) };
+        return HostServices.textOf(buffer, length);
     }
 
     /// `File.kind(path)` (type-system.md §26.8): what is at `path`, following symbolic links, or null if nothing is.

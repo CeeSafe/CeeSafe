@@ -706,6 +706,12 @@ TABLES.append(table(
         ("`Process.capture(program: StringView, arguments: borrow Vector<StringView>, input: Slice<u8>?) -> Result<ProcessOutput, IoError>`",
          "Runs a program with `input` as its standard input, and returns its `status`, and its `stdout` and `stderr` as byte vectors.",
          "`Err(IoError)` when the program cannot be started", []),
+        ("`Process.spawn(program: StringView, arguments: borrow Vector<StringView>, options: ChildOptions) -> Result<ChildProcess, IoError>`",
+         "Starts a program found on `PATH` and returns: it runs beside this one. The `ChildProcess` has `id`, `poll`, `wait`, `terminate` and `kill`.",
+         "`Err(IoError)` when the program cannot be started; `Unsupported` in the interpreter", []),
+        ("`Process.id() -> u64`", "The system's id of this process.", "0 in the interpreter", []),
+        ("`Process.executable() -> Result<String, IoError>`",
+         "The path of the running program, to start it again.", "`Err(IoError)` when the system does not say", []),
     ],
     first="Function",
 ))

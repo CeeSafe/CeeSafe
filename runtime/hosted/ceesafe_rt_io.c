@@ -2941,6 +2941,247 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     return result;
 }
 
+/* ---- Child processes that run beside their parent (ADR 0169; type-system.md §26.16; lib/std's ChildProcess) ----
+ * ceesafe_host_child_start starts argv[0] (found on PATH) and returns at once: the child's process id, or a negated
+ * errno, with `*handle` what the other calls take (POSIX: the id again; Windows: the process's handle). `streams`
+ * says what the child's standard input, output and error are, two bits each from bit 0: 0 the parent's, 1 nothing
+ * (the null device).
+ * ceesafe_host_child_poll: 0 while the child runs (never with `wait`, which blocks until it ends), else how it ended:
+ * (1 << 32) | its exit status, or (2 << 32) | the signal that ended it; or a negated errno. An exit is reported once:
+ * the caller keeps it.
+ * ceesafe_host_child_signal asks the child to end (`kill` 0: SIGTERM; a console control event to its process group
+ * on Windows) or ends it (`kill` 1: SIGKILL; TerminateProcess). The caller never signals a child whose exit it has.
+ * ceesafe_host_child_forget ends the caller's hold: with `ended` 0 the child may still run, and POSIX keeps its id to
+ * reap it at a later start or poll of any child, so it is no zombie for the parent's life; Windows closes the handle.
+ * CosmoOS has none of these: EOPNOTSUPP. */
+#if defined(COSMO_AF_INET) || defined(CEE_COSMOOS)
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+    (void)arguments; (void)count; (void)streams; (void)handle;
+    return -(int64_t)EOPNOTSUPP;
+}
+int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) { (void)handle; (void)wait; return -(int64_t)EOPNOTSUPP; }
+int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it) { (void)handle; (void)kill_it; return -(int64_t)EOPNOTSUPP; }
+void ceesafe_host_child_forget(uint64_t handle, uint32_t ended) { (void)handle; (void)ended; }
+int64_t ceesafe_host_pid(void) { return 0; }
+int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity) { (void)buffer; (void)capacity; return -(int64_t)EOPNOTSUPP; }
+#elif defined(_WIN32)
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+    const cee_str *texts = (const cee_str *)arguments;
+    if (count == 0u || count > 4097u || handle == NULL) return -(int64_t)EINVAL;
+    size_t capacity = 32768u;
+    char *line = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
+    wchar_t *wide = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+    int ok = line != NULL && wide != NULL;
+    int64_t result = ok ? 0 : -(int64_t)ENOMEM;
+    size_t at = 0;
+    for (uint64_t i = 0; ok && i < count; i++) {
+        int32_t error = 0;
+        char *argument = ceesafe_c_string(texts[i], &error);
+        if (argument == NULL) {
+            ok = 0;
+            result = -(int64_t)error;
+            break;
+        }
+        if (i > 0u && at + 1u < capacity) line[at++] = ' ';
+        at = ceesafe_host_quote(line, at, capacity, argument, &ok);
+        ceesafe_free(argument, CEE_ALLOC_SYSTEM);
+        if (!ok) result = -(int64_t)E2BIG;
+    }
+    if (ok) {
+        line[at] = 0;
+        if (!cee_win_wide(line, wide, (int)capacity)) {
+            ok = 0;
+            result = -(int64_t)EINVAL;
+        }
+    }
+    if (ok) {
+        (void)fflush(stdout);
+        SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
+        HANDLE nothing = INVALID_HANDLE_VALUE;
+        if ((streams & 0x15u) != 0u) {
+            nothing = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+                                  OPEN_EXISTING, 0, NULL);
+        }
+        STARTUPINFOW startup;
+        PROCESS_INFORMATION process;
+        memset(&startup, 0, sizeof startup);
+        startup.cb = sizeof startup;
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = (streams & 3u) == 1u ? nothing : GetStdHandle(STD_INPUT_HANDLE);
+        startup.hStdOutput = ((streams >> 2) & 3u) == 1u ? nothing : GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = ((streams >> 4) & 3u) == 1u ? nothing : GetStdHandle(STD_ERROR_HANDLE);
+        if ((streams & 0x15u) != 0u && nothing == INVALID_HANDLE_VALUE) {
+            result = -(int64_t)cee_win_errno(GetLastError());
+        } else if (!CreateProcessW(NULL, wide, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP, NULL, NULL, &startup,
+                                   &process)) {
+            result = -(int64_t)cee_win_errno(GetLastError());
+        } else {
+            (void)CloseHandle(process.hThread);
+            *handle = (uint64_t)(uintptr_t)process.hProcess;
+            result = (int64_t)process.dwProcessId;
+        }
+        if (nothing != INVALID_HANDLE_VALUE) (void)CloseHandle(nothing);
+    }
+    if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
+    if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+    return result;
+}
+
+int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {
+    HANDLE process = (HANDLE)(uintptr_t)handle;
+    DWORD waited = WaitForSingleObject(process, wait != 0u ? INFINITE : 0u);
+    if (waited == WAIT_TIMEOUT) return 0;
+    if (waited != WAIT_OBJECT_0) return -(int64_t)cee_win_errno(GetLastError());
+    DWORD code = 0;
+    if (!GetExitCodeProcess(process, &code)) return -(int64_t)cee_win_errno(GetLastError());
+    return (int64_t)(((uint64_t)1u << 32) | (uint64_t)code);
+}
+
+int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it) {
+    HANDLE process = (HANDLE)(uintptr_t)handle;
+    BOOL done = kill_it != 0u ? TerminateProcess(process, 1u)
+                              : GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, GetProcessId(process));
+    return done ? 0 : -(int64_t)cee_win_errno(GetLastError());
+}
+
+void ceesafe_host_child_forget(uint64_t handle, uint32_t ended) {
+    (void)ended;
+    (void)CloseHandle((HANDLE)(uintptr_t)handle);
+}
+
+int64_t ceesafe_host_pid(void) { return (int64_t)GetCurrentProcessId(); }
+
+int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity) {
+    wchar_t wide[4096];
+    char text[4096];
+    DWORD length = GetModuleFileNameW(NULL, wide, 4096u);
+    if (length == 0u || length >= 4096u) return -(int64_t)(length == 0u ? cee_win_errno(GetLastError()) : ENAMETOOLONG);
+    if (!cee_win_narrow(wide, text, (int)sizeof text)) return -(int64_t)EINVAL;
+    uint64_t n = (uint64_t)strlen(text);
+    if (n > capacity) return -(int64_t)ENAMETOOLONG;
+    memcpy(buffer, text, (size_t)n);
+    return (int64_t)n;
+}
+#else
+#include <signal.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#elif defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#endif
+
+/* The children whose ChildProcess was dropped while they ran: reaped when they have ended, at a later start or poll.
+   A spin lock (ceesafe_atomic_*): the list is short and each hold is a few loads. More than it holds are left to the
+   system, which takes a process's zombies when the process ends. */
+#define CEE_FORGOTTEN_CHILDREN 256u
+static uint32_t cee_forgotten_lock;
+static pid_t cee_forgotten[CEE_FORGOTTEN_CHILDREN];
+static uint32_t cee_forgotten_count;
+
+static void cee_forgotten_reap(pid_t add) {
+    while (ceesafe_atomic_cas_u32(&cee_forgotten_lock, 0u, 1u) != 0u) {
+    }
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < cee_forgotten_count; i++) {
+        int status = 0;
+        pid_t waited = waitpid(cee_forgotten[i], &status, WNOHANG);
+        if (waited == 0) cee_forgotten[kept++] = cee_forgotten[i]; /* it still runs */
+    }
+    cee_forgotten_count = kept;
+    if (add > 0 && cee_forgotten_count < CEE_FORGOTTEN_CHILDREN) cee_forgotten[cee_forgotten_count++] = add;
+    ceesafe_atomic_store_u32(&cee_forgotten_lock, 0u);
+}
+
+int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
+    const cee_str *texts = (const cee_str *)arguments;
+    if (count == 0u || count > 4097u || handle == NULL) return -(int64_t)EINVAL;
+    cee_forgotten_reap(0);
+    char **argv = (char **)ceesafe_alloc((size_t)(count + 1u) * sizeof(char *), CEE_ALLOC_SYSTEM);
+    if (argv == NULL) return -(int64_t)ENOMEM;
+    int32_t error = 0;
+    uint64_t made = 0;
+    for (; made < count; made++) {
+        argv[made] = ceesafe_c_string(texts[made], &error);
+        if (argv[made] == NULL) break;
+    }
+    int64_t result = 0;
+    if (error != 0) {
+        result = -(int64_t)error;
+    } else {
+        argv[count] = NULL;
+        (void)fflush(stdout);
+        pid_t pid = -1;
+        posix_spawn_file_actions_t actions;
+        int started = posix_spawn_file_actions_init(&actions);
+        if (started == 0) {
+            if ((streams & 3u) == 1u) started = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+            if (started == 0 && ((streams >> 2) & 3u) == 1u) {
+                started = posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
+            }
+            if (started == 0 && ((streams >> 4) & 3u) == 1u) {
+                started = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
+            }
+            if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+            (void)posix_spawn_file_actions_destroy(&actions);
+        }
+        if (started != 0) {
+            result = -(int64_t)started;
+        } else {
+            *handle = (uint64_t)pid;
+            result = (int64_t)pid;
+        }
+    }
+    for (uint64_t i = 0; i < made; i++) ceesafe_free(argv[i], CEE_ALLOC_SYSTEM);
+    ceesafe_free(argv, CEE_ALLOC_SYSTEM);
+    return result;
+}
+
+int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {
+    cee_forgotten_reap(0);
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid((pid_t)handle, &status, wait != 0u ? 0 : WNOHANG);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) return -(int64_t)errno;
+    if (waited == 0) return 0;
+    if (WIFEXITED(status)) return (int64_t)(((uint64_t)1u << 32) | (uint64_t)(uint32_t)WEXITSTATUS(status));
+    return (int64_t)(((uint64_t)2u << 32) | (uint64_t)(uint32_t)WTERMSIG(status));
+}
+
+int64_t ceesafe_host_child_signal(uint64_t handle, uint32_t kill_it) {
+    return kill((pid_t)handle, kill_it != 0u ? SIGKILL : SIGTERM) == 0 ? 0 : -(int64_t)errno;
+}
+
+void ceesafe_host_child_forget(uint64_t handle, uint32_t ended) {
+    if (ended == 0u) cee_forgotten_reap((pid_t)handle);
+}
+
+int64_t ceesafe_host_pid(void) { return (int64_t)getpid(); }
+
+int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity) {
+    char found[4096];
+    char real[4096];
+#if defined(__APPLE__)
+    uint32_t size = (uint32_t)sizeof found;
+    if (_NSGetExecutablePath(found, &size) != 0) return -(int64_t)ENAMETOOLONG;
+#elif defined(__FreeBSD__)
+    int name[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+    size_t size = sizeof found;
+    if (sysctl(name, 4, found, &size, NULL, 0) != 0) return -(int64_t)errno;
+#else
+    ssize_t length = readlink("/proc/self/exe", found, sizeof found - 1u);
+    if (length < 0) return -(int64_t)errno;
+    found[length] = 0;
+#endif
+    if (realpath(found, real) == NULL) return -(int64_t)errno;
+    uint64_t n = (uint64_t)strlen(real);
+    if (n > capacity) return -(int64_t)ENAMETOOLONG;
+    memcpy(buffer, real, (size_t)n);
+    return (int64_t)n;
+}
+#endif
+
 /* ---- Random bytes (ADR 0060) and HashMap's per-process key (ADR 0052 §3.2), from the system's source. ---- */
 
 #if !defined(_WIN32) && !defined(CEE_COSMOOS) && defined(__has_include)

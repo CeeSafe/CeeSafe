@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPTION = r"--?[A-Za-z][A-Za-z0-9-]*"
 COMMANDS = ["parse", "check", "build", "run", "fix", "test"]
 # A value each option that takes one accepts, so that the reader goes on to the next word.
-VALUES = {"--emit": "exe", "-o": "x", "--exports-header": "x.h", "--cc": "cc", "--cflag": "-O1", "--ld": "ld",
+VALUES = {"--target": "macos", "--emit": "exe", "-o": "x", "--exports-header": "x.h", "--cc": "cc", "--cflag": "-O1", "--ld": "ld",
           "--ar": "ar", "--program": "p", "--profile": "hosted", "--kernel": "cosmoos", "--filter": "x",
           "--jobs": "2", "--timeout": "5", "--sweep": "alloc", "--format": "text", "--ceesafe-harness": "h.cee",
           "--package": "p", "--diagnostics-format": "text"}

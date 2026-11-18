@@ -253,6 +253,11 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         out,
         "  --explain-closure-calls  (build) print each call through a closure, whether it became direct, and each variant made\n",
     )?;
+    appendText(
+        out,
+        "  --target <system>  the system the build is for: linux, macos, windows, freebsd, ios or android. It chooses the\n",
+    )?;
+    appendText(out, "                    manifests' [target.<system>] tables; default: this machine's\n")?;
     return Ok();
 }
 
@@ -592,6 +597,25 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 null => { return fail("option '--package' needs a value"); }
             }
             a += 1;
+        } else if (arg == "--target") {
+            // The system the build is for (ADR 0171 §3.2): the manifests' [target.NAME] tables are chosen by it
+            // (manifestTarget reads it from the command line). It names the system and nothing else.
+            let name = match (Process.argument(a)) {
+                Some(v) => v,
+                null => { return fail("option '--target' needs a value"); }
+            };
+            a += 1;
+            if (name != "linux" && name != "macos" && name != "windows" && name != "freebsd" && name != "ios" &&
+                name != "android") {
+                var message = String.create();
+                message.append("--target must be 'linux', 'macos', 'windows', 'freebsd', 'ios' or 'android', not '")!;
+                message.append(name)!;
+                message.append("'")!;
+                return fail(message.view());
+            }
+            if ((options.running || options.testing) && (name == "ios" || name == "android")) {
+                return fail("--target ios and --target android are for 'build' and 'check': this machine cannot run what it builds for a phone");
+            }
         } else if (arg == "--offline") {
             options.offline = true;
         } else if (options.fixing && arg == "--dry-run") {

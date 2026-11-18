@@ -214,7 +214,8 @@ links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcryp
 lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
 include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files and its @headers (ADR 0120)
 
-[target.windows]             # also [target.macos], [target.linux] and [target.freebsd] (ADR 0149): added after [package]'s on that system
+[target.windows]             # also [target.macos], [target.linux], [target.freebsd] (ADR 0149), [target.ios] and
+                             # [target.android] (ADR 0171): added after [package]'s in a build for that system
 links = ["libssl", "libcrypto"]
 
 [embed]                      # where `embed` may read besides the package's directory (ADR 0087 §2.8)
@@ -1247,6 +1248,7 @@ for it.
 | `--emit` | build, test | build | test: nothing, the test program is an executable; a value that is not `c`, `exe`, `obj` or `lib` is still a usage error |
 | `--explain-allocations`, `--explain-bounds-checks`, `--explain-closure-calls`, `--explain-frames`, `--explain-overflow-checks` | build, test | build, test (the test program's) | |
 | `--exports-header` | build, test | build, test | |
+| `--target` | parse, check, build, run, fix, test | check, build, test, run: the manifests' `[target.NAME]` tables that apply are the named system's and no other (ADR 0171); without it, this machine's | NAME is `linux`, `macos`, `windows`, `freebsd`, `ios` or `android`, and anything else is a usage error. It names the system and nothing else: `--cc` and `--cflag` choose the C compiler and what it builds for. With `run` or `test`, `ios` and `android` are usage errors: this machine cannot run what it builds for a phone |
 | `--filter`, `--format`, `--list`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
 | `--flat-c` | build, test | build, test | |
 | `--interp` | run, test | run, test | |

@@ -3559,7 +3559,10 @@ Diagnostics: none new.
     and `secure()`; `x`, `y`, `width`, `height: f32` in points from the content's top left; `min`, `max`,
     `now: f64` for a slider; `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges of `text`
     (UTF-8); and `caret` and `anchor: u32`, a text field's caret and the other end of its selection as byte
-    offsets into its value (equal when nothing is selected; 0 for another element). The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
+    offsets into its value (equal when nothing is selected; 0 for another element); and `layer: u32`, 0 for the
+    page and higher for what is drawn over it (a dropdown's open list, a menu, a dialog). Where elements overlap,
+    the element at a point (macOS's `accessibilityHitTest:`, UI Automation's `ElementProviderFromPoint`, TalkBack's
+    exploring finger) is the highest layer's, and of one layer the latest in the list. The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
     removed, renamed or changed value, state or focus; an element whose `id` is in both lists is the same element
     to the system. A range outside `text`, a caret or anchor past its value's end, an `id` of 0 and an `id` given
     twice are panics. When memory runs out

@@ -63,6 +63,7 @@ public final class AccessView extends View {
     private int[] virtual = new int[0];
     private int[] roles = new int[0];
     private int[] flags = new int[0];
+    private int[] layers = new int[0];     // 0 the page; higher is drawn over it (ADR 0164 §10)
     private float[] rects = new float[0];   // left, top, width, height of each, in pixels of the view
     private double[] ranges = new double[0]; // min, max, now of each
     private String[] labels = new String[0];
@@ -85,8 +86,8 @@ public final class AccessView extends View {
         setWillNotDraw(true);
     }
 
-    /** The program's list, as the runtime packs it: a count, then for each node its id, role, flags, rectangle in
-        pixels, range, and its label and value as UTF-8 with their lengths before them. Little-endian. */
+    /** The program's list, as the runtime packs it: a count, then for each node its id, role, flags, layer,
+        rectangle in pixels, range, and its label and value as UTF-8 with their lengths before them. Little-endian. */
     public void update(byte[] packed) {
         ByteBuffer in = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
         int count = in.getInt();
@@ -94,6 +95,7 @@ public final class AccessView extends View {
         int[] newVirtual = new int[count];
         int[] newRoles = new int[count];
         int[] newFlags = new int[count];
+        int[] newLayers = new int[count];
         float[] newRects = new float[count * 4];
         double[] newRanges = new double[count * 3];
         String[] newLabels = new String[count];
@@ -104,6 +106,7 @@ public final class AccessView extends View {
             long id = in.getLong();
             int role = in.getInt();
             int flag = in.getInt();
+            int layer = in.getInt();
             float x = in.getFloat();
             float y = in.getFloat();
             float w = in.getFloat();
@@ -124,6 +127,7 @@ public final class AccessView extends View {
             newVirtual[kept] = number;
             newRoles[kept] = role >= 0 && role < CLASSES.length ? role : TEXT;
             newFlags[kept] = flag;
+            newLayers[kept] = layer;
             newRects[kept * 4] = x;
             newRects[kept * 4 + 1] = y;
             newRects[kept * 4 + 2] = w;
@@ -139,6 +143,7 @@ public final class AccessView extends View {
         virtual = java.util.Arrays.copyOf(newVirtual, kept);
         roles = newRoles;
         flags = newFlags;
+        layers = newLayers;
         rects = newRects;
         ranges = newRanges;
         labels = newLabels;
@@ -211,12 +216,16 @@ public final class AccessView extends View {
         if (event.getAction() != MotionEvent.ACTION_HOVER_EXIT) {
             float x = event.getX();
             float y = event.getY();
-            for (int k = virtual.length - 1; k >= 0; k--) { // the last that holds the point is on top
+            // Of those that hold the point, the highest layer's, and of one layer the latest (drawn later, on top).
+            int best = -1;
+            for (int k = 0; k < virtual.length; k++) {
                 if (x >= rects[k * 4] && y >= rects[k * 4 + 1] && x < rects[k * 4] + rects[k * 4 + 2]
-                    && y < rects[k * 4 + 1] + rects[k * 4 + 3]) {
-                    at = virtual[k];
-                    break;
+                    && y < rects[k * 4 + 1] + rects[k * 4 + 3] && (best < 0 || layers[k] >= layers[best])) {
+                    best = k;
                 }
+            }
+            if (best >= 0) {
+                at = virtual[best];
             }
         }
         if (at != hovered) {

@@ -384,6 +384,11 @@ public struct WindowAccessNode {
     /// is selected, 0 for an element that is no text field. A screen reader reads by character and word with them.
     public caret: u32;
     public anchor: u32;
+    /// Which layer the element is drawn in: 0 for the page, higher for what is drawn over it (an open dropdown's
+    /// list, a menu, a dialog). Where elements overlap, the one under a point is the highest layer's, and of one
+    /// layer the latest in the list: the list stays in reading order while a popup read before the page it covers
+    /// still takes the point (ADR 0164 §10).
+    public layer: u32;
 
     public fn checked() -> u32 => 1;
     public fn selected() -> u32 => 2;
@@ -644,12 +649,12 @@ public struct Window {
     /// last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
     /// A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
     /// there yet, and when memory runs out, the last list stays.
-    /// Safety: the runtime reads ten words for each node and `text.length` bytes during the call.
+    /// Safety: the runtime reads eleven words for each node and `text.length` bytes during the call.
     public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: Slice<u8>) {
         if (nodes.length > 0x7FFFFFFF || text.length > 0x7FFFFFFF) {
             panic("Window.setAccessNodes: a list or a text longer than 2^31");
         }
-        var raw = match (Vector<u64>.withCapacity(nodes.length * 10)) {
+        var raw = match (Vector<u64>.withCapacity(nodes.length * 11)) {
             Ok(v) => v,
             Err(_) => { return; }
         };
@@ -678,7 +683,7 @@ public struct Window {
                 WindowAccessRole.Dropdown => 9,
                 WindowAccessRole.Image => 10,
             };
-            // Ten words a node, as the runtime reads them.
+            // Eleven words a node, as the runtime reads them.
             let words = [
                 n.id,
                 n.min.bits(),
@@ -690,6 +695,7 @@ public struct Window {
                 (n.labelStart as u64) | ((n.labelLength as u64) << 32),
                 (n.valueStart as u64) | ((n.valueLength as u64) << 32),
                 (n.caret as u64) | ((n.anchor as u64) << 32),
+                n.layer as u64,
             ];
             for (word in words) {
                 match (raw.push(word)) {

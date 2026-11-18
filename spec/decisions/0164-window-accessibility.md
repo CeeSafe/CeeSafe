@@ -54,7 +54,7 @@ match (window.takeAccessAction()) {               // what the reader asked, one 
   are; `min`, `max`, `now: f64` for a slider; `labelStart`, `labelLength`, `valueStart`, `valueLength: u32`, ranges
   of the `text` given with the list (UTF-8); and `caret` and `anchor: u32`, a text field's caret and the other end
   of its selection as byte offsets into its value (added after VoiceOver showed the need, §6; this replaces §2.3's
-  "a later addition").
+  "a later addition"). And `layer: u32`, which layer the element is drawn in (added in §10).
 - **`WindowAccessAction`**: `Press`, `Focus`, `Increment`, `Decrement`. **`WindowAccessRequest`**: `id: u64`,
   `action`.
 
@@ -250,3 +250,28 @@ all together".
   And one that is the check's own: the name of plain text that changes each frame (a clock) raised an event each
   time; only a control's name does now.
 - **Not checked**: Narrator; `announce`.
+
+## 10. Layers (2026-11-18)
+
+**Found** in the IPos port on ClayWind: an open dropdown's list lies over the invoice list's first row. A click there
+picks the item (ClayWind's own hit test stops at a floating layer), but asked through the accessibility API (System
+Events' `click at`, which presses the element `accessibilityHitTest:` names; VoiceOver's pointer the same) the point
+was the row's, and pressing it opened an invoice. Every backend took "the last in the list that holds the point" as
+the one on top. The list is in reading order, though (§2, §6: VoiceOver moves in it), and a dropdown is read where it
+is, before the page it covers: drawn later, listed earlier.
+
+**Decision.** `WindowAccessNode` has `layer: u32`: 0 for the page, higher for what is drawn over it. The element at a
+point is, of those that hold it, the highest layer's, and of one layer the latest in the list, as before. The list's
+order stays the reading order. A program that gives 0 everywhere has what it had.
+
+- One function in the runtime (`cee_access_at`) answers it for macOS (`accessibilityHitTest:`) and Windows
+  (`ElementProviderFromPoint`); Android's `AccessView` packs the layer with each node and its exploring finger does
+  the same.
+- **iOS** is unchanged: UIKit finds the element under a finger from `accessibilityElements` itself, and has no
+  public way to ask the view.
+- A node is eleven words to the runtime (the layer the eleventh).
+- **Alternatives**: the list in drawing order (it would no longer be the reading order: a dropdown's items read after
+  the page); a program giving no node under a popup (it would lose the page to the reader while a tooltip shows).
+- **Checked** (macOS, `window_check --display`): Save is of layer 1 and a later node of layer 0 covers it;
+  `accessibilityHitTest:` at Save's middle answers Save.
+

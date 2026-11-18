@@ -3251,6 +3251,7 @@ public struct WindowAccessNode {
     public valueLength: u32;
     public caret: u32;
     public anchor: u32;
+    public layer: u32;
 }
 ```
 
@@ -3499,7 +3500,7 @@ holds the names and values the nodes' ranges point into. The runtime copies both
 last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
 A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
 there yet, and when memory runs out, the last list stays.
-Safety: the runtime reads ten words for each node and `text.length` bytes during the call.
+Safety: the runtime reads eleven words for each node and `text.length` bytes during the call.
 
 ### Window.takeAccessAction
 

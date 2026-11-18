@@ -1801,11 +1801,12 @@ fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], va
         valueLength: value[1],
         caret: if (id == 5) 1 else 0,
         anchor: if (id == 5) 2 else 0,
+        layer: if (id == 2) 1 else 0,
     };
 
 fn give(window: borrow mut Window, volume: f64, focusField: bool) {
-    //          0123456789012345678901234567890123456789012345678
-    let text = "HeadingSaveAgreeAppleNameVolumeTabRowItemPickIconAlPear";
+    //          0123456789012345678901234567890123456789012345678901234
+    let text = "HeadingSaveAgreeAppleNameVolumeTabRowItemPickIconAlPearOver";
     var nodes = [
         node(1, WindowAccessRole.Text, 0, 0.0, [0, 7], [0, 0]),
         node(2, WindowAccessRole.Button, 0, 20.0, [7, 4], [0, 0]),
@@ -1818,6 +1819,9 @@ fn give(window: borrow mut Window, volume: f64, focusField: bool) {
         node(9, WindowAccessRole.MenuItem, WindowAccessNode.disabled(), 160.0, [37, 4], [0, 0]),
         node(10, WindowAccessRole.Dropdown, WindowAccessNode.expanded(), 180.0, [41, 4], [51, 4]),
         node(11, WindowAccessRole.Image, 0, 200.0, [45, 4], [0, 0]),
+        // Later in the list and over Save, but of the page's layer, where Save is of layer 1 (ADR 0164 §10): the
+        // point is Save's.
+        node(12, WindowAccessRole.Text, 0, 20.0, [55, 4], [0, 0]),
     ];
     nodes[5].now = volume;
     window.setAccessNodes(nodes[..], text.bytes());
@@ -1927,6 +1931,7 @@ int32_t access_inspect(int32_t act) {
     rect wf = ((rect(*)(id, SEL))objc_msgSend)(window, sel_registerName("frame"));
     rect cr = ((rect(*)(id, SEL, rect))objc_msgSend)(window, sel_registerName("contentRectForFrameRect:"), wf);
     int same = 0;
+    rect save = {0, 0, 0, 0};
     for (unsigned long k = 0; k < n; k++) {
         id e = ((id(*)(id, SEL, unsigned long))objc_msgSend)(children, sel_registerName("objectAtIndex:"), k);
         rect f = ((rect(*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityFrame"));
@@ -1943,6 +1948,7 @@ int32_t access_inspect(int32_t act) {
             printf("  selection %lu+%lu %s of %ld\n", r.location, r.length, text(send0(e, "accessibilitySelectedText")),
                    ((long (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityNumberOfCharacters")));
         }
+        if (k == 1) save = f;
         if (k < 32) {
             same += seen[k] == (void *)e;
             seen[k] = (void *)e;
@@ -1953,6 +1959,11 @@ int32_t access_inspect(int32_t act) {
         if (act && k == 4) ((void (*)(id, SEL, signed char))objc_msgSend)(e, sel_registerName("setAccessibilityFocused:"), 1);
         if (act && k == 8) ((signed char (*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityPerformPress"));
     }
+    /* What is under Save's middle, which a later element of a lower layer covers too: the higher layer's. */
+    typedef struct { double x, y; } point;
+    point middle = {save.x + save.w / 2, save.y + save.h / 2};
+    id hit = ((id(*)(id, SEL, point))objc_msgSend)(view, sel_registerName("accessibilityHitTest:"), middle);
+    printf("  hit %s %s\n", text(send0(hit, "accessibilityRole")), text(send0(hit, "accessibilityLabel")));
     printf("  same elements as last time: %d\n", same);
     fflush(stdout);
     return (int32_t)n;
@@ -1977,21 +1988,22 @@ def access_real_expected():
             ("AXTextField -", "Name", "Al", 1, 0), ("AXSlider -", "Volume", "4", 1, 0),
             ("AXRadioButton AXTabButton", "Tab", "1", 1, 1), ("AXButton -", "Row", "-", 1, 0),
             ("AXMenuItem -", "Item", "-", 0, 0), ("AXPopUpButton -", "Pick", "Pear", 1, 0),
-            ("AXImage -", "Icon", "-", 1, 0)]
+            ("AXImage -", "Icon", "-", 1, 0), ("AXStaticText -", "-", "Over", 1, 0)]
 
     def listing(volume, focused, same):
         out = []
         for k, (role, label, value, enabled, selected) in enumerate(rows):
             value = volume if label == "Volume" else value
-            line = (f"  {role} label={label} value={value} at 10,{20 * k} 100x18 enabled={enabled} "
+            y = 20 if value == "Over" else 20 * k  # Over lies on Save
+            line = (f"  {role} label={label} value={value} at 10,{y} 100x18 enabled={enabled} "
                     f"selected={selected} focused={1 if focused and label == 'Name' else 0} parent=1")
             out.append(("inspect " if k == 0 else "") + line)
             if label == "Name":
                 out.append("  selection 1+1 l of 2")
-        return out + [f"  same elements as last time: {same}", "11"]
+        return out + ["  hit AXButton Save", f"  same elements as last time: {same}", "12"]
 
     return (["active false"] + listing("4", False, 0) + ["active true", "asked 2 press", "asked 5 focus",
-            "asked 6 increment", "asked 6 decrement"] + listing("7", True, 11))
+            "asked 6 increment", "asked 6 decrement"] + listing("7", True, 12))
 
 
 # Its script, and what SAFE prints for it: none at first; a phone's portrait insets (a Resized at the same size); the

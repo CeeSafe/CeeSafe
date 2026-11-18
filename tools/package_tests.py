@@ -1199,6 +1199,57 @@ def git_subdirectories(compiler, work, problems):
                         f"{q.stderr[:300]!r} {lock!r}")
 
 
+def manifest_targets(compiler, work, problems):
+    """36. manifest-targets (ADR 0171): a manifest's table for the system the build is for. A package with different
+    `links` under [target.<host>], [target.android] and [target.ios]: `--emit c` lists the host's without --target,
+    and the named system's and no other with it; a dependency's tables follow. A name that is not a system, and a
+    phone with `run`, are usage errors; [target.haiku] is still refused, in a message that names the six."""
+    base = os.path.join(work, "manifest-targets")
+    host = "windows" if WINDOWS else ("macos" if sys.platform == "darwin" else
+                                      ("freebsd" if sys.platform.startswith("freebsd") else "linux"))
+    tables = f'[target.{host}]\nlinks = ["hostthing"]\n\n[target.android]\nlinks = ["droidthing"]\n\n' \
+             '[target.ios]\nlinks = ["phonething"]\n'
+    for name, extra in (("dep", ""), ("app", '\n[dependencies]\ndep = { path = "../dep" }\n')):
+        os.makedirs(os.path.join(base, name, "src"))
+        kind = "executable" if name == "app" else "library"
+        with open(os.path.join(base, name, "ceesafe.toml"), "w") as f:
+            f.write(f'[package]\nname = "{name}"\nversion = "0.1.0"\nkind = "{kind}"\n\n'
+                    + tables.replace("thing", "thing" + name) + extra)
+    with open(os.path.join(base, "dep", "src", "dep.cee"), "w") as f:
+        f.write("public fn one() -> i32 => 1;\n")
+    with open(os.path.join(base, "app", "src", "main.cee"), "w") as f:
+        f.write("import dep;\nfn main() -> i32 => one() - 1;\n")
+    app = os.path.join(base, "app")
+    p = run([compiler, "fetch"], app)
+    if p.returncode != 0:
+        problems.append(f"manifest-targets: fetch failed: {p.stderr.strip()[-300:]}")
+        return
+    for target, want in ((None, "host"), ("android", "droid"), ("ios", "phone")):
+        out = "c-" + (target or "host")
+        p = run([compiler, "build", "--emit", "c", "-o", out] + (["--target", target] if target else []), app)
+        link = os.path.join(app, out, "ceesafe_link.txt")
+        text = open(link).read() if os.path.exists(link) else ""
+        names = sorted(w for w in ("host", "droid", "phone") if w + "thing" in text)
+        both = (want + "thingapp") in text and (want + "thingdep") in text
+        if p.returncode != 0 or names != [want] or not both:
+            problems.append(f"manifest-targets: --target {target}: the link names {names}, not the package's and "
+                            f"its dependency's {want} libraries only: {p.stderr.strip()[-300:]}")
+    p = run([compiler, "check", "--target", "android"], app)
+    if p.returncode != 0:
+        problems.append(f"manifest-targets: check --target android failed: {p.stderr.strip()[-300:]}")
+    p = run([compiler, "build", "--target", "plan9"], app)
+    if p.returncode != 2 or "'android'" not in p.stderr:
+        problems.append(f"manifest-targets: --target plan9 was not a usage error naming the systems: {p.returncode}")
+    p = run([compiler, "run", "--target", "android"], app)
+    if p.returncode != 2 or "cannot run" not in p.stderr:
+        problems.append(f"manifest-targets: run --target android was not a usage error: {p.returncode}")
+    with open(os.path.join(app, "ceesafe.toml"), "a") as f:
+        f.write('\n[target.haiku]\nlinks = ["x"]\n')
+    p = run([compiler, "check"], app)
+    if p.returncode == 0 or "[target.android]" not in p.stderr:
+        problems.append("manifest-targets: [target.haiku] was not refused in a message that names [target.android]")
+
+
 def pe_subsystem(path):
     """A PE executable's subsystem: 2 GUI, 3 console; None if the file is not one."""
     try:
@@ -2313,6 +2364,7 @@ def main():
             interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
         windowed_executables(compiler, work, problems)
+        manifest_targets(compiler, work, problems)
         git_subdirectories(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""

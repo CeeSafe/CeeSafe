@@ -307,7 +307,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 message2(
                     "unknown table '[",
                     t.name[start..],
-                    "]': a manifest has [package], [dependencies], [embed] and [target.linux], [target.macos], [target.windows], [target.freebsd]",
+                    "]': a manifest has [package], [dependencies], [embed] and [target.linux], [target.macos], [target.windows], [target.freebsd], [target.ios], [target.android]",
                 )?,
             )?;
         }
@@ -552,7 +552,8 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             )?,
         )?;
     }
-    // The [target.OS] tables (ADR 0047): each checked, the host's added after [package].
+    // The [target.OS] tables (ADR 0047): each checked, the build's (ADR 0171: the host's without --target) added
+    // after [package].
     let host = manifestTarget();
     for (k in 1..tables.length) {
         let t = borrow tables[k];
@@ -645,15 +646,43 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
     return Ok(manifest);
 }
 
-/// The manifest's name for the system the build is for (ADR 0047 §3.1): the host's. FreeBSD is asked first: with
-/// procfs mounted it has a `/proc/self` too (ADR 0149).
-fn manifestTarget() -> StringView =>
-    if (hostIsWindows()) "windows" else if (hostIsFreeBsd()) "freebsd" else if (isLinuxHost()) "linux" else "macos";
+/// Whether `name` is a system a manifest may have a table for (ADR 0047 §3.1, ADR 0171 §3.1).
+fn isTargetName(name: Slice<u8>) -> bool =>
+    sameText(name, "linux") || sameText(name, "macos") || sameText(name, "windows") || sameText(name, "freebsd") ||
+        sameText(name, "ios") || sameText(name, "android");
 
-/// `[target.linux]`, `[target.macos]`, `[target.windows]` or `[target.freebsd]`.
-fn isTargetTable(name: Slice<u8>) -> bool =>
-    sameText(name, "target.linux") || sameText(name, "target.macos") || sameText(name, "target.windows") ||
-        sameText(name, "target.freebsd");
+/// The manifest's name for the system the build is for: `--target NAME` of the command line (ADR 0171 §3.2), which
+/// the options' reader has checked, and otherwise the host's (ADR 0047 §3.1). It is read from the command line here
+/// because every command reads its manifests through this file, and a manifest is read before most of them have
+/// options. FreeBSD is asked first: with procfs mounted it has a `/proc/self` too (ADR 0149).
+fn manifestTarget() -> StringView {
+    var a: usize = 1;
+    while (a + 1 < Process.argumentCount()) {
+        match (Process.argument(a)) {
+            Some(arg) => {
+                if (arg == "--") {
+                    break; // what follows is the program's own (run)
+                }
+                if (arg == "--target") {
+                    match (Process.argument(a + 1)) {
+                        Some(name) => {
+                            if (isTargetName(name.bytes())) {
+                                return name;
+                            }
+                        }
+                        null => {}
+                    }
+                }
+            }
+            null => {}
+        }
+        a += 1;
+    }
+    return if (hostIsWindows()) "windows" else if (hostIsFreeBsd()) "freebsd" else if (isLinuxHost()) "linux" else "macos";
+}
+
+/// `[target.linux]`, `[target.macos]`, `[target.windows]`, `[target.freebsd]`, `[target.ios]` or `[target.android]`.
+fn isTargetTable(name: Slice<u8>) -> bool => name.length > 7 && sameText(name[0..7], "target.") && isTargetName(name[7..]);
 
 fn isNativeField(key: Slice<u8>) -> bool =>
     sameText(key, "links") || sameText(key, "lib-dirs") || sameText(key, "include-dirs");

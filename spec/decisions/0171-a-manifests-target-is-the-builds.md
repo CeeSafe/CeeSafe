@@ -1,6 +1,7 @@
 # ADR 0171 — A manifest's target is the build's, and phones are targets
 
-- Status: **Proposed**, 2026-11-18. Asked for by the owner for ClayWind ("The most important gate I see is HTTPS on
+- Status: **Accepted** by the owner, 2026-11-18 ("Go ahead with 1-3: All yes from me"): the three questions of §5 as
+  recommended. Implemented the same day (§7). Asked for by the owner for ClayWind ("The most important gate I see is HTTPS on
   phones. We need to tackle it urgently"): an app that uses CeeSafe.Web's `web_tls` cannot be built for a phone.
 - Scope: `ceesafe.toml`'s target tables (`src/packages/manifest.cee`, tooling.md §4.1; ADR 0047 §3.1), a `--target`
   option of `build`, `run`, `test` and `check` (`src/main.cee`, `src/host/build.cee`). No change to the language, to
@@ -99,3 +100,16 @@ These are not part of the decision; they are why it is asked for, and each is it
   on a Mac lists Android's and none of the Mac's; without `--target`, the Mac's.
 - A dependency's tables follow the build's `--target`.
 - `--target plan9` is an error; `run --target android` is an error.
+
+## 7. Implementation
+
+- `src/packages/manifest.cee`: `[target.ios]` and `[target.android]` are tables; the table that applies is
+  `--target`'s, read from the command line where manifests are read (every command reads them through that file, most
+  before they have options), and otherwise the host's.
+- `src/main.cee`: `--target NAME` is checked where options are read: a name that is not one of the six, and `ios` or
+  `android` with `run` or `test`, are usage errors.
+- `tools/package_tests.py`, item 36 (`manifest_targets`).
+- Tried outside the tests, with CeeSafe.Web's `web_tls` given the two tables and an OpenSSL 3.5.9 built for each
+  system: ClayWind's IPos app, packed for Android (arm64) and the iOS simulator with `--target`, made HTTPS requests
+  on the Android 17 emulator and the iOS 26 simulator; a good certificate was accepted and an expired one, one for
+  another host and a self-signed one were refused, on both.

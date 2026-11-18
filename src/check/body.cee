@@ -710,7 +710,8 @@ fn checkFor(
     if (endSyntax == none()) {
         let sequence = synth(c, startSyntax, none())?;
         if (isIteratorType(c, c.typeOf(sequence))) {
-            noteLoopCopy(c, startSyntax, c.typeOf(sequence), span)?;
+            let sequenceType = c.typeOf(sequence); // read first: the release chain's 0.8.0 has no two-phase `mut`
+            noteLoopCopy(c, startSyntax, sequenceType, span)?;
             return checkForIterator(c, variable, sequence, body, span);
         }
         start = forSequence(c, startSyntax, sequence, mut variableType)?;

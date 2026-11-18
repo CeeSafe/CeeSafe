@@ -1536,6 +1536,35 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_set_done") || sameText(name, "ceesafe_async_set_oom")) {
         return "P:b";
     }
+    // Isolated tasks (ADR 0175).
+    if (sameText(name, "ceesafe_async_isolate_next")) {
+        return "PPs:-";
+    }
+    if (sameText(name, "ceesafe_async_isolated_last")) {
+        return ":s";
+    }
+    if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
+        return "P:s";
+    }
+    if (sameText(name, "ceesafe_async_set_watch")) {
+        return "PP:b";
+    }
+    if (sameText(name, "ceesafe_async_set_end") || sameText(name, "ceesafe_async_critical_leave") ||
+        sameText(name, "ceesafe_async_lock_released") || sameText(name, "ceesafe_async_isolation_report")) {
+        return "P:-";
+    }
+    if (sameText(name, "ceesafe_async_critical_enter")) {
+        return ":P";
+    }
+    if (sameText(name, "ceesafe_async_lock_held")) {
+        return "uPP:-";
+    }
+    if (sameText(name, "ceesafe_panic_poisoned")) {
+        return ":-";
+    }
+    if (sameText(name, "ceesafe_host_handover_shutdown")) {
+        return "s:l";
+    }
     if (sameText(name, "ceesafe_async_set_cancel")) {
         return "P:-";
     }
@@ -2095,6 +2124,17 @@ fn callC(
     if (sameText(n0, "ceesafe_signal_subscribe") || sameText(n0, "ceesafe_signal_unsubscribe")) {
         return signalService(it, n0, arguments); // ADR 0125
     }
+    if (sameText(n0, "ceesafe_async_isolate_next") || sameText(n0, "ceesafe_async_isolated_last") ||
+        sameText(n0, "ceesafe_async_set_crashes") || sameText(n0, "ceesafe_async_set_missed") ||
+        sameText(n0, "ceesafe_async_set_watch") || sameText(n0, "ceesafe_async_set_end") ||
+        sameText(n0, "ceesafe_async_critical_enter") || sameText(n0, "ceesafe_async_critical_leave") ||
+        sameText(n0, "ceesafe_async_lock_held") || sameText(n0, "ceesafe_async_lock_released") ||
+        sameText(n0, "ceesafe_async_isolation_report") || sameText(n0, "ceesafe_panic_poisoned")) {
+        return isolationService(it, n0, arguments); // ADR 0175
+    }
+    if (sameText(n0, "ceesafe_host_handover_shutdown")) {
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // no closer's hold in the interpreter
+    }
     // Allocation budgets (ADR 0170) hold nothing back here: the interpreter's memory is its own model, not the
     // program's blocks. A budget is entered and left, and none is ever current.
     if (sameText(n0, "ceesafe_budget_enter")) {
@@ -2625,6 +2665,10 @@ fn asyncSetSpawn(
             }
             it.memory.end(environment);
         }
+        if (it.asyncIsolatePending && it.asyncIsolateAt != 0) {
+            it.memory.end(it.asyncIsolateAt);
+        }
+        it.asyncIsolatePending = false;
         return Ok(valueOf(code, 4));
     }
     let scope = truncate<u32>(it.memory.loadBits(record, 8)? - 1);
@@ -2660,6 +2704,30 @@ fn asyncSetSpawn(
         }
     }
     it.asyncScopes[scope as usize].live += 1;
+    // `set.spawnIsolated` asked just before (ADR 0175): the child is the root of a unit of its own.
+    var unit = none();
+    it.asyncIsolatedLast = 0;
+    if (it.asyncIsolatePending) {
+        it.asyncIsolatePending = false;
+        it.asyncUnits.push(
+            InterpUnit {
+                outer: unitOfTask(it, it.asyncCurrent),
+                root: none(),
+                scope: scope,
+                dead: false,
+                missed: false,
+                ended: false,
+                critical: 0,
+                crashedAt: it.asyncIsolateAt,
+                crashedSize: it.asyncIsolateSize,
+                lockKinds: Vector<u32>.create(),
+                locks: Vector<u64>.create(),
+                flags: Vector<u64>.create(),
+            },
+        )!;
+        unit = truncate<u32>(it.asyncUnits.length - 1);
+        it.asyncIsolatedLast = it.asyncUnits.length as u64;
+    }
     it.asyncSpawns.push(
         InterpSpawn {
             function: function,
@@ -2671,6 +2739,7 @@ fn asyncSetSpawn(
             release: allocator,
             releaseBlock: releaseBlock,
             releaseSize: releaseSize,
+            unit: unit,
         },
     )!;
     return Ok(valueOf(0, 4));
@@ -2792,6 +2861,279 @@ struct InterpSpawn {
     release: u32;         // Async.scopeIn's user allocator, or none
     releaseBlock: u64;
     releaseSize: u64;
+    unit: u32; // an isolated child's own unit (ADR 0175); none: its maker's
+}
+
+/// An isolation unit (ADR 0175, type-system.md §40.10): an isolated child of a task set and every task made under
+/// it. When one of its tasks panics, outside a critical section, none of them runs again and its set is told.
+struct InterpUnit {
+    outer: u32; // the unit its root was made in, or none
+    root: u32;  // its root's task index
+    scope: u32; // the set its root is a child of
+    dead: bool;
+    missed: bool;   // its crash did not fit in the watcher's channel
+    ended: bool;    // its root returned
+    critical: u32;  // Critical guards its tasks hold
+    crashedAt: u64; // the Result<void, E> its set is given, in a block of its own
+    crashedSize: usize;
+    lockKinds: Vector<u32>; // the locks its tasks hold: 1 a Mutex, 2 an AsyncMutex's token channel
+    locks: Vector<u64>;
+    flags: Vector<u64>; // each one's poison mark
+}
+
+/// The unit of task `task`, or none.
+fn unitOfTask(it: borrow Interp, task: u32) -> u32 {
+    if (task == none() || (task as usize) >= it.asyncUnitOf.length) {
+        return none();
+    }
+    return it.asyncUnitOf[task as usize];
+}
+
+/// Whether `unit`, or a unit it is inside, has trapped.
+fn unitDead(it: borrow Interp, unit: u32) -> bool {
+    var u = unit;
+    while (u != none()) {
+        if (it.asyncUnits[u as usize].dead) {
+            return true;
+        }
+        u = it.asyncUnits[u as usize].outer;
+    }
+    return false;
+}
+
+/// The runtime's kind of a panic (CEE_PANIC_*), from its reason: what TaskCrash.kind reads.
+fn panicCode(message: Slice<u8>) -> u32 {
+    if (sameText(message, "integer overflow")) {
+        return 1;
+    }
+    if (sameText(message, "division by zero")) {
+        return 2;
+    }
+    if (sameText(message, "shift amount out of range")) {
+        return 3;
+    }
+    if (sameText(message, "entered unreachable code")) {
+        return 4;
+    }
+    if (sameText(message, "index out of bounds")) {
+        return 5;
+    }
+    if (sameText(message, "slice range out of bounds")) {
+        return 6;
+    }
+    if (sameText(message, "unwrapped an Err value")) {
+        return 7;
+    }
+    if (sameText(message, "unwrapped null")) {
+        return 9;
+    }
+    if (sameText(message, "string slice not on a character boundary")) {
+        return 10;
+    }
+    if (sameText(message, "slice lengths differ")) {
+        return 12;
+    }
+    if (sameText(message, "float out of range")) {
+        return 13;
+    }
+    if (message.length > 14 && sameText(message[0..14], "this lock was ")) {
+        return 18;
+    }
+    return 16; // panic(message), or a failed assert
+}
+
+/// Takes `lock` off the list of `unit` and of the units it is inside.
+fn unitForgetLock(it: borrow mut Interp, unit: u32, lock: u64) {
+    var u = unit;
+    while (u != none()) {
+        var k = it.asyncUnits[u as usize].locks.length;
+        var found = false;
+        while (k > 0 && !found) {
+            k -= 1;
+            if (it.asyncUnits[u as usize].locks[k] == lock) {
+                let last = it.asyncUnits[u as usize].locks.length - 1;
+                it.asyncUnits[u as usize].locks[k] = it.asyncUnits[u as usize].locks[last];
+                it.asyncUnits[u as usize].lockKinds[k] = it.asyncUnits[u as usize].lockKinds[last];
+                it.asyncUnits[u as usize].flags[k] = it.asyncUnits[u as usize].flags[last];
+                it.asyncUnits[u as usize].locks.truncate(last);
+                it.asyncUnits[u as usize].lockKinds.truncate(last);
+                it.asyncUnits[u as usize].flags.truncate(last);
+                found = true;
+            }
+        }
+        u = it.asyncUnits[u as usize].outer;
+    }
+}
+
+/// Puts one value of `bits` (`size` bytes, the rest of the slot zero) in channel `handle` if it has room.
+fn channelPut(it: borrow mut Interp, handle: u64, bits: u64, size: usize) -> Result<bool, Stop> {
+    let k = (handle - 1) as usize;
+    let count = it.runtime.channels[k].count;
+    let capacity = it.runtime.channels[k].capacity;
+    if (count >= capacity || it.runtime.channels[k].closed) {
+        return Ok(false);
+    }
+    let head = it.runtime.channels[k].head;
+    let slot = it.runtime.channels[k].data + ((head + count) % capacity) * it.runtime.channels[k].stride;
+    it.memory.storeBits(slot, bits, size)?;
+    it.runtime.channels[k].count += 1;
+    channelChanged(it, k);
+    return Ok(true);
+}
+
+/// `unit` trapped (ADR 0175 §2.2): dead from now, its locks poisoned and released, its set told. What it held
+/// stays.
+fn unitCrashed(it: borrow mut Interp, unit: u32, code: u32) -> Result<void, Stop> {
+    let u = unit as usize;
+    it.asyncUnits[u].dead = true;
+    it.asyncCrashes += 1;
+    loop {
+        let last = it.asyncUnits[u].locks.length;
+        if (last == 0) {
+            break;
+        }
+        let lock = it.asyncUnits[u].locks[last - 1];
+        let kind = it.asyncUnits[u].lockKinds[last - 1];
+        let flag = it.asyncUnits[u].flags[last - 1];
+        unitForgetLock(it, unit, lock); // from this unit and those it is inside: released here, once
+        it.memory.storeBits(flag, 1, 4)?;
+        if (kind == 1) {
+            for (m in 0..it.runtime.mutexAddresses.length) {
+                if (it.runtime.mutexAddresses[m] == lock) {
+                    it.runtime.mutexOwners[m] = none();
+                }
+            }
+        } else {
+            let back = channelPut(it, lock, 0, 1)?; // the token: whoever waits for the lock finds it poisoned
+        }
+    }
+    let scope = it.asyncUnits[u].scope as usize;
+    if (!it.asyncScopes[scope].failed) {
+        it.asyncScopes[scope].failed = true;
+        let crashed = it.memory.load(it.asyncUnits[u].crashedAt, it.asyncUnits[u].crashedSize)?;
+        it.memory.store(it.asyncScopes[scope].errorSlot, crashed)?;
+    }
+    it.asyncScopes[scope].live -= 1;
+    let room = it.asyncScopes[scope].roomWaiter;
+    if (room != none() && it.asyncScopes[scope].live < it.asyncScopes[scope].limit) {
+        it.asyncWoken.push(room)!;
+        it.asyncScopes[scope].roomWaiter = none();
+    }
+    let done = it.asyncScopes[scope].doneWaiter;
+    if (done != none() && it.asyncScopes[scope].live == 0) {
+        it.asyncWoken.push(done)!;
+        it.asyncScopes[scope].doneWaiter = none();
+    }
+    for (w in 0..it.asyncWatchScopes.length) {
+        if (it.asyncWatchScopes[w] as usize == scope) {
+            // lib/core's TaskCrash: the task, what it leaked (the interpreter's memory is its own: 0), the kind.
+            let handle = it.asyncWatchChannels[w];
+            let k = (handle - 1) as usize;
+            let count = it.runtime.channels[k].count;
+            let capacity = it.runtime.channels[k].capacity;
+            if (count < capacity && !it.runtime.channels[k].closed) {
+                let head = it.runtime.channels[k].head;
+                let slot = it.runtime.channels[k].data + ((head + count) % capacity) * it.runtime.channels[k].stride;
+                it.memory.storeBits(slot, unit as u64 + 1, 8)?;
+                it.memory.storeBits(slot + 8, 0, 8)?;
+                it.memory.storeBits(slot + 16, code as u64, 8)?;
+                it.runtime.channels[k].count += 1;
+                channelChanged(it, k);
+            } else {
+                it.asyncUnits[u].missed = true;
+            }
+        }
+    }
+    return Ok();
+}
+
+/// The runtime's ceesafe_async_* for isolated tasks, and ceesafe_panic_poisoned (ADR 0175).
+fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_async_isolate_next")) {
+        // The crashed value is copied, for the start that follows with no await between.
+        let size = truncate<usize>(arguments[2].bits(0, 8)?);
+        var at: u64 = 0;
+        if (size != 0) {
+            at = it.memory.allocate(allocationHeap(), size, true, "an isolated child's crash value".bytes())?;
+            let bytes = it.memory.load(arguments[1].bits(0, 8)?, size)?;
+            it.memory.store(at, bytes)?;
+        }
+        it.asyncIsolatePending = true;
+        it.asyncIsolateAt = at;
+        it.asyncIsolateSize = size;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_isolated_last")) {
+        return Ok(valueOf(it.asyncIsolatedLast, 8));
+    }
+    if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
+        let missed = sameText(name, "ceesafe_async_set_missed");
+        let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
+        var count: u64 = 0;
+        for (u in 0..it.asyncUnits.length) {
+            if (it.asyncUnits[u].scope == scope && it.asyncUnits[u].dead && (!missed || it.asyncUnits[u].missed)) {
+                count += 1;
+            }
+        }
+        return Ok(valueOf(count, 8));
+    }
+    if (sameText(name, "ceesafe_async_set_watch")) {
+        let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
+        let handle = arguments[1].bits(0, 8)?;
+        it.runtime.channels[(handle - 1) as usize].refs += 1;
+        it.asyncWatchScopes.push(scope)!;
+        it.asyncWatchChannels.push(handle)!;
+        return Ok(valueOf(1, 1));
+    }
+    if (sameText(name, "ceesafe_async_set_end")) {
+        let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
+        for (w in 0..it.asyncWatchScopes.length) {
+            if (it.asyncWatchScopes[w] == scope && it.asyncWatchChannels[w] != 0) {
+                it.runtime.channels[(it.asyncWatchChannels[w] - 1) as usize].refs -= 1;
+                it.asyncWatchScopes[w] = none();
+                it.asyncWatchChannels[w] = 0;
+            }
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_critical_enter")) {
+        let unit = unitOfTask(it, it.asyncCurrent);
+        if (unit == none()) {
+            return Ok(valueOf(0, 8));
+        }
+        it.asyncUnits[unit as usize].critical += 1;
+        return Ok(valueOf(unit as u64 + 1, 8));
+    }
+    if (sameText(name, "ceesafe_async_critical_leave")) {
+        let unit = arguments[0].bits(0, 8)?;
+        if (unit != 0 && it.asyncUnits[(unit - 1) as usize].critical != 0) {
+            it.asyncUnits[(unit - 1) as usize].critical -= 1;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_lock_held")) {
+        var unit = unitOfTask(it, it.asyncCurrent);
+        while (unit != none()) {
+            it.asyncUnits[unit as usize].lockKinds.push(truncate<u32>(arguments[0].bits(0, 4)?))!;
+            it.asyncUnits[unit as usize].locks.push(arguments[1].bits(0, 8)?)!;
+            it.asyncUnits[unit as usize].flags.push(arguments[2].bits(0, 8)?)!;
+            unit = it.asyncUnits[unit as usize].outer;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_lock_released")) {
+        unitForgetLock(it, unitOfTask(it, it.asyncCurrent), arguments[0].bits(0, 8)?);
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_isolation_report")) {
+        let out = arguments[0].bits(0, 8)?;
+        it.memory.storeBits(out, it.asyncCrashes, 8)?;
+        it.memory.storeBits(out + 8, 0, 8)?; // what the interpreter leaks is its own
+        return Ok(null);
+    }
+    // ceesafe_panic_poisoned
+    let location = here(it);
+    return Err(panicAt("this lock was held by an isolated task that trapped: its data may be broken", location));
 }
 
 /// A scope of a task: (task, site) while it has children or has not ended.
@@ -2972,6 +3314,7 @@ fn asyncSpawn(
             release: release,
             releaseBlock: releaseBlock,
             releaseSize: releaseSize,
+            unit: none(),
         },
     )!;
     return Ok(null);
@@ -3078,6 +3421,11 @@ fn runTasks(
     )!;
     ready.push(0)!;
     it.asyncTasks.push(InterpTaskInfo { scope: none(), shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF })!;
+    while (it.asyncUnitOf.length < savedTasks) {
+        it.asyncUnitOf.push(none())!; // tasks made before any unit was
+    }
+    // A run started by a task of a unit (in a function it calls) is that unit's too.
+    it.asyncUnitOf.push(unitOfTask(it, savedCurrent))!;
     loop {
         if (it.asyncSetCancelled) {
             // A task set was cancelled (ADR 0053): every waiting task runs again to see it, as for a scope's.
@@ -3204,6 +3552,7 @@ fn runTasks(
                 endTasks(it, mut stacks);
                 it.asyncCurrent = savedCurrent;
                 it.asyncTasks.truncate(savedTasks);
+                it.asyncUnitOf.truncate(savedTasks);
                 return Err(fault("every task is parked with nothing to wake it"));
             }
             if (earliest > it.asyncClock) {
@@ -3222,6 +3571,9 @@ fn runTasks(
         }
         let k = ready[head];
         head += 1;
+        if (unitDead(it, unitOfTask(it, first + k))) {
+            continue; // a task of a unit that trapped never runs again, whatever woke it (ADR 0175 §2.2)
+        }
         // A task that runs waits for nothing. One woken by a cancellation while it waited on a socket would keep the
         // descriptor otherwise, and the poll above would ask about it (closed by then, perhaps) while the task
         // waits for something else.
@@ -3268,6 +3620,13 @@ fn runTasks(
             it.asyncTasks.push(
                 InterpTaskInfo { scope: spawn.scope, shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF },
             )!;
+            // Its unit (ADR 0175): its own if it is an isolated child, else the task's that spawned it.
+            if (spawn.unit != none()) {
+                it.asyncUnits[spawn.unit as usize].root = truncate<u32>(it.asyncTasks.length - 1);
+                it.asyncUnitOf.push(spawn.unit)!;
+            } else {
+                it.asyncUnitOf.push(unitOfTask(it, first + k))!;
+            }
             tasks.push(
                 InterpTask {
                     scope: spawn.scope,
@@ -3291,11 +3650,21 @@ fn runTasks(
                 if (k == 0) {
                     it.asyncCurrent = savedCurrent;
                     it.asyncTasks.truncate(savedTasks);
+                    it.asyncUnitOf.truncate(savedTasks);
                     return Ok(value); // the root's scopes have ended, so every child has returned
                 }
                 let scope = tasks[k as usize].scope;
                 let environment = tasks[k as usize].environment;
                 let environmentDrop = tasks[k as usize].environmentDrop;
+                let finished = unitOfTask(it, first + k);
+                if (finished != none() && it.asyncUnits[finished as usize].root == first + k &&
+                    !it.asyncUnits[finished as usize].ended) {
+                    // An isolated child that returned: its crash value is not needed (ADR 0175).
+                    it.asyncUnits[finished as usize].ended = true;
+                    if (it.asyncUnits[finished as usize].crashedAt != 0) {
+                        it.memory.end(it.asyncUnits[finished as usize].crashedAt);
+                    }
+                }
                 if (tasks[k as usize].release != none()) {
                     let allocator = tasks[k as usize].release;
                     let block = tasks[k as usize].releaseBlock;
@@ -3396,6 +3765,20 @@ fn runTasks(
                 }
             }
             Err(stop) => {
+                let crashing = unitOfTask(it, first + k);
+                if (stop.kind == 1 && crashing != none() && it.asyncUnits[crashing as usize].critical == 0) {
+                    // An isolated task's panic (ADR 0175): its unit ends, and the program goes on.
+                    var m = copyBytes("ceesafe panic: ".bytes())!;
+                    appendBytes(mut m, stop.message.view())!;
+                    appendText(mut m, " at ")!;
+                    appendBytes(mut m, stop.location.view())!;
+                    appendText(mut m, " (isolated task ")!;
+                    appendDecimal(mut m, crashing as u64 + 1)!;
+                    appendText(mut m, ": ended alone)\n")!;
+                    writeError(it, m.view());
+                    unitCrashed(it, crashing, panicCode(stop.message.view()))?;
+                    continue;
+                }
                 if (stop.kind != 3) {
                     var located = stop;
                     if (located.kind == 0 && !located.hasLocation) {
@@ -3405,6 +3788,7 @@ fn runTasks(
                     endTasks(it, mut stacks);
                     it.asyncCurrent = savedCurrent;
                     it.asyncTasks.truncate(savedTasks);
+                    it.asyncUnitOf.truncate(savedTasks);
                     return Err(located);
                 }
                 if (it.asyncRetry) {
@@ -3427,6 +3811,7 @@ fn runTasks(
                     endTasks(it, mut stacks);
                     it.asyncCurrent = savedCurrent;
                     it.asyncTasks.truncate(savedTasks);
+                    it.asyncUnitOf.truncate(savedTasks);
                     return Err(fault("a task parked with nothing to wake it"));
                 }
             }
@@ -3484,6 +3869,7 @@ fn asyncJoin(
                     release: none(),
                     releaseBlock: 0,
                     releaseSize: 0,
+                    unit: none(),
                 },
             )!;
         }

@@ -588,6 +588,7 @@ fn checkSetSpawn(
     arguments: Range,
     trying: bool,
     send: bool,
+    isolated: bool,
     targetSpan: Span,
     span: Span,
 ) -> Result<u32, AllocError> {
@@ -596,6 +597,13 @@ fn checkSetSpawn(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    if (isolated && c.freestanding) {
+        hostedOnly(c, span, "'spawnIsolated' (a trap ends a freestanding program)".bytes())?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    // `set.spawnIsolated(crashed, child)` (ADR 0175): the child is the second argument.
+    let childAt: u32 = if (isolated) 1 else 0;
     let awaited = c.taskStart == span.start && c.taskEnd == span.end;
     if (awaited && !trying) {
         c.taskStart = none();
@@ -608,7 +616,10 @@ fn checkSetSpawn(
         )?;
         c.error(taskNotAwaited(), span.start, span.end, message)?;
     }
-    let literal = if (arguments.count == 1) match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
+    let literal = if (arguments.count == childAt + 1) match (c.front.ast.exprs[c.front.ast.at(
+        arguments,
+        childAt,
+    ) as usize]) {
         ExprNode.Closure(closure) => if (c.front.ast.closures[closure as usize].isAsync &&
             c.front.ast.closures[closure as usize].isMove &&
             c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
@@ -618,13 +629,15 @@ fn checkSetSpawn(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "a task set's child is an async move closure literal with no parameters: 'set.spawn(async move () => …)' (ADR 0053 §3.2)",
+            if (isolated) "an isolated child is the error it stands for if it traps, then an async move closure literal with no parameters: 'set.spawnIsolated(crashed, async move () => …)' (ADR 0175 §2.1)"
+                else "a task set's child is an async move closure literal with no parameters: 'set.spawn(async move () => …)' (ADR 0053 §3.2)",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
-        let isClosure = arguments.count == 1 && match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
-            ExprNode.Closure(_) => true,
-            _ => false,
-        };
+        let isClosure = arguments.count == childAt + 1 &&
+            match (c.front.ast.exprs[c.front.ast.at(arguments, childAt) as usize]) {
+                ExprNode.Closure(_) => true,
+                _ => false,
+            };
         if (!isClosure) {
             checkArgumentsLoosely(c, arguments)?; // a closure literal refused here is not checked again
         }
@@ -636,7 +649,15 @@ fn checkSetSpawn(
     let resultType = resultOf(c, voidType, errorType)?;
     let none0 = Vector<u32>.create();
     let into = c.types.dynFunctionOf(none0.view(), resultType, maskEffects(), true, false)?;
-    let argument = c.front.ast.at(arguments, 0);
+    // What the set is given for a child that traps: an `E`.
+    var crashed = none();
+    if (isolated) {
+        crashed = checkArgument(c, c.front.ast.at(arguments, 0), errorType)?;
+        if (c.isBottom(crashed)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    let argument = c.front.ast.at(arguments, childAt);
     let argumentSpan = c.front.ast.exprSpans[argument as usize];
     let savedCopy = c.copyCaptures;
     c.copyCaptures = true;
@@ -667,8 +688,9 @@ fn checkSetSpawn(
             )?;
             c.error(setCapturesLoan(), argumentSpan.start, argumentSpan.end, message)?;
             ok = false;
-        } else if (send && !c.types.isSendType(t)?) {
+        } else if ((send || isolated) && !c.types.isSendType(t)?) {
             // `set.spawnSend`: the child may run on another worker (ADR 0038's rule, ADR 0053 §3.2).
+            // `set.spawnIsolated`: what it shares with its parent must be safe to leave half way (ADR 0175 §2.1).
             var message = Vector<u8>.create();
             appendText(mut message, "this child captures ")?;
             appendQuotedName(mut message, c, local.name)?;
@@ -676,7 +698,8 @@ fn checkSetSpawn(
             appendQuotedType(mut message, c, t)?;
             appendText(
                 mut message,
-                ", which is not Send, but a 'spawnSend' child may run on another worker (type-system.md §38.1, ADR 0038)",
+                if (isolated) ", which is not Send, but an isolated child may trap and leave what it shares as it is (type-system.md §40.10, ADR 0175)"
+                    else ", which is not Send, but a 'spawnSend' child may run on another worker (type-system.md §38.1, ADR 0038)",
             )?;
             c.error(notSend(), argumentSpan.start, argumentSpan.end, message)?;
             ok = false;
@@ -697,7 +720,7 @@ fn checkSetSpawn(
     setTypeArguments.push(errorType)?;
     let recordName = c.intern("recordOf")?;
     let roomName = c.intern(if (trying) "tryRoom" else "room")?;
-    let resultName = c.intern(if (trying) "started" else "spawned")?;
+    let resultName = c.intern(if (trying) "started" else if (isolated) "spawnedIsolated" else "spawned")?;
     let recordOf = libraryFunction(c, "TaskSet", setTypeArguments.view(), recordName, span)?;
     let room = libraryFunction(c, "TaskSet", setTypeArguments.view(), roomName, span)?;
     let finish = libraryFunction(c, "TaskSet", setTypeArguments.view(), resultName, span)?;
@@ -721,6 +744,25 @@ fn checkSetSpawn(
     var admitted = c.expr(HirExpr.Call(room, c.hir.list(roomArguments.view())?), u32Type, span.start, span.end)?;
     if (!trying) {
         admitted = c.expr(HirExpr.Await(admitted), u32Type, span.start, span.end)?;
+    }
+    if (isolated) {
+        // `TaskSet.isolating(set, crashed, admitted)`: between the wait for room and the start, with no await.
+        let isolatingName = c.intern("isolating")?;
+        let isolating = libraryFunction(c, "TaskSet", setTypeArguments.view(), isolatingName, span)?;
+        if (isolating == none()) {
+            return c.errorResult(span.start, span.end);
+        }
+        let marked = setArgument(c, target, setType, targetSpan)?;
+        var isolatingArguments = Vector<u32>.create();
+        isolatingArguments.push(marked)?;
+        isolatingArguments.push(crashed)?;
+        isolatingArguments.push(admitted)?;
+        admitted = c.expr(
+            HirExpr.Call(isolating, c.hir.list(isolatingArguments.view())?),
+            u32Type,
+            span.start,
+            span.end,
+        )?;
     }
     let code = c.expr(HirExpr.SetSpawn(record, admitted, closure), u32Type, span.start, span.end)?;
     if (send) {

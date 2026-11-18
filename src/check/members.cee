@@ -599,10 +599,12 @@ fn checkMethodCall(
     )) c.types.info(currentType).pointee else currentType;
     if (isTaskSet(c, structType) &&
         (sameText(c.name(memberIdent.symbol), "spawn") || sameText(c.name(memberIdent.symbol), "trySpawn") ||
-            sameText(c.name(memberIdent.symbol), "spawnSend"))) {
+            sameText(c.name(memberIdent.symbol), "spawnSend") ||
+            sameText(c.name(memberIdent.symbol), "spawnIsolated"))) {
         let trying = sameText(c.name(memberIdent.symbol), "trySpawn");
         let send = sameText(c.name(memberIdent.symbol), "spawnSend");
-        return checkSetSpawn(c, target, structType, arguments, trying, send, targetSpan, span); // ADR 0053
+        let isolated = sameText(c.name(memberIdent.symbol), "spawnIsolated");                             // ADR 0175
+        return checkSetSpawn(c, target, structType, arguments, trying, send, isolated, targetSpan, span); // ADR 0053
     }
     // Own methods, impl methods, or a type parameter's bound methods (§21).
     let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };

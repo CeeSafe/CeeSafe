@@ -33,6 +33,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_FRAME_STACK: return "async frame stack: out of memory";
     case CEE_PANIC_EXPLICIT: return "explicit panic";
     case CEE_PANIC_ALLOCATOR: return "the host's allocator broke its contract";
+    case CEE_PANIC_POISONED: return "this lock was held by an isolated task that trapped: its data may be broken";
     default: return "unknown panic";
     }
 }
@@ -265,6 +266,8 @@ static _Thread_local uint8_t thread_panic_text[CEE_PANIC_KEPT];
 
 /* Message format (relied on by run-fail tests): "ceesafe panic: <reason or message> at <file>:<line>:<column>\n"; a
    runtime abort, which has no CeeSafe location, ends after its message. */
+static void write_err_u64(uint64_t value);
+
 static void write_panic_line(const ceesafe_panic_info *info) {
     write_err_cstr("ceesafe panic: ");
     if (info->message != NULL) {
@@ -280,12 +283,42 @@ static void write_panic_line(const ceesafe_panic_info *info) {
         write_err_cstr(":");
         write_err_u32(info->column);
     }
+    if (info->isolated_task != 0u) {
+        write_err_cstr(" (isolated task ");
+        write_err_u64(info->isolated_task);
+        write_err_cstr(": ended alone)");
+    }
     write_err_cstr("\n");
+}
+
+/* ---- Isolated tasks (ADR 0175): what the panic path and the generated entries from C need of them ----
+ * ceesafe_units_live counts the isolation units that exist (ceesafe_atomic_*); while it is 0, an entry from C costs
+ * what it cost. ceesafe_entry_counted keeps, for this thread, how many entries from C are on its stack (never below
+ * 0: an entry made before any unit existed is not counted, and is outside every executor that runs a unit's task).
+ * ceesafe_panic_isolate is the executor's: given a panic, it returns if the panic is not one an isolated task ends
+ * alone for, and otherwise does not return. ceesafe_panic_notify is what it uses to report such a panic: the hook,
+ * and the line. */
+uint32_t ceesafe_units_live;
+static _Thread_local int32_t cee_entry_depth;
+void (*ceesafe_panic_isolate)(const ceesafe_panic_info *info);
+
+void ceesafe_entry_counted(int32_t by) {
+    int32_t depth = cee_entry_depth + by;
+    cee_entry_depth = depth < 0 ? 0 : depth;
+}
+
+int32_t ceesafe_entry_depth(void) { return cee_entry_depth; }
+
+void ceesafe_panic_notify(const ceesafe_panic_info *info) {
+    if ((rt_initializing != 0u || ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTED) && rt_panic_hook != NULL) {
+        rt_panic_hook(rt_panic_context, info);
+    }
+    write_panic_line(info);
 }
 
 /* The one path every hosted panic takes: the hook on the thread's first panic, if ceesafe_init installed one; then,
    if the hook returns, or on a panic inside it, the printed line and the abort. */
-static _Noreturn void panic_report(const ceesafe_panic_info *info) {
+static _Noreturn void panic_end(const ceesafe_panic_info *info) {
     if (ceesafe_thread_panicked == 0u) {
 #if defined(_MSC_VER) && !defined(__clang__)
         *(volatile uint32_t *)&ceesafe_any_panicked = 1u;
@@ -310,8 +343,23 @@ static _Noreturn void panic_report(const ceesafe_panic_info *info) {
     ceesafe_platform_abort();
 }
 
+/* A panic of the program's: an isolated task's ends that task (ADR 0175), any other ends the process. */
+static _Noreturn void panic_report(const ceesafe_panic_info *info) {
+    if (ceesafe_panic_isolate != NULL && ceesafe_thread_panicked == 0u && info->kind != (uint32_t)CEE_PANIC_ASYNC &&
+        info->kind != (uint32_t)CEE_PANIC_ALLOCATOR) {
+        ceesafe_panic_isolate(info); /* returns if this one is not an isolated task's */
+    }
+    panic_end(info);
+}
+
 _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
-    ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), NULL, 0u, loc.file, loc.line, loc.column};
+    ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), NULL, 0u, loc.file, loc.line, loc.column, 0u};
+    panic_report(&info);
+}
+
+_Noreturn void ceesafe_panic_poisoned(void) {
+    ceesafe_panic_info info = {(uint32_t)CEE_PANIC_POISONED, ceesafe_panic_reason(CEE_PANIC_POISONED), NULL, 0u, NULL, 0u,
+                               0u, 0u};
     panic_report(&info);
 }
 
@@ -320,7 +368,7 @@ _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
     static const uint8_t empty = 0u;
     ceesafe_panic_info info = {(uint32_t)CEE_PANIC_EXPLICIT, ceesafe_panic_reason(CEE_PANIC_EXPLICIT),
                                message.ptr != NULL ? message.ptr : &empty, (size_t)message.len, loc.file, loc.line,
-                               loc.column};
+                               loc.column, 0u};
     panic_report(&info);
 }
 
@@ -330,8 +378,8 @@ _Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *message) {
         length++;
     }
     ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), (const uint8_t *)message, length, NULL, 0u,
-                               0u};
-    panic_report(&info);
+                               0u, 0u};
+    panic_end(&info); /* the runtime's own: never an isolated task's (ADR 0175 §2.3) */
 }
 
 /* An export or @callback entered on a thread that has panicked: that panic's line (its message as kept), and the
@@ -608,6 +656,19 @@ void *ceesafe_budget_enter(uint64_t limit) {
     }
     cee_budget_now = b;
     return b;
+}
+
+/* A budget of `limit` bytes inside the current one, not made current: an isolated task's own (ADR 0175), which the
+   executor makes the task's. NULL as ceesafe_budget_enter. ceesafe_budget_held_of is what such a record holds. */
+void *ceesafe_budget_make(uint64_t limit) {
+    cee_budget *outer = cee_budget_now;
+    void *made = ceesafe_budget_enter(limit);
+    cee_budget_now = outer;
+    return made;
+}
+
+uint64_t ceesafe_budget_held_of(void *budget) {
+    return budget == NULL ? 0u : ceesafe_atomic_load_u64(&((cee_budget *)budget)->held);
 }
 
 void ceesafe_budget_leave(void *budget) {

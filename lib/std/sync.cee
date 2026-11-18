@@ -12,6 +12,12 @@ extern "C" {
     @effects()
     fn ceesafe_mutex_unlock(m: *mut void);
     @effects()
+    fn ceesafe_async_lock_held(kind: u32, lock: *mut void, flag: *mut u32);
+    @effects()
+    fn ceesafe_async_lock_released(lock: *mut void);
+    @effects()
+    fn ceesafe_panic_poisoned();
+    @effects()
     fn ceesafe_mutex_destroy(m: *mut void);
     @effects(sleep)
     fn ceesafe_mutex_once_lock();
@@ -25,6 +31,8 @@ extern "C" {
 public struct Mutex<T: Send> {
     private raw: *mut void;
     private data: RawCell<T>; // changed through the guard while the mutex is shared (type-system.md §41.1)
+    /// 1 once an isolated task that held the lock trapped (ADR 0175 §2.6), until `heal`.
+    private poisoned: AtomicU32;
 
     /// A mutex holding `data`; its platform lock is allocated.
     /// Safety: a null lock is reported, never stored.
@@ -33,14 +41,49 @@ public struct Mutex<T: Send> {
         if (raw.isNull()) {
             return Err(AllocError.OutOfMemory);
         }
-        return Ok(Mutex { raw: raw, data: RawCell<T>.create(data) });
+        return Ok(Mutex { raw: raw, data: RawCell<T>.create(data), poisoned: AtomicU32.create(0) });
     }
 
-    /// Waits for the lock; the guard lends the data until it is dropped.
+    /// Waits for the lock; the guard lends the data until it is dropped. It panics (`PanicKind.Poisoned`) if an
+    /// isolated task that held the lock trapped (ADR 0175 §2.6): the data may break its invariant. `recover` is for
+    /// code that can repair it.
     /// Safety: `raw` is the lock made in create, destroyed only in drop, when no guard can be live (B-rules).
     public fn lock(borrow this) -> MutexGuard<T> {
         unsafe { ceesafe_mutex_lock(this.raw); }
+        if (this.poisoned.load() != 0) {
+            unsafe {
+                ceesafe_mutex_unlock(this.raw);
+                ceesafe_panic_poisoned();
+            }
+        }
+        this.held();
         return MutexGuard { lock: this };
+    }
+
+    /// `lock`, whether or not the mutex is poisoned: `guard.poisoned()` says which, and `guard.heal()` clears the
+    /// mark once the data is whole again.
+    /// Safety: as `lock`.
+    public fn recover(borrow this) -> MutexGuard<T> {
+        unsafe { ceesafe_mutex_lock(this.raw); }
+        this.held();
+        return MutexGuard { lock: this };
+    }
+
+    /// `tryLock`, whether or not the mutex is poisoned: for async code, which cannot wait for a lock.
+    /// Safety: as `tryLock`.
+    public fn tryRecover(borrow this) -> MutexGuard<T>? {
+        if (!unsafe { ceesafe_mutex_try_lock(this.raw) }) {
+            return null;
+        }
+        this.held();
+        return Some(MutexGuard { lock: this });
+    }
+
+    /// Tells the runtime that the running task holds the lock: if it is an isolated task that traps, the lock is
+    /// poisoned and released.
+    /// Safety: the flag is this mutex's, which outlives the guard that holds the lock.
+    fn held(borrow this) {
+        unsafe { ceesafe_async_lock_held(1, this.raw, borrow this.poisoned as *AtomicU32 as *mut u32); }
     }
 
     /// The guard if no thread holds the lock, else null, at once: it never waits (ADR 0112). The thread that holds
@@ -50,6 +93,13 @@ public struct Mutex<T: Send> {
         if (!unsafe { ceesafe_mutex_try_lock(this.raw) }) {
             return null;
         }
+        if (this.poisoned.load() != 0) {
+            unsafe {
+                ceesafe_mutex_unlock(this.raw);
+                ceesafe_panic_poisoned();
+            }
+        }
+        this.held();
         return Some(MutexGuard { lock: this });
     }
 
@@ -67,9 +117,20 @@ public struct MutexGuard<region r, T: Send> {
     /// guard's drop (a RawCell's contents may change while the mutex is shared, §41.1).
     public fn data(borrow mut this) -> borrow mut T => unsafe { Ptr.toBorrowMut(this.lock.data.pointer()) };
 
+    /// Whether an isolated task that held the lock trapped, and nothing has healed it since (ADR 0175 §2.6).
+    public fn poisoned(borrow this) -> bool => this.lock.poisoned.load() != 0;
+
+    /// Clears the mark: the data is whole again.
+    public fn heal(borrow this) {
+        this.lock.poisoned.store(0);
+    }
+
     /// Safety: the guard took the lock in Mutex.lock and releases it once.
     drop {
-        unsafe { ceesafe_mutex_unlock(this.lock.raw); }
+        unsafe {
+            ceesafe_async_lock_released(this.lock.raw);
+            ceesafe_mutex_unlock(this.lock.raw);
+        }
     }
 }
 
@@ -154,6 +215,9 @@ public struct OnceLock<T: Send + Share> {
                 panic("cell initialised recursively");
             }
             if (state == 0) {
+                // The process's once-lock is held, and the cell is half made: a trap in `init` in an isolated
+                // task ends the process, as it always did (ADR 0175 §2.6).
+                let critical = Critical.enter();
                 this.state.store(1);
                 let value = init();
                 unsafe { this.raw.pointer().write(value); }
@@ -179,6 +243,7 @@ public struct OnceLock<T: Send + Share> {
             panic("cell initialised recursively");
         }
         if (state == 0) {
+            let critical = Critical.enter(); // as getOrInit
             this.state.store(1);
             match (init()) {
                 Ok(value) => {

@@ -3158,6 +3158,7 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
 }
 int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) { (void)kind; (void)handle; return -(int64_t)EOPNOTSUPP; }
 void ceesafe_host_handover_release(uint32_t kind, uint64_t held) { (void)kind; (void)held; }
+int64_t ceesafe_host_handover_shutdown(uint64_t held) { (void)held; return -(int64_t)EOPNOTSUPP; }
 int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) { (void)kinds; (void)capacity; return 0; }
 int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out) {
     (void)place; (void)kind; (void)out;
@@ -3237,6 +3238,10 @@ int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) {
 void ceesafe_host_handover_release(uint32_t kind, uint64_t held) {
     if (kind == 3u) (void)CloseHandle((HANDLE)(uintptr_t)held);
     else (void)closesocket((SOCKET)(uintptr_t)held);
+}
+
+int64_t ceesafe_host_handover_shutdown(uint64_t held) {
+    return shutdown((SOCKET)(uintptr_t)held, SD_BOTH) == 0 ? 0 : -(int64_t)cee_wsa_errno(WSAGetLastError());
 }
 
 int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity) {
@@ -3572,6 +3577,12 @@ int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) {
 void ceesafe_host_handover_release(uint32_t kind, uint64_t held) {
     (void)kind;
     (void)close((int)held);
+}
+
+/* Ends the connection of a socket held for `stream.closer()` (ADR 0175 §2.7), for both directions and for every
+   holder of the socket: 0, or a negated errno. */
+int64_t ceesafe_host_handover_shutdown(uint64_t held) {
+    return shutdown((int)held, SHUT_RDWR) == 0 ? 0 : -(int64_t)errno;
 }
 
 /* How many places this process was handed, with their kinds in `kinds` (0: taken). */

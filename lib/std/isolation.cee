@@ -1,0 +1,34 @@
+// Isolated tasks (ADR 0175; type-system.md §40.10): the process's count of them, and a set's watcher.
+
+extern "C" {
+    @effects()
+    fn ceesafe_async_isolation_report(out: *mut u64);
+    @effects()
+    fn ceesafe_async_set_watch(set: *mut void, channel: *mut void) -> bool;
+}
+
+/// What the isolated tasks that trapped in this process have cost it (`Isolation.report()`).
+public struct IsolationReport {
+    /// How many have trapped and ended alone.
+    public crashes: u64;
+    /// What they held, in bytes, none of which is ever freed. A program that goes on for long decides from this
+    /// when to stop and be started again.
+    public leakedBytes: u64;
+}
+
+public struct Isolation {
+    /// The process's totals.
+    /// Safety: the runtime writes the two words of `out`.
+    public fn report() -> IsolationReport {
+        var out = [0u64; 2];
+        unsafe { ceesafe_async_isolation_report(borrow mut out[0] as *mut u64); }
+        return IsolationReport { crashes: out[0], leakedBytes: out[1] };
+    }
+
+    /// Has each crash of `set`'s isolated children put in `crashes` from now, without waiting: one that does not
+    /// fit is counted (`set.missedCrashes()`). The set keeps a handle of the channel until it ends. False if there
+    /// is no memory for it.
+    /// Safety: the runtime takes a count of the channel, which it gives back when the set ends.
+    public fn watch<E: Copy>(set: borrow TaskSet<E>, crashes: borrow Channel<TaskCrash>) -> bool =>
+        unsafe { ceesafe_async_set_watch(set.recordOf(), crashes.handle()) };
+}

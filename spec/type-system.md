@@ -677,7 +677,8 @@ The analysis runs on NIR move paths (`intermediate-representation.md`):
 - **Moved values are not destroyed.** A value that has been moved on *some* paths gets a runtime
   **drop flag**. A partially moved struct destroys only the fields it still has.
 - **`Process.exit` and panics do not run destructors or deferred statements** (panic = abort,
-  OD-5).
+  OD-5). A panic in an isolated task (§40.10, ADR 0175) ends that task's unit and not the process; it runs no
+  destructor either, and what the unit held stays.
 
 ### 14.6 `using`
 `using x = e;` declares a local that cannot be moved out of (N0253) and is destroyed at the end
@@ -5650,6 +5651,11 @@ fn main() {
   - `m.lock()` waits for the lock and returns a `MutexGuard<T>`, scoped to `m` like C7's guards. Its `data()` lends
     `borrow mut T`, and its drop unlocks. The data is held in a `RawCell<T>` (§41.1), since the guard changes it while
     the mutex is shared. `T: Send` already refuses every loan-holding `T`, so N0351 cannot arise there.
+  - **Poisoning** (ADR 0175 §2.6). A mutex that an isolated task held when it trapped (§40.10) is poisoned:
+    `lock()` and `tryLock()` on it panic (`PanicKind.Poisoned`), since the data may break its invariant.
+    `m.recover()` and `m.tryRecover()` take the lock whether or not it is poisoned; the guard's `poisoned()` says
+    which, and its `heal()` clears the mark. `AsyncMutex` has the same (`lock`, `recover`, `poisoned`, `heal`).
+    `OnceLock`'s initialiser runs in a critical section: a panic in it ends the process.
   - `m.tryLock()` (ADR 0112) is `MutexGuard<T>?`: the guard if no thread holds the lock, else null, at once. It
     never waits, so it has no effect and async code may call it. The thread that holds the lock gets null too: the
     lock is not recursive.
@@ -6283,6 +6289,44 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
 - **Where.** Hosted only. `Budget.enter` is `Err(AllocError.OutOfMemory)` where a block's size cannot be told:
   under a host's allocator hook (§42), on CosmoOS. Under `ceesafec run --interp` a budget is entered and left and
   holds nothing back: `held()` and `limit()` are `null` there.
+
+### 40.10 Isolated tasks (ADR 0175)
+- **`await set.spawnIsolated(crashed, async move () => …)`** is `set.spawn` (§40.5) for a child that is the root
+  of an **isolation unit**. `crashed` is an `E`. The result is `Result<u64, E>`: a number that names the child,
+  or `Err(oom)` as `spawn`'s. The number is 0 if there was no memory to isolate the child, which then is an
+  ordinary one. Hosted only.
+- **The unit** is the child and every task made under it, by it or by them: what it awaits, the children of its
+  `race`, `all`, `shield` and `timeout`, of each `Async.scope` and task set opened in it. An isolated child started
+  inside a unit is a unit of its own, and ends with the outer one. A unit's tasks run on the worker that started
+  it: `spawnSend` inside one is `spawn`.
+- **A panic in a task of a unit ends the unit and nothing else**, where a panic elsewhere ends the process
+  (§14.5):
+  - no task of the unit runs again, whatever would have woken it;
+  - the set counts the child as returned with `Err(crashed)`: it cancels no sibling, and the set keeps the first;
+  - each `Mutex` and `AsyncMutex` a task of the unit holds is poisoned and released (§38.3);
+  - **nothing the unit held is freed, dropped or closed**: its frames, its blocks, its descriptors, its channel
+    handles. What can still reach them finds them as they were. The bytes are counted.
+- **It ends the process, as any panic, when** the task holds a `Critical`; when C's frames lie between the
+  executor and the panic (a `@callback` or an export that C called since the task was resumed), or the panic is on
+  another thread than the one that runs the task (`Async.blocking`'s closure); or the panic is the runtime's own.
+- **The child's captures** hold no loan (N0349) and are `Send` (N0334): what it shares with its parent is then
+  only what is safe to leave half way, or is the program's to mark.
+- **`Critical.enter()`** (lib/core) is a value: while it lives in a task of a unit, a panic in that unit ends the
+  process. It is for a change to shared state that has no lock: several atomics that must agree, words of shared
+  memory, anything through `unsafe`. Outside a unit it does nothing.
+- **What is reported.** The panic's line, with the unit: `ceesafe panic: index out of bounds at serve.cee:214:9
+  (isolated task 5731: ended alone)`; the panic hook (ADR 0088), with `isolated_task` set. `set.crashes()` is how
+  many of the set's isolated children have trapped. `Isolation.watch(set, channel)` (lib/std) has each put in a
+  `Channel<TaskCrash>` without waiting: `task`, `kind()` (a `PanicKind`) and `leakedBytes`; one that does not fit
+  is counted (`set.missedCrashes()`). `Isolation.report()` gives the process's `crashes` and `leakedBytes`.
+- **`stream.closer()`** (lib/std, `AsyncTcpStream`) is a `StreamCloser`, a second hold on the stream's socket:
+  `shutdown()` ends the connection for the peer whoever holds the stream. An owner keeps it for a connection it
+  gives to an isolated child.
+- **Cost.** A program with no isolated child runs the code it ran. While a unit exists, every allocation goes
+  through the runtime's functions (as under a budget, §40.9), each resume of a unit's task sets a jump point, and
+  each entry from C is counted.
+- **The interpreter** does the same, so a program's handling of a crash runs under `ceesafec test`. There
+  `leakedBytes` is 0, and `closer()` is `Unsupported`.
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

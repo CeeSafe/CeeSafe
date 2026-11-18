@@ -38,6 +38,16 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/isolated_check.py` (ADR 0175, in the contract suite) builds two programs. One runs natively, with the
+sanitizers and in the interpreter, with the same thirteen lines: six isolated children that each trap another way
+beside three that work; a unit with a scope's children, a race and a nested task set under it, whose root traps,
+and again with one of those tasks trapping, none of which runs again; a `Mutex` and an `AsyncMutex` held at the
+trap, poisoned, recovered and healed. The other is run a case at a time: a trap in an isolated child (the program
+goes on), and in a `Critical`, under a `@callback` that C's `qsort` calls, on `Async.blocking`'s thread and in a
+`spawn` child (each ends the process); ten thousand crashes, with what each and all of them leaked; and a
+connection handed to a child that traps, shut by its owner's `closer`. They are not corpus tests: the corpus
+counts leaks, and a trapped task leaks what it held.
+
 `tools/handover_check.py` (ADR 0173, in the contract suite) builds one program and runs it as several processes:
 three workers started with a listener and unnamed memory handed over answer 300 connections and count them
 together, after the parent has dropped its own listener, and the port is free once they have ended; a UDP socket

@@ -22,6 +22,7 @@
 #include "ceesafe/rt.h"
 
 #include <errno.h>
+#include <setjmp.h> /* an isolated task that traps leaves through the executor (ADR 0175) */
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -136,6 +137,8 @@ typedef struct cee_task {
     struct cee_task *sibling_prev;
     ceesafe_scope *owned;  /* the scopes it owns that have children or wait for them, innermost first (ADR 0062) */
     void *budget;          /* its allocation budget (ADR 0170): its maker's when it was made, then its own; hosted */
+    struct cee_unit *unit; /* the isolation unit it belongs to (ADR 0175): its maker's, or its own if it is the root
+                              of one; NULL for none; hosted */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -225,6 +228,11 @@ typedef struct {
     uint32_t woken_capacity;
     uint64_t wakes;            /* ceesafe_atomic_*: wakes since the last look at the wake list, from any thread; a wait
                                   with none skips the walk, which costs every task waiting to be woken */
+#if !defined(CEE_FREESTANDING)
+    jmp_buf *jump;             /* where a trap in the isolated task being resumed leaves to (ADR 0175); else NULL */
+    int32_t jump_depth;        /* the thread's count of entries from C when that task was resumed */
+    uint32_t crash_kind;       /* the kind of the panic that jumped */
+#endif
 } cee_executor;
 
 #if defined(CEE_FREESTANDING)
@@ -232,6 +240,24 @@ typedef struct {
 #define cee_exec (*(cee_executor *)*ceesafe_env_slot())
 #else
 static _Thread_local cee_executor cee_exec;
+#endif
+
+#if !defined(CEE_FREESTANDING)
+/* Isolated tasks (ADR 0175), defined with the task sets below. */
+struct cee_unit;
+struct cee_task;
+static bool cee_unit_dead(const struct cee_unit *u);
+static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size);
+static void cee_unit_crash(struct cee_task *t);
+static void cee_unit_end(struct cee_unit *u);
+static void cee_child_gone(struct cee_task *t, bool keep);
+/* What `set.spawnIsolated` left for the start that follows it on this thread, and the unit that start made. */
+static _Thread_local struct {
+    bool on;
+    void *crashed; /* a copy of the Result<void, E>, the pending start's to keep or free */
+    size_t size;
+} cee_isolate_pending;
+static _Thread_local uint64_t cee_isolate_last;
 #endif
 
 /* ---- Work stealing (ADR 0038) ----
@@ -1102,6 +1128,7 @@ static void cee_task_init(cee_task *t, void *frame, ceesafe_scope *scope, const 
     t->info = info;
 #if !defined(CEE_FREESTANDING)
     t->budget = ceesafe_budget_retain(); /* a task is made under its maker's budget (ADR 0170) */
+    t->unit = cee_exec.current != NULL ? cee_exec.current->unit : NULL; /* and in its unit (ADR 0175) */
 #endif
 }
 
@@ -1168,11 +1195,25 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     /* A task set's owner is fixed when it starts (ADR 0053 §3.3): the task that awaits it. A function the set was
        passed to may spawn from another task (a child of a race in the body); cancelling that task does not reach
        the set's children. */
+#if !defined(CEE_FREESTANDING)
+    bool isolated = cee_isolate_pending.on; /* `set.spawnIsolated` asked for it just before (ADR 0175) */
+    void *crashed = cee_isolate_pending.crashed;
+    size_t crashed_size = cee_isolate_pending.size;
+    cee_isolate_pending.on = false;
+    cee_isolate_pending.crashed = NULL;
+    cee_isolate_last = 0u;
+    if (cee_exec.current != NULL && cee_exec.current->unit != NULL) {
+        send = false; /* a unit's tasks stay on its worker: a trap ends them where they are (ADR 0175 §3) */
+    }
+#endif
     if (!scope->set && scope->owner != cee_exec.current) {
         cee_scope_disown(scope); /* listed under the task that owned it until now (ADR 0062) */
         scope->owner = cee_exec.current; /* before its first child, which other workers may read it from */
     }
     if (scope->oom && !scope->set) {
+#if !defined(CEE_FREESTANDING)
+        if (crashed != NULL) ceesafe_platform_free(crashed);
+#endif
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
     size_t block_size = CEE_TASK_HEAD + frame_size;
@@ -1186,6 +1227,9 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
                                             : (unsigned char *)ceesafe_alloc(block_size, CEE_ALLOC_SYSTEM);
 #endif
     if (block == NULL) {
+#if !defined(CEE_FREESTANDING)
+        if (crashed != NULL) ceesafe_platform_free(crashed);
+#endif
         if (scope->set) {
             ((ceesafe_task_set *)(void *)scope)->oom = true; /* the set goes on (ADR 0053 §3.2) */
             return NULL;
@@ -1199,6 +1243,13 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     t->resume.child = resume;
     t->release = release;
     t->block_size = block_size;
+#if !defined(CEE_FREESTANDING)
+    if (isolated && scope->set) {
+        cee_unit_begin(t, crashed, crashed_size); /* without memory for it, the child is an ordinary one */
+    } else if (crashed != NULL) {
+        ceesafe_platform_free(crashed);
+    }
+#endif
     if (send && !scope->shared) {
         scope->shared = true; /* before its first child can run elsewhere: its state changes under the lock from now */
     }
@@ -1884,6 +1935,302 @@ void ceesafe_async_set_init(void *set, uint32_t limit, void *error) {
     s->limit = limit == 0u ? 1u : limit;
     s->error = error;
 }
+
+#if !defined(CEE_FREESTANDING)
+/* ---- Isolated tasks (ADR 0175; type-system.md §40.10) ----
+ * A unit is an isolated child of a task set and every task made under it. A trap in one of its tasks, with nothing
+ * of C's on the stack above the executor and outside a critical section, ends the unit: its tasks never run again,
+ * what it held is leaked and counted, the locks it held are poisoned and released, and its set is told. */
+typedef struct cee_unit_lock {
+    uint32_t kind;  /* 1 a Mutex's platform lock, 2 an AsyncMutex's token channel */
+    void *lock;
+    uint32_t *flag; /* its poison mark (ceesafe_atomic_*) */
+} cee_unit_lock;
+
+typedef struct cee_unit {
+    uint64_t id;
+    struct cee_unit *outer; /* the unit its root was made in, or NULL */
+    cee_task *root;
+    bool dead;
+    uint32_t critical;      /* Critical guards held by its tasks: a trap then ends the process */
+    void *budget;           /* what it holds: its own record, or its maker's where a block's size cannot be told */
+    bool counted;           /* budget is its own */
+    void *crashed;          /* the Result<void, E> its set is given, copied when it was started */
+    size_t crashed_size;
+    cee_unit_lock *locks;   /* held by its tasks and by those of the units inside it */
+    uint32_t lock_count;
+    uint32_t lock_capacity;
+} cee_unit;
+
+/* A set's isolated children: how many trapped, and where each is reported. */
+typedef struct cee_set_isolation {
+    uint64_t crashes;
+    uint64_t missed;
+    void *watch; /* a Channel<TaskCrash>, one count of it held; or NULL */
+} cee_set_isolation;
+
+/* lib/core's TaskCrash. */
+typedef struct cee_task_crash {
+    uint64_t task;
+    uint64_t leaked;
+    uint32_t kind;
+} cee_task_crash;
+
+static uint64_t cee_unit_ids;     /* ceesafe_atomic_* */
+static uint64_t cee_crashes;      /* the process's, ceesafe_atomic_* */
+static uint64_t cee_leaked;
+
+static bool cee_unit_dead(const cee_unit *u) {
+    for (; u != NULL; u = u->outer) {
+        if (u->dead) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cee_isolate_panic(const ceesafe_panic_info *info) {
+    cee_task *t = cee_exec.current;
+    if (cee_exec.jump == NULL || t == NULL || t->unit == NULL) {
+        return; /* not a task of a unit, or not on the thread that runs it */
+    }
+    if (t->unit->critical != 0u || ceesafe_entry_depth() != cee_exec.jump_depth) {
+        return; /* in a critical section, or with C's frames between the executor and here (§2.3) */
+    }
+    ceesafe_panic_info told = *info;
+    told.isolated_task = t->unit->id;
+    cee_exec.crash_kind = info->kind;
+    ceesafe_panic_notify(&told);
+    longjmp(*cee_exec.jump, 1);
+}
+
+/* Makes `t`, a set's new child, the root of a unit of its own. */
+static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
+    cee_unit *u = (cee_unit *)ceesafe_platform_alloc_zeroed(sizeof *u);
+    if (u == NULL) {
+        if (crashed != NULL) ceesafe_platform_free(crashed);
+        return;
+    }
+    void *copy = crashed; /* the unit's from now */
+    u->id = ceesafe_atomic_add_u64(&cee_unit_ids, 1u) + 1u;
+    u->outer = t->unit;
+    u->root = t;
+    u->crashed = copy;
+    u->crashed_size = crashed_size;
+    void *own = ceesafe_budget_make(UINT64_MAX); /* inside its maker's, with no bound of its own */
+    if (own != NULL) {
+        ceesafe_budget_release(t->budget);
+        t->budget = own;
+        u->counted = true;
+    }
+    u->budget = t->budget;
+    t->unit = u;
+    ceesafe_panic_isolate = cee_isolate_panic;
+    (void)ceesafe_atomic_add_u32(&ceesafe_units_live, 1u);
+    cee_isolate_last = u->id;
+}
+
+static void cee_unit_forget_lock(cee_unit *u, void *lock) {
+    for (uint32_t i = u->lock_count; i > 0u; i--) {
+        if (u->locks[i - 1u].lock == lock) {
+            u->locks[i - 1u] = u->locks[u->lock_count - 1u];
+            u->lock_count -= 1u;
+            return;
+        }
+    }
+}
+
+/* A unit whose root returned: nothing of it is left. */
+static void cee_unit_end(cee_unit *u) {
+    if (u->locks != NULL) ceesafe_platform_free(u->locks);
+    if (u->crashed != NULL) ceesafe_platform_free(u->crashed);
+    ceesafe_platform_free(u);
+    (void)ceesafe_atomic_add_u32(&ceesafe_units_live, UINT32_MAX); /* minus one */
+}
+
+/* The unit of `t`, which trapped: dead from now, its locks poisoned and released, its set told. Its record, like
+   everything it held, stays. */
+static void cee_unit_crash(cee_task *t) {
+    cee_unit *u = t->unit;
+    u->dead = true;
+    uint64_t leaked = u->counted ? ceesafe_budget_held_of(u->budget) : 0u;
+    (void)ceesafe_atomic_add_u64(&cee_crashes, 1u);
+    (void)ceesafe_atomic_add_u64(&cee_leaked, leaked);
+    for (uint32_t i = 0; i < u->lock_count; i++) {
+        cee_unit_lock held = u->locks[i];
+        for (cee_unit *outer = u->outer; outer != NULL; outer = outer->outer) {
+            cee_unit_forget_lock(outer, held.lock); /* released here, once */
+        }
+        ceesafe_atomic_store_u32(held.flag, 1u);
+        if (held.kind == 1u) {
+            ceesafe_mutex_unlock(held.lock);
+        } else {
+            uint32_t status = 0;
+            uint64_t epoch = 0;
+            uint8_t *slot = (uint8_t *)ceesafe_chan_begin_send(held.lock, &status, &epoch);
+            if (status == 0u) {
+                *slot = 0u;
+                ceesafe_chan_end_send(held.lock); /* the token back: whoever waits for the lock finds it poisoned */
+            }
+        }
+    }
+    u->lock_count = 0u;
+    /* Its set, which is outside the unit: the root counts as returned with the error it was started with. */
+    cee_task *root = u->root;
+    ceesafe_scope *scope = root->scope;
+    ceesafe_task_set *set = (ceesafe_task_set *)(void *)scope;
+    if (u->crashed != NULL && ceesafe_async_claim_failure(scope)) {
+        memcpy(set->error, u->crashed, u->crashed_size);
+    }
+    cee_set_isolation *told = (cee_set_isolation *)set->isolation;
+    if (told != NULL) {
+        told->crashes += 1u;
+        if (told->watch != NULL) {
+            uint32_t status = 0;
+            uint64_t epoch = 0;
+            cee_task_crash *slot = (cee_task_crash *)ceesafe_chan_begin_send(told->watch, &status, &epoch);
+            if (status == 0u) {
+                slot->task = u->id;
+                slot->leaked = leaked;
+                slot->kind = cee_exec.crash_kind;
+                ceesafe_chan_end_send(told->watch);
+            } else {
+                told->missed += 1u; /* full, or closed: never waited for */
+            }
+        }
+    }
+    cee_child_gone(root, true);
+}
+
+static cee_set_isolation *cee_set_isolating(ceesafe_task_set *s) {
+    if (s->isolation == NULL) {
+        s->isolation = ceesafe_platform_alloc_zeroed(sizeof(cee_set_isolation));
+    }
+    return (cee_set_isolation *)s->isolation;
+}
+
+/* `set.spawnIsolated` (lib/core): the start that follows on this thread, with no await between, makes its child the
+   root of a unit, whose set is given the `size` bytes at `crashed` (a Result<void, E>) if it traps.
+   ceesafe_async_isolated_last is that unit's id, or 0 if the start made none. */
+void ceesafe_async_isolate_next(void *set, const void *crashed, uint64_t size) {
+    (void)cee_set_isolating((ceesafe_task_set *)set);
+    if (cee_isolate_pending.crashed != NULL) {
+        ceesafe_platform_free(cee_isolate_pending.crashed); /* a start that never came */
+    }
+    void *copy = size != 0u ? ceesafe_platform_alloc((size_t)size) : NULL;
+    if (copy != NULL) {
+        memcpy(copy, crashed, (size_t)size);
+    }
+    cee_isolate_pending.on = size == 0u || copy != NULL; /* without the copy, the child is an ordinary one */
+    cee_isolate_pending.crashed = copy;
+    cee_isolate_pending.size = (size_t)size;
+}
+
+uint64_t ceesafe_async_isolated_last(void) { return cee_isolate_last; }
+
+uint64_t ceesafe_async_set_crashes(void *set) {
+    cee_set_isolation *told = (cee_set_isolation *)((ceesafe_task_set *)set)->isolation;
+    return told == NULL ? 0u : told->crashes;
+}
+
+uint64_t ceesafe_async_set_missed(void *set) {
+    cee_set_isolation *told = (cee_set_isolation *)((ceesafe_task_set *)set)->isolation;
+    return told == NULL ? 0u : told->missed;
+}
+
+/* Each crash of the set's isolated children is put in `channel` (a Channel<TaskCrash>) from now, without waiting. */
+bool ceesafe_async_set_watch(void *set, void *channel) {
+    cee_set_isolation *told = cee_set_isolating((ceesafe_task_set *)set);
+    if (told == NULL) {
+        return false;
+    }
+    ceesafe_chan_retain(channel);
+    if (told->watch != NULL && ceesafe_chan_release(told->watch)) {
+        ceesafe_chan_free(told->watch); /* its values are plain */
+    }
+    told->watch = channel;
+    return true;
+}
+
+/* The set has ended: what it kept for its isolated children goes. */
+void ceesafe_async_set_end(void *set) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+    cee_set_isolation *told = (cee_set_isolation *)s->isolation;
+    if (told != NULL) {
+        if (told->watch != NULL && ceesafe_chan_release(told->watch)) {
+            ceesafe_chan_free(told->watch);
+        }
+        ceesafe_platform_free(told);
+        s->isolation = NULL;
+    }
+}
+
+/* `Critical.enter()` (lib/core): the unit whose tasks are in one critical section more, or NULL outside any unit;
+   ceesafe_async_critical_leave ends it. */
+void *ceesafe_async_critical_enter(void) {
+    cee_task *t = cee_exec.current;
+    if (t == NULL || t->unit == NULL) {
+        return NULL;
+    }
+    t->unit->critical += 1u;
+    return t->unit;
+}
+
+void ceesafe_async_critical_leave(void *unit) {
+    cee_unit *u = (cee_unit *)unit;
+    if (u != NULL && u->critical != 0u) {
+        u->critical -= 1u;
+    }
+}
+
+/* A lock the running task took (lib/std's Mutex and AsyncMutex), so that a trap can poison and release it: kept by
+   the task's unit and the units that one is inside. Outside a unit, nothing. */
+void ceesafe_async_lock_held(uint32_t kind, void *lock, uint32_t *flag) {
+    cee_task *t = cee_exec.current;
+    for (cee_unit *u = t != NULL ? t->unit : NULL; u != NULL; u = u->outer) {
+        if (u->lock_count == u->lock_capacity) {
+            uint32_t capacity = u->lock_capacity == 0u ? 4u : u->lock_capacity * 2u;
+            cee_unit_lock *grown = (cee_unit_lock *)ceesafe_platform_realloc(u->locks, (size_t)capacity * sizeof *grown);
+            if (grown == NULL) {
+                ceesafe_panic_runtime(CEE_PANIC_ASYNC, "no memory to record a lock an isolated task holds");
+            }
+            u->locks = grown;
+            u->lock_capacity = capacity;
+        }
+        u->locks[u->lock_count].kind = kind;
+        u->locks[u->lock_count].lock = lock;
+        u->locks[u->lock_count].flag = flag;
+        u->lock_count += 1u;
+    }
+}
+
+void ceesafe_async_lock_released(void *lock) {
+    cee_task *t = cee_exec.current;
+    for (cee_unit *u = t != NULL ? t->unit : NULL; u != NULL; u = u->outer) {
+        cee_unit_forget_lock(u, lock);
+    }
+}
+
+/* lib/std's Isolation.report: out[0] the isolated tasks that have trapped in this process, out[1] the bytes they
+   held. */
+void ceesafe_async_isolation_report(uint64_t *out) {
+    out[0] = ceesafe_atomic_load_u64(&cee_crashes);
+    out[1] = ceesafe_atomic_load_u64(&cee_leaked);
+}
+#else
+/* Freestanding: no isolated tasks (ADR 0175 is the hosted runtime's). lib/core names these, so they exist. */
+void ceesafe_async_isolate_next(void *set, const void *crashed, uint64_t size) { (void)set; (void)crashed; (void)size; }
+uint64_t ceesafe_async_isolated_last(void) { return 0u; }
+uint64_t ceesafe_async_set_crashes(void *set) { (void)set; return 0u; }
+uint64_t ceesafe_async_set_missed(void *set) { (void)set; return 0u; }
+bool ceesafe_async_set_watch(void *set, void *channel) { (void)set; (void)channel; return false; }
+void ceesafe_async_set_end(void *set) { (void)set; }
+void *ceesafe_async_critical_enter(void) { return NULL; }
+void ceesafe_async_critical_leave(void *unit) { (void)unit; }
+void ceesafe_async_lock_held(uint32_t kind, void *lock, uint32_t *flag) { (void)kind; (void)lock; (void)flag; }
+void ceesafe_async_lock_released(void *lock) { (void)lock; }
+void ceesafe_async_isolation_report(uint64_t *out) { out[0] = 0u; out[1] = 0u; }
+#endif
 
 uint32_t ceesafe_async_set_admit(void *set, bool wait) {
     ceesafe_task_set *s = (ceesafe_task_set *)set;
@@ -2705,10 +3052,16 @@ static void cee_exec_end(void) {
 
 /* A child that returned: its block freed, its scope told; the scope's first error cancels its siblings, and its last
    child wakes the task waiting for it, on whichever worker that task runs (ADR 0038). */
-static void cee_child_done(cee_task *t) {
+static void cee_child_gone(cee_task *t, bool keep);
+
+static void cee_child_done(cee_task *t) { cee_child_gone(t, false); }
+
+/* A child has returned, or (`keep`) is the root of an isolation unit that trapped: its scope is told either way, and
+   the second keeps its block, which is never freed (ADR 0175 §2.4). */
+static void cee_child_gone(cee_task *t, bool keep) {
     ceesafe_scope *scope = t->scope;
     cee_child_unlink(t); /* before its block is released (ADR 0062) */
-    if (!t->embedded) {
+    if (!t->embedded && !keep) {
         if (t->release != NULL) {
             t->release(t, t->block_size, _Alignof(cee_max_align_t));
         } else {
@@ -2760,16 +3113,51 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
             cee_wait();
             continue;
         }
+#if !defined(CEE_FREESTANDING)
+        if (t->unit != NULL && cee_unit_dead(t->unit)) {
+            continue; /* a task of a unit that trapped never runs again, whatever woke it (ADR 0175 §2.2) */
+        }
+#endif
         t->home = &cee_exec;
         cee_exec.current = t;
 #if !defined(CEE_FREESTANDING)
         /* The task's budget is the thread's while the task runs (ADR 0170), and what the task left current is the
            task's when it parks. */
         void *outer = ceesafe_budget_swap(t->budget);
+        /* A task of an isolation unit is resumed over a jump point: a trap in it comes back here (ADR 0175 §2.3).
+           What is read after the jump was set before it and not changed since. */
+        jmp_buf crash;
+        jmp_buf *outer_jump = cee_exec.jump;
+        int32_t outer_depth = cee_exec.jump_depth;
+        bool crashed = false;
+        if (t->unit != NULL) {
+            cee_exec.jump = &crash;
+            cee_exec.jump_depth = ceesafe_entry_depth();
+            if (setjmp(crash) != 0) {
+                crashed = true;
+            }
+        } else {
+            cee_exec.jump = NULL; /* a trap in a task of no unit ends the process, also under an outer executor's unit */
+        }
+        if (crashed) {
+            cee_exec.jump = outer_jump;
+            cee_exec.jump_depth = outer_depth;
+            cee_exec.current = NULL;
+            (void)ceesafe_budget_swap(outer); /* what the task had current is its unit's, and stays held */
+            cee_unit_crash(t);
+            /* It is never resumed. If this resume registered a wait, the task is parked as if it had returned to
+               wait, so that whatever wakes it finds it where a waiting task is; it is then dropped above. */
+            if (t->deadline != UINT64_MAX || t->fd >= 0 || t->on_scope || t->on_wake || t->on_op) {
+                cee_park(t);
+            }
+            continue;
+        }
 #endif
         bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
 #if !defined(CEE_FREESTANDING)
+        cee_exec.jump = outer_jump;
+        cee_exec.jump_depth = outer_depth;
         if (!done) {
             t->budget = ceesafe_budget_swap(outer);
         }
@@ -2814,8 +3202,12 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
             ceesafe_budget_release(ceesafe_budget_swap(outer));
             break;
         }
+        cee_unit *finished = t->unit != NULL && t->unit->root == t ? t->unit : NULL;
         cee_child_done(t);
         ceesafe_budget_release(ceesafe_budget_swap(outer));
+        if (finished != NULL) {
+            cee_unit_end(finished); /* its root returned, so every task under it has */
+        }
 #else
         if (t == root) {
             break; /* its scopes have ended, so every child has returned */

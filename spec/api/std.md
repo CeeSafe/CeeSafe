@@ -2,6 +2,7 @@
 
 - [struct AsyncConsole](#struct-asyncconsole)
 - [struct AsyncTcpListener](#struct-asynctcplistener)
+- [struct StreamCloser](#struct-streamcloser)
 - [struct AsyncTcpStream](#struct-asynctcpstream)
 - [struct AsyncUdpSocket](#struct-asyncudpsocket)
 - [struct AsyncSockets](#struct-asyncsockets)
@@ -43,6 +44,8 @@
 - [struct UnixTime](#struct-unixtime)
 - [struct Clock](#struct-clock)
 - [struct Random](#struct-random)
+- [struct IsolationReport](#struct-isolationreport)
+- [struct Isolation](#struct-isolation)
 - [enum SocketAddress](#enum-socketaddress)
 - [interface SocketEndpoint](#interface-socketendpoint)
 - [struct SocketAddresses](#struct-socketaddresses)
@@ -184,6 +187,27 @@ public async fn accept(borrow this) -> Result<AsyncTcpStream, AsyncError>
 The next connection; the task parks until one arrives.
 Safety: the descriptor is this listener's; a new one becomes the stream's.
 
+## struct StreamCloser
+
+```ceesafe
+@noncopy
+public struct StreamCloser {
+    drop { … }
+}
+```
+
+A second hold on a stream's socket (`AsyncTcpStream.closer()`, ADR 0175 §2.7): it can end the connection, and
+nothing else. The socket is closed when the stream and every closer of it are dropped.
+
+### StreamCloser.shutdown
+
+```ceesafe
+public fn shutdown(borrow this) -> Result<void, IoError>
+```
+
+Ends the connection in both directions: the peer sees the end, and the stream's reads and writes fail.
+Safety: the hold is the runtime's, alive until this value's drop.
+
 ## struct AsyncTcpStream
 
 ```ceesafe
@@ -195,6 +219,16 @@ public struct AsyncTcpStream {
 
 A TCP stream for tasks (type-system.md §40.4): `read` and `write` park the task until the socket is ready. Its
 socket is non-blocking; the drop closes it.
+
+### AsyncTcpStream.closer
+
+```ceesafe
+public fn closer(borrow this) -> Result<StreamCloser, IoError>
+```
+
+A second hold on this stream's socket, for an owner that gives the stream away (to an isolated task, ADR
+0175 §2.7): `shutdown()` on it ends the connection whoever holds the stream.
+Safety: the runtime duplicates the socket's descriptor, or says why not.
 
 ### AsyncTcpStream.connect
 
@@ -998,7 +1032,19 @@ A mutex holding `data`, unlocked.
 public async fn lock(borrow this) -> Result<AsyncMutexGuard<T>, AsyncError>
 ```
 
-Waits for the lock; `Err(AsyncError.Cancelled)` if the task is cancelled first.
+Waits for the lock; `Err(AsyncError.Cancelled)` if the task is cancelled first. It panics
+(`PanicKind.Poisoned`) if an isolated task that held the lock trapped (ADR 0175 §2.6); `recover` is for code
+that can repair the data.
+Safety: the token is back before the panic, so the next task to lock meets the mark too.
+
+### AsyncMutex.recover
+
+```ceesafe
+public async fn recover(borrow this) -> Result<AsyncMutexGuard<T>, AsyncError>
+```
+
+`lock`, whether or not the mutex is poisoned: `guard.poisoned()` says which, and `guard.heal()` clears the
+mark.
 
 ## struct AsyncMutexGuard
 
@@ -1018,6 +1064,22 @@ public fn data(borrow mut this) -> borrow mut T
 
 Safety: the guard holds the token, so no other task or thread reaches the data, and the loan ends before the
 guard's drop.
+
+### AsyncMutexGuard.poisoned
+
+```ceesafe
+public fn poisoned(borrow this) -> bool
+```
+
+Whether an isolated task that held the lock trapped, and nothing has healed it since (ADR 0175 §2.6).
+
+### AsyncMutexGuard.heal
+
+```ceesafe
+public fn heal(borrow this)
+```
+
+Clears the mark: the data is whole again.
 
 ## struct Crc32c
 
@@ -2236,6 +2298,43 @@ draws eight bytes with `fill`, and again while they fall in the part of the 64-b
 some values likelier (less than one time in two, whatever `n`), so there is no modulo bias. In the
 interpreter it follows `fill`'s fixed sequence: the same numbers every run.
 
+## struct IsolationReport
+
+```ceesafe
+public struct IsolationReport {
+    public crashes: u64;
+    public leakedBytes: u64;
+}
+```
+
+What the isolated tasks that trapped in this process have cost it (`Isolation.report()`).
+
+## struct Isolation
+
+```ceesafe
+public struct Isolation
+```
+
+### Isolation.report
+
+```ceesafe
+public fn report() -> IsolationReport
+```
+
+The process's totals.
+Safety: the runtime writes the two words of `out`.
+
+### Isolation.watch
+
+```ceesafe
+public fn watch<E: Copy>(set: borrow TaskSet<E>, crashes: borrow Channel<TaskCrash>) -> bool
+```
+
+Has each crash of `set`'s isolated children put in `crashes` from now, without waiting: one that does not
+fit is counted (`set.missedCrashes()`). The set keeps a handle of the channel until it ends. False if there
+is no memory for it.
+Safety: the runtime takes a count of the channel, which it gives back when the set ends.
+
 ## enum SocketAddress
 
 ```ceesafe
@@ -2796,8 +2895,29 @@ Safety: a null lock is reported, never stored.
 public fn lock(borrow this) -> MutexGuard<T>
 ```
 
-Waits for the lock; the guard lends the data until it is dropped.
+Waits for the lock; the guard lends the data until it is dropped. It panics (`PanicKind.Poisoned`) if an
+isolated task that held the lock trapped (ADR 0175 §2.6): the data may break its invariant. `recover` is for
+code that can repair it.
 Safety: `raw` is the lock made in create, destroyed only in drop, when no guard can be live (B-rules).
+
+### Mutex.recover
+
+```ceesafe
+public fn recover(borrow this) -> MutexGuard<T>
+```
+
+`lock`, whether or not the mutex is poisoned: `guard.poisoned()` says which, and `guard.heal()` clears the
+mark once the data is whole again.
+Safety: as `lock`.
+
+### Mutex.tryRecover
+
+```ceesafe
+public fn tryRecover(borrow this) -> MutexGuard<T>?
+```
+
+`tryLock`, whether or not the mutex is poisoned: for async code, which cannot wait for a lock.
+Safety: as `tryLock`.
 
 ### Mutex.tryLock
 
@@ -2827,6 +2947,22 @@ public fn data(borrow mut this) -> borrow mut T
 
 Safety: the guard holds the lock, so no other thread reaches the cell's contents, and the loan ends before the
 guard's drop (a RawCell's contents may change while the mutex is shared, §41.1).
+
+### MutexGuard.poisoned
+
+```ceesafe
+public fn poisoned(borrow this) -> bool
+```
+
+Whether an isolated task that held the lock trapped, and nothing has healed it since (ADR 0175 §2.6).
+
+### MutexGuard.heal
+
+```ceesafe
+public fn heal(borrow this)
+```
+
+Clears the mark: the data is whole again.
 
 ## struct Arc
 

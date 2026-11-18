@@ -536,16 +536,35 @@ fn emitWrapperBody(
     call: Slice<u8>,
 ) -> Result<void, AllocError> {
     let returnType = c.hir.functions[function as usize].returnType;
+    if (!e.hosted) {
+        if (c.types.is(returnType, TypeKind.Void)) {
+            e.t("    ")?;
+            e.b(call)?;
+            e.t(";")?;
+        } else {
+            e.t("    return ")?;
+            appendToBoundary(c, mut e.buf, returnType, call)?;
+            e.t(";")?;
+        }
+        return e.emit();
+    }
+    // Hosted: the entry is counted out again once the call has returned (ADR 0175 §2.3), so that a trap in an
+    // isolated task knows whether C's frames lie above the executor.
     if (c.types.is(returnType, TypeKind.Void)) {
         e.t("    ")?;
         e.b(call)?;
         e.t(";")?;
-    } else {
-        e.t("    return ")?;
-        appendToBoundary(c, mut e.buf, returnType, call)?;
-        e.t(";")?;
+        e.emit()?;
+        return e.line("    ceesafe_entry_leave();");
     }
-    return e.emit();
+    e.t("    ")?;
+    appendBoundaryType(c, mut e.buf, returnType, false)?;
+    e.t(" cee_returned = ")?;
+    appendToBoundary(c, mut e.buf, returnType, call)?;
+    e.t(";")?;
+    e.emit()?;
+    e.line("    ceesafe_entry_leave();")?;
+    return e.line("    return cee_returned;");
 }
 
 /// Each callback in use: a C function with the C types that converts and calls the CeeSafe function (EmitCallbacks).
@@ -557,7 +576,8 @@ fn emitCallbacks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram
         e.t(" {")?;
         e.emit()?;
         if (e.hosted) {
-            e.line("    ceesafe_entry_check();")?; // no CeeSafe on a thread that has panicked (ADR 0088 §2.4)
+            // No CeeSafe on a thread that has panicked (ADR 0088 §2.4), and counted in for isolated tasks (ADR 0175).
+            e.line("    ceesafe_entry_enter();")?;
         }
         var call = Vector<u8>.create();
         appendWrapperCall(c, mut call, function, "0")?;
@@ -771,7 +791,8 @@ fn emitExports(
         e.t(" {")?;
         e.emit()?;
         if (e.hosted) {
-            e.line("    ceesafe_entry_check();")?; // no CeeSafe on a thread that has panicked (ADR 0088 §2.4)
+            // No CeeSafe on a thread that has panicked (ADR 0088 §2.4), and counted in for isolated tasks (ADR 0175).
+            e.line("    ceesafe_entry_enter();")?;
         }
         for (k in 0..c.hir.functions[function as usize].parameters.length) {
             var argument = Vector<u8>.create();

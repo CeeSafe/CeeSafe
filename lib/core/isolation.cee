@@ -1,0 +1,92 @@
+// Isolated tasks (ADR 0175; type-system.md §40.10): what a task set says of a child that trapped, and the critical
+// section a task declares.
+
+extern "C" {
+    @effects()
+    fn ceesafe_async_critical_enter() -> *mut void;
+    @effects()
+    fn ceesafe_async_critical_leave(unit: *mut void);
+}
+
+/// What kind of panic it was: the runtime's kinds (type-system.md §14.5).
+public enum PanicKind {
+    Overflow,
+    DivideByZero,
+    Shift,
+    Unreachable,
+    Index,
+    Slice,
+    Unwrap,
+    Scratch,
+    UnwrapNull,
+    StringBoundary,
+    ForeignEnum,
+    Length,
+    FloatRange,
+    /// `panic(message)` or a failed `assert`.
+    Explicit,
+    /// A lock that an isolated task held when it trapped was taken (`Mutex.lock`, `AsyncMutex.lock`).
+    Poisoned,
+    /// One this enum has no name for.
+    Other,
+}
+
+/// An isolated child of a task set that trapped and ended alone (`set.spawnIsolated`): what the set's watcher is
+/// sent.
+public struct TaskCrash {
+    /// The child: what `spawnIsolated` returned for it.
+    public task: u64;
+    /// What the child and the tasks under it held when it trapped, in bytes. It is never freed. 0 where a block's
+    /// size cannot be told (under a host's allocator hook).
+    public leakedBytes: u64;
+    private code: u32;
+
+    /// The panic's kind.
+    public fn kind(borrow this) -> PanicKind => match (this.code) {
+        1 => PanicKind.Overflow,
+        2 => PanicKind.DivideByZero,
+        3 => PanicKind.Shift,
+        4 => PanicKind.Unreachable,
+        5 => PanicKind.Index,
+        6 => PanicKind.Slice,
+        7 => PanicKind.Unwrap,
+        8 => PanicKind.Scratch,
+        9 => PanicKind.UnwrapNull,
+        10 => PanicKind.StringBoundary,
+        11 => PanicKind.ForeignEnum,
+        12 => PanicKind.Length,
+        13 => PanicKind.FloatRange,
+        16 => PanicKind.Explicit,
+        18 => PanicKind.Poisoned,
+        _ => PanicKind.Other,
+    };
+}
+
+/// A critical section: while this value lives in a task of an isolated unit, a trap in that unit ends the process,
+/// as a trap outside one does.
+///
+/// ```
+/// {
+///     let critical = Critical.enter();
+///     table.word(slot).store(key);        // two steps that must both happen
+///     table.word(slot + 1).store(value);
+/// }
+/// ```
+///
+/// An isolated task that traps leaves what it shared as it was at the trap. A lock it held is poisoned; state it
+/// was changing without one (several atomics that must agree, words of shared memory, anything reached through
+/// `unsafe`) has no such mark, and this is how the code that changes it says so. Outside an isolated task it does
+/// nothing.
+@noncopy
+public struct Critical {
+    private unit: usize;
+
+    /// Enters a critical section, left when the value is dropped.
+    /// Safety: the runtime only counts.
+    public fn enter() -> Critical => Critical { unit: unsafe { ceesafe_async_critical_enter() } as usize };
+
+    /// Safety: the unit is the one `enter` was given, or none.
+    drop {
+        unsafe { ceesafe_async_critical_leave(this.unit as *mut void); }
+    }
+}

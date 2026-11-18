@@ -74,12 +74,21 @@ struct Interp {
     asyncSpawns: Vector<InterpSpawn>; // children spawned by the running task, for runTasks to start
     asyncScopes: Vector<InterpScope>;
     asyncTasks: Vector<InterpTaskInfo>; // by runTasks' task index: what cancellation needs (§40.7)
-    asyncOnWake: bool;                  // the parked task waits on a channel's change (ADR 0032)
-    asyncFd: i32;                       // the parked task waits on this descriptor (a socket), or -1
-    asyncFdEvents: u32;                 // 1 readable, 2 writable
-    udpLocal: Vector<i32>;              // UDP sockets that asked for each datagram's local address (ADR 0050)
-    asyncWoken: Vector<u32>;            // tasks a channel's change woke, for runTasks
-    asyncSetCancelled: bool;            // a task set was cancelled: runTasks wakes every waiting task (ADR 0053)
+    asyncUnits: Vector<InterpUnit>;     // isolation units (ADR 0175), each kept for the program's life
+    asyncUnitOf: Vector<u32>;           // by task index, beside asyncTasks: the task's unit, or none
+    asyncIsolatePending: bool;          // `set.spawnIsolated` asked: the set's next start makes a unit
+    asyncIsolateAt: u64;                // where its crashed value is kept, and how long it is
+    asyncIsolateSize: usize;
+    asyncIsolatedLast: u64;        // the unit the last start made, plus one; 0 for none
+    asyncCrashes: u64;             // the isolated tasks that trapped
+    asyncWatchScopes: Vector<u32>; // the sets with a watcher (Isolation.watch), and its channel's handle
+    asyncWatchChannels: Vector<u64>;
+    asyncOnWake: bool;       // the parked task waits on a channel's change (ADR 0032)
+    asyncFd: i32;            // the parked task waits on this descriptor (a socket), or -1
+    asyncFdEvents: u32;      // 1 readable, 2 writable
+    udpLocal: Vector<i32>;   // UDP sockets that asked for each datagram's local address (ADR 0050)
+    asyncWoken: Vector<u32>; // tasks a channel's change woke, for runTasks
+    asyncSetCancelled: bool; // a task set was cancelled: runTasks wakes every waiting task (ADR 0053)
     // ceesafe_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
@@ -2119,6 +2128,15 @@ fn newInterp(
         asyncRetry: false,
         asyncSpawns: Vector<InterpSpawn>.create(),
         asyncScopes: Vector<InterpScope>.create(),
+        asyncUnits: Vector<InterpUnit>.create(),
+        asyncUnitOf: Vector<u32>.create(),
+        asyncIsolatePending: false,
+        asyncIsolateAt: 0,
+        asyncIsolateSize: 0,
+        asyncIsolatedLast: 0,
+        asyncCrashes: 0,
+        asyncWatchScopes: Vector<u32>.create(),
+        asyncWatchChannels: Vector<u64>.create(),
         asyncTasks: Vector<InterpTaskInfo>.create(),
         asyncOnWake: false,
         asyncFd: -1,

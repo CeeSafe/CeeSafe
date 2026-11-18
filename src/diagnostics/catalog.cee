@@ -170,13 +170,14 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     315 =>
         "An item or a type parameter has the name of one of the package's dependencies (a local, parameter, loop variable or binding may, ADR 0074 §2.10)",
     320 => "`ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset",
-    321 => "A manifest field is missing, unknown or invalid, or a dependency is an executable",
+    321 =>
+        "A manifest field is missing, unknown or invalid, a dependency is an executable, or a `[patch]` has no source, is given twice or names no package of the build",
     322 =>
         "A dependency's directory or manifest is missing, a git package's `dir` or path dependency leads out of its checkout, or its name differs from its key",
     323 => "A git dependency cannot be fetched or resolved, or is absent with `--offline`",
     324 => "The lock file is missing or does not match the manifest",
     325 => "A git checkout's manifest and sources do not match the lock's hash",
-    326 => "One package name reached through two different sources",
+    326 => "One package name reached through two different sources (the root's `[patch]` chooses one)",
     327 => "A dependency cycle",
     328 => "An invalid version, version requirement, or index entry (`tooling.md` §4.6)",
     329 => "No versions satisfy the requirements: the conflicting requirements and where each came from (§4.7)",
@@ -188,7 +189,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5)",
     333 => "A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>`",
     334 =>
-        "A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038)",
+        "A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `set.spawnIsolated`, a capture that is not `Send` (ADR 0175 §2.1: what an isolated child shares, it may leave half way); for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038)",
     335 => "`ceesafec publish`: the package cannot be published as it is (§4.8)",
     336 =>
         "`@effectsOf` that names no parameter, or a parameter that is not of a function or closure type, or has no names (`type-system.md` §32.5)",

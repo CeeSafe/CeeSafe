@@ -100,7 +100,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_ASYNC = 14, /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
     CEE_PANIC_FRAME_STACK = 15, /* a task's frame stack could not grow (ADR 0056 §3.3) */
     CEE_PANIC_EXPLICIT = 16, /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
-    CEE_PANIC_ALLOCATOR = 17 /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
+    CEE_PANIC_ALLOCATOR = 17, /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
+    CEE_PANIC_POISONED = 18 /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -808,6 +809,32 @@ static inline void ceesafe_entry_check(void) {
 #endif
     if (any != 0u) ceesafe_entry_panicked();
 }
+/* Isolated tasks (ADR 0175; runtime/core/ceesafe_rt_core.c says what each is). An export or a @callback counts
+   itself in and out while an isolation unit exists, so that a trap under C's frames ends the process and is not
+   jumped out of. Elsewhere it costs a load of one global, as ceesafe_entry_check's own test does. */
+extern uint32_t ceesafe_units_live;
+struct ceesafe_panic_info; /* embed.h */
+extern void (*ceesafe_panic_isolate)(const struct ceesafe_panic_info *info);
+void ceesafe_panic_notify(const struct ceesafe_panic_info *info);
+void ceesafe_entry_counted(int32_t by);
+int32_t ceesafe_entry_depth(void);
+static inline void ceesafe_entry_enter(void) {
+    ceesafe_entry_check();
+#if defined(_MSC_VER) && !defined(__clang__)
+    uint32_t live = *(volatile uint32_t *)&ceesafe_units_live;
+#else
+    uint32_t live = __atomic_load_n(&ceesafe_units_live, __ATOMIC_RELAXED);
+#endif
+    if (live != 0u) ceesafe_entry_counted(1);
+}
+static inline void ceesafe_entry_leave(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    uint32_t live = *(volatile uint32_t *)&ceesafe_units_live;
+#else
+    uint32_t live = __atomic_load_n(&ceesafe_units_live, __ATOMIC_RELAXED);
+#endif
+    if (live != 0u) ceesafe_entry_counted(-1);
+}
 #endif
 
 /* True if `index` is not inside a UTF-8 multi-byte sequence (the end counts as a boundary). */
@@ -899,6 +926,8 @@ bool ceesafe_platform_block_sizes(void);
    ceesafe_budget_release when it ends. */
 void *ceesafe_budget_enter(uint64_t limit);
 void ceesafe_budget_leave(void *budget);
+void *ceesafe_budget_make(uint64_t limit);
+uint64_t ceesafe_budget_held_of(void *budget);
 int64_t ceesafe_budget_held(void);
 int64_t ceesafe_budget_limit(void);
 void *ceesafe_budget_retain(void);
@@ -1429,6 +1458,7 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
                                     const uint8_t *kinds, uint32_t handed, uint64_t *handle);
 int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle);
 void ceesafe_host_handover_release(uint32_t kind, uint64_t held);
+int64_t ceesafe_host_handover_shutdown(uint64_t held);
 int64_t ceesafe_host_inherited(uint8_t *kinds, uint64_t capacity);
 int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out);
 int64_t ceesafe_host_shared_map(const uint8_t *name, uint64_t name_length, uint64_t bytes, uint32_t create, uint64_t *out);
@@ -1599,7 +1629,22 @@ typedef struct ceesafe_task_set {
     void *room_waiter;
     void *(*allocate)(size_t size, size_t align);
     void (*release)(void *p, size_t size, size_t align);
+    void *isolation;    /* what the set keeps for its isolated children (ADR 0175), from the first; else NULL */
 } ceesafe_task_set;
+/* Isolated tasks (ADR 0175; runtime/hosted/ceesafe_rt_async.c says what each does). Hosted only. */
+void ceesafe_async_isolate_next(void *set, const void *crashed, uint64_t size);
+uint64_t ceesafe_async_isolated_last(void);
+uint64_t ceesafe_async_set_crashes(void *set);
+uint64_t ceesafe_async_set_missed(void *set);
+bool ceesafe_async_set_watch(void *set, void *channel);
+void ceesafe_async_set_end(void *set);
+void *ceesafe_async_critical_enter(void);
+void ceesafe_async_critical_leave(void *unit);
+void ceesafe_async_lock_held(uint32_t kind, void *lock, uint32_t *flag);
+void ceesafe_async_lock_released(void *lock);
+void ceesafe_async_isolation_report(uint64_t *out);
+/* lib/std's Mutex.lock and AsyncMutex.lock, for a poisoned lock: the panic of kind CEE_PANIC_POISONED. */
+_Noreturn void ceesafe_panic_poisoned(void);
 void ceesafe_async_set_init(void *set, uint32_t limit, void *error);
 uint32_t ceesafe_async_set_admit(void *set, bool wait);
 void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),

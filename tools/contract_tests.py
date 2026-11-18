@@ -13,7 +13,8 @@
   (tools/random_check.py), a dialogue on standard input (tools/console_input_check.py, ADR 0106), a server
   stopped by SIGINT and SIGTERM (tools/signal_check.py, ADR 0125 and 0126), child processes (tools/child_check.py,
   ADR 0169), allocation budgets (tools/budget_check.py, ADR 0170), named shared memory
-  (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), C's allocations (tools/foreign_alloc_check.py), task frame
+  (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
+  (tools/isolated_check.py, ADR 0175), C's allocations (tools/foreign_alloc_check.py), task frame
   stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
   (tools/embed_check.py, ADR 0088), the
   cancellation wake count (tools/wake_check.py), `ceesafec test` on its fixture (tools/test_command_check.py),
@@ -177,6 +178,7 @@ def main():
             ("budgets", py + [f"{HERE}/budget_check.py", "--compiler", cee]),  # ADR 0170
             ("shared", py + [f"{HERE}/shared_check.py", "--compiler", cee]),  # ADR 0172
             ("handover", py + [f"{HERE}/handover_check.py", "--compiler", cee]),  # ADR 0173
+            ("isolated", py + [f"{HERE}/isolated_check.py", "--compiler", cee]),  # ADR 0175
             ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),
             ("frame stacks", py + [f"{HERE}/frame_stack_check.py", "--compiler", cee]),

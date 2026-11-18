@@ -280,9 +280,12 @@ Everything else is unchanged. Heap boxes, and every other site, use the drop glu
 - **Exports.** Each `@export` function gets a non-`static` wrapper under its symbol, with the C
   types, that converts the arguments (checking `@repr` enums), calls `ceeF_<name>`, and converts the
   result. Nothing else in the generated code has external linkage except `main`. In a hosted build the wrapper,
-  and each `@callback`'s C function (`ceeW_<name>`), first calls `ceesafe_entry_check()` (ADR 0088 §2.4): a relaxed
-  load of `ceesafe_any_panicked`, a global set at any thread's first panic, and only when it is set, a call that reads
-  the thread's own panicked flag and on a thread that has panicked prints that panic's line and aborts. A freestanding
+  and each `@callback`'s C function (`ceeW_<name>`), first calls `ceesafe_entry_enter()`: `ceesafe_entry_check()` (ADR
+  0088 §2.4), a relaxed load of `ceesafe_any_panicked`, a global set at any thread's first panic, and only when it
+  is set, a call that reads the thread's own panicked flag and on a thread that has panicked prints that panic's
+  line and aborts; then, while an isolation unit exists (a relaxed load of `ceesafe_units_live`, ADR 0175 §2.3), a
+  call that counts the entry for its thread. The wrapper calls `ceesafe_entry_leave()` when the function has
+  returned, which counts it out the same way, so a result is held in `cee_returned` across it. A freestanding
   build has no flag and no call.
 - **`@repr(C)` structs** are `struct S` with members named as in CeeSafe (other structs are `struct
   ceeT_S` with members `f_<name>`), and `typedef struct S ceeT_S;`, so generated code uses them like

@@ -336,11 +336,44 @@ public struct AsyncTcpListener {
     }
 }
 
+/// A second hold on a stream's socket (`AsyncTcpStream.closer()`, ADR 0175 §2.7): it can end the connection, and
+/// nothing else. The socket is closed when the stream and every closer of it are dropped.
+@noncopy
+public struct StreamCloser {
+    private held: u64;
+
+    /// Ends the connection in both directions: the peer sees the end, and the stream's reads and writes fail.
+    /// Safety: the hold is the runtime's, alive until this value's drop.
+    public fn shutdown(borrow this) -> Result<void, IoError> {
+        let status = unsafe { ceesafe_host_handover_shutdown(this.held) };
+        if (status < 0) {
+            return Err(AsyncIo.ioError(status));
+        }
+        return Ok();
+    }
+
+    /// Safety: the hold is given back once.
+    drop {
+        unsafe { ceesafe_host_handover_release(1, this.held); }
+    }
+}
+
 /// A TCP stream for tasks (type-system.md §40.4): `read` and `write` park the task until the socket is ready. Its
 /// socket is non-blocking; the drop closes it.
 @noncopy
 public struct AsyncTcpStream {
     private fd: i32;
+
+    /// A second hold on this stream's socket, for an owner that gives the stream away (to an isolated task, ADR
+    /// 0175 §2.7): `shutdown()` on it ends the connection whoever holds the stream.
+    /// Safety: the runtime duplicates the socket's descriptor, or says why not.
+    public fn closer(borrow this) -> Result<StreamCloser, IoError> {
+        let held = unsafe { ceesafe_host_handover_hold(1, truncate<u64>(this.fd as i64)) };
+        if (held < 0) {
+            return Err(AsyncIo.ioError(held));
+        }
+        return Ok(StreamCloser { held: truncate<u64>(held) });
+    }
 
     /// Connects to `address` (IPv4 or IPv6 text, without a zone) and `port`; the task parks until the connection is
     /// made or refused.

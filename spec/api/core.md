@@ -38,6 +38,9 @@
 - [struct Formatted](#struct-formatted)
 - [interface AppendFormatted](#interface-appendformatted)
 - [interface AppendText](#interface-appendtext)
+- [enum PanicKind](#enum-panickind)
+- [struct TaskCrash](#struct-taskcrash)
+- [struct Critical](#struct-critical)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -272,6 +275,24 @@ The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functio
 children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
 `set.trySpawn(async move () => …)`, which is false instead. A child owns what it captures: no loans, so it cannot
 capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
+
+### TaskSet.crashes
+
+```ceesafe
+public fn crashes(borrow this) -> u64
+```
+
+How many of the set's isolated children have trapped (ADR 0175).
+Safety: as room.
+
+### TaskSet.missedCrashes
+
+```ceesafe
+public fn missedCrashes(borrow this) -> u64
+```
+
+How many of those were not put in the watcher's channel, which was full or closed (`Isolation.watch`).
+Safety: as room.
 
 ## struct AsyncTasks
 
@@ -2249,6 +2270,85 @@ public interface AppendText {
 `s.appendChar(c)` and `s.appendUtf8(bytes)` (ADR 0138 §6): text added a character, or a run of bytes, at a time.
 Implemented here for a `Vector<u8>`, and in lib/std for a `String`, which stays UTF-8: a character is encoded
 straight in, and bytes are checked once, with no copy before they are appended.
+
+## enum PanicKind
+
+```ceesafe
+public enum PanicKind {
+    Overflow,
+    DivideByZero,
+    Shift,
+    Unreachable,
+    Index,
+    Slice,
+    Unwrap,
+    Scratch,
+    UnwrapNull,
+    StringBoundary,
+    ForeignEnum,
+    Length,
+    FloatRange,
+    Explicit,
+    Poisoned,
+    Other,
+}
+```
+
+What kind of panic it was: the runtime's kinds (type-system.md §14.5).
+
+## struct TaskCrash
+
+```ceesafe
+public struct TaskCrash {
+    public task: u64;
+    public leakedBytes: u64;
+}
+```
+
+An isolated child of a task set that trapped and ended alone (`set.spawnIsolated`): what the set's watcher is
+sent.
+
+### TaskCrash.kind
+
+```ceesafe
+public fn kind(borrow this) -> PanicKind
+```
+
+The panic's kind.
+
+## struct Critical
+
+```ceesafe
+@noncopy
+public struct Critical {
+    drop { … }
+}
+```
+
+A critical section: while this value lives in a task of an isolated unit, a trap in that unit ends the process,
+as a trap outside one does.
+
+```
+{
+    let critical = Critical.enter();
+    table.word(slot).store(key);        // two steps that must both happen
+    table.word(slot + 1).store(value);
+}
+```
+
+An isolated task that traps leaves what it shared as it was at the trap. A lock it held is poisoned; state it
+was changing without one (several atomics that must agree, words of shared memory, anything reached through
+`unsafe`) has no such mark, and this is how the code that changes it says so. Outside an isolated task it does
+nothing.
+
+### Critical.enter
+
+```ceesafe
+public fn enter() -> Critical
+```
+
+Enters a critical section, left when the value is dropped.
+Safety: the runtime only counts.
 
 ## interface Iterator
 

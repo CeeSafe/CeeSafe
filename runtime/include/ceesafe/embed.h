@@ -74,6 +74,8 @@ typedef struct ceesafe_panic_info {
     size_t message_length;
     const char *file;                   /* the CeeSafe source path, zero-terminated; NULL for a runtime abort */
     uint32_t line, column;              /* 1-based; 0 when file is NULL */
+    uint64_t isolated_task;             /* 0, or the isolated task that ends alone for this panic (ADR 0175): the
+                                           process goes on when the hook returns */
 } ceesafe_panic_info;
 
 /* Runs on the panicking thread, once per thread: several threads that panic at once run it at once, so a hook that

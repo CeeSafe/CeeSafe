@@ -105,7 +105,11 @@ public struct Channel<T: Send> {
         loop {
             var status: u32 = 0;
             var epoch: u64 = 0;
-            let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            let slot = unsafe { ceesafe_chan_begin_send(
+                this.raw,
+                borrow mut status as *mut u32,
+                borrow mut epoch as *mut u64,
+            ) };
             if (status == 0) {
                 unsafe {
                     (slot as *mut T).write(value);
@@ -126,7 +130,11 @@ public struct Channel<T: Send> {
     public fn trySend(borrow this, value: T) -> Result<void, T> {
         var status: u32 = 0;
         var epoch: u64 = 0;
-        let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+        let slot = unsafe { ceesafe_chan_begin_send(
+            this.raw,
+            borrow mut status as *mut u32,
+            borrow mut epoch as *mut u64,
+        ) };
         if (status != 0) {
             return Err(value);
         }
@@ -143,7 +151,11 @@ public struct Channel<T: Send> {
     public fn tryRecv(borrow this) -> T? {
         var status: u32 = 0;
         var epoch: u64 = 0;
-        let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+        let slot = unsafe { ceesafe_chan_begin_recv(
+            this.raw,
+            borrow mut status as *mut u32,
+            borrow mut epoch as *mut u64,
+        ) };
         if (status != 0) {
             return null;
         }
@@ -158,7 +170,11 @@ public struct Channel<T: Send> {
         loop {
             var status: u32 = 0;
             var epoch: u64 = 0;
-            let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            let slot = unsafe { ceesafe_chan_begin_recv(
+                this.raw,
+                borrow mut status as *mut u32,
+                borrow mut epoch as *mut u64,
+            ) };
             if (status == 0) {
                 let value = unsafe { (slot as *mut T).read() };
                 unsafe { ceesafe_chan_end_recv(this.raw); }
@@ -183,7 +199,11 @@ public struct Channel<T: Send> {
             }
             var status: u32 = 0;
             var epoch: u64 = 0;
-            let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            let slot = unsafe { ceesafe_chan_begin_send(
+                this.raw,
+                borrow mut status as *mut u32,
+                borrow mut epoch as *mut u64,
+            ) };
             if (status == 0) {
                 unsafe {
                     (slot as *mut T).write(value);
@@ -212,7 +232,11 @@ public struct Channel<T: Send> {
             }
             var status: u32 = 0;
             var epoch: u64 = 0;
-            let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            let slot = unsafe { ceesafe_chan_begin_recv(
+                this.raw,
+                borrow mut status as *mut u32,
+                borrow mut epoch as *mut u64,
+            ) };
             if (status == 0) {
                 let value = unsafe { (slot as *mut T).read() };
                 unsafe { ceesafe_chan_end_recv(this.raw); }
@@ -235,7 +259,11 @@ public struct Channel<T: Send> {
             loop {
                 var status: u32 = 0;
                 var epoch: u64 = 0;
-                let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+                let slot = unsafe { ceesafe_chan_begin_recv(
+                    this.raw,
+                    borrow mut status as *mut u32,
+                    borrow mut epoch as *mut u64,
+                ) };
                 if (status != 0) {
                     break;
                 }
@@ -256,6 +284,8 @@ public struct Channel<T: Send> {
 public struct AsyncMutex<T: Send> {
     private token: Channel<u8>;
     private data: T;
+    /// 1 once an isolated task that held the lock trapped (ADR 0175 §2.6), until `heal`.
+    private poisoned: AtomicU32;
 
     /// A mutex holding `data`, unlocked.
     public fn create(data: T) -> Result<AsyncMutex<T>, AllocError> {
@@ -264,15 +294,46 @@ public struct AsyncMutex<T: Send> {
             Ok() => {}
             Err(_) => {}
         }
-        return Ok(AsyncMutex { token: token, data: data });
+        return Ok(AsyncMutex { token: token, data: data, poisoned: AtomicU32.create(0) });
     }
 
-    /// Waits for the lock; `Err(AsyncError.Cancelled)` if the task is cancelled first.
+    /// Waits for the lock; `Err(AsyncError.Cancelled)` if the task is cancelled first. It panics
+    /// (`PanicKind.Poisoned`) if an isolated task that held the lock trapped (ADR 0175 §2.6); `recover` is for code
+    /// that can repair the data.
+    /// Safety: the token is back before the panic, so the next task to lock meets the mark too.
     public async fn lock(borrow this) -> Result<AsyncMutexGuard<T>, AsyncError> {
         match (await this.token.recvAsync()?) {
-            Some(_) => { return Ok(AsyncMutexGuard { lock: this }); }
+            Some(_) => {
+                if (this.poisoned.load() != 0) {
+                    match (this.token.trySend(0)) {
+                        Ok() => {}
+                        Err(_) => {}
+                    }
+                    unsafe { ceesafe_panic_poisoned(); }
+                }
+                this.held();
+                return Ok(AsyncMutexGuard { lock: this });
+            }
             null => { return Err(AsyncError.Cancelled); } // the token's channel is never closed
         }
+    }
+
+    /// `lock`, whether or not the mutex is poisoned: `guard.poisoned()` says which, and `guard.heal()` clears the
+    /// mark.
+    public async fn recover(borrow this) -> Result<AsyncMutexGuard<T>, AsyncError> {
+        match (await this.token.recvAsync()?) {
+            Some(_) => {
+                this.held();
+                return Ok(AsyncMutexGuard { lock: this });
+            }
+            null => { return Err(AsyncError.Cancelled); }
+        }
+    }
+
+    /// Tells the runtime that the running task holds the lock (as `Mutex`'s).
+    /// Safety: the channel and the flag are this mutex's, which outlives the guard.
+    fn held(borrow this) {
+        unsafe { ceesafe_async_lock_held(2, this.token.handle(), borrow this.poisoned as *AtomicU32 as *mut u32); }
     }
 }
 
@@ -285,7 +346,17 @@ public struct AsyncMutexGuard<region r, T: Send> {
     public fn data(borrow mut this) -> borrow mut T =>
         unsafe { Ptr.toBorrowMut(borrow this.lock.data as *T as *mut T) };
 
+    /// Whether an isolated task that held the lock trapped, and nothing has healed it since (ADR 0175 §2.6).
+    public fn poisoned(borrow this) -> bool => this.lock.poisoned.load() != 0;
+
+    /// Clears the mark: the data is whole again.
+    public fn heal(borrow this) {
+        this.lock.poisoned.store(0);
+    }
+
+    /// Safety: the runtime forgets a lock this task held; the channel is the mutex's.
     drop {
+        unsafe { ceesafe_async_lock_released(this.lock.token.handle()); }
         match (this.lock.token.trySend(0)) {
             Ok() => {}
             Err(_) => {} // cannot happen: the guard took the only token

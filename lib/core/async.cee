@@ -28,6 +28,16 @@ extern "C" {
     @effects()
     fn ceesafe_async_set_done(set: *mut void) -> bool;
     @effects()
+    fn ceesafe_async_isolate_next(set: *mut void, crashed: *void, size: u64);
+    @effects()
+    fn ceesafe_async_isolated_last() -> u64;
+    @effects()
+    fn ceesafe_async_set_crashes(set: *mut void) -> u64;
+    @effects()
+    fn ceesafe_async_set_missed(set: *mut void) -> u64;
+    @effects()
+    fn ceesafe_async_set_end(set: *mut void);
+    @effects()
     fn ceesafe_async_set_cancel(set: *mut void);
     @effects()
     fn ceesafe_async_set_oom(set: *mut void) -> bool;
@@ -247,6 +257,42 @@ public struct TaskSet<E: Copy> {
 
     /// `trySpawn`'s result: whether the child started.
     fn started(borrow this, code: u32) -> bool => code == 0;
+
+    /// `spawnIsolated`'s step between the wait for room and the start (ADR 0175): the child that is started next,
+    /// with no await between, is the root of an isolation unit, and the set is given `Err(crashed)` for it if it
+    /// traps. `admitted` is passed through.
+    /// Safety: the runtime copies the value during the call.
+    fn isolating(borrow this, crashed: E, admitted: u32) -> u32 {
+        if (admitted == 0) {
+            let value: Result<void, E> = Err(crashed);
+            unsafe {
+                ceesafe_async_isolate_next(
+                    this.record,
+                    borrow value as *Result<void, E> as *void,
+                    layoutOf<Result<void, E>>().size as u64,
+                );
+            }
+        }
+        return admitted;
+    }
+
+    /// `spawnIsolated`'s result for the start's code: the child's number; else `Err(oom)`. The number is 0 if there
+    /// was no memory to isolate the child, which then runs as `spawn`'s does.
+    /// Safety: the runtime only reads what the start left for this thread.
+    async fn spawnedIsolated(borrow this, code: u32) -> Result<u64, E> {
+        if (code == 0) {
+            return Ok(unsafe { ceesafe_async_isolated_last() });
+        }
+        return Err(this.oom);
+    }
+
+    /// How many of the set's isolated children have trapped (ADR 0175).
+    /// Safety: as room.
+    public fn crashes(borrow this) -> u64 => unsafe { ceesafe_async_set_crashes(this.record) };
+
+    /// How many of those were not put in the watcher's channel, which was full or closed (`Isolation.watch`).
+    /// Safety: as room.
+    public fn missedCrashes(borrow this) -> u64 => unsafe { ceesafe_async_set_missed(this.record) };
 }
 
 /// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): `Async.tasksIn` with the system heap.
@@ -285,6 +331,7 @@ public struct AsyncTasksIn<E: Copy + Send, A> {
         while (!unsafe { ceesafe_async_set_done(raw) }) {
             await Async.park(); // the last child wakes this task
         }
+        unsafe { ceesafe_async_set_end(raw); } // what it kept for its isolated children (ADR 0175)
         match (result) {
             Err(e) => { return Err(e); }
             Ok() => {}

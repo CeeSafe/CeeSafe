@@ -87,6 +87,8 @@ extern "C" {
     @effects()
     fn ceesafe_host_handover_release(kind: u32, held: u64);
     @effects()
+    fn ceesafe_host_handover_shutdown(held: u64) -> i64;
+    @effects()
     fn ceesafe_host_inherited(kinds: *mut u8, capacity: u64) -> i64;
     @effects()
     fn ceesafe_host_inherited_take(place: u32, kind: u32, out: *mut u64) -> i64;

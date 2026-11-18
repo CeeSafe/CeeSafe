@@ -3577,7 +3577,61 @@ Diagnostics: none new.
     field's text and caret is the keyboard, through the program. `accessibilityPerformPress`, `…Increment`, `…Decrement` and `setAccessibilityFocused:` queue the
     requests. The notifications posted are `AXLayoutChanged` on the view when elements came or went,
     `AXValueChanged`, `AXTitleChanged`, `AXSelectedTextChanged` and `AXFocusedUIElementChanged` on an element, and `AXAnnouncementRequested`
-    for `announce`. iOS, Android, Windows, Linux and FreeBSD: not implemented yet (ADR 0164 §3); the list is kept
+    for `announce`. iOS: each node is a `CeeSafeAccessElement`, a `UIAccessibilityElement` whose
+    container is the window's view; the view's `accessibilityElements` are the elements in the list's order, the
+    order VoiceOver moves in, and an element's place is its `accessibilityFrameInContainerSpace`. iOS has traits
+    and no roles: `Text` is static text; `Button`, `Tab`, `Radio`, `ListItem`, `MenuItem` and `Dropdown` are
+    buttons, selected when `selected` (a `Radio` when `checked`), a `Dropdown` with its value; a `Checkbox` is a
+    toggle button with the value `1` or `0`, said "on" and "off" (iOS 17; a button with that value before); a
+    `Slider` is adjustable, its value the node's value text or else its share of the range as `40%`; an `Image` is
+    an image; a `TextField` has its name and value and no trait; `disabled` is not enabled. `accessibilityActivate`
+    queues `Press` (which is how a field gets the keyboard, as a tap does), `accessibilityIncrement` and
+    `…Decrement` the steps; `Focus` is never asked. `UIAccessibilityLayoutChangedNotification` is posted when
+    elements came or went, and `announce` posts an announcement. `accessActive` is whether VoiceOver runs
+    (`UIAccessibilityIsVoiceOverRunning`), read when the window takes its events. A field's `caret` and `anchor`
+    are not used. Android: an `org.ceesafe.window.AccessView`, a view the size of the
+    window that draws nothing and takes no touch, made when the program first gives a list; its
+    `AccessibilityNodeProvider` describes the list as virtual views, children of the view in the list's order. A
+    virtual view's number is the element's `id` folded to 31 bits (two of a list that fold to one number: the
+    first is kept). Each says the widget its role is (`TextView`, `Button`, `CheckBox`, `RadioButton`, `EditText`,
+    `SeekBar`, `Spinner`, `ImageView`; a `Tab`, a `ListItem` and a `MenuItem` are buttons), its name as its
+    content description with its value after it, checked for a `Checkbox` and a `Radio`, selected, enabled, a
+    slider's range, and its bounds on the screen in pixels. `ACTION_CLICK` queues `Press`, a slider's
+    `ACTION_SCROLL_FORWARD` and `…BACKWARD` the steps; `Focus` is never asked. The view keeps TalkBack's cursor
+    (`ACTION_ACCESSIBILITY_FOCUS`), and turns the hover events of a finger exploring the screen into the entering
+    and leaving of the element under it, for which the runtime leaves a touch screen's hover events to the views.
+    A changed list sends `TYPE_WINDOW_CONTENT_CHANGED`; `announce` is `announceForAccessibility`. `accessActive`
+    is true once a node was asked for. The list goes from the program's thread to the activity's packed in bytes,
+    and requests come back under the runtime's lock. TalkBack's own focus rectangle is not drawn: the window's
+    surface is the program's. A field's `caret` and `anchor` are not used. Windows: UI Automation providers, which NVDA
+    and Narrator read. The window answers `WM_GETOBJECT` for UI Automation's root with a fragment root
+    (`IRawElementProviderSimple`, `…Fragment`, `…FragmentRoot`) whose host provider is the window's own and whose
+    children are the list's elements in its order; the first such question makes `accessActive` true. Each
+    element is a provider of its own, kept while its `id` is in the list, with the runtime id `{3, id's low half,
+    id's high half}` and its bounds on the screen in pixels. The control types are `Text`, `Button`, `CheckBox`,
+    `RadioButton`, `Edit`, `Slider`, `TabItem`, `ListItem`, `MenuItem`, `ComboBox` and `Image`. The patterns: a
+    `Button`, a `ListItem` and a `MenuItem` are invoked; a `Checkbox` is toggled; a `Radio`, a `Tab` and a
+    `ListItem` are selection items (selected when `checked` or `selected`); a `Slider` has a range value, and
+    setting it above or below its value asks one step (a slider that gives its value as text, a count, has its own
+    range; any other is given as a percentage, 0 to 100, because a reader says a slider's value as a whole number:
+    NVDA says "0" for 0.5 of 0 to 1); a `TextField` and a `Dropdown` have a value, which a client
+    cannot set; a `Dropdown` expands and collapses by a press. `Invoke`, `Toggle`, `Select`, `Expand` and
+    `Collapse` queue `Press`, and a fragment's `SetFocus` queues `Focus`; a `disabled` element answers
+    `UIA_E_ELEMENTNOTENABLED`, and one that left the list `UIA_E_ELEMENTNOTAVAILABLE`. While a client listens, a
+    changed list raises a structure change of the root and property changes of a control's name, value, range
+    value, toggle state, selection and expansion (the name of plain text that changes, a clock, is not told).
+    **The focus is told**: when the window gets the keyboard focus, when an element takes it or gives it up, and
+    once after the provider is first given out to a window that has it already, a focus-changed event is raised
+    for the element whose node is `focused`, or else for the window. UI Automation does not watch a window that
+    has a provider of its own, and a reader that hears no such event goes on believing the last window is in
+    front. The providers are server-side ones (`ProviderOptions_ServerSideProvider`, 2: a client-side one's
+    events go nowhere), and every event is raised with the lock let go, since a client's question on another
+    thread may be what the event waits for; `announce` raises a notification (Windows
+    10 1709 on). The interfaces are written in the runtime as their vtables and their functions come from
+    `uiautomationcore.dll` and `oleaut32.dll`, loaded at first use. A provider is called on threads of UI
+    Automation's: the providers and the list are under one lock, and what was asked is queued when the window
+    takes its messages. A field's `caret` and `anchor` are not used. Linux and FreeBSD: not
+    implemented yet (ADR 0164 §3); the list is kept
     and `takeAccessAction` is null, `accessActive` false.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`

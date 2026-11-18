@@ -3264,13 +3264,17 @@ int64_t ceesafe_signal_subscribe(void *channel) {
 void ceesafe_signal_unsubscribe(void *channel) { (void)channel; }
 #elif defined(_WIN32)
 static BOOL WINAPI cee_signal_handler(DWORD kind) {
-    uint32_t which = kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT ? CEE_SIGNAL_INTERRUPT : CEE_SIGNAL_TERMINATE;
+    /* Ctrl+Break is a request to terminate (ADR 0173 §9): it is the one event a process can send to another's
+       group, so it is what ChildProcess.terminate sends, and what stands for SIGTERM on Windows. */
+    uint32_t which = kind == CTRL_C_EVENT ? CEE_SIGNAL_INTERRUPT : CEE_SIGNAL_TERMINATE;
     cee_signal_enter();
     void *channel = cee_signal_channel;
     if (channel != NULL) cee_signal_send(channel, which);
     cee_signal_leave();
     if (channel == NULL) return FALSE; /* no subscription: the next handler, or the system's default */
-    if (which == CEE_SIGNAL_TERMINATE) Sleep(INFINITE);
+    /* A close, logoff or shutdown ends the process when this returns, so it does not return: the program ends
+       itself. Ctrl+Break ends nothing by itself, and its handler returns. */
+    if (which == CEE_SIGNAL_TERMINATE && kind != CTRL_BREAK_EVENT) Sleep(INFINITE);
     return TRUE;
 }
 

@@ -433,10 +433,10 @@ public struct ProcessLimits {
 
 /// A request to the process from outside it (`ProcessSignals`, type-system.md §26.15, ADRs 0125 and 0140).
 public enum ProcessSignal {
-    /// The user's interrupt: POSIX `SIGINT` (Ctrl+C in a terminal); on Windows, Ctrl+C and Ctrl+Break.
+    /// The user's interrupt: POSIX `SIGINT` (Ctrl+C in a terminal); on Windows, Ctrl+C.
     Interrupt,
-    /// A request to terminate: POSIX `SIGTERM` (`kill`, a service manager, a container's stop); on Windows, the
-    /// console's close, logoff and shutdown.
+    /// A request to terminate: POSIX `SIGTERM` (`kill`, a service manager, a container's stop); on Windows,
+    /// Ctrl+Break (which `ChildProcess.terminate` sends) and the console's close, logoff and shutdown.
     Terminate,
     /// POSIX `SIGHUP` (ADR 0140): the terminal went away, or, for a daemon, which has none, by convention a request
     /// to read its configuration again (`kill -HUP`, systemd's `ExecReload`). Windows has no such request, so it never

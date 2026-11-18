@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept it as written."): the six questions of §7 as
   recommended. Implemented the same day (§9), **not as written in several places**, which §9 lists; not released.
-  **Run on Windows nowhere; its Windows half ran under Wine.** Written at the owner's request ("Write the descriptor passing ADR"): it is the
+  Its checks pass on Linux, macOS and Windows 11 (built there with GCC; **not compiled with MSVC**). Written at the owner's request ("Write the descriptor passing ADR"): it is the
   second half of ADR 0169 §5 question 2, which ADR 0172 §6 question 2 left as "the next ADR". Not accepted: §7 has
   the questions.
 - Scope: lib/std (`Handover`, `Inherited`, `Process.spawnWith`, `Process.inherited`, `SharedMemory.anonymous`),
@@ -223,17 +223,25 @@ places; the first four are the ones to know.
 - **Async code can start and watch a child.** `Process.spawn` and `ChildProcess.poll` were declared as calls that
   may sleep (ADR 0169), so an async function could not call them (N0295), and ADR 0169 §2.1 says async code polls
   on a timer. `poll` and `spawn` no longer are; `wait` is, through a runtime function of its own.
-- **§8 step 1 was not done first.** `.github/workflows/windows.yml` is written (it builds `ceesafec` from the
-  tree, compiles its C on Windows and runs `child_check`, `shared_check` and `handover_check`) and **has not
-  run**: nothing was pushed. What ran instead: the three programs cross-compiled with MinGW and run under Wine
-  on Linux.
-  - `shared_check`'s program: every line as on POSIX.
-  - `handover_check`'s program: three workers answer 300 connections on a handed listener and count in handed
-    memory; a handed UDP socket is heard by two children. This found a fault of this ADR's own (unnamed memory
-    was refused as "already exists": the last error is not cleared by a success) and fixed it.
-  - `child_check`'s program: a child's status, its id and the kept exit are right; **`terminate` fails** where
-    the processes have no console (`GenerateConsoleCtrlEvent`), which is ADR 0169's and may be Wine's alone.
-  Wine is not Windows: the job is still the first thing to run.
+- **§8 step 1, Windows first, was done on a machine, not in a workflow.** `.github/workflows/windows.yml` is
+  written (it builds `ceesafec` from the tree, compiles its C with MSVC and runs `child_check`, `shared_check` and
+  `handover_check`) and **has not run**: nothing was pushed. The owner gave a Windows 11 laptop instead, where
+  `ceesafec` was built from its own C with GCC 16 (MinGW-w64, UCRT) and the checks run: `child_check` 6 cases,
+  `shared_check` 7, `handover_check` 5, `budget_check` 3, no problems. **MSVC has compiled none of this ADR's
+  Windows code**; the release workflow's Windows jobs would be the first. Before that the three programs were
+  cross-compiled and run under Wine, which found the first of the faults below.
+- **Three faults found by running on Windows**, the last two in ADR 0169's and ADR 0125's code, which had never
+  run there:
+  - unnamed memory was refused as "already exists": a successful `CreateFileMappingW` need not clear the last
+    error, which is now cleared before the call and read only for a name;
+  - **a child told to `terminate` heard `Interrupt`.** ADR 0125 reports Ctrl+C and Ctrl+Break as `Interrupt`, and
+    Ctrl+Break is the one console event a process can send to another's group, so it is what `terminate` sends
+    (ADR 0169 §2.3), whose §2.1 says the child hears `Terminate`. **Ctrl+Break is now `Terminate`**, which changes
+    ADR 0125's rule for a user's own Ctrl+Break too: §26.15 and `ProcessSignal`'s comment say so;
+  - with that, the child never ended: the handler of a terminate request does not return, which a console's
+    close needs and Ctrl+Break does not. It returns for Ctrl+Break.
+  `child_check` skipped on Windows and now runs there (a killed child has status 1; children are found by the
+  program's name).
 - **The test of §8 that every worker answers some connections on Linux** is not made: with one socket, which
   process is given a connection is the kernel's choice on Linux too.
 - **Tests:** `tools/handover_check.py`, in the contract suite as `handover`: 6 cases on macOS and on Linux

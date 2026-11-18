@@ -3760,7 +3760,8 @@ Diagnostics: none new.
 
 ### 26.15 Process signals (ADRs 0125 and 0140)
 - `ProcessSignal` (lib/std) is a request to the process from outside it: `Interrupt` (POSIX `SIGINT`, Ctrl+C in a
-  terminal; Windows' Ctrl+C and Ctrl+Break), `Terminate` (POSIX `SIGTERM`; Windows' console close, logoff and
+  terminal; Windows' Ctrl+C), `Terminate` (POSIX `SIGTERM`; Windows' Ctrl+Break, which is what
+  `ChildProcess.terminate` sends (§26.16, ADR 0173 §9), console close, logoff and
   shutdown) or `Hangup` (POSIX `SIGHUP`, ADR 0140: the terminal went away, or, for a daemon, by convention a request to
   read its configuration again; never on Windows, which has no such request). No other signal is touched.
 - **The default is unchanged.** The runtime installs no handler by itself: until a program subscribes, and after its

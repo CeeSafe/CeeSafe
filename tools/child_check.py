@@ -14,8 +14,8 @@ A program is built that starts itself again as its children (`Process.executable
 The interpreter starts no children: there `Process.spawn` is `IoError.Unsupported`, `Process.id()` is 0 and
 `Process.executable()` is an error, which is checked too.
 
-POSIX only: elsewhere it reports that it was skipped. On Windows the same program is tried by hand
-(tools/child_check.py --write DIR writes it); its third child ends with status 1, not a signal.
+On Windows the third child ends with status 1, not a signal, and the children are found by the program's name
+(tools/child_check.py --write DIR writes the programs, to try them by hand).
 
 usage: python3 tools/child_check.py --compiler out/ceesafec
 """
@@ -138,8 +138,16 @@ EXPECTED_CHILDREN = ["child listening", "child told to terminate"]
 DEADLINE = 60.0
 
 
+WINDOWS = os.name == "nt"
+
+
 def children_of(exe):
-    """The ids of the running copies of `exe` that are children (`exe child ...`)."""
+    """The ids of the running copies of `exe` that are children (`exe child ...`). On Windows, of every running
+    copy: the parent has ended when this is asked."""
+    if WINDOWS:
+        listed = subprocess.run(["tasklist", "/FO", "CSV", "/NH", "/FI", f"IMAGENAME eq {os.path.basename(exe)}"],
+                                capture_output=True, text=True).stdout
+        return [line.split(",")[1].strip('"') for line in listed.splitlines() if line.startswith('"')]
     listed = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True).stdout
     return [line.split()[0] for line in listed.splitlines() if f"{exe} child" in line]
 
@@ -157,15 +165,15 @@ def main():
                 f.write(source)
         print(f"child_check: wrote 2 programs to {args.write}")
         return 0
-    if os.name != "posix":
-        print("child_check: skipped (the checks send signals and list processes as POSIX does)")
-        return 0
+    # Windows has no signal to end a process with: a child that is killed has status 1 (type-system.md §26.16).
+    expected_parent = [("status 1" if WINDOWS and line == "signal 9" else line) for line in EXPECTED_PARENT]
     problems = []
     with tempfile.TemporaryDirectory(prefix="ceesafe-child-") as work:
         path = os.path.join(work, "kids.cee")
         with open(path, "w", encoding="utf-8") as f:
             f.write(PARENT)
-        exe = os.path.join(work, "kids")
+        # A name of this run's own: on Windows the children are found by it.
+        exe = os.path.join(work, f"kids{os.getpid()}.exe" if WINDOWS else "kids")
         b = subprocess.run([compiler, "build", path, "-o", exe], capture_output=True, text=True)
         if b.returncode != 0:
             problems.append(f"kids: build failed: {b.stderr.strip()[:600]}")
@@ -180,8 +188,8 @@ def main():
             lines = out.splitlines()
             parent = [l for l in lines if not l.startswith("child ")]
             children = [l for l in lines if l.startswith("child ") and l != "child sleeping"]
-            if parent != EXPECTED_PARENT:
-                problems.append(f"kids: the parent wrote {parent!r}, expected {EXPECTED_PARENT!r} ({err.strip()[:300]!r})")
+            if parent != expected_parent:
+                problems.append(f"kids: the parent wrote {parent!r}, expected {expected_parent!r} ({err.strip()[:300]!r})")
             if children != EXPECTED_CHILDREN:
                 problems.append(f"kids: the children wrote {children!r}, expected {EXPECTED_CHILDREN!r}")
             if p.returncode != 0:
@@ -194,7 +202,7 @@ def main():
             if left:
                 problems.append(f"kids: children still there after the parent ended: {left}")
                 for pid in left:
-                    subprocess.run(["kill", "-9", pid])
+                    subprocess.run(["taskkill", "/F", "/PID", pid] if WINDOWS else ["kill", "-9", pid], capture_output=True)
         path = os.path.join(work, "interpreted.cee")
         with open(path, "w", encoding="utf-8") as f:
             f.write(INTERPRETED)

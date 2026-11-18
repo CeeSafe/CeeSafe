@@ -656,7 +656,11 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             if (manifest.dependencies.length == before) {
                 continue; // said already
             }
-            let patch = manifest.dependencies.remove(before);
+            // The entry just read is the last (pop: the release chain's 0.8.0 has no remove).
+            let patch = match (manifest.dependencies.pop()) {
+                Some(p) => p,
+                null => { continue; }
+            };
             if (patch.isRegistry) {
                 manifestError(
                     report,

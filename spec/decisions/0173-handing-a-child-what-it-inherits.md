@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept it as written."): the six questions of §7 as
   recommended. Implemented the same day (§9), **not as written in several places**, which §9 lists; not released.
-  Its checks pass on Linux, macOS and Windows 11 (built there with GCC; **not compiled with MSVC**). Written at the owner's request ("Write the descriptor passing ADR"): it is the
+  Its checks pass on Linux, macOS, Windows 11 x64 (built with GCC) and Windows on ARM64 (built with MSVC). Written at the owner's request ("Write the descriptor passing ADR"): it is the
   second half of ADR 0169 §5 question 2, which ADR 0172 §6 question 2 left as "the next ADR". Not accepted: §7 has
   the questions.
 - Scope: lib/std (`Handover`, `Inherited`, `Process.spawnWith`, `Process.inherited`, `SharedMemory.anonymous`),
@@ -227,8 +227,10 @@ places; the first four are the ones to know.
   written (it builds `ceesafec` from the tree, compiles its C with MSVC and runs `child_check`, `shared_check` and
   `handover_check`) and **has not run**: nothing was pushed. The owner gave a Windows 11 laptop instead, where
   `ceesafec` was built from its own C with GCC 16 (MinGW-w64, UCRT) and the checks run: `child_check` 6 cases,
-  `shared_check` 7, `handover_check` 5, `budget_check` 3, no problems. **MSVC has compiled none of this ADR's
-  Windows code**; the release workflow's Windows jobs would be the first. Before that the three programs were
+  `shared_check` 7, `handover_check` 5, `budget_check` 3, no problems. Then, in the owner's Windows on ARM64
+  virtual machine, `ceesafec` was built from its C with MSVC by the release workflow's command, with no warning,
+  and the same four checks pass with `cl` as the C compiler (`budget_check` 5 cases there). **MSVC for x64 has
+  compiled none of it**; the release workflow's `win-x64` job would be the first. Before that the three programs were
   cross-compiled and run under Wine, which found the first of the faults below.
 - **Three faults found by running on Windows**, the last two in ADR 0169's and ADR 0125's code, which had never
   run there:

@@ -305,12 +305,12 @@ Packages (N0320–N0329 and N0335; `tooling.md` §4, ADR 0013):
 | Code | Meaning | Example |
 |---|---|---|
 | N0320 | `ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset | `name = app` (no quotes) |
-| N0321 | A manifest field is missing, unknown or invalid, or a dependency is an executable | `kind = "binary"` |
+| N0321 | A manifest field is missing, unknown or invalid, a dependency is an executable, or a `[patch]` has no source, is given twice or names no package of the build | `kind = "binary"` |
 | N0322 | A dependency's directory or manifest is missing, a git package's `dir` or path dependency leads out of its checkout, or its name differs from its key | `geometry = { path = "../geo" }` with no `../geo/ceesafe.toml` |
 | N0323 | A git dependency cannot be fetched or resolved, or is absent with `--offline` | an unknown tag |
 | N0324 | The lock file is missing or does not match the manifest | a dependency added without `ceesafec fetch` |
 | N0325 | A git checkout's manifest and sources do not match the lock's hash | a file edited in the cache |
-| N0326 | One package name reached through two different sources | two paths to two `geometry` packages |
+| N0326 | One package name reached through two different sources (the root's `[patch]` chooses one) | two paths to two `geometry` packages |
 | N0327 | A dependency cycle | `a` depends on `b`, `b` on `a` |
 | N0328 | An invalid version, version requirement, or index entry (`tooling.md` §4.6) | `shapes = "1.x"` |
 | N0329 | No versions satisfy the requirements: the conflicting requirements and where each came from (§4.7) | `^2.1 (from geometry 1.4.0) and ^1.0 (from plot 0.3.0)` |

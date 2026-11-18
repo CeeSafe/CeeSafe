@@ -171,6 +171,11 @@
     link leading out of it (v4, POSIX) are N0322; shapes at v1 and extra at v2, whose path names shapes2, are N0326
     naming both directories. `publish` in a subdirectory writes `dir`, `index-check` accepts the entry, and an
     application using it from that index runs, its lock recording `dir`.
+42. dependency-patch (ADR 0174, tooling.md §4.1, §4.2): app depends on extra and shapes by path, extra on shapes by
+    another path: `fetch` is N0326. With `[patch] shapes = { path = "../shapes-local" }`, `fetch` locks one shapes,
+    from the patch, `check` is clean and the program prints the patched package's values, in the interpreter and
+    compiled. A patch that names no package of the build, and one given as a version requirement, are N0321; a
+    dependency's own [patch] is not read.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1197,6 +1202,63 @@ def git_subdirectories(compiler, work, problems):
     if p.returncode != 0 or q.stdout.strip() != "3" or 'dir = "tally"' not in lock:
         problems.append(f"git dir: a registry package in a subdirectory: {p.stderr[:300]!r} {q.stdout!r} "
                         f"{q.stderr[:300]!r} {lock!r}")
+
+
+def dependency_patch(compiler, work, problems):
+    """42. [patch] (ADR 0174): a package's source replaced everywhere in the build by the root's choice."""
+    base = os.path.join(work, "dependency-patch")
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def fetch_codes(p):
+        return re.findall(r"error\[(N[0-9]{4})\]", p.stderr)
+
+    for name, value in (("shapes", "2"), ("shapes-local", "20")):
+        write(os.path.join(base, name, "ceesafe.toml"), '[package]\nname = "shapes"\nkind = "library"\n')
+        write(os.path.join(base, name, "src", "lib.cee"), f"public fn two() -> i32 => {value};\n")
+    write(os.path.join(base, "extra", "ceesafe.toml"),
+          '[package]\nname = "extra"\nkind = "library"\n\n[dependencies]\nshapes = { path = "../shapes" }\n\n'
+          '[patch]\n# a dependency\'s patch: not read\nshapes = { path = "../nowhere" }\n')
+    write(os.path.join(base, "extra", "src", "lib.cee"), "public fn four() -> i32 => shapes.two() * 2;\n")
+    app = os.path.join(base, "app")
+    write(os.path.join(app, "src", "main.cee"),
+          "fn main() {\n    Console.writeLine(extra.four());\n    Console.writeLine(shapes.two());\n}\n")
+    dependencies = '[package]\nname = "app"\n\n[dependencies]\nextra = { path = "../extra" }\nshapes = { path = "../shapes-local" }\n'
+
+    # Two sources for shapes: N0326.
+    write(os.path.join(app, "ceesafe.toml"), dependencies)
+    p = run([compiler, "fetch"], app)
+    if p.returncode == 0 or fetch_codes(p) != ["N0326"]:
+        problems.append(f"patch: without it, N0326: {p.returncode} {fetch_codes(p)} {p.stderr[:300]!r}")
+
+    # The root's patch: one shapes, from it, for extra too.
+    write(os.path.join(app, "ceesafe.toml"), dependencies + '\n[patch]\nshapes = { path = "../shapes-local" }\n')
+    p = run([compiler, "fetch"], app)
+    lock = open(os.path.join(app, "ceesafe.lock"), encoding="utf-8").read() if p.returncode == 0 else ""
+    if p.returncode != 0 or lock.count('name = "shapes"') != 1 or 'source = "path+../shapes-local"' not in lock:
+        problems.append(f"patch: fetch: {p.returncode} {p.stderr[:300]!r} lock {lock!r}")
+    p = run([compiler, "check"], app)
+    if p.returncode != 0:
+        problems.append(f"patch: check: {p.returncode} {p.stderr[:300]!r}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.split() != ["40", "20"]:
+        problems.append(f"patch: run --interp: {p.returncode} {p.stdout!r} {p.stderr[-300:]!r}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0 or run([exe], app).stdout.split() != ["40", "20"]:
+        problems.append(f"patch: build: {p.returncode} {p.stderr[-300:]!r}")
+
+    # A patch of no package of the build, and one with no source, are N0321.
+    for extra_patch, label in (('nothing = { path = "../shapes" }\n', "unused"), ('shapes = "1.0"\n', "no source")):
+        write(os.path.join(app, "ceesafe.toml"),
+              dependencies + '\n[patch]\nshapes = { path = "../shapes-local" }\n' + extra_patch
+              if label == "unused" else dependencies + "\n[patch]\n" + extra_patch)
+        p = run([compiler, "fetch"], app)
+        if p.returncode == 0 or "N0321" not in fetch_codes(p):
+            problems.append(f"patch: {label}: N0321: {p.returncode} {fetch_codes(p)} {p.stderr[:300]!r}")
 
 
 def manifest_targets(compiler, work, problems):
@@ -2366,9 +2428,10 @@ def main():
         windowed_executables(compiler, work, problems)
         manifest_targets(compiler, work, problems)
         git_subdirectories(compiler, work, problems)
+        dependency_patch(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 38 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 39 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

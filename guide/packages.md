@@ -116,6 +116,28 @@ fn main() {
   helper`; and a value of a private type may travel to other files, which only cannot write its name.
 - Two packages may declare the same name: in the generated C, a dependency's items carry its package's name.
 
+## Working on a dependency
+
+A package reaches each library through one source: a path, a git commit, or a registry version. When an
+application is developed beside a library it uses, it names the library by path, and a published library it also
+uses names the same one by git: two sources, error N0326. The application's `[patch]` chooses one for the whole
+build:
+
+```toml
+[dependencies]
+claywind = { path = "../Clay/claywind" }
+reporting = { git = "https://example.org/reporting.git", rev = "4805743" }   # it names claywind by git
+
+[patch]
+claywind = { path = "../Clay/claywind" }    # every package of the build takes this one
+```
+
+- A patch is a path or git source, written as a dependency is; a path is relative to the application's directory.
+- Only the package being built applies its `[patch]`: a library's patches are for its own development and do not
+  reach its users.
+- `ceesafec fetch` records the patched source in `ceesafe.lock`. A patch that names no package of the build is an
+  error (N0321): usually a misspelt name.
+
 ## The lock file
 
 ```sh

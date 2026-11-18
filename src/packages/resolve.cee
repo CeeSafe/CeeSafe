@@ -314,8 +314,32 @@ fn resolveAll(w: borrow mut Workspace, report: borrow mut PackageReport) -> Resu
     if (report.hasErrors()) {
         return Ok();
     }
+    // A patch that names no package of the build is a mistake (a name misspelt, a dependency since removed).
+    for (k in 0..w.root.patches.length) {
+        if (w.findResolved(w.root.patches[k].name.view()) == null) {
+            var m = Words.create();
+            m.t("the patch of '")?;
+            m.b(w.root.patches[k].name.view())?;
+            m.t("' names no package of the build")?;
+            let patch = copyDependency(w.root.patches[k])?;
+            w.error(report, 321, none(), patch, m.out)?;
+        }
+    }
+    if (report.hasErrors()) {
+        return Ok();
+    }
     checkCycles(w, report)?;
     return Ok();
+}
+
+/// The root's patch (ADR 0174) of package `name`, if it has one.
+fn patchOf(w: borrow Workspace, name: Slice<u8>) -> usize? {
+    for (k in 0..w.root.patches.length) {
+        if (sameBytes(w.root.patches[k].name.view(), name)) {
+            return k;
+        }
+    }
+    return null;
 }
 
 fn drain(
@@ -325,11 +349,21 @@ fn drain(
 ) -> Result<void, AllocError> {
     var next: usize = 0;
     while (next < queue.length) {
-        let dependent = queue[next].dependent;
+        var dependent = queue[next].dependent;
         var spec = copyDependency(queue[next].spec)?;
         next += 1;
-        if (!pathInCheckout(w, dependent, mut spec, report)?) {
-            continue;
+        match (patchOf(w, spec.name.view())) {
+            Some(p) => {
+                // The root's [patch] gives this package's source wherever it is reached (ADR 0174): resolved as
+                // the root's own dependency, its path from the root's directory, its errors at the patch.
+                spec = copyDependency(w.root.patches[p])?;
+                dependent = none();
+            }
+            null => {
+                if (!pathInCheckout(w, dependent, mut spec, report)?) {
+                    continue;
+                }
+            }
         }
         var solved = false;
         for (s in w.solution.view()) {

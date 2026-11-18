@@ -227,6 +227,9 @@ lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev 
 widgets = { git = "https://example.org/ui.git", tag = "v0.3.0", dir = "widgets" }   # a package in a subdirectory
 shapes = "2.1"               # from the registry (§4.6): a version requirement
 json = { version = "0.9", index = "https://example.org/my-index.git" }   # from another index
+
+[patch]                      # the root's only: a package's source wherever the build reaches it (ADR 0174)
+geometry = { path = "../geometry-fork" }
 ```
 
 **The compiler requirement** (ADR 0076). When a manifest is read (the root's, and each dependency's, by every command
@@ -314,8 +317,15 @@ repository that names a sibling `{ path = "../core" }`, and an application that 
 dir = "core" }` at the same commit, reach one package. Such a path that leaves the checkout (`..` past its root, or
 absolute) is N0322 at the dependency.
 
+**Patches** (ADR 0174). The root manifest's `[patch]` gives a package's source for the whole build: each dependency
+named like a patch, wherever it is reached, is resolved as the patch says instead, as if the root had named it (a
+patch's `path` is relative to the root's directory, its errors are at the patch, its package is code the user works
+on). A dependency's own `[patch]` is not applied. A patch with a version requirement instead of a source, a package
+patched twice, and a patch that names no package of the build are N0321.
+
 A package name reached by two different sources (two paths, two commits, two directories of a repository, a path and
-a commit) is N0326, naming both dependents, and each source's directory. A package that depends on itself, directly
+a commit) is N0326, naming both dependents, and each source's directory; a `[patch]` in the root manifest chooses
+one. A package that depends on itself, directly
 or not, is N0327. A missing directory or manifest is N0322. Nothing runs during resolution except `git` (ADR 0013
 D5).
 
@@ -479,7 +489,7 @@ lock's hash (§4.3), which covers a package's manifest and sources, nor `fetch` 
 | Code | Meaning |
 |---|---|
 | N0320 | `ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset of §4.1 |
-| N0321 | A manifest field is missing, unknown, or has an invalid value |
+| N0321 | A manifest field is missing, unknown, or has an invalid value; a `[patch]` without a source, given twice, or naming no package of the build |
 | N0322 | A dependency's directory or manifest is missing, a git package's `dir` or path dependency leads out of its checkout (ADR 0152), or a dependency is named differently from its key |
 | N0323 | A git dependency cannot be fetched or resolved, or is needed with `--offline` and absent |
 | N0324 | The lock file is missing or does not match the manifest: run `ceesafec fetch` |

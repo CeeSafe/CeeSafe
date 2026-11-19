@@ -231,7 +231,7 @@ and run. The first table is the list that `ceesafec new` writes into `AGENTS.md`
 
 | A model writes | The compiler says | Write instead | Section |
 |---|---|---|---|
-| `~x`, to complement the bits | `N0102`, expected expression | `x ^ 0xFFFFFFFF`, with as many `F`s as the type is wide. There is no `~`. | [20.4](./ch20-04-arithmetic) |
+| `~x` or `x & 1` on an `i32` | `N0207` | `truncate<u32>(x)` first: `~`, `& \| ^` and shifts take unsigned integers only. | [20.4](./ch20-04-arithmetic) |
 | `type Id = u32;` | `N0101` | The type itself, or a struct with one field. There are no type aliases. | [3.2](./ch03-02-data-types) |
 | `let p = (1, 2);` | `N0100`, expected `)` | A struct with named fields. There are no tuples. | [3.2](./ch03-02-data-types) |
 | `a == b` on two structs | `N0207` | `@derive(Equal)` on the line before the struct, or compare the fields. | [5.1](./ch05-01-defining-structs), [20.5](./ch20-05-derives-and-macros) |

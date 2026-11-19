@@ -39,7 +39,8 @@ character literal is an integer. The checks that panic are in every build, optim
 | `*` before an operand | Reads the Copy value that a borrow refers to: `*r`. `*r = v;` assigns through the borrow. It is seldom needed, because a borrow is read through wherever its value is expected. | a `borrow T` or `borrow mut T` | `T` | No. | not in the chapters; [the specification](https://ceesafe.github.io/CeeSafe/reference/type-system), §13.3 |
 | `&` | Bitwise and. There is no address-of `&x`: a borrow is written `borrow x`. | two unsigned integers; not signed ones, not `bool` (`N0207`) | the operands' type | No. | [20.4](./ch20-04-arithmetic) |
 | `\|` between operands | Bitwise or. | two unsigned integers | the operands' type | No. | [20.4](./ch20-04-arithmetic) |
-| `^` | Bitwise exclusive or. `x ^ 0xFF`, with as many `F`s as the type is wide, is the complement, since there is no `~`. | two unsigned integers | the operands' type | No. | [20.4](./ch20-04-arithmetic) |
+| `~` before an operand | Bitwise complement: every bit flipped. | an unsigned integer; not a signed one, not `bool` (`N0207`) | the operand's type | No. | [20.4](./ch20-04-arithmetic) |
+| `^` | Bitwise exclusive or. | two unsigned integers | the operands' type | No. | [20.4](./ch20-04-arithmetic) |
 | `<<` | Shift left. Bits shifted out are dropped. | left: an unsigned integer; right: any integer | the left operand's type | Yes: `shift amount out of range` when the amount is negative or not less than the width in bits. | [20.4](./ch20-04-arithmetic) |
 | `>>` | Shift right, filling with zeros. The two `>` must touch. | left: an unsigned integer; right: any integer | the left operand's type | Yes: `shift amount out of range`, as for `<<`. | [20.4](./ch20-04-arithmetic) |
 | `==` `!=` | Equal, not equal. | two values of one type: integers, floats, `bool`, an enum without payloads, `StringView`, `String`, slices, arrays, raw pointers, or a type with `@derive(Equal)`; also an optional and `null` | `bool` | No. | [3.2](./ch03-02-data-types), [8.2](./ch08-02-strings), [20.5](./ch20-05-derives-and-macros) |
@@ -76,7 +77,7 @@ Level 12 binds tightest. An operator of a higher level takes its operands before
 | Level | Operators | Associativity |
 |---|---|---|
 | 12 | postfix: call `f(x)`, member `x.name`, index and slice `a[i]`, `?`, `!` | left to right |
-| 11 | prefix: `-`, `!`, `*`, `borrow`, `borrow mut`, `move`, `await` | right to left: `- -x` is `-(-x)` |
+| 11 | prefix: `-`, `!`, `~`, `*`, `borrow`, `borrow mut`, `move`, `await` | right to left: `- -x` is `-(-x)` |
 | 10 | `as` | left to right: `x as u32 as u64` |
 | 9 | `*` `/` `%` | left to right |
 | 8 | `+` `-` | left to right |
@@ -160,7 +161,6 @@ beside operands.
 | `*` before a type | A raw pointer type: `*T` reads, `*mut T` reads and writes. | [20.1](./ch20-01-unsafe-code) |
 | `\|` between patterns | Alternatives: `1 \| 2 \| 3` fits any of the three. | [19.3](./ch19-03-the-syntax-whole) |
 | `-` before a literal in a pattern | A negative number as a pattern: `-1`. | [19.3](./ch19-03-the-syntax-whole) |
-| `~` | Nothing. The compiler reads it as a token, and no rule of the grammar uses it: `~x` is `N0102`. | the last section of this appendix |
 
 ## Symbols inside literals and comments
 
@@ -188,7 +188,6 @@ Each row is something that another language has and CeeSafe %ceesafec-version% r
 
 | Not in CeeSafe | Write instead | Taught in |
 |---|---|---|
-| `~x`, the bitwise complement | `x ^ 0xFF` for a `u8`, `x ^ 0xFFFFFFFF` for a `u32`: as many `F`s as the type is wide. | [20.4](./ch20-04-arithmetic) |
 | `x++`, `x--` | `x += 1;`, `x -= 1;` | [3.1](./ch03-01-variables) |
 | `+x`, a prefix plus | `x` | [3.2](./ch03-02-data-types) |
 | `a ** b`, a power operator | A loop that multiplies. | [3.5](./ch03-05-control-flow) |
@@ -208,20 +207,21 @@ Each row is something that another language has and CeeSafe %ceesafec-version% r
 | `==` on a struct of yours | `@derive(Equal)` on the struct, or compare the fields. | [20.5](./ch20-05-derives-and-macros) |
 | `#`, `$`, a backtick, as tokens | Nothing: outside a literal or a comment each is `N0001`, an unexpected character. | [the grammar](https://ceesafe.github.io/CeeSafe/reference/grammar), §1.7 |
 
-The compiler reads `~` as a token and then finds no rule for it, so the message is that an expression was
-expected:
+The compiler reads `++` as two `+` and finds no expression after them, so the message is that an expression
+was expected:
 
 <!-- ceesafe: fail N0102 -->
 ```ceesafe
 fn main() {
-    let flags: u8 = 6;
-    Console.writeLine(~flags);
+    var count: u8 = 6;
+    count++;
+    Console.writeLine(count);
 }
 ```
 
 ```text
-main.cee:3:23: error[N0102]: expected expression, found '~'
+main.cee:3:11: error[N0102]: expected expression, found '+'
   |
-3 |     Console.writeLine(~flags);
-  |                       ^
+3 |     count++;
+  |           ^
 ```

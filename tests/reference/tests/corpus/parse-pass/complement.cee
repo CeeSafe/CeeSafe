@@ -1,0 +1,6 @@
+fn bits(a: u32, b: u32) -> u32 {
+    let x = ~a & b;
+    let y = ~(a | b);
+    let z = ~~a;
+    return -~x + !~y;
+}

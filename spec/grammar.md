@@ -293,7 +293,7 @@ comparisons, which are **non-associative**: `a < b < c` is error N0103, and `??`
 | 8 | `+ -` | |
 | 9 | `* / %` | |
 | 10 | `as` | `Expr 'as' Type`, left-assoc (`x as u32 as u64`). A primitive type name (`u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `f32`, `f64`, `bool`, `char`) takes no type arguments, so `a as u64 < b` is `(a as u64) < b` (ADR 0075 §2.13) |
-| 11 | unary `- !`, `*` (ADR 0075 §2.14: reading through a reference), `borrow`, `borrow mut`, `move`; `await` (L1) | prefix, right-assoc (`- -x`); `await`'s operand: below |
+| 11 | unary `- ! ~` (ADR 0176), `*` (ADR 0075 §2.14: reading through a reference), `borrow`, `borrow mut`, `move`; `await` (L1) | prefix, right-assoc (`- -x`); `await`'s operand: below |
 | 12 | postfix: call `(...)`, member `.name`, index and slice `[...]`, `?` (propagate), `!` (unwrap) | left to right: `Postfix` below |
 
 The ordering puts bitwise operators **above** comparisons (as in Rust and Swift), so

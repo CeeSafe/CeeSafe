@@ -45,7 +45,8 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 
 ## Common mistakes
 
-- There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases or tuples, and no `==` on structs.
+- `~x`, `& | ^` and shifts take unsigned integers only; `!` is for `bool`. There are no type aliases or tuples, and no
+  `==` on structs.
 - An optional's fallback is `o ?? value`, or a block that leaves, `o ?? { return Err(e); }`; `o.isSome()` and
   `o.isNull()` test it, and `o == Some(3)` compares. `let _ = f();` discards a value.
 - Indexes are `usize`. `0..4` is a `usize` range when the body indexes with its variable, else `i32`; `0..values.length` is `usize`.

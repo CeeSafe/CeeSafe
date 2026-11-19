@@ -301,7 +301,7 @@ Medium
 | Operation | Notes |
 |---|---|
 | `+ - * / %`, unary `-` | panic on overflow, and on dividing by zero |
-| `& \| ^ << >>` | unsigned types only; no `~` (use `x ^ 0xFFFFFFFF`) |
+| `& \| ^ << >>`, unary `~` | unsigned types only |
 | `x.wrappingAdd(y)`, `x.checkedAdd(y)`, `x.saturatingAdd(y)` | also `Sub`, `Mul`; `checked…` is a `T?` |
 | `x.mulHigh(y)` | every integer type: the upper half of the full product (`wrappingMul` is the lower); never overflows |
 | `x.min(y)`, `x.max(y)` | every integer type |

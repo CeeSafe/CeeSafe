@@ -26,7 +26,7 @@ Both operands of a binary operator have the same type, and the result has that t
 | `+` `-` `*` | integers | panic, `integer overflow` |
 | `/` `%` | integers | panic on a zero divisor, and on the least value divided by -1. `/` rounds toward zero; `%` has the sign of the left operand |
 | unary `-` | signed integers | panic on the least value |
-| `&` `\|` `^` | unsigned integers | cannot fail |
+| `&` `\|` `^`, unary `~` | unsigned integers | cannot fail |
 | `<<` `>>` | unsigned integers | panic when the amount is negative or not less than the width. Bits shifted out are dropped |
 | `+` `-` `*` `/` | floats | never panic: the result is infinity or NaN |
 
@@ -106,9 +106,9 @@ by -1, and an `if` tests for both.
 
 ## Bits and shifts
 
-The bit operators `&`, `|`, `^` and the shifts work on **unsigned** types only. So no sign bit is ever shifted
+The bit operators `&`, `|`, `^`, the complement `~` and the shifts work on **unsigned** types only. So no sign bit is ever shifted
 or masked by accident, and `>>` always fills with zeros. To work on the bits of a signed value, convert it with
-`truncate` first. There is no `~`: complement with `x ^ 0xFF`, using as many `F`s as the type is wide.
+`truncate` first. `~x` flips every bit of `x`: `~0x0Fu8` is `0xF0`.
 
 <span class="listing-caption"><strong>Listing 20-30</strong>, <code>main.cee</code>: Bit operators, shifts and the bit methods on a <code>u8</code>, and the bits of a negative <code>i32</code>.</span>
 
@@ -481,7 +481,7 @@ For a float that comes from input or from a division, use `checkedTruncate`, whi
 - `+`, `-`, `*`, a zero divisor, negating the least value and a shift amount out of range panic, in every build.
 - `wrapping…` keeps the low bits, `checked…` gives an optional, `saturating…` clamps; each for `Add`, `Sub` and
   `Mul`. `min`, `max`, `mulHigh` and `unsignedAbs` cannot overflow.
-- Bit operators and shifts need unsigned operands (`N0207`). There is no `~`.
+- Bit operators, `~` and shifts need unsigned operands (`N0207`).
 - Arithmetic on literals alone is computed by the compiler, and one that would panic is an error (`N0217`).
 - `as` converts only without loss. `truncate` keeps the low bits of an integer and drops the fraction of a
   float; `checkedTruncate` gives an optional; `saturatingTruncate` clamps; `round<T>` converts to a float.

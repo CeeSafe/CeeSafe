@@ -1,0 +1,10 @@
+(unit
+  (fn default bits (params (a u32) (b u32)) (returns u32)
+    (block
+      (let x = (& (compl a) b))
+      (let y = (compl (paren (| a b))))
+      (let z = (compl (compl a)))
+      (return (+ (neg (compl x)) (not (compl y))))
+    )
+  )
+)

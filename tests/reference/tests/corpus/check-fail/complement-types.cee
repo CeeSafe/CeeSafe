@@ -1,0 +1,9 @@
+// ADR 0176: `~` is for unsigned integers only, as `&`, `|` and `^` are.
+fn f(s: i32, p: bool, x: f64, w: u32) {
+    let a = ~s; // error[N0207]
+    let b = ~p; // error[N0207]
+    let c = ~x; // error[N0207]
+    let d = ~0; // error[N0207]
+    let e = ~-1; // error[N0207]
+    let ok: u32 = ~w & ~0;
+}

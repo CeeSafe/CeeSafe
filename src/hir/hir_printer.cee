@@ -732,6 +732,7 @@ struct HirPrinter {
                 this.text(match (op) {
                     UnaryOp.Negate => "(neg ",
                     UnaryOp.Not => "(not ",
+                    UnaryOp.Complement => "(compl ",
                 })?;
                 this.expr(hir, types, symbols, operand)?;
                 this.text(")")?;

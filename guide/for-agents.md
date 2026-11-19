@@ -82,24 +82,24 @@ document with every diagnostic, its position and its fixes, and `ceesafec fix ma
 
 These are the mistakes models make most often in CeeSafe, each with the compiler's answer and what to write instead.
 
-### There is no `~`
+### Bit operators take unsigned integers
 
-<!-- ceesafe: fail N0102 -->
+<!-- ceesafe: fail N0207 -->
 ```ceesafe
-fn invert(x: u32) -> u32 => ~x;
+fn invert(x: i32) -> i32 => ~x;
 ```
 
 ```text
-main.cee:1:29: error[N0102]: expected expression, found '~'
+main.cee:1:29: error[N0207]: operator '~' cannot be applied to type 'i32'; bitwise operators and shifts require unsigned operands (reinterpret with truncate<uN>(x))
   |
-1 | fn invert(x: u32) -> u32 => ~x;
-  |                             ^
+1 | fn invert(x: i32) -> i32 => ~x;
+  |                             ^^
 ```
 
-Complement with an exclusive or of all ones:
+`~`, `&`, `|`, `^` and the shifts take unsigned integers; reinterpret a signed value first:
 
 ```ceesafe
-fn invert(x: u32) -> u32 => x ^ 0xFFFFFFFF;
+fn invert(x: u32) -> u32 => ~x;
 ```
 
 ### There are no type aliases

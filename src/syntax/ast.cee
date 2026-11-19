@@ -43,6 +43,7 @@ enum ReceiverKind {
 enum UnaryOp {
     Negate,
     Not,
+    Complement,
 }
 
 enum BinaryOp {

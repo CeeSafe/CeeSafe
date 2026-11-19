@@ -196,6 +196,7 @@ fn printNirRvalue(
             appendText(out, match (op) {
                 UnaryOp.Negate => "Negate",
                 UnaryOp.Not => "Not",
+                UnaryOp.Complement => "Complement",
             })?;
             out.push('(')?;
             printNirOperand(c, n, function, operand, out)?;

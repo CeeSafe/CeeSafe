@@ -37,6 +37,7 @@ fn isFlexible(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e a
     ExprNode.Unary(op, operand) => match (op) {
         UnaryOp.Negate => isFlexible(c, operand),
         UnaryOp.Not => false,
+        UnaryOp.Complement => isFlexible(c, operand),
     },
     ExprNode.Binary(left, op, right) => (isArithmetic(op) || isBitwise(op) || isShift(op)) && isFlexible(c, left) &&
         isFlexible(c, right),
@@ -45,8 +46,8 @@ fn isFlexible(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e a
     _ => false,
 };
 
-/// Literal arithmetic (ADR 0110, §6): only integer literals, suffixed or not, combined by unary `-`, parentheses
-/// and the arithmetic, bitwise and shift operators. No name, call, cast or float literal is in one.
+/// Literal arithmetic (ADR 0110, §6): only integer literals, suffixed or not, combined by unary `-` and `~`,
+/// parentheses and the arithmetic, bitwise and shift operators. No name, call, cast or float literal is in one.
 fn isLiteralArithmetic(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
     ExprNode.IntLiteral(_, _) => true,
     ExprNode.CharLiteral(_) => true,
@@ -54,6 +55,7 @@ fn isLiteralArithmetic(c: borrow Checker, e: u32) -> bool => match (c.front.ast.
     ExprNode.Unary(op, operand) => match (op) {
         UnaryOp.Negate => isLiteralArithmetic(c, operand),
         UnaryOp.Not => false,
+        UnaryOp.Complement => isLiteralArithmetic(c, operand),
     },
     ExprNode.Binary(left, op, right) => (isArithmetic(op) || isBitwise(op) || isShift(op)) &&
         isLiteralArithmetic(c, left) && isLiteralArithmetic(c, right),
@@ -559,6 +561,32 @@ fn viewOf(c: borrow Checker, e: u32) -> u32 {
     return e;
 }
 
+/// `~x`: every bit of an unsigned integer flipped (§6, ADR 0176). A signed operand is N0205, as `&` on one is.
+fn synthComplement(c: borrow mut Checker, operand: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let synthesized = synth(c, operand, numericHint(c, expected))?;
+    let value = autoDeref(c, synthesized)?;
+    let t = c.typeOf(value);
+    if (c.types.isBottom(t)) {
+        return Ok(value);
+    }
+    if (!c.types.is(t, TypeKind.Integer) || c.types.info(t).signed) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "operator '~' cannot be applied to type ")?;
+        appendQuotedType(mut message, c, t)?;
+        if (c.types.is(t, TypeKind.Integer)) {
+            appendText(
+                mut message,
+                "; bitwise operators and shifts require unsigned operands (reinterpret with truncate<uN>(x))",
+            )?;
+        } else if (c.types.is(t, TypeKind.Bool)) {
+            appendText(mut message, "; '!' negates a bool")?;
+        }
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return c.expr(HirExpr.Unary(UnaryOp.Complement, value), t, span.start, span.end);
+}
+
 fn synthUnary(c: borrow mut Checker, op: UnaryOp, operand: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
     match (op) {
         UnaryOp.Not => {
@@ -566,6 +594,7 @@ fn synthUnary(c: borrow mut Checker, op: UnaryOp, operand: u32, expected: u32, s
             let value = checkExpr(c, operand, b)?;
             return c.expr(HirExpr.Unary(UnaryOp.Not, value), b, span.start, span.end);
         }
+        UnaryOp.Complement => { return synthComplement(c, operand, expected, span); }
         UnaryOp.Negate => {}
     }
     // A literal directly under '-' is checked as one negative literal (§4).

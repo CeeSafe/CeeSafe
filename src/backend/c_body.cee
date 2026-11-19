@@ -1787,6 +1787,14 @@ fn appendRvalue(
                     out.push('!')?;
                     return appendBytes(out, operand.view());
                 }
+                UnaryOp.Complement => {
+                    // Cast back: C promotes a uint8_t or uint16_t to int before '~' (§6, ADR 0176).
+                    appendText(out, "((")?;
+                    appendCTypeName(c, out, t)?;
+                    appendText(out, ")~(")?;
+                    appendBytes(out, operand.view())?;
+                    return appendText(out, "))");
+                }
                 UnaryOp.Negate => {
                     if (uncheckedArithmetic(e, c, n, r)) {
                         appendText(out, "((")?;

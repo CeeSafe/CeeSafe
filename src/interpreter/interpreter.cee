@@ -1408,6 +1408,12 @@ fn rvalue(
             let v = operand(it, c, n, frame, value)?;
             match (op) {
                 UnaryOp.Not => { return Ok(valueOf(if (v.bits(0, 1)? == 0) 1 else 0, 1)); }
+                UnaryOp.Complement => {
+                    let x = integerOf(c, v, t)?;
+                    let bits = c.types.info(t).bits;
+                    let mask: u64 = if (bits >= 64) 0xFFFFFFFFFFFFFFFF else (1u64 << truncate<u32>(bits)) - 1;
+                    return Ok(fromInteger(c, IntValue { negative: false, magnitude: x.magnitude ^ mask }, t)?);
+                }
                 UnaryOp.Negate => {
                     if (isFloatValueType(c, t)) {
                         return Ok(floatValue(c, -toDouble(c, v, t)?, t)?);

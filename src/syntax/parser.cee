@@ -2885,8 +2885,12 @@ struct Parser {
             this.nesting -= links;
             return result;
         }
-        if (this.at(TokenKind.Minus) || this.at(TokenKind.Bang)) {
-            let op = if (sameKind(this.advance().kind, TokenKind.Minus)) UnaryOp.Negate else UnaryOp.Not;
+        if (this.at(TokenKind.Minus) || this.at(TokenKind.Bang) || this.at(TokenKind.Tilde)) {
+            let kind = this.advance().kind;
+            let op = if (sameKind(kind, TokenKind.Minus)) UnaryOp.Negate else if (sameKind(
+                kind,
+                TokenKind.Bang,
+            )) UnaryOp.Not else UnaryOp.Complement;
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Unary(op, operand), start, this.endFrom(start));
         }

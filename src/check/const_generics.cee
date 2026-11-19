@@ -443,6 +443,7 @@ fn literalArgument(c: borrow Checker, e: u32) -> LiteralArgument {
                 _ => absent,
             },
             UnaryOp.Not => absent,
+            UnaryOp.Complement => absent,
         },
         _ => absent,
     };

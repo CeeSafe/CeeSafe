@@ -1,0 +1,38 @@
+// ADR 0176: `~x` flips every bit of an unsigned integer, at every width, in constants and literal arithmetic.
+const LOW_CLEARED: u16 = ~0x00FF;
+const ALL: u64 = ~0;
+
+fn flip8(x: u8) -> u8 => ~x;
+
+fn main() {
+    Console.writeLine(flip8(0x0F));
+    let h: u16 = 0x1234;
+    Console.writeLine(~h);
+    let w: u32 = 0x0F0F0F0F;
+    Console.writeLine(~w);
+    let d: u64 = 1;
+    Console.writeLine(~d);
+    let s: usize = 0;
+    Console.writeLine(~s == ~0usize);
+    Console.writeLine(LOW_CLEARED);
+    Console.writeLine(ALL);
+    let masked: u8 = 0xF0;
+    Console.writeLine(~masked & 0x3F);
+    Console.writeLine(~~w == w);
+    let literal: u32 = ~1;
+    Console.writeLine(literal);
+    var flags: u32 = 0xFF;
+    flags &= ~0x0Fu32;
+    Console.writeLine(flags);
+}
+// expect-stdout: 240
+// expect-stdout: 60875
+// expect-stdout: 4042322160
+// expect-stdout: 18446744073709551614
+// expect-stdout: true
+// expect-stdout: 65280
+// expect-stdout: 18446744073709551615
+// expect-stdout: 15
+// expect-stdout: true
+// expect-stdout: 4294967294
+// expect-stdout: 240

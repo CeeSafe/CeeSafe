@@ -156,7 +156,7 @@ Each expression is checked against an optional expected type:
   its branches the type expected of the parentheses.
 - An expression's *actual* type must equal the expected type, unless it is *never* (N0205).
 - **Flexible operands.** An expression is *flexible* if it consists only of unsuffixed integer
-  literals combined with unary `-`, parentheses and the arithmetic/bitwise binary operators, or (M11) if it is an
+  literals combined with unary `-` or `~`, parentheses and the arithmetic/bitwise binary operators, or (M11) if it is an
   `if` or `match` expression whose expression branches are all flexible (§15.3). Since M11 (G7), unsuffixed float
   literals combined the same way are flexible too; they take an expected `f32` or `f64` instead (§35.2).
   For a binary operator whose operands must have the same type:
@@ -185,9 +185,10 @@ conversions.
 | `&& \|\|` | `bool` | `bool` | short-circuit |
 | unary `-` | **signed** integer | same | `-MIN` → panic |
 | unary `!` | `bool` | `bool` | |
+| unary `~` | **unsigned** integer | same | every bit flipped (ADR 0176) |
 
 **Literal arithmetic** (ADR 0110). An expression made only of integer literals (suffixed or not, character literals
-included), unary `-`, parentheses and the arithmetic, bitwise and shift operators is *literal arithmetic*. Wherever
+included), unary `-` and `~`, parentheses and the arithmetic, bitwise and shift operators is *literal arithmetic*. Wherever
 it stands in a function's body (an initialiser, an operand of a larger expression, an argument, a branch), the
 outermost such expression is evaluated when the program is compiled, once its type is known (§5), exactly as a
 constant's value is (§10). If an operation in it would panic (overflow, division or remainder by zero, `MIN / -1`,

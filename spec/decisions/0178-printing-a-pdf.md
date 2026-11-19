@@ -20,7 +20,7 @@ system knows: CeeSafe had no way to reach its print dialog. (Receipts go to a Bl
   system reads.
 - **The runtime** runs it as a sixth kind of the window's dialog (`CEE_DIALOG_PRINT`), the path where an export's
   file is: one empty path answers "printed", none "cancelled". A scripted window answers it from its script as any
-  dialog.
+  dialog: an item with a path is printed, one without a cancel (`tools/print_check.py`).
 - **Per system.** macOS: PDFKit's `PDFDocument` and its print operation (scaled to the paper, turned to fit), loaded
   with dlopen. iOS: `UIPrintInteractionController` (AirPrint). Android: `PrintManager` with a document adapter of
   the runtime's dex that gives it the file. Windows: the print dialog, and Windows' own PDF renderer (§6). Linux

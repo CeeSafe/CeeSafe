@@ -7907,6 +7907,438 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
     return result;
 }
 
+/* ---- Printing a PDF (ADR 0178 §6) ---------------------------------------------------------------------------------
+   Win32 cannot give a PDF to a print dialog: the document is loaded by Windows' own renderer, Windows.Data.Pdf (WinRT,
+   reached through its COM interfaces), the common print dialog (PrintDlgExW) gives the printer and the pages, and each
+   page is rendered to a bitmap at the printer's resolution (300 dots per inch at most) and drawn on the dialog's
+   device context, scaled to fit the printable area, centred, and turned when page and paper differ in orientation.
+   combase.dll, shcore.dll and comdlg32.dll are loaded at the first print, and the interfaces' ids and slots are
+   written here (from the SDK's windows.data.pdf.h and windows.storage.streams.h), so no program needs a link flag or
+   the WinRT headers. For checking only (tools/print_check.py), CEESAFE_PRINT_PRINTER names a printer to print to
+   without the dialog, and CEESAFE_PRINT_OUTPUT the file a printer that writes files (Microsoft Print to PDF) writes. */
+#include <commdlg.h>
+
+typedef void (*cee_rt_fn)(void);
+struct cee_rt {
+    const cee_rt_fn *vtbl;
+};
+/* The function in `slot` of a COM object's vtable, as `type`. IUnknown's are 0 to 2; IInspectable adds 3 to 5. */
+#define CEE_RT(object, slot, type) ((type)((const struct cee_rt *)(object))->vtbl[slot])
+typedef HRESULT(STDMETHODCALLTYPE *cee_rt_query)(void *, REFIID, void **);
+typedef ULONG(STDMETHODCALLTYPE *cee_rt_release)(void *);
+typedef HRESULT(STDMETHODCALLTYPE *cee_rt_get)(void *, void **);
+
+static const IID cee_iid_pdf_statics = {0x433a0b5f, 0xc007, 0x4788, {0x90, 0xf2, 0x08, 0x14, 0x3d, 0x92, 0x25, 0x99}};
+static const IID cee_iid_pdf_options = {0x3c98056f, 0xb7cf, 0x4c29, {0x9a, 0x04, 0x52, 0xd9, 0x02, 0x67, 0xf4, 0x25}};
+static const IID cee_iid_random_stream = {0x905a0fe1, 0xbc53, 0x11df, {0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda}};
+static const IID cee_iid_async_info = {0x00000036, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID cee_iid_stream = {0x0000000c, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+/* BitmapEncoder.BmpEncoderId: the pages come as BMP, which is read here without a decoder. */
+static const GUID cee_bmp_encoder = {0x69be8bb4, 0xd66d, 0x47c8, {0x86, 0x5a, 0xed, 0x15, 0x89, 0x43, 0x37, 0x82}};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    HRESULT(WINAPI *factory)(void *, REFIID, void **);              /* RoGetActivationFactory */
+    HRESULT(WINAPI *activate)(void *, void **);                     /* RoActivateInstance */
+    HRESULT(WINAPI *create_string)(const wchar_t *, UINT32, void **); /* WindowsCreateString */
+    HRESULT(WINAPI *delete_string)(void *);                         /* WindowsDeleteString */
+    HRESULT(WINAPI *file_stream)(const wchar_t *, DWORD, REFIID, void **); /* CreateRandomAccessStreamOnFile */
+    HRESULT(WINAPI *over_stream)(void *, REFIID, void **);          /* CreateStreamOverRandomAccessStream */
+    HRESULT(WINAPI *print_dialog)(LPPRINTDLGEXW);                   /* PrintDlgExW */
+} cee_pdf;
+
+static int cee_pdf_load(void) {
+    if (cee_pdf.state != 0) {
+        return cee_pdf.state == 1;
+    }
+    cee_pdf.state = -1;
+    HMODULE combase = LoadLibraryW(L"combase.dll");
+    HMODULE shcore = LoadLibraryW(L"shcore.dll");
+    HMODULE comdlg = LoadLibraryW(L"comdlg32.dll");
+    if (combase == NULL || shcore == NULL || comdlg == NULL) {
+        return 0;
+    }
+    FARPROC p[7] = {GetProcAddress(combase, "RoGetActivationFactory"), GetProcAddress(combase, "RoActivateInstance"),
+                    GetProcAddress(combase, "WindowsCreateString"),    GetProcAddress(combase, "WindowsDeleteString"),
+                    GetProcAddress(shcore, "CreateRandomAccessStreamOnFile"),
+                    GetProcAddress(shcore, "CreateStreamOverRandomAccessStream"),
+                    GetProcAddress(comdlg, "PrintDlgExW")};
+    for (int k = 0; k < 7; k++) {
+        if (p[k] == NULL) {
+            return 0;
+        }
+    }
+    memcpy(&cee_pdf.factory, &p[0], sizeof p[0]);
+    memcpy(&cee_pdf.activate, &p[1], sizeof p[1]);
+    memcpy(&cee_pdf.create_string, &p[2], sizeof p[2]);
+    memcpy(&cee_pdf.delete_string, &p[3], sizeof p[3]);
+    memcpy(&cee_pdf.file_stream, &p[4], sizeof p[4]);
+    memcpy(&cee_pdf.over_stream, &p[5], sizeof p[5]);
+    memcpy(&cee_pdf.print_dialog, &p[6], sizeof p[6]);
+    cee_pdf.state = 1;
+    return 1;
+}
+
+static void cee_rt_free(void *object) {
+    if (object != NULL) {
+        (void)CEE_RT(object, 2, cee_rt_release)(object);
+    }
+}
+
+/* A WinRT class's activation factory as `iid` (`instance` 0), or a new instance of it as `iid` (`instance` 1). */
+static HRESULT cee_pdf_class(const wchar_t *name, int instance, REFIID iid, void **out) {
+    void *string = NULL;
+    *out = NULL;
+    HRESULT h = cee_pdf.create_string(name, (UINT32)lstrlenW(name), &string);
+    if (FAILED(h)) {
+        return h;
+    }
+    if (instance) {
+        void *object = NULL;
+        h = cee_pdf.activate(string, &object);
+        if (SUCCEEDED(h)) {
+            h = CEE_RT(object, 0, cee_rt_query)(object, iid, out);
+            cee_rt_free(object);
+        }
+    } else {
+        h = cee_pdf.factory(string, iid, out);
+    }
+    (void)cee_pdf.delete_string(string);
+    return h;
+}
+
+/* Waits for a WinRT operation or action (IAsyncInfo's status, slot 7: 0 started, 1 completed) for a minute at most:
+   whether it completed. One that is still going is cancelled (slot 9). */
+static int cee_pdf_wait(void *operation) {
+    void *info = NULL;
+    if (operation == NULL || FAILED(CEE_RT(operation, 0, cee_rt_query)(operation, &cee_iid_async_info, &info))) {
+        return 0;
+    }
+    int status = 0;
+    for (int k = 0; k < 60000 && status == 0; k++) {
+        if (FAILED(CEE_RT(info, 7, HRESULT(STDMETHODCALLTYPE *)(void *, int *))(info, &status))) {
+            status = 3;
+        } else if (status == 0) {
+            Sleep(1);
+        }
+    }
+    if (status == 0) {
+        (void)CEE_RT(info, 9, HRESULT(STDMETHODCALLTYPE *)(void *))(info);
+    }
+    cee_rt_free(info);
+    return status == 1;
+}
+
+/* The PDF at `file` as an IPdfDocument (PdfDocument.LoadFromStreamAsync, slot 8 of its statics), or NULL when Windows
+   does not read it. */
+static void *cee_pdf_open(const char *file) {
+    wchar_t *path = cee_win32_wide(file);
+    void *stream = NULL, *statics = NULL, *operation = NULL, *document = NULL;
+    if (path != NULL && SUCCEEDED(cee_pdf.file_stream(path, 0 /* FileAccessMode.Read */, &cee_iid_random_stream,
+                                                      &stream)) &&
+        SUCCEEDED(cee_pdf_class(L"Windows.Data.Pdf.PdfDocument", 0, &cee_iid_pdf_statics, &statics)) &&
+        SUCCEEDED(CEE_RT(statics, 8, HRESULT(STDMETHODCALLTYPE *)(void *, void *, void **))(statics, stream,
+                                                                                            &operation)) &&
+        cee_pdf_wait(operation)) {
+        /* IAsyncOperation<PdfDocument>.GetResults, slot 8 */
+        if (FAILED(CEE_RT(operation, 8, cee_rt_get)(operation, &document))) {
+            document = NULL;
+        }
+    }
+    cee_rt_free(operation);
+    cee_rt_free(statics);
+    cee_rt_free(stream);
+    ceesafe_platform_free(path);
+    return document;
+}
+
+/* A page's pixels, top row first, as BGRX. */
+struct cee_pdf_bitmap {
+    uint32_t *pixels;
+    uint32_t width, height;
+};
+
+static uint32_t cee_pdf_u32(const unsigned char *b) {
+    return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+}
+
+/* A BMP of 24 or 32 bits a pixel (as Windows' encoder writes it) into `out`: whether it was one. */
+static int cee_pdf_bmp(const unsigned char *b, size_t n, struct cee_pdf_bitmap *out) {
+    if (n < 54 || b[0] != 'B' || b[1] != 'M') {
+        return 0;
+    }
+    uint32_t offset = cee_pdf_u32(b + 10), compression = cee_pdf_u32(b + 30);
+    int32_t width = (int32_t)cee_pdf_u32(b + 18), height = (int32_t)cee_pdf_u32(b + 22);
+    unsigned bits = (unsigned)b[28] | (unsigned)b[29] << 8;
+    if (width <= 0 || height == 0 || height == INT32_MIN || (bits != 24 && bits != 32) ||
+        (compression != 0 && compression != 3)) {
+        return 0;
+    }
+    uint32_t w = (uint32_t)width, h = (uint32_t)(height < 0 ? -height : height);
+    size_t stride = ((size_t)w * bits / 8u + 3u) & ~(size_t)3u;
+    if (offset > n || (n - offset) / stride < h || (size_t)w * h > SIZE_MAX / 4u) {
+        return 0;
+    }
+    uint32_t *pixels = (uint32_t *)ceesafe_platform_alloc((size_t)w * h * 4u);
+    if (pixels == NULL) {
+        return 0;
+    }
+    for (uint32_t y = 0; y < h; y++) {
+        const unsigned char *row = b + offset + stride * (height < 0 ? y : h - 1u - y);
+        uint32_t *to = pixels + (size_t)y * w;
+        for (uint32_t x = 0; x < w; x++) {
+            const unsigned char *p = row + (size_t)x * (bits / 8u);
+            to[x] = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16;
+        }
+    }
+    out->pixels = pixels;
+    out->width = w;
+    out->height = h;
+    return 1;
+}
+
+/* `page` (an IPdfPage) rendered at `width` × `height` pixels into `out`: PdfPage.RenderWithOptionsToStreamAsync
+   (slot 7) to a stream in memory, as BMP, read back through an IStream over it. Whether it was. */
+static int cee_pdf_render(void *page, uint32_t width, uint32_t height, struct cee_pdf_bitmap *out) {
+    void *options = NULL, *memory = NULL, *action = NULL;
+    IStream *stream = NULL;
+    unsigned char *bytes = NULL;
+    int done = 0;
+    if (SUCCEEDED(cee_pdf_class(L"Windows.Data.Pdf.PdfPageRenderOptions", 1, &cee_iid_pdf_options, &options)) &&
+        SUCCEEDED(cee_pdf_class(L"Windows.Storage.Streams.InMemoryRandomAccessStream", 1, &cee_iid_random_stream,
+                                &memory)) &&
+        /* DestinationWidth (9), DestinationHeight (11), BitmapEncoderId (17) */
+        SUCCEEDED(CEE_RT(options, 9, HRESULT(STDMETHODCALLTYPE *)(void *, UINT32))(options, width)) &&
+        SUCCEEDED(CEE_RT(options, 11, HRESULT(STDMETHODCALLTYPE *)(void *, UINT32))(options, height)) &&
+        SUCCEEDED(CEE_RT(options, 17, HRESULT(STDMETHODCALLTYPE *)(void *, GUID))(options, cee_bmp_encoder)) &&
+        SUCCEEDED(CEE_RT(page, 7, HRESULT(STDMETHODCALLTYPE *)(void *, void *, void *, void **))(page, memory, options,
+                                                                                              &action)) &&
+        cee_pdf_wait(action) && SUCCEEDED(CEE_RT(action, 8, HRESULT(STDMETHODCALLTYPE *)(void *))(action)) &&
+        SUCCEEDED(cee_pdf.over_stream(memory, &cee_iid_stream, (void **)&stream))) {
+        STATSTG stat;
+        LARGE_INTEGER start;
+        start.QuadPart = 0;
+        if (SUCCEEDED(IStream_Stat(stream, &stat, STATFLAG_NONAME)) && stat.cbSize.QuadPart > 0 &&
+            stat.cbSize.QuadPart < 0x7fffffffu && SUCCEEDED(IStream_Seek(stream, start, STREAM_SEEK_SET, NULL))) {
+            ULONG size = (ULONG)stat.cbSize.QuadPart, got = 0;
+            bytes = (unsigned char *)ceesafe_platform_alloc(size);
+            while (bytes != NULL && got < size) {
+                ULONG read = 0;
+                if (FAILED(IStream_Read(stream, bytes + got, size - got, &read)) || read == 0) {
+                    break;
+                }
+                got += read;
+            }
+            done = bytes != NULL && got == size && cee_pdf_bmp(bytes, size, out);
+        }
+    }
+    ceesafe_platform_free(bytes);
+    if (stream != NULL) {
+        IStream_Release(stream);
+    }
+    cee_rt_free(action);
+    cee_rt_free(memory);
+    cee_rt_free(options);
+    return done;
+}
+
+/* The document's page `index` printed on its own sheet of `dc`: whether it was. */
+static int cee_pdf_page(void *document, uint32_t index, HDC dc) {
+    void *page = NULL;
+    struct {
+        float width, height; /* Windows.Foundation.Size, in device-independent pixels (1/96 inch) */
+    } size = {0.0f, 0.0f};
+    /* IPdfDocument.GetPage (6), IPdfPage.Size (10) */
+    if (FAILED(CEE_RT(document, 6, HRESULT(STDMETHODCALLTYPE *)(void *, UINT32, void **))(document, index, &page)) ||
+        FAILED(CEE_RT(page, 10, HRESULT(STDMETHODCALLTYPE *)(void *, void *))(page, &size)) || size.width <= 0.0f ||
+        size.height <= 0.0f) {
+        cee_rt_free(page);
+        return 0;
+    }
+    int area_w = GetDeviceCaps(dc, HORZRES), area_h = GetDeviceCaps(dc, VERTRES);
+    int dpi_x = GetDeviceCaps(dc, LOGPIXELSX), dpi_y = GetDeviceCaps(dc, LOGPIXELSY);
+    if (area_w <= 0 || area_h <= 0 || dpi_x <= 0 || dpi_y <= 0) {
+        cee_rt_free(page);
+        return 0;
+    }
+    /* The page in inches, turned when it is landscape on portrait paper or the other way. */
+    double page_w = (double)size.width / 96.0, page_h = (double)size.height / 96.0;
+    int turn = (page_w > page_h && area_h > area_w) || (page_h > page_w && area_w > area_h);
+    double sheet_w = turn ? page_h : page_w, sheet_h = turn ? page_w : page_h;
+    double scale_x = (double)area_w / (sheet_w * dpi_x), scale_y = (double)area_h / (sheet_h * dpi_y);
+    double scale = scale_x < scale_y ? scale_x : scale_y;
+    int draw_w = (int)(sheet_w * dpi_x * scale), draw_h = (int)(sheet_h * dpi_y * scale);
+    /* The bitmap: the drawn size at the printer's resolution, 300 dots per inch at most. */
+    double keep_x = dpi_x > 300 ? 300.0 / dpi_x : 1.0, keep_y = dpi_y > 300 ? 300.0 / dpi_y : 1.0;
+    uint32_t bitmap_w = (uint32_t)(draw_w * keep_x), bitmap_h = (uint32_t)(draw_h * keep_y);
+    if (draw_w <= 0 || draw_h <= 0 || bitmap_w == 0 || bitmap_h == 0) {
+        cee_rt_free(page);
+        return 0;
+    }
+    struct cee_pdf_bitmap bitmap = {NULL, 0, 0};
+    int done = cee_pdf_render(page, turn ? bitmap_h : bitmap_w, turn ? bitmap_w : bitmap_h, &bitmap);
+    cee_rt_free(page);
+    if (done && turn) {
+        /* A quarter turn clockwise: the pixel at (x, y) goes to (height - 1 - y, x). */
+        uint32_t *turned = (uint32_t *)ceesafe_platform_alloc((size_t)bitmap.width * bitmap.height * 4u);
+        if (turned == NULL) {
+            done = 0;
+        } else {
+            for (uint32_t y = 0; y < bitmap.height; y++) {
+                for (uint32_t x = 0; x < bitmap.width; x++) {
+                    turned[(size_t)x * bitmap.height + (bitmap.height - 1u - y)] =
+                        bitmap.pixels[(size_t)y * bitmap.width + x];
+                }
+            }
+            ceesafe_platform_free(bitmap.pixels);
+            bitmap.pixels = turned;
+            uint32_t width = bitmap.width;
+            bitmap.width = bitmap.height;
+            bitmap.height = width;
+        }
+    }
+    if (done) {
+        BITMAPINFO info;
+        memset(&info, 0, sizeof info);
+        info.bmiHeader.biSize = sizeof info.bmiHeader;
+        info.bmiHeader.biWidth = (LONG)bitmap.width;
+        info.bmiHeader.biHeight = -(LONG)bitmap.height; /* top row first */
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        done = StartPage(dc) > 0;
+        if (done) {
+            (void)SetStretchBltMode(dc, HALFTONE);
+            (void)SetBrushOrgEx(dc, 0, 0, NULL);
+            done = StretchDIBits(dc, (area_w - draw_w) / 2, (area_h - draw_h) / 2, draw_w, draw_h, 0, 0,
+                                 (int)bitmap.width, (int)bitmap.height, bitmap.pixels, &info, DIB_RGB_COLORS,
+                                 SRCCOPY) != 0 &&
+                   EndPage(dc) > 0;
+        }
+    }
+    ceesafe_platform_free(bitmap.pixels);
+    return done;
+}
+
+/* The document's pages (`ranges`, or every one with none), `copies` times, as one job on `dc`: 1 given to the spooler,
+   or minus a WindowError's number (the job abandoned). */
+static int32_t cee_pdf_job(void *document, uint32_t pages, HDC dc, const wchar_t *title, const wchar_t *output,
+                           const PRINTPAGERANGE *ranges, DWORD range_count, DWORD copies, int collate) {
+    DOCINFOW job;
+    memset(&job, 0, sizeof job);
+    job.cbSize = (int)sizeof job;
+    job.lpszDocName = title;
+    job.lpszOutput = output;
+    if (StartDocW(dc, &job) <= 0) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    PRINTPAGERANGE every = {1, pages};
+    if (range_count == 0) {
+        ranges = &every;
+        range_count = 1;
+    }
+    if (copies == 0) {
+        copies = 1;
+    }
+    int done = 1;
+    /* Collated: the document, then again; else each page its copies, then the next. */
+    for (DWORD round = 0; done && round < (collate ? copies : 1u); round++) {
+        for (DWORD r = 0; done && r < range_count; r++) {
+            DWORD from = ranges[r].nFromPage < 1 ? 1 : ranges[r].nFromPage;
+            DWORD to = ranges[r].nToPage > pages ? pages : ranges[r].nToPage;
+            for (DWORD p = from; done && p <= to; p++) {
+                for (DWORD c = 0; done && c < (collate ? 1u : copies); c++) {
+                    done = cee_pdf_page(document, (uint32_t)(p - 1u), dc);
+                }
+            }
+        }
+    }
+    if (!done) {
+        (void)AbortDoc(dc);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    return EndDoc(dc) > 0 ? 1 : -CEE_WINDOW_RESOURCES;
+}
+
+/* An environment variable (for checking: CEESAFE_PRINT_PRINTER, CEESAFE_PRINT_OUTPUT), or NULL when it is not set. */
+static wchar_t *cee_pdf_variable(const wchar_t *name) {
+    DWORD units = GetEnvironmentVariableW(name, NULL, 0);
+    wchar_t *value = units > 1 ? (wchar_t *)ceesafe_platform_alloc((size_t)units * sizeof(wchar_t)) : NULL;
+    if (value != NULL && GetEnvironmentVariableW(name, value, units) != units - 1u) {
+        ceesafe_platform_free(value);
+        value = NULL;
+    }
+    return value;
+}
+
+#define CEE_HAS_NATIVE_PRINT 1
+static int32_t cee_native_print(struct cee_window *w, const char *title, const char *file) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (!cee_ole_load() || !cee_pdf_load()) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    HRESULT initialized = cee_ole.initialize(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    void *document = cee_pdf_open(file);
+    UINT32 pages = 0;
+    int32_t result = -CEE_WINDOW_RESOURCES;
+    /* IPdfDocument.PageCount (7) */
+    if (document != NULL &&
+        SUCCEEDED(CEE_RT(document, 7, HRESULT(STDMETHODCALLTYPE *)(void *, UINT32 *))(document, &pages)) &&
+        pages > 0) {
+        wchar_t *name = cee_win32_wide(title[0] != '\0' ? title : file);
+        wchar_t *printer = cee_pdf_variable(L"CEESAFE_PRINT_PRINTER");
+        wchar_t *output = cee_pdf_variable(L"CEESAFE_PRINT_OUTPUT");
+        if (name == NULL) {
+            result = -CEE_WINDOW_RESOURCES;
+        } else if (printer != NULL) {
+            HDC dc = CreateDCW(L"WINSPOOL", printer, NULL, NULL);
+            result = dc != NULL ? cee_pdf_job(document, pages, dc, name, output, NULL, 0, 1, 1) : -CEE_WINDOW_RESOURCES;
+            if (dc != NULL) {
+                DeleteDC(dc);
+            }
+        } else {
+            PRINTPAGERANGE ranges[16];
+            PRINTDLGEXW dialog;
+            memset(&dialog, 0, sizeof dialog);
+            dialog.lStructSize = sizeof dialog;
+            dialog.hwndOwner = n->hwnd;
+            dialog.Flags = PD_RETURNDC | PD_NOSELECTION | PD_NOCURRENTPAGE | PD_USEDEVMODECOPIESANDCOLLATE;
+            dialog.nMaxPageRanges = 16;
+            dialog.lpPageRanges = ranges;
+            dialog.nMinPage = 1;
+            dialog.nMaxPage = pages;
+            dialog.nCopies = 1;
+            dialog.nStartPage = START_PAGE_GENERAL;
+            if (FAILED(cee_pdf.print_dialog(&dialog))) {
+                result = -CEE_WINDOW_RESOURCES;
+            } else if (dialog.dwResultAction != PD_RESULT_PRINT || dialog.hDC == NULL) {
+                result = 0; /* cancelled, or only applied */
+            } else {
+                result = cee_pdf_job(document, pages, dialog.hDC, name, NULL, ranges,
+                                     (dialog.Flags & PD_PAGENUMS) != 0 ? dialog.nPageRanges : 0, dialog.nCopies,
+                                     (dialog.Flags & PD_COLLATE) != 0);
+            }
+            if (dialog.hDC != NULL) {
+                DeleteDC(dialog.hDC);
+            }
+            if (dialog.hDevMode != NULL) {
+                GlobalFree(dialog.hDevMode);
+            }
+            if (dialog.hDevNames != NULL) {
+                GlobalFree(dialog.hDevNames);
+            }
+        }
+        ceesafe_platform_free(name);
+        ceesafe_platform_free(printer);
+        ceesafe_platform_free(output);
+    }
+    cee_rt_free(document);
+    if (SUCCEEDED(initialized)) {
+        cee_ole.uninitialize();
+    }
+    return result;
+}
+
 /* Drops (ADR 0150): an IDropTarget for each window, registered with OLE, whose methods OLE calls on the window's thread
    while it dispatches messages (in a pump, so they queue as the window procedure does). OLE is ole32.dll's, loaded
    with LoadLibraryW like the dialogs' COM, and initialized from each window's open to its close (OleInitialize counts);

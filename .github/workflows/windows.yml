@@ -4,7 +4,8 @@ name: windows
 # child is handed (ADR 0173). Their checks start several processes, so the corpus cannot make them, and no machine
 # but this workflow's runs them on Windows. ceesafec is built from the tree on Linux (as checks.yml builds it), emits
 # its own C, and that C is compiled here; the checks then build and run their programs with it. Bluetooth printers
-# (ADR 0177) are checked here too: their runtime's Windows part is built by no other machine of the project's.
+# (ADR 0177) and printing a PDF (ADR 0178 §6) are checked here too: their runtime's Windows parts are built by no other
+# machine of the project's.
 #
 # Like checks.yml it runs when a release is tagged and when started by hand ("Run workflow"), not on pushes: it reports
 # on the release's commit and does not hold the release back.
@@ -110,3 +111,7 @@ jobs:
         if: always()
         shell: bash
         run: python tools/bluetooth_check.py --compiler seed/ceesafec.exe
+      - name: Printing a PDF (ADR 0178)
+        if: always()
+        shell: bash
+        run: python tools/print_check.py --compiler seed/ceesafec.exe

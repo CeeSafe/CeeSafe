@@ -6331,8 +6331,8 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
 - **The interpreter** does the same, so a program's handling of a crash runs under `ceesafec test`. There
   `leakedBytes` is 0, and `closer()` is `Unsupported`.
 - **Under `ceesafec test`** a crash is the child's, not the test's: its panic line does not make the test panicked,
-  and the blocks the crashed units left (`ceesafe alloc: isolated leaked=<k>`, memory-model.md) are not its leak
-  (tooling.md, the test outcomes; amendment 1).
+  and the blocks the crashed units still reach at the end, what they captured included (`ceesafe alloc: isolated
+  leaked=<k>`, memory-model.md), are not its leak (tooling.md, the test outcomes; amendments 1 and 2).
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

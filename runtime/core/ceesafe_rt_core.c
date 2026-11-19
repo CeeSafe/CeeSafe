@@ -402,7 +402,7 @@ static uint64_t alloc_attempts;   /* every allocation attempt, failed ones inclu
 static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
 static uint32_t alloc_foreign_used; /* C has allocated: the report gives alloc_foreign (ceesafe_atomic_*) */
-static uint64_t alloc_isolated; /* blocks isolated units that trapped left behind (ADR 0175; ceesafe_atomic_*) */
+static uint64_t alloc_isolated; /* blocks crashed isolated units reach at the end (ADR 0175 amendment 2) */
 static uint64_t alloc_given;      /* blocks a host adopted (Vector.intoForeign, ADR 0090): no longer in alloc_live */
 static uint64_t alloc_taken;      /* blocks taken from a host (Vector.fromForeign): now in alloc_live */
 static uint32_t alloc_moved_used; /* a block changed sides: the report gives both counts (ceesafe_atomic_*) */
@@ -572,8 +572,6 @@ static void alloc_count_live(uint32_t allocator, uint64_t delta) {
 typedef struct cee_budget {
     uint64_t limit;
     uint64_t held;
-    uint64_t blocks; /* blocks allocated under it and not freed under it, never below zero: what an isolated unit
-                        that traps leaves, for the leak count of `ceesafec test` (ADR 0175 amendment 1) */
     uint32_t refs;
     struct cee_budget *parent;
 } cee_budget;
@@ -595,21 +593,6 @@ static void budget_give_back(cee_budget *b, uint64_t bytes) {
                 break;
             }
             held = seen;
-        }
-    }
-}
-
-/* One block more (`up`) or fewer under `b` and the budgets it is inside, never below zero. */
-static void budget_blocks(cee_budget *b, bool up) {
-    for (; b != NULL; b = b->parent) {
-        uint64_t had = ceesafe_atomic_load_u64(&b->blocks);
-        for (;;) {
-            uint64_t next = up ? had + 1u : (had > 0u ? had - 1u : 0u);
-            uint64_t seen = ceesafe_atomic_cas_u64(&b->blocks, had, next);
-            if (seen == had) {
-                break;
-            }
-            had = seen;
         }
     }
 }
@@ -664,7 +647,6 @@ void *ceesafe_budget_enter(uint64_t limit) {
     }
     b->limit = limit;
     b->held = 0u;
-    b->blocks = 0u;
     b->refs = 1u;
     b->parent = cee_budget_now;
     if (b->parent != NULL) {
@@ -688,14 +670,6 @@ void *ceesafe_budget_make(uint64_t limit) {
 
 uint64_t ceesafe_budget_held_of(void *budget) {
     return budget == NULL ? 0u : ceesafe_atomic_load_u64(&((cee_budget *)budget)->held);
-}
-
-void ceesafe_alloc_isolated_leaked(uint64_t blocks) {
-    (void)ceesafe_atomic_add_u64(&alloc_isolated, blocks);
-}
-
-uint64_t ceesafe_budget_blocks_of(void *budget) {
-    return budget == NULL ? 0u : ceesafe_atomic_load_u64(&((cee_budget *)budget)->blocks);
 }
 
 void ceesafe_budget_leave(void *budget) {
@@ -744,9 +718,6 @@ static void *budget_new_block(void *p, uint32_t allocator) {
         ceesafe_platform_free(p);
         return NULL;
     }
-    if (b != NULL) {
-        budget_blocks(b, true);
-    }
     return p;
 }
 
@@ -761,6 +732,218 @@ static void budget_give_back(cee_budget *b, uint64_t bytes) { (void)b; (void)byt
 #define ceesafe_platform_block_size(p) ((size_t)0)
 #endif
 
+/* ---- What a crashed isolated unit leaves (ADR 0175 amendment 2) ----
+ * Only while allocations are counted (`ceesafec test`, CEESAFE_ALLOC_REPORT, CEESAFE_FAIL_ALLOC_AT): a table of the
+ * live blocks counted in `live` (their addresses and the sizes asked for), and the task blocks of the units that
+ * crashed. At the end, every live block those reach, through any 8-byte-aligned word that holds the address of a
+ * live block or of a byte inside one, is counted as `isolated leaked`, which `ceesafec test` takes off `live`. A
+ * unit holds no loan (N0349): what it reaches it owns, or holds a count of, and keeps for ever. The walk is
+ * conservative, so a stale word may add a block; it never misses one the unit reaches through its words. Nothing of
+ * this runs where allocations are not counted. The table's own memory is the C library's, never a host's allocator
+ * hook's (ADR 0088 §2.5: the host sees only CeeSafe's blocks), and is given back at the end. */
+#ifndef CEE_FREESTANDING
+#include <stdlib.h>
+typedef struct cee_live_block {
+    uintptr_t at;  /* 0: empty; 1: removed */
+    size_t size;
+} cee_live_block;
+
+static cee_live_block *live_table;
+static size_t live_capacity;  /* a power of two, or 0 */
+static size_t live_used;      /* entries that are not empty: blocks and removed ones */
+static size_t live_blocks;
+static const void **dead_roots;
+static size_t dead_count;
+static size_t dead_capacity;
+static uint32_t live_lock; /* ceesafe_atomic_*: allocations come from every thread */
+
+static void live_take(void) {
+    while (ceesafe_atomic_cas_u32(&live_lock, 0u, 1u) != 0u) {
+    }
+}
+
+static void live_give(void) { ceesafe_atomic_store_u32(&live_lock, 0u); }
+
+static size_t live_slot(uintptr_t at, size_t capacity) {
+    uint64_t h = (uint64_t)at * 0x9E3779B97F4A7C15u;
+    return (size_t)(h >> 17) & (capacity - 1u);
+}
+
+/* Room for one more; false if the platform heap has none, and then the table stays as it was. */
+static bool live_room(void) {
+    if (live_capacity != 0u && (live_used + 1u) * 2u <= live_capacity) {
+        return true;
+    }
+    size_t capacity = live_capacity == 0u ? 1024u : (live_blocks * 4u > live_capacity ? live_capacity * 2u : live_capacity);
+    cee_live_block *table = (cee_live_block *)calloc(capacity, sizeof(cee_live_block));
+    if (table == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < live_capacity; i++) {
+        if (live_table[i].at > 1u) {
+            size_t k = live_slot(live_table[i].at, capacity);
+            while (table[k].at != 0u) k = (k + 1u) & (capacity - 1u);
+            table[k] = live_table[i];
+        }
+    }
+    if (live_table != NULL) free(live_table);
+    live_table = table;
+    live_capacity = capacity;
+    live_used = live_blocks;
+    return true;
+}
+
+static void live_track(const void *p, size_t size, uint32_t allocator) {
+    if (p == NULL || config_u32(&alloc_counting) == 0u || allocator == CEE_ALLOC_FOREIGN ||
+        allocator == CEE_ALLOC_FOREIGN_INIT) {
+        return;
+    }
+    live_take();
+    if (live_room()) {
+        size_t k = live_slot((uintptr_t)p, live_capacity);
+        while (live_table[k].at > 1u) k = (k + 1u) & (live_capacity - 1u);
+        if (live_table[k].at == 0u) live_used += 1u;
+        live_table[k].at = (uintptr_t)p;
+        live_table[k].size = size == 0u ? 1u : size;
+        live_blocks += 1u;
+    }
+    live_give();
+}
+
+static void live_untrack(const void *p) {
+    if (p == NULL || config_u32(&alloc_counting) == 0u) {
+        return;
+    }
+    live_take();
+    if (live_capacity == 0u) {
+        live_give();
+        return;
+    }
+    size_t k = live_slot((uintptr_t)p, live_capacity);
+    while (live_table[k].at != 0u) {
+        if (live_table[k].at == (uintptr_t)p) {
+            live_table[k].at = 1u;
+            live_blocks -= 1u;
+            break;
+        }
+        k = (k + 1u) & (live_capacity - 1u);
+    }
+    live_give();
+}
+
+void ceesafe_alloc_dead_root(const void *block) {
+    if (block == NULL || config_u32(&alloc_counting) == 0u) {
+        return;
+    }
+    live_take();
+    if (dead_count == dead_capacity) {
+        size_t capacity = dead_capacity == 0u ? 16u : dead_capacity * 2u;
+        const void **roots = (const void **)realloc((void *)dead_roots, capacity * sizeof(void *));
+        if (roots == NULL) {
+            live_give();
+            return; /* uncounted: the runner may report what this unit reaches as a leak */
+        }
+        dead_roots = roots;
+        dead_capacity = capacity;
+    }
+    dead_roots[dead_count++] = block;
+    live_give();
+}
+
+/* The live block that holds address `a` in `sorted` (by address), or SIZE_MAX. */
+static size_t live_holder(const cee_live_block *sorted, size_t n, uintptr_t a) {
+    size_t lo = 0u, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        if (sorted[mid].at <= a) lo = mid + 1u; else hi = mid;
+    }
+    if (lo == 0u) return SIZE_MAX;
+    const cee_live_block *b = &sorted[lo - 1u];
+    return a < b->at + b->size ? lo - 1u : SIZE_MAX;
+}
+
+/* Sorts by address: a heap sort, with no C library. */
+static void live_sift(cee_live_block *v, size_t root, size_t n) {
+    for (;;) {
+        size_t child = root * 2u + 1u;
+        if (child >= n) return;
+        if (child + 1u < n && v[child + 1u].at > v[child].at) child += 1u;
+        if (v[root].at >= v[child].at) return;
+        cee_live_block t = v[root];
+        v[root] = v[child];
+        v[child] = t;
+        root = child;
+    }
+}
+
+/* How many live blocks the crashed units reach; 0 if none crashed or there is no memory to look. */
+static uint64_t live_dead_reach(void) {
+    live_take();
+    uint64_t found = 0u;
+    if (dead_count != 0u && live_blocks != 0u) {
+        size_t n = live_blocks;
+        cee_live_block *sorted = (cee_live_block *)malloc(n * sizeof(cee_live_block));
+        uint8_t *seen = (uint8_t *)calloc(n, 1u);
+        size_t *work = (size_t *)malloc(n * sizeof(size_t));
+        if (sorted != NULL && seen != NULL && work != NULL) {
+            size_t m = 0u;
+            for (size_t i = 0; i < live_capacity && m < n; i++) {
+                if (live_table[i].at > 1u) sorted[m++] = live_table[i];
+            }
+            for (size_t i = m / 2u; i > 0u; i--) live_sift(sorted, i - 1u, m);
+            for (size_t end = m; end > 1u; end--) {
+                cee_live_block t = sorted[0];
+                sorted[0] = sorted[end - 1u];
+                sorted[end - 1u] = t;
+                live_sift(sorted, 0u, end - 1u);
+            }
+            size_t top = 0u;
+            for (size_t r = 0; r < dead_count; r++) {
+                size_t k = live_holder(sorted, m, (uintptr_t)dead_roots[r]);
+                if (k != SIZE_MAX && seen[k] == 0u) {
+                    seen[k] = 1u;
+                    work[top++] = k;
+                }
+            }
+            while (top > 0u) {
+                const cee_live_block *b = &sorted[work[--top]];
+                found += 1u;
+                uintptr_t first = (b->at + 7u) & ~(uintptr_t)7u;
+                for (uintptr_t a = first; a + sizeof(uintptr_t) <= b->at + b->size; a += 8u) {
+                    uintptr_t word;
+                    ceesafe_mem_copy(&word, (const void *)a, sizeof word);
+                    size_t k = live_holder(sorted, m, word);
+                    if (k != SIZE_MAX && seen[k] == 0u) {
+                        seen[k] = 1u;
+                        work[top++] = k;
+                    }
+                }
+            }
+        }
+        free(sorted);
+        free(seen);
+        free(work);
+    }
+    /* The end: the table and the roots go back to the C library. Blocks freed after this are not looked for. */
+    free(live_table);
+    free((void *)dead_roots);
+    live_table = NULL;
+    live_capacity = 0u;
+    live_used = 0u;
+    live_blocks = 0u;
+    dead_roots = NULL;
+    dead_count = 0u;
+    dead_capacity = 0u;
+    live_give();
+    return found;
+}
+#else
+static void live_track(const void *p, size_t size, uint32_t allocator) { (void)p; (void)size; (void)allocator; }
+static void live_untrack(const void *p) { (void)p; }
+static uint64_t live_dead_reach(void) { return 0u; }
+void ceesafe_alloc_dead_root(const void *block) { (void)block; }
+#endif
+
 void *ceesafe_alloc(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
@@ -768,6 +951,7 @@ void *ceesafe_alloc(size_t size, uint32_t allocator) {
     void *p = budget_new_block(ceesafe_platform_alloc(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
+        live_track(p, size, allocator);
     }
     return p;
 }
@@ -779,14 +963,26 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
     void *p = budget_new_block(ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
+        live_track(p, size, allocator);
     }
     return p;
 }
+
+static void *realloc_block(void *p, size_t size, uint32_t allocator);
 
 void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
     if (p == NULL) {
         return ceesafe_alloc(size, allocator); /* C's realloc(NULL, n), for CEE_ALLOC_FOREIGN's callers */
     }
+    void *q = realloc_block(p, size, allocator);
+    if (q != NULL && config_u32(&alloc_counting) != 0u) {
+        live_untrack(p); /* the table follows the block, which may have moved */
+        live_track(q, size, allocator);
+    }
+    return q;
+}
+
+static void *realloc_block(void *p, size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
@@ -822,10 +1018,10 @@ void ceesafe_free(void *p, uint32_t allocator) {
     cee_budget *b = budget_for(allocator);
     if (b != NULL) {
         budget_give_back(b, (uint64_t)ceesafe_platform_block_size(p));
-        budget_blocks(b, false);
     }
     if (config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */
+        live_untrack(p);
     }
     ceesafe_platform_free(p);
 }
@@ -1056,8 +1252,8 @@ int32_t ceesafe_rt_init_main(const ceesafe_config *config) {
 
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
    with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak; then, if
-   isolated units trapped, "ceesafe alloc: isolated leaked=<k>\n" (ADR 0175 amendment 1), the blocks they left, which
-   `live` counts and `ceesafec test` takes off it; then, if a vector's block changed sides, "ceesafe alloc: given=<k>
+   isolated units trapped, "ceesafe alloc: isolated leaked=<k>\n" (ADR 0175 amendments 1 and 2), the live blocks they
+   reach, which `live` counts and `ceesafec test` takes off it; then, if a vector's block changed sides, "ceesafe alloc: given=<k>
    taken=<m>\n" (ADR 0090), for information too. */
 uint64_t ceesafe_shutdown(void) {
     /* Before ceesafe_init has published the config (never called, or still under way on another thread), nothing
@@ -1066,6 +1262,9 @@ uint64_t ceesafe_shutdown(void) {
         return 0u;
     }
     uint64_t live = config_u32(&alloc_counting) != 0u ? ceesafe_atomic_load_u64(&alloc_live) : 0u;
+    if (config_u32(&alloc_counting) != 0u) {
+        ceesafe_atomic_store_u64(&alloc_isolated, live_dead_reach()); /* ADR 0175 amendment 2 */
+    }
     if (config_u32(&alloc_report) != 0u) {
         write_err_cstr("ceesafe alloc: attempts=");
         write_err_u64(ceesafe_atomic_load_u64(&alloc_attempts));

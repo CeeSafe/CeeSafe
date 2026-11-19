@@ -12,6 +12,7 @@ struct Allocation {
     init: Vector<bool>;
     what: Vector<u8>;
     live: bool;
+    counted: bool; // in the interpreter's `live` count: a heap block from ceesafe_alloc's steps (runtime.cee)
 }
 
 /// An ended local of this many bytes or fewer keeps its buffers for `revive`.
@@ -251,7 +252,9 @@ struct Memory {
             data.push(0)!;
             init.push(initialised)!;
         }
-        this.allocations.push(Allocation { kind: kind, data: data, init: init, what: copyBytes(what)!, live: true })!;
+        this.allocations.push(
+            Allocation { kind: kind, data: data, init: init, what: copyBytes(what)!, live: true, counted: false },
+        )!;
         return Ok(allocationBase(this.allocations.length - 1));
     }
 

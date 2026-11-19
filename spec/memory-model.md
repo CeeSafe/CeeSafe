@@ -157,9 +157,11 @@ public interface Allocator {
     `ceesafe alloc: given=<k> taken=<m>`, counts them, and no tool reads it as a leak. The interpreter counts the
     same way. `Vector.intoRaw` changes nothing: its block stays in `live` until a vector made by `Vector.fromRaw` is
     dropped.
-  - Isolated tasks that trapped (ADR 0175 amendment 1): what their units left is in `live`, and a line,
+  - Isolated tasks that trapped (ADR 0175 amendments 1 and 2): what their units left is in `live`, and a line,
     `ceesafe alloc: isolated leaked=<k>`, after the foreign one, gives those blocks, which `ceesafec test` takes off
-    `live`. A unit counts the blocks allocated under its budget and not freed under it, and its root's frame.
+    `live`. They are the live blocks the dead units' tasks reach at the end, through any aligned word that holds a
+    block's address (conservatively, natively; exactly, in the interpreter). In a counting run the runtime keeps a
+    table of the live blocks for this; elsewhere it keeps nothing.
   - The test runner's sweep uses both (`testing.md`).
 
 ### 3.3 Arenas (regions)

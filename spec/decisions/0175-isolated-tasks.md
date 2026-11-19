@@ -9,7 +9,7 @@
   day (§10), with the differences §10 lists; released in 0.75.0. Its check passes on macOS, Linux and Windows on
   ARM64 (MSVC). Amendment 1 (§11, 2026-11-19): `trySpawnIsolated`, and three faults CeeSafe.Web met building on it;
   released in 0.77.0. Amendment 2 (§12, 2026-11-19): what a crashed unit leaves, counted from what it can reach;
-  **proposed**, five questions for the owner.
+  accepted by the owner ("I accept amendment 2's five questions as written.") and implemented (§12.7).
 - Scope: the hosted runtime (the panic path, `runtime/core/ceesafe_rt_core.c`; the executor,
   `runtime/hosted/ceesafe_rt_async.c`; mutexes, `ceesafe_rt_thread.c`), lib/core (`TaskSet.spawnIsolated`,
   `TaskCrash`, `Critical`), lib/std (`Mutex`, `AsyncMutex`: poisoning; `Isolation`; `AsyncTcpStream.closer`), the
@@ -415,7 +415,7 @@ fails: "the peer saw no end"); `tools/test_command_check.py`, whose fixture gain
 trap that leaves the test passed, one followed by the test's own panic (reported at the test's line) and by the
 test's own leak, and a watcher made in the set's body.
 
-## 12. Amendment 2 (2026-11-19, proposed): what a crashed unit leaves, counted from what it can reach
+## 12. Amendment 2 (2026-11-19): what a crashed unit leaves, counted from what it can reach
 
 ### 12.1 Context
 
@@ -484,14 +484,15 @@ last count go. A block the unit cannot reach, it cannot be what keeps alive.
 ### 12.5 Questions for the owner
 
 1. Option B, a conservative walk from the dead units' tasks at the end, in counting runs only? *Recommended: yes.*
+   **Accepted.**
 2. Keep the table only while allocations are counted, so a program that does not count pays nothing? *Recommended:
-   yes.*
+   yes.* **Accepted.**
 3. Accept that the native walk may over-count from a stale word in a dead frame, hiding a test's own leak of that
-   block, rather than under-count and report a crash's leak as the test's? *Recommended: yes.*
+   block, rather than under-count and report a crash's leak as the test's? *Recommended: yes.* **Accepted.**
 4. Replace amendment 1's budget block count with the walk, keeping `leakedBytes` from the budget? *Recommended:
-   yes.*
+   yes.* **Accepted.**
 5. Release it as a patch release once it is in, and raise CeeSafe.Web's minimum to it for the streams' part of Web
-   ADR 0016? *Recommended: yes.*
+   ADR 0016? *Recommended: yes.* **Accepted.**
 
 ### 12.6 Tests (proposed)
 
@@ -501,4 +502,33 @@ last count go. A block the unit cannot reach, it cannot be what keeps alive.
 - CeeSafe.Web's two stream tests (`web_http2` and `web_http3`, each a stream whose handler traps): passed, and
   the HTTP/2 one in the interpreter too.
 - The fault and cancellation sweeps over those, and the contract suite.
+
+### 12.7 Implementation notes (2026-11-19)
+
+- **Native** (`runtime/core/ceesafe_rt_core.c`): the table is open-addressed by address, under a spin lock (blocks are
+  allocated on every thread), in the platform heap, only while `alloc_counting` is on; `ceesafe_realloc` moves an
+  entry with its block. The roots are the dead unit's root task block and the task that trapped
+  (`ceesafe_alloc_dead_root`, from `cee_unit_crash`). The other task blocks are reached from them: a scope's record
+  is in its owner's frame and lists its children, and a task names its frame-stack chunks. The walk sorts the
+  table (a heap sort, with no C library sort) and searches it for the block that holds each word. **The table and
+  the roots take the C library's heap**, not `ceesafe_platform_alloc`: under a host's allocator hook (ADR 0088
+  §2.5) the platform functions are the host's, which then saw a block it never got back (`tools/embed_check.py`,
+  five of its cases), and are given back at the end. `live_untrack` reads the table's size under the lock: read
+  before it, it raced with a constructor's thread that allocated while counting was turned on (ThreadSanitizer, in
+  the same check).
+- **Interpreter** (`src/interpreter/runtime.cee`, `io.cee`): the roots are the heap blocks the unit's tasks allocated,
+  and, for every task of a dead unit, its environment and its frames' locals and slots. **A channel's handle is now
+  tagged** (0x7C4A in its high 16 bits, `chanHandle`), so the walk follows a handle the unit holds to the channel's
+  buffer while a count of it is held. Before, a handle was the channel's index plus one, a small number the walk
+  could not tell from any other. An allocation's address was already distinctive (`(i + 1) << 32`).
+- **Amendment 1's block count is gone** (the budget's `blocks`, `ceesafe_alloc_isolated_leaked`); the report line
+  and the runner are as amendment 1 made them.
+
+Checked (2026-11-19, macOS arm64, the tree's compiler):
+- `tools/test_command_check.py`: the fixture has seven isolated tests, natively and in the interpreter. Two capture
+  a `Vector`, a `Box`, a `String`, a channel's handle and an `Arc`'s count and trap: passed, and leaked with the
+  test's own leak after. A child that sent its captured vector back before it trapped: passed.
+- CeeSafe.Web's two stream tests (B24): `web_http2`'s, natively and in the interpreter, and `web_http3`'s, natively,
+  passed. Under 0.77.0 they were leaked: 17 live against 3 counted, and 10 against 0. The interpreter found 11 of 16
+  before channel handles were tagged.
 

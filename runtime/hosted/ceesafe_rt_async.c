@@ -247,7 +247,7 @@ static _Thread_local cee_executor cee_exec;
 struct cee_unit;
 struct cee_task;
 static bool cee_unit_dead(const struct cee_unit *u);
-static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size, bool root_counted);
+static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size);
 static void cee_unit_crash(struct cee_task *t);
 static void cee_unit_end(struct cee_unit *u);
 static void cee_child_gone(struct cee_task *t, bool keep);
@@ -1245,8 +1245,7 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     t->block_size = block_size;
 #if !defined(CEE_FREESTANDING)
     if (isolated && scope->set) {
-        /* without memory for it, the child is an ordinary one */
-        cee_unit_begin(t, crashed, crashed_size, allocate == NULL);
+        cee_unit_begin(t, crashed, crashed_size); /* without memory for it, the child is an ordinary one */
     } else if (crashed != NULL) {
         ceesafe_platform_free(crashed);
     }
@@ -1956,7 +1955,6 @@ typedef struct cee_unit {
     uint32_t critical;      /* Critical guards held by its tasks: a trap then ends the process */
     void *budget;           /* what it holds: its own record, or its maker's where a block's size cannot be told */
     bool counted;           /* budget is its own */
-    bool root_counted;      /* the root's block came from ceesafe_alloc before the unit was made: one more it leaves */
     void *crashed;          /* the Result<void, E> its set is given, copied when it was started */
     size_t crashed_size;
     cee_unit_lock *locks;   /* held by its tasks and by those of the units inside it */
@@ -2007,7 +2005,7 @@ static void cee_isolate_panic(const ceesafe_panic_info *info) {
 }
 
 /* Makes `t`, a set's new child, the root of a unit of its own. */
-static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size, bool root_counted) {
+static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
     cee_unit *u = (cee_unit *)ceesafe_platform_alloc_zeroed(sizeof *u);
     if (u == NULL) {
         if (crashed != NULL) ceesafe_platform_free(crashed);
@@ -2019,7 +2017,6 @@ static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size, bool
     u->root = t;
     u->crashed = copy;
     u->crashed_size = crashed_size;
-    u->root_counted = root_counted;
     void *own = ceesafe_budget_make(UINT64_MAX); /* inside its maker's, with no bound of its own */
     if (own != NULL) {
         ceesafe_budget_release(t->budget);
@@ -2057,8 +2054,11 @@ static void cee_unit_crash(cee_task *t) {
     cee_unit *u = t->unit;
     u->dead = true;
     uint64_t leaked = u->counted ? ceesafe_budget_held_of(u->budget) : 0u;
-    if (u->counted) {
-        ceesafe_alloc_isolated_leaked(ceesafe_budget_blocks_of(u->budget) + (u->root_counted ? 1u : 0u));
+    /* What the unit reaches stays live, and is counted at the end (ADR 0175 amendment 2): from its root's block,
+       and from the task that trapped, which may be under it. */
+    ceesafe_alloc_dead_root(u->root);
+    if (t != u->root) {
+        ceesafe_alloc_dead_root(t);
     }
     (void)ceesafe_atomic_add_u64(&cee_crashes, 1u);
     (void)ceesafe_atomic_add_u64(&cee_leaked, leaked);

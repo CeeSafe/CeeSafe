@@ -2741,6 +2741,7 @@ fn asyncSetSpawn(
                 critical: 0,
                 crashedAt: it.asyncIsolateAt,
                 crashedSize: it.asyncIsolateSize,
+                allocated: Vector<u64>.create(),
                 lockKinds: Vector<u32>.create(),
                 locks: Vector<u64>.create(),
                 flags: Vector<u64>.create(),
@@ -2897,9 +2898,19 @@ struct InterpUnit {
     critical: u32;  // Critical guards its tasks hold
     crashedAt: u64; // the Result<void, E> its set is given, in a block of its own
     crashedSize: usize;
+    allocated: Vector<u64>; // the heap blocks its tasks and those of the units inside it allocated (ADR 0175 amendment 2)
     lockKinds: Vector<u32>; // the locks its tasks hold: 1 a Mutex, 2 an AsyncMutex's token channel
     locks: Vector<u64>;
     flags: Vector<u64>; // each one's poison mark
+}
+
+/// A heap block allocated now, in the current task's unit and those it is inside (ADR 0175 amendment 2).
+fn unitAllocated(it: borrow mut Interp, address: u64) {
+    var u = unitOfTask(it, it.asyncCurrent);
+    while (u != none()) {
+        it.asyncUnits[u as usize].allocated.push(address)!;
+        u = it.asyncUnits[u as usize].outer;
+    }
 }
 
 /// The unit of task `task`, or none.
@@ -2986,9 +2997,20 @@ fn unitForgetLock(it: borrow mut Interp, unit: u32, lock: u64) {
     }
 }
 
+/// A channel's handle: its index plus one, with 0x7C4A in the high 16 bits, so that the end's walk over a crashed
+/// unit's memory (ADR 0175 amendment 2) tells a handle it holds from a number: no allocation's address
+/// (`(i + 1) << 32`) and no small integer has those bits.
+fn chanHandle(index: usize) -> u64 => 0x7C4A000000000000 | (index as u64 + 1);
+
+/// The index of the channel `handle` names.
+fn chanIndex(handle: u64) -> usize => ((handle & 0xFFFFFFFF) - 1) as usize;
+
+/// Whether `word` has a channel handle's tag.
+fn isChanHandle(word: u64) -> bool => (word >> 48) == 0x7C4A;
+
 /// Puts one value of `bits` (`size` bytes, the rest of the slot zero) in channel `handle` if it has room.
 fn channelPut(it: borrow mut Interp, handle: u64, bits: u64, size: usize) -> Result<bool, Stop> {
-    let k = (handle - 1) as usize;
+    let k = chanIndex(handle);
     let count = it.runtime.channels[k].count;
     let capacity = it.runtime.channels[k].capacity;
     if (count >= capacity || it.runtime.channels[k].closed) {
@@ -3008,6 +3030,10 @@ fn unitCrashed(it: borrow mut Interp, unit: u32, code: u32) -> Result<void, Stop
     let u = unit as usize;
     it.asyncUnits[u].dead = true;
     it.asyncCrashes += 1;
+    // What it allocated is where the end's walk starts, with its tasks' environments (runTasks; amendment 2).
+    for (k in 0..it.asyncUnits[u].allocated.length) {
+        it.isolatedRoots.push(it.asyncUnits[u].allocated[k])!;
+    }
     loop {
         let last = it.asyncUnits[u].locks.length;
         if (last == 0) {
@@ -3049,7 +3075,7 @@ fn unitCrashed(it: borrow mut Interp, unit: u32, code: u32) -> Result<void, Stop
         if (it.asyncWatchScopes[w] as usize == scope) {
             // lib/core's TaskCrash: the task, what it leaked (the interpreter's memory is its own: 0), the kind.
             let handle = it.asyncWatchChannels[w];
-            let k = (handle - 1) as usize;
+            let k = chanIndex(handle);
             let count = it.runtime.channels[k].count;
             let capacity = it.runtime.channels[k].capacity;
             if (count < capacity && !it.runtime.channels[k].closed) {
@@ -3101,7 +3127,7 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
     if (sameText(name, "ceesafe_async_set_watch")) {
         let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
         let handle = arguments[1].bits(0, 8)?;
-        it.runtime.channels[(handle - 1) as usize].refs += 1;
+        it.runtime.channels[chanIndex(handle)].refs += 1;
         it.asyncWatchScopes.push(scope)!;
         it.asyncWatchChannels.push(handle)!;
         return Ok(valueOf(1, 1));
@@ -3110,7 +3136,14 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
         let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
         for (w in 0..it.asyncWatchScopes.length) {
             if (it.asyncWatchScopes[w] == scope && it.asyncWatchChannels[w] != 0) {
-                it.runtime.channels[(it.asyncWatchChannels[w] - 1) as usize].refs -= 1;
+                let k = chanIndex(it.asyncWatchChannels[w]);
+                it.runtime.channels[k].refs -= 1;
+                if (it.runtime.channels[k].refs == 0) {
+                    // The set held the last count: the program's own handle went first (a channel made in the
+                    // set's body). Its values are TaskCrash, Copy: freeing the storage is all its drop does.
+                    let data = it.runtime.channels[k].data;
+                    freeMemory(it, data)?;
+                }
                 it.asyncWatchScopes[w] = none();
                 it.asyncWatchChannels[w] = 0;
             }
@@ -3802,6 +3835,27 @@ fn runTasks(
                     appendText(mut m, ": ended alone)\n")!;
                     writeError(it, m.view());
                     unitCrashed(it, crashing, panicCode(stop.message.view()))?;
+                    // The environments of its tasks, where their captures are: the end's walk starts there too.
+                    // And their frames: the locals they moved their captures into, and the values held in slots.
+                    for (j in 0..tasks.length) {
+                        let u = unitOfTask(it, first + truncate<u32>(j));
+                        if (u == none() || !unitDead(it, u)) {
+                            continue;
+                        }
+                        if (tasks[j].environment != 0) {
+                            it.isolatedRoots.push(tasks[j].environment)!;
+                        }
+                        if (j < stacks.length) {
+                            for (a in 0..stacks[j].length) {
+                                for (local in stacks[j][a].frame.locals.view()) {
+                                    it.isolatedRoots.push(local)!;
+                                }
+                                for (slot in stacks[j][a].frame.slots.view()) {
+                                    it.isolatedRoots.push(slot)!;
+                                }
+                            }
+                        }
+                    }
                     continue;
                 }
                 if (stop.kind != 3) {
@@ -3973,9 +4027,9 @@ fn channelService(
                 waiters: Vector<u32>.create(),
             },
         )!;
-        return Ok(valueOf(it.runtime.channels.length as u64, 8));
+        return Ok(valueOf(chanHandle(it.runtime.channels.length - 1), 8));
     }
-    let k = (arguments[0].bits(0, 8)? - 1) as usize;
+    let k = chanIndex(arguments[0].bits(0, 8)?);
     if (sameText(name, "ceesafe_chan_retain")) {
         it.runtime.channels[k].refs += 1;
         return Ok(null);
@@ -3991,7 +4045,7 @@ fn channelService(
     }
     if (sameText(name, "ceesafe_chan_begin_send") || sameText(name, "ceesafe_chan_begin_recv")) {
         let sending = sameText(name, "ceesafe_chan_begin_send");
-        if (!sending && k as u64 + 1 == it.runtime.signalChannel) {
+        if (!sending && chanHandle(k) == it.runtime.signalChannel) {
             deliverSignals(it)?; // ADR 0125: the requests that arrived since the program last asked
         }
         let channel = borrow it.runtime.channels[k];
@@ -4037,7 +4091,7 @@ fn channelService(
     }
     if (sameText(name, "ceesafe_chan_wait")) {
         let epoch = arguments[1].bits(0, 8)?;
-        if (k as u64 + 1 == it.runtime.signalChannel) {
+        if (chanHandle(k) == it.runtime.signalChannel) {
             // ProcessSignals.wait (ADR 0125): no thread of the program fills this channel, so this is no deadlock
             // and no other thread is given the baton: real time passes until a signal comes, and the library's
             // loop asks again.

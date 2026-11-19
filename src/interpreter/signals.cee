@@ -76,7 +76,7 @@ fn signalTaskWaits(it: borrow Interp) -> bool {
     if (it.runtime.signalChannel == 0) {
         return false;
     }
-    return it.runtime.channels[(it.runtime.signalChannel - 1) as usize].waiters.length > 0;
+    return it.runtime.channels[chanIndex(it.runtime.signalChannel)].waiters.length > 0;
 }
 
 /// Sends the requests that arrived into the subscription's channel, as the runtime's thread does (a full channel
@@ -89,7 +89,7 @@ fn deliverSignals(it: borrow mut Interp) -> Result<bool, Stop> {
     if (bits == 0) {
         return Ok(false);
     }
-    let k = (it.runtime.signalChannel - 1) as usize;
+    let k = chanIndex(it.runtime.signalChannel);
     var sent = false;
     var which: u32 = 1; // the value sent; its bit is 1, 2, then 4 for 3, a hangup
     while (which <= 3) {
@@ -122,7 +122,7 @@ fn signalService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vecto
             return Ok(hostFailure(17)); // EEXIST, 17 on every host: IoError.AlreadyExists
         }
         let handle = arguments[0].bits(0, 8)?;
-        it.runtime.channels[(handle - 1) as usize].refs += 1;
+        it.runtime.channels[chanIndex(handle)].refs += 1;
         it.runtime.signalChannel = handle;
         interpSignalsWatch();
         return Ok(hostResult(0));
@@ -130,7 +130,7 @@ fn signalService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vecto
     // Unsubscribing names the subscription's channel, and ends no other.
     if (it.runtime.signalChannel != 0 && arguments[0].bits(0, 8)? == it.runtime.signalChannel) {
         interpSignalsRestore();
-        it.runtime.channels[(it.runtime.signalChannel - 1) as usize].refs -= 1;
+        it.runtime.channels[chanIndex(it.runtime.signalChannel)].refs -= 1;
         it.runtime.signalChannel = 0;
     }
     return Ok(null);

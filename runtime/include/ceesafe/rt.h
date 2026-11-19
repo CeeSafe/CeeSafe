@@ -928,6 +928,9 @@ void *ceesafe_budget_enter(uint64_t limit);
 void ceesafe_budget_leave(void *budget);
 void *ceesafe_budget_make(uint64_t limit);
 uint64_t ceesafe_budget_held_of(void *budget);
+/* A task block of an isolated unit that crashed (ADR 0175 amendment 2): what it reaches at the end, in a run that
+   counts allocations, is reported as `isolated leaked`. Nothing in a run that does not count. */
+void ceesafe_alloc_dead_root(const void *block);
 int64_t ceesafe_budget_held(void);
 int64_t ceesafe_budget_limit(void);
 void *ceesafe_budget_retain(void);

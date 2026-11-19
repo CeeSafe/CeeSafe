@@ -2,7 +2,7 @@
 # outcome natively, the outcome with --interp, and a part of the failure message ("-": none checked). Tab-separated,
 # in the names' order, which the runner follows. Reviewed changes (2026-11-02, CeeSafe.Web's report): failsOther names
 # its variant; leaksSafely leaks without C, so --interp finds it; exits ends the process itself ("exited", not
-# "crashed").
+# "crashed"). 2026-11-19 (ADR 0175 amendment 1): an isolated child's trap is neither the test's panic nor its leak; amendment 2: nor what it captured.
 adds	passed	passed	-
 allocates	passed	passed	-
 crashes	crashed	skipped	-
@@ -13,6 +13,13 @@ failsIo	failed	failed	-
 failsOther	failed	failed	returned Err(Mine.Broke)
 failsText	failed	failed	expected "abc", got "abd"
 hangs	timed out	timed out	-
+isolatedCapturesPass	passed	passed	-
+isolatedCapturesThenLeaks	leaked	leaked	-
+isolatedPasses	passed	passed	-
+isolatedSentAwayPasses	passed	passed	-
+isolatedThenLeaks	leaked	leaked	-
+isolatedThenPanics	panicked	panicked	index out of bounds at tests/isolated.cee:55:19
+isolatedWatchMadeInside	passed	passed	-
 leaks	leaked	skipped	-
 leaksSafely	leaked	leaked	-
 panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25

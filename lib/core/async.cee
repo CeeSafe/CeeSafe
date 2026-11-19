@@ -222,7 +222,8 @@ struct TaskSetRecord<E> {
 
 /// The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
 /// children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
-/// `set.trySpawn(async move () => …)`, which is false instead. A child owns what it captures: no loans, so it cannot
+/// `set.trySpawn(async move () => …)`, which is false instead. `await set.spawnIsolated(crashed, async move () => …)`
+/// and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175). A child owns what it captures: no loans, so it cannot
 /// capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
 @noncopy // the one handle of its record
 public struct TaskSet<E: Copy> {
@@ -284,6 +285,16 @@ public struct TaskSet<E: Copy> {
             return Ok(unsafe { ceesafe_async_isolated_last() });
         }
         return Err(this.oom);
+    }
+
+    /// `trySpawnIsolated`'s result (ADR 0175 amendment 1): the child's number if it started (0 if there was no memory
+    /// to isolate it, as for `spawnIsolated`), null if the set was full or cancelled.
+    /// Safety: as spawnedIsolated.
+    fn startedIsolated(borrow this, code: u32) -> u64? {
+        if (code == 0) {
+            return Some(unsafe { ceesafe_async_isolated_last() });
+        }
+        return null;
     }
 
     /// How many of the set's isolated children have trapped (ADR 0175).

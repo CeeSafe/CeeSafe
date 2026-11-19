@@ -9,8 +9,9 @@ Two programs are built and run:
    children parked on a timer and on a channel, a race, a nested task set with an ordinary and an isolated child),
    whose root traps, and again with one of those tasks trapping: none of them runs again, also when what it waits
    for comes; a Mutex and an AsyncMutex held at the trap, which the next takers find poisoned (and trap for,
-   alone), and which `recover` and `heal` make whole. It runs natively, with the address and undefined-behaviour
-   sanitizers, and in the interpreter, with the same thirteen lines each time;
+   alone), and which `recover` and `heal` make whole; `trySpawnIsolated` (ADR 0175 amendment 1), which starts while
+   there is room, is refused while the set is full, and whose child's trap is the set's crash. It runs natively, with
+   the address and undefined-behaviour sanitizers, and in the interpreter, with the same fifteen lines each time;
 2. `ends`, one case an argument:
    - `isolated`: the child traps and the program goes on, the panic's line naming the task;
    - `critical`, `callback`, `blocking`, `plain`: a trap in a `Critical` section, under C's frames (a comparison
@@ -19,7 +20,8 @@ Two programs are built and run:
    - `many`: ten thousand children that each hold 64 KiB and trap; each crash's `leakedBytes` and the process's
      total are what they held;
    - `sockets`: a connection handed to an isolated child whose unit traps while a task of it is parked reading;
-     the peer's later write is read by nobody, and the owner's `closer` ends the connection, which the peer sees.
+     the peer's later write is read by nobody, the peer ends its side, and the owner's `closer` still ends the
+     connection, which the peer sees (on macOS that took amendment 1's fix).
      Also with the sanitizers.
 
 usage: python3 tools/isolated_check.py --compiler out/ceesafec
@@ -395,11 +397,67 @@ async fn locks() -> Result<Locks, Fail> {
     });
 }
 
+struct Tries {
+    started: u32;
+    refused: u32;
+    numbered: u32;
+    crashes: u64;
+    result: u32; // 1: the set's result is what the crashed child stands for
+}
+
+/// `trySpawnIsolated` (ADR 0175 amendment 1): into a set of two, two start (one traps), a third is refused while
+/// they run, and a fourth starts once there is room.
+async fn tries() -> Result<Tries, Fail> {
+    let started = AtomicU64.create(0);
+    let refused = AtomicU64.create(0);
+    let numbered = AtomicU64.create(0);
+    let counted = AtomicU64.create(0);
+    let r = await Async.tasks(2, Fail.NoMemory, async (set) => {
+        var k: u32 = 0;
+        while (k < 4) {
+            if (k == 3) {
+                await nap(60)?; // both have ended: room again
+            }
+            let w = k;
+            let tried = set.trySpawnIsolated(Fail.Crashed, async move () => {
+                if (w == 0) {
+                    return await traps(0);
+                }
+                return await nap(if (w == 1) 30u64 else 1u64);
+            });
+            match (tried) {
+                Some(id) => {
+                    started.fetchAdd(1);
+                    if (id != 0) {
+                        numbered.fetchAdd(1);
+                    }
+                }
+                null => { refused.fetchAdd(1); }
+            }
+            k += 1;
+        }
+        await nap(10)?;
+        counted.store(set.crashes());
+        return Ok();
+    });
+    return Ok(Tries {
+        started: truncate<u32>(started.load()),
+        refused: truncate<u32>(refused.load()),
+        numbered: truncate<u32>(numbered.load()),
+        crashes: counted.load(),
+        result: match (r) {
+            Err(Fail.Crashed) => 1,
+            _ => 0,
+        },
+    });
+}
+
 struct All {
     kinds: Kinds;
     shallow: Family;
     deep: Family;
     locks: Locks;
+    tries: Tries;
     total: u64;
 }
 
@@ -408,7 +466,8 @@ async fn all() -> Result<All, Fail> {
     let shallow = await families(false)?;
     let deep = await families(true)?;
     let l = await locks()?;
-    return Ok(All { kinds: k, shallow: shallow, deep: deep, locks: l, total: Isolation.report().crashes });
+    let t = await tries()?;
+    return Ok(All { kinds: k, shallow: shallow, deep: deep, locks: l, tries: t, total: Isolation.report().crashes });
 }
 
 fn say(ok: bool, what: StringView) {
@@ -431,7 +490,9 @@ fn main() {
             say(o.locks.crashes == 3 && o.locks.poisonedKinds == 2, "a lock held at the trap poisons: the next two takers trap for it");
             say(o.locks.recovered, "recover() takes a poisoned lock, with the data as the trap left it");
             say(o.locks.healed == 7 && o.locks.slowHealed == 9, "healed, lock() takes it again");
-            say(o.total == 11, "eleven crashes in all, and the program goes on");
+            say(o.tries.started == 3 && o.tries.refused == 1 && o.tries.numbered == 3, "trySpawnIsolated: three started, each numbered, one refused while the set was full");
+            say(o.tries.crashes == 1 && o.tries.result == 1, "trySpawnIsolated: its child's trap is the set's crash");
+            say(o.total == 12, "twelve crashes in all, and the program goes on");
         }
         Err(_) => { Console.writeLine("FAIL the run returned an error"); }
     }
@@ -628,6 +689,12 @@ async fn sockets() -> Result<Sockets, Fail> {
             Ok() => { wrote.store(1); }
             Err(_) => {}
         }
+        // And ends its side, as a client that has sent its request may: on macOS that made SHUT_RDWR refuse
+        // (ENOTCONN) and send nothing, so the closer shuts each side on its own (ADR 0175 amendment 1).
+        match (peer.shutdownWrite()) {
+            Ok() => {}
+            Err(_) => { wrote.store(0); }
+        }
         await nap(20)?;
         // The owner ends the connection it gave away.
         match (closer.shutdown()) {
@@ -695,7 +762,9 @@ SURVIVE_LINES = [
     "ok   a lock held at the trap poisons: the next two takers trap for it",
     "ok   recover() takes a poisoned lock, with the data as the trap left it",
     "ok   healed, lock() takes it again",
-    "ok   eleven crashes in all, and the program goes on",
+    "ok   trySpawnIsolated: three started, each numbered, one refused while the set was full",
+    "ok   trySpawnIsolated: its child's trap is the set's crash",
+    "ok   twelve crashes in all, and the program goes on",
 ]
 MANY_LINES = ["10000", "one crash leaks what it held", "ten thousand leak ten thousand times that"]
 SOCKET_LINES = ["the unit trapped", "the peer wrote after it", "nobody read it",
@@ -745,7 +814,7 @@ def main():
                 expect(key, r.stdout.splitlines(), SURVIVE_LINES, f"(status {r.returncode}, {r.stderr.strip()[-300:]!r})")
                 cases += 1
                 named = [line for line in r.stderr.splitlines() if "ended alone)" in line]
-                if len(named) != 11 or r.returncode != 0:
+                if len(named) != 12 or r.returncode != 0:
                     problems.append(f"{key}: {len(named)} panics named an isolated task, status {r.returncode}")
         r = subprocess.run([compiler, "run", "--interp", os.path.join(work, "survive.cee")], capture_output=True,
                            text=True, timeout=DEADLINE)

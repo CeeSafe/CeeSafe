@@ -15,6 +15,13 @@ fn finishRuntime(it: borrow mut Interp) {
         appendText(mut m, " live=")!;
         appendDecimal(mut m, it.liveAllocations)!;
         m.push('\n')!;
+        it.isolatedLeaked = deadReach(it); // ADR 0175 amendment 2
+        if (it.isolatedLeaked != 0) {
+            // The live blocks isolated units that trapped reach (ADR 0175 amendment 2), as the runtime prints them.
+            appendText(mut m, "ceesafe alloc: isolated leaked=")!;
+            appendDecimal(mut m, it.isolatedLeaked)!;
+            m.push('\n')!;
+        }
         if (it.givenAllocations != 0 || it.takenAllocations != 0) {
             // Blocks that changed sides (ADR 0090 §2.3): for information, as the runtime prints them.
             appendText(mut m, "ceesafe alloc: given=")!;
@@ -25,6 +32,70 @@ fn finishRuntime(it: borrow mut Interp) {
         }
         writeError(it, m.view());
     }
+}
+
+/// How many counted heap blocks, still live, the crashed units reach (ADR 0175 amendment 2): from their tasks'
+/// environments, frames and the blocks they allocated, through every 8-byte word that holds an allocation's address
+/// or a channel's handle. An allocation's address is `(i + 1) << 32` plus an offset (memory.cee) and a handle is
+/// tagged (`chanHandle`), so the walk finds pointers, not numbers that happen to look like them, as the native
+/// runtime's conservative one may.
+fn deadReach(it: borrow Interp) -> u64 {
+    if (it.isolatedRoots.length == 0) {
+        return 0;
+    }
+    let count = it.memory.allocations.length;
+    var seen = Vector<bool>.withCapacity(count)!;
+    for (i in 0..count) {
+        seen.push(false)!;
+    }
+    var work = Vector<usize>.create();
+    for (root in it.isolatedRoots.view()) {
+        reachAddress(it, root, mut seen, mut work);
+    }
+    var found: u64 = 0;
+    while (work.length > 0) {
+        let id = match (work.pop()) {
+            Some(k) => k,
+            null => 0,
+        };
+        let a = borrow it.memory.allocations[id];
+        if (a.counted && a.live) {
+            found += 1;
+        }
+        var off: usize = 0;
+        while (off + 8 <= a.data.length) {
+            var word: u64 = 0;
+            for (b in 0..8usize) {
+                word = word | ((a.data[off + b] as u64) << (b as u64 * 8));
+            }
+            reachAddress(it, word, mut seen, mut work);
+            off += 8;
+        }
+    }
+    return found;
+}
+
+/// Adds the live allocation that `address` points into, if it is one and not yet seen; for a channel's handle
+/// (`chanHandle`), the channel's buffer, while a count of it is held.
+fn reachAddress(it: borrow Interp, address: u64, seen: borrow mut Vector<bool>, work: borrow mut Vector<usize>) {
+    if (isChanHandle(address)) {
+        let k = chanIndex(address);
+        if (k < it.runtime.channels.length && it.runtime.channels[k].refs > 0) {
+            reachAddress(it, it.runtime.channels[k].data, seen, work);
+        }
+        return;
+    }
+    let id = address >> 32;
+    if (id == 0 || (id - 1) as usize >= it.memory.allocations.length) {
+        return;
+    }
+    let k = (id - 1) as usize;
+    let a = borrow it.memory.allocations[k];
+    if (!a.live || (address & 0xFFFFFFFF) as usize >= a.data.length || seen[k]) {
+        return;
+    }
+    seen[k] = true;
+    work.push(k)!;
 }
 
 // ---- Heap ----
@@ -48,12 +119,15 @@ fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> 
         return Ok(0); // malloc would fail, or the sandbox has no more memory (tooling.md §6.3)
     }
     it.liveAllocations += 1;
-    return it.memory.allocate(
+    let address = it.memory.allocate(
         allocationHeap(),
         if (size == 0) 1 else size as usize,
         false,
         "a heap allocation".bytes(),
-    );
+    )?;
+    it.memory.allocations[((address >> 32) - 1) as usize].counted = true;
+    unitAllocated(it, address);
+    return Ok(address);
 }
 
 fn freeMemory(it: borrow mut Interp, pointer: u64) -> Result<void, Stop> {

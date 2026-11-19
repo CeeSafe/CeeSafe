@@ -298,6 +298,26 @@ fn numberAfter(text: Slice<u8>, key: StringView) -> u64 {
     return found;
 }
 
+/// Where the test's own panic line starts in `stderr`: the first `ceesafe panic` line that does not say its task
+/// ended alone (an isolated task's trap, which the process survives, ADR 0175 §2.5); `stderr.length` if none.
+fn ownPanic(stderr: Slice<u8>) -> usize {
+    let key = "ceesafe panic".bytes();
+    let alone = "ended alone)".bytes();
+    var line: usize = 0;
+    while (line < stderr.length) {
+        var end = line;
+        while (end < stderr.length && stderr[end] != '\n') {
+            end += 1;
+        }
+        let text = stderr[line..end];
+        if (containsSlice(text, key) && !containsSlice(text, alone)) {
+            return line;
+        }
+        line = end + 1;
+    }
+    return stderr.length;
+}
+
 /// The lines between `ceesafe-test 1 failed` and `ceesafe-test 1 end`, or the panic's line.
 fn failureMessage(stderr: Slice<u8>, start: StringView, end: StringView) -> Vector<u8> {
     var message = Vector<u8>.create();
@@ -387,7 +407,11 @@ fn runTest(
         {
             let err = output.stderr.view();
             let attempts = numberAfter(err, "ceesafe alloc: attempts=");
-            let live = numberAfter(err, " live=");
+            // What isolated tasks that trapped left (ADR 0175 amendment 1) is the rule for a trap, not the test's leak.
+            let counted = numberAfter(err, " live=");
+            let isolated = numberAfter(err, "ceesafe alloc: isolated leaked=");
+            let live = if (counted == none() as u64 || isolated == none() as u64) counted
+                else (if (counted > isolated) counted - isolated else 0u64);
             let points = numberAfter(err, "ceesafe cancel: points=");
             result.attempts = if (attempts == none() as u64) 0 else attempts;
             result.points = if (points == none() as u64) 0 else points;
@@ -396,9 +420,9 @@ fn runTest(
                 appendText(mut result.message, "it calls C, which the interpreter cannot run")!;
             } else if (containsText(err, "ceesafe-test 1 timeout")) {
                 result.outcome = 4;
-            } else if (containsText(err, "ceesafe panic")) {
+            } else if (ownPanic(err) < err.length) {
                 result.outcome = 2;
-                result.message = failureMessage(err, "ceesafe panic", "");
+                result.message = failureMessage(err[ownPanic(err)..], "ceesafe panic", "");
             } else if (containsText(err, "ceesafe-test 1 failed")) {
                 result.outcome = 1;
                 result.message = failureMessage(err, "ceesafe-test 1 failed", "ceesafe-test 1 end");

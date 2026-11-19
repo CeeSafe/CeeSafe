@@ -2054,6 +2054,12 @@ static void cee_unit_crash(cee_task *t) {
     cee_unit *u = t->unit;
     u->dead = true;
     uint64_t leaked = u->counted ? ceesafe_budget_held_of(u->budget) : 0u;
+    /* What the unit reaches stays live, and is counted at the end (ADR 0175 amendment 2): from its root's block,
+       and from the task that trapped, which may be under it. */
+    ceesafe_alloc_dead_root(u->root);
+    if (t != u->root) {
+        ceesafe_alloc_dead_root(t);
+    }
     (void)ceesafe_atomic_add_u64(&cee_crashes, 1u);
     (void)ceesafe_atomic_add_u64(&cee_leaked, leaked);
     for (uint32_t i = 0; i < u->lock_count; i++) {
@@ -3099,6 +3105,28 @@ static void cee_child_gone(cee_task *t, bool keep) {
     }
 }
 
+/* Resumes `t`: whether it returned. */
+static bool cee_resume(cee_task *t) {
+    return t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
+}
+
+#if !defined(CEE_FREESTANDING)
+/* Resumes `t`, a task of an isolation unit, over a jump point: 1 if it returned, 0 if it waits, -1 if it trapped and
+   the panic path jumped back here (ADR 0175 §2.3). The jump point is this function's own, so that the loop that calls
+   it keeps no local across a setjmp (gcc's -Wclobbered named two), and nothing here is read after the jump. gcc and
+   clang never inline a function that calls setjmp. cee_exec.jump points at `crash` only until the loop restores it,
+   right after the return, with no CeeSafe code between. */
+static int cee_resume_isolated(cee_task *t) {
+    jmp_buf crash;
+    cee_exec.jump = &crash;
+    cee_exec.jump_depth = ceesafe_entry_depth();
+    if (setjmp(crash) != 0) {
+        return -1;
+    }
+    return cee_resume(t) ? 1 : 0;
+}
+#endif
+
 /* Runs tasks until `root` returns, or, for a worker (root NULL), until the run is done. */
 static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
     for (;;) {
@@ -3124,22 +3152,18 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         /* The task's budget is the thread's while the task runs (ADR 0170), and what the task left current is the
            task's when it parks. */
         void *outer = ceesafe_budget_swap(t->budget);
-        /* A task of an isolation unit is resumed over a jump point: a trap in it comes back here (ADR 0175 §2.3).
-           What is read after the jump was set before it and not changed since. */
-        jmp_buf crash;
+        /* A task of an isolation unit is resumed over a jump point (cee_resume_isolated): a trap in it comes back
+           as -1 (ADR 0175 §2.3). */
         jmp_buf *outer_jump = cee_exec.jump;
         int32_t outer_depth = cee_exec.jump_depth;
-        bool crashed = false;
+        int resumed;
         if (t->unit != NULL) {
-            cee_exec.jump = &crash;
-            cee_exec.jump_depth = ceesafe_entry_depth();
-            if (setjmp(crash) != 0) {
-                crashed = true;
-            }
+            resumed = cee_resume_isolated(t);
         } else {
             cee_exec.jump = NULL; /* a trap in a task of no unit ends the process, also under an outer executor's unit */
+            resumed = cee_resume(t) ? 1 : 0;
         }
-        if (crashed) {
+        if (resumed < 0) {
             cee_exec.jump = outer_jump;
             cee_exec.jump_depth = outer_depth;
             cee_exec.current = NULL;
@@ -3152,8 +3176,10 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
             }
             continue;
         }
+        bool done = resumed > 0;
+#else
+        bool done = cee_resume(t);
 #endif
-        bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
 #if !defined(CEE_FREESTANDING)
         cee_exec.jump = outer_jump;

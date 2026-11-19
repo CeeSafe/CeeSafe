@@ -1,0 +1,184 @@
+// Isolated children that trap (ADR 0175 and its amendment 1): the trap is the child's, not the test's. Its panic line
+// is not the test's panic, and what it leaves is not the test's leak; a panic or a leak of the test's own still is.
+enum Iso {
+    NoMemory,
+    Crashed,
+}
+
+/// Allocates, then traps: an index out of bounds in a child that ends alone.
+async fn trapsHolding() -> Result<void, Iso> {
+    var held = Vector<u64>.create();
+    match (held.push(7)) {
+        Ok() => {}
+        Err(_) => { return Err(Iso.NoMemory); }
+    }
+    let at = held.length + 2;
+    let x = held[at];
+    return Ok();
+}
+
+/// One isolated child that traps, beside one that works.
+async fn oneTraps() -> Result<u64, Iso> {
+    var crashes: u64 = 0;
+    let r = await Async.tasks(2, Iso.NoMemory, async (set) => {
+        let id = await set.spawnIsolated(Iso.Crashed, async move () => await trapsHolding())?;
+        await set.spawn(async move () => Ok())?;
+        match (await Timer.sleep(10)) {
+            Ok() => {}
+            Err(_) => { return Err(Iso.NoMemory); }
+        }
+        crashes = set.crashes();
+        return Ok();
+    });
+    return Ok(crashes);
+}
+
+/// The child's trap leaves the test passing, with nothing leaked of its own.
+@test
+async fn isolatedPasses() -> Result<void, TestFailure> {
+    match (await oneTraps()) {
+        Ok(n) => { Check.isTrue(n == 1, "one crash")?; }
+        Err(_) => { return Err(TestFailure.create("no memory")); }
+    }
+    return Ok();
+}
+
+/// The child's trap, then the test's own panic: the test's is the one reported.
+@test
+async fn isolatedThenPanics() -> Result<void, TestFailure> {
+    let n = match (await oneTraps()) {
+        Ok(n) => n,
+        Err(_) => { return Err(TestFailure.create("no memory")); },
+    };
+    let small = [1u64; 2];
+    let k = n as usize + 4;
+    let y = small[k];
+    return Ok();
+}
+
+/// The child's trap, then a leak of the test's own: still a leak.
+@test
+async fn isolatedThenLeaks() -> Result<void, TestFailure> {
+    match (await oneTraps()) {
+        Ok(_) => {}
+        Err(_) => { return Err(TestFailure.create("no memory")); }
+    }
+    match (Box.create(5u32)) {
+        Ok(b) => { let p = Box.intoRaw(b); }
+        Err(_) => {}
+    }
+    return Ok();
+}
+
+/// A watcher's channel made inside the set's body, which the set outlives the program's handle of (B23 of
+/// CeeSafe.Web's list): nothing is left.
+@test
+async fn isolatedWatchMadeInside() -> Result<void, TestFailure> {
+    let r = await Async.tasks(4, Iso.NoMemory, async (set) => {
+        let crashes = match (Channel<TaskCrash>.create(4)) {
+            Ok(c) => c,
+            Err(_) => { return Err(Iso.NoMemory); },
+        };
+        if (!Isolation.watch(set, crashes)) {
+            return Err(Iso.NoMemory);
+        }
+        return Ok();
+    });
+    return Ok();
+}
+
+/// What a child captured, made by its parent before it started: a vector, a box, a string, a channel's handle and an
+/// `Arc`'s count. It traps holding them all; the end's walk reaches them (ADR 0175 amendment 2).
+async fn trapsWithCaptures() -> Result<void, Iso> {
+    let r = await Async.tasks(2, Iso.NoMemory, async (set) => {
+        var numbers = Vector<u64>.create();
+        if (numbers.push(1).isErr()) {
+            return Err(Iso.NoMemory);
+        }
+        let boxed = match (Box.create(9u64)) {
+            Ok(b) => b,
+            Err(_) => { return Err(Iso.NoMemory); },
+        };
+        var text = String.create();
+        if (text.append("captured").isErr()) {
+            return Err(Iso.NoMemory);
+        }
+        let messages = match (Channel<u64>.create(4)) {
+            Ok(c) => c,
+            Err(_) => { return Err(Iso.NoMemory); },
+        };
+        let shared = match (Arc<AtomicU64>.create(AtomicU64.create(0))) {
+            Ok(a) => a,
+            Err(_) => { return Err(Iso.NoMemory); },
+        };
+        let mine = messages.clone();
+        let count = shared.clone();
+        let id = await set.spawnIsolated(Iso.Crashed, async move () => {
+            let held = numbers;
+            let b = boxed;
+            let t = text;
+            let m = mine;
+            let c = count;
+            return await trapsHolding();
+        })?;
+        match (await Timer.sleep(10)) {
+            Ok() => {}
+            Err(_) => { return Err(Iso.NoMemory); }
+        }
+        return Ok();
+    });
+    return Ok();
+}
+
+/// A child's captures are left by its trap, and are not the test's leak.
+@test
+async fn isolatedCapturesPass() -> Result<void, TestFailure> {
+    match (await trapsWithCaptures()) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(TestFailure.create("no memory")); }
+    }
+}
+
+/// The same, then a leak of the test's own: still a leak.
+@test
+async fn isolatedCapturesThenLeaks() -> Result<void, TestFailure> {
+    match (await trapsWithCaptures()) {
+        Ok() => {}
+        Err(_) => { return Err(TestFailure.create("no memory")); }
+    }
+    match (Box.create(5u32)) {
+        Ok(b) => { let p = Box.intoRaw(b); }
+        Err(_) => {}
+    }
+    return Ok();
+}
+
+/// A child that sends the vector it captured to its parent before it traps: the parent frees it, and nothing of the
+/// child's is left for the test.
+@test
+async fn isolatedSentAwayPasses() -> Result<void, TestFailure> {
+    let back = match (Channel<Vector<u64>>.create(1)) {
+        Ok(c) => c,
+        Err(_) => { return Err(TestFailure.create("no memory")); },
+    };
+    let r = await Async.tasks(2, Iso.NoMemory, async (set) => {
+        var numbers = Vector<u64>.create();
+        if (numbers.push(1).isErr()) {
+            return Err(Iso.NoMemory);
+        }
+        let out = back.clone();
+        let id = await set.spawnIsolated(Iso.Crashed, async move () => {
+            match (out.trySend(numbers)) {
+                Ok() => {}
+                Err(_) => {}
+            }
+            return await trapsHolding();
+        })?;
+        return Ok();
+    });
+    match (back.tryRecv()) {
+        Some(v) => { Check.isTrue(v.length == 1, "the vector came back")?; }
+        null => { return Err(TestFailure.create("nothing came back")); }
+    }
+    return Ok();
+}

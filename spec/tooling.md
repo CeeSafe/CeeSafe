@@ -1047,11 +1047,11 @@ Each test's outcome:
 |---|---|
 | passed | it returned `Ok`, or `void` |
 | failed | it returned `Err`; its message is shown (`IoError`'s and `AsyncError`'s message, a `TestFailure`'s, or for the test's own enum the variant: `returned Err(Mine.Broke)`), and its captured output |
-| panicked | the runtime's panic report, with its location |
+| panicked | the runtime's panic report, with its location; not an isolated task's, whose line says `ended alone)` (ADR 0175 amendment 1) |
 | crashed | a signal or exception: `abort`, a fault (a status of 129 to 192 on POSIX, as `Process.capture` reports a signal; an exception's code on Windows) |
 | exited | the test ended the process itself with another status (`Process.exit(3)`) |
 | timed out | it ran past `--timeout` (default 60 s) |
-| leaked | it passed, but allocations were live at the end (`CEESAFE_ALLOC_REPORT`) |
+| leaked | it passed, but allocations were live at the end (`CEESAFE_ALLOC_REPORT`), less those isolated tasks that trapped left (`isolated leaked`) |
 | skipped | with `--interp`, it calls C, which the interpreter cannot run |
 
 - **Exit status.** 1 if any test is not passed or skipped, else 0.

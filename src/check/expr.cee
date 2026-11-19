@@ -563,7 +563,8 @@ fn viewOf(c: borrow Checker, e: u32) -> u32 {
 
 /// `~x`: every bit of an unsigned integer flipped (§6, ADR 0176). A signed operand is N0205, as `&` on one is.
 fn synthComplement(c: borrow mut Checker, operand: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
-    let synthesized = synth(c, operand, numericHint(c, expected))?;
+    let hint = numericHint(c, expected);
+    let synthesized = synth(c, operand, hint)?;
     let value = autoDeref(c, synthesized)?;
     let t = c.typeOf(value);
     if (c.types.isBottom(t)) {

@@ -6,8 +6,10 @@
   (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`, S3: a trap ends the process, so a task cannot fail alone) and
   from the three things that review's proposal left open: what happens to the tasks under a child that traps, a
   trap with C frames beneath it, and shared state a child was half way through changing. Implemented the same
-  day (§10), with the differences §10 lists; not released. Its check passes on macOS, Linux and Windows on ARM64
-  (MSVC).
+  day (§10), with the differences §10 lists; released in 0.75.0. Its check passes on macOS, Linux and Windows on
+  ARM64 (MSVC). Amendment 1 (§11, 2026-11-19): `trySpawnIsolated`, and three faults CeeSafe.Web met building on it;
+  released in 0.77.0. Amendment 2 (§12, 2026-11-19): what a crashed unit leaves, counted from what it can reach;
+  accepted by the owner ("I accept amendment 2's five questions as written.") and implemented (§12.7).
 - Scope: the hosted runtime (the panic path, `runtime/core/ceesafe_rt_core.c`; the executor,
   `runtime/hosted/ceesafe_rt_async.c`; mutexes, `ceesafe_rt_thread.c`), lib/core (`TaskSet.spawnIsolated`,
   `TaskCrash`, `Critical`), lib/std (`Mutex`, `AsyncMutex`: poisoning; `Isolation`; `AsyncTcpStream.closer`), the
@@ -371,3 +373,162 @@ What was not done:
 - **A unit under `Async.runWorkers`** with other workers running is not tested: its tasks stay on one worker by
   construction.
 - **Tests:** `tools/isolated_check.py`, in the contract suite as `isolated`: 14 cases.
+
+## 11. Amendment 1 (2026-11-19): `trySpawnIsolated`, and what CeeSafe.Web met
+
+From CeeSafe.Web's Web ADR 0016 (isolated connections and streams), accepted by the owner the same day, and its
+`docs/ceesafe-upstream-work.md` (U25, B21, B22, B23). The owner, asked whether to do them in CeeSafe for a release:
+"Yes, go ahead."
+
+1. **`set.trySpawnIsolated(crashed, async move () => …)`** (U25): `spawnIsolated` without the wait, as `trySpawn`
+   is `spawn` without it. Its result is `u64?`: the child's number (0 if there was no memory to isolate it, as for
+   `spawnIsolated`), or `null` when the set is full or cancelled, and the child is then not started. Its child
+   follows `spawnIsolated`'s rules (N0349, N0334, hosted only). It is for a task that cannot wait for room: an
+   HTTP/2 or HTTP/3 connection's frame loop starts each stream's handler and refuses the stream when the set is
+   full, and the streams it would wait for wait on that loop to send their data. The checker joins `tryRoom`,
+   `isolating` and the start as for `trySpawn`, and `TaskSet.startedIsolated` gives the result.
+2. **`StreamCloser.shutdown()` ends a connection whose peer has half-closed** (B21). It was `shutdown(SHUT_RDWR)`,
+   which macOS (and the BSDs) refuse with `ENOTCONN` once the peer's FIN has arrived, sending nothing: the peer of a
+   crashed connection that had ended its side waited for its own timeout. On `ENOTCONN` each direction is now shut
+   on its own; `SHUT_WR` is taken there, and the peer reads the end. Linux took `SHUT_RDWR` in that state already.
+3. **`ceesafec test` reports an isolated child's trap as neither the test's panic nor its leak** (B22). The runner
+   called any test whose standard error held `ceesafe panic` panicked, and an isolated task that ends alone writes
+   that line too (§2.5). It now looks for a panic line that does not say `ended alone)`, and reports that one. What
+   the crashed units left was counted as live allocations at the end: each budget record (ADR 0170) now counts its
+   blocks beside its bytes, a crash adds its unit's blocks (and its root's frame, allocated before the unit was
+   made) to a process total, and `ceesafe_shutdown`'s report gives it as `ceesafe alloc: isolated leaked=<k>`, which
+   the runner takes off `live`. The interpreter counts the same per unit. A block allocated in a unit and freed
+   outside it stays in the unit's count, as its bytes do, so a test whose unit crashed may have that many of its
+   own leaks unreported; a block of nested units that both crash is counted twice, and the runner never takes off
+   more than `live`.
+4. **The interpreter frees a watched channel at its set's end** when the set held the last count (B23): a channel
+   made in the set's body and given to `Isolation.watch` was left live, which `ceesafec test --interp` reported as
+   a leak. The runtime did this already.
+5. **The executor's jump point is a function of its own** (`cee_resume_isolated`), so that the executor's loop keeps
+   no local across a `setjmp`: gcc 13.3 warned (`-Wclobbered`) of two (`t`, `outer`) when a program used isolated
+   tasks. They were set before the `setjmp` and not changed, which C11 §7.13.2.1 says keeps them; the warning is
+   gone without a `volatile`.
+
+Checked (2026-11-19, macOS arm64, the tree's compiler): `tools/isolated_check.py` 14 cases, with `trySpawnIsolated`
+in its first program and a peer that half-closes before the owner's closer in its sockets case (which 0.75.0
+fails: "the peer saw no end"); `tools/test_command_check.py`, whose fixture gains four tests: an isolated child's
+trap that leaves the test passed, one followed by the test's own panic (reported at the test's line) and by the
+test's own leak, and a watcher made in the set's body.
+
+## 12. Amendment 2 (2026-11-19): what a crashed unit leaves, counted from what it can reach
+
+### 12.1 Context
+
+Found by CeeSafe.Web isolating HTTP/2 and HTTP/3 streams with 0.77.0 (Web ADR 0016 §2.3; its upstream list, B24).
+Amendment 1 (§11 item 3) has `ceesafec test` take off `live` the blocks a crashed unit left, counted as the blocks
+allocated under the unit's budget and not freed under it, plus its root's frame. That misses what the unit
+**captured**. An isolated child owns its captures (N0349), so a crash leaks them by §2.4's rule. But its parent
+allocated them, before the unit existed: a stream's kit of buffers, its request head, its channel handles, its
+clone of the application's `Arc`. The HTTP/2 test that traps one stream ends with `live=17` and `isolated
+leaked=3`; the other 14 blocks are the stream task's captures, and the test is reported "leaked". The HTTP/3 test
+is the same (10 blocks). Every isolated child of a real program captures something, so 0.77.0's discount works only
+for a child that captures nothing allocated.
+
+What the count has to say: the blocks still live at the end that are there **because** a unit crashed. Those are
+exactly the blocks the dead unit can still reach. It holds no loan (N0349), so what it reaches it owns, or holds a
+count of (`Arc`, `Channel`, a `Handover`'s hold): an owned block is never dropped, and a counted one never sees its
+last count go. A block the unit cannot reach, it cannot be what keeps alive.
+
+### 12.2 Options weighed
+
+- **A. Count glue at the spawn.** The compiler emits for each captured type a walk like its drop glue that counts
+  the blocks it owns, and the unit takes them over when it starts. It cannot see through a type whose `drop` is
+  the program's or the library's own (`Arc`, `Channel`, `HashMap`, `String` are library structs with `drop`
+  blocks), and whether an `Arc`'s block leaks depends on the counts at the crash, not at the spawn. A capture the
+  child drops, moves out or sends away before it traps stays counted, and that hides a real leak of the test's.
+- **B. Reachability at the end, in counting runs only (recommended).** While the allocation counters run
+  (`ceesafec test`, `CEESAFE_ALLOC_REPORT`, `CEESAFE_FAIL_ALLOC_AT`: memory-model.md), the runtime keeps a table of live blocks
+  (address and size). At a crash it records the dead unit's task blocks. At `ceesafe_shutdown` it walks
+  conservatively from them: every aligned word of a block that holds the address of a live block in the table
+  adds that block, transitively. The blocks found are the ones reported as `isolated leaked=<k>`. They are taken
+  as a set, so two units that reach one block count it once, and a block freed since the crash is not in the table.
+- **C. No leak check for a test whose isolated task trapped.** Simple and honest, but a test that checks a server's
+  crash handling is then never checked for the leaks its own code has, which is the test that most needs it.
+
+### 12.3 Decision (B)
+
+1. **The table.** Only where `alloc_counting` is on: every `ceesafe_alloc`, `ceesafe_alloc_zeroed` and
+   `ceesafe_realloc` of the system's or the failing allocator puts the block in an open-addressed table (address,
+   size), and `ceesafe_free` takes it out. Under a host's allocator hook, and on CosmoOS, there are no block sizes:
+   the table keeps the sizes asked for. Without counting, nothing changes: no table, no cost.
+2. **The roots.** At a crash (§2.2 step 4), the dead unit's tasks are the root's block and, through each task's
+   scopes and their lists of children (ADR 0062), every task block under it, the units inside it included. Their
+   addresses are kept in a list of the process's dead roots, in counting runs only.
+3. **The walk,** at `ceesafe_shutdown`, before the report: from the roots, every 8-byte-aligned word of a reached
+   block that equals the address of a block in the table, or points inside one, reaches that block. Blocks are
+   visited once. The count of reached blocks that are still live is `isolated leaked`, in place of amendment 1's
+   budget count. The bytes stay as they are (`TaskCrash.leakedBytes`, `Isolation.report()`): those are what the
+   unit held at the trap, by its budget.
+4. **The interpreter** does the same over its own allocations: from the dead unit's task frames, every
+   pointer-sized value that holds an allocation's address. Its memory model knows each allocation's extent, so its
+   walk is exact where the native one is conservative.
+5. **The runner** is unchanged from amendment 1: it takes `isolated leaked` off `live`, never below zero.
+
+### 12.4 What it costs and where it can be wrong
+
+- **Cost.** Nothing in a program that does not count allocations. In a counting run: a table insert and a removal
+  per allocation (tests already count each one), and a walk once, at the end, only if a unit crashed.
+- **Conservative, so it can over-count**, never under-count what the unit reaches. A word in a dead frame that
+  happens to equal a live block's address (a stale copy of a pointer the child moved out before it trapped, or an
+  integer) adds that block, which hides a leak of the test's own of that block. Over-counting is the safe side:
+  a test is never reported leaked for what a crash left.
+- **The interpreter's walk is exact**, so the two can differ only in a test with a stale pointer in a dead
+  frame, and only in the native run's favour.
+- **Amendment 1's budget block count goes.** The bytes it gave and the budget records stay.
+
+### 12.5 Questions for the owner
+
+1. Option B, a conservative walk from the dead units' tasks at the end, in counting runs only? *Recommended: yes.*
+   **Accepted.**
+2. Keep the table only while allocations are counted, so a program that does not count pays nothing? *Recommended:
+   yes.* **Accepted.**
+3. Accept that the native walk may over-count from a stale word in a dead frame, hiding a test's own leak of that
+   block, rather than under-count and report a crash's leak as the test's? *Recommended: yes.* **Accepted.**
+4. Replace amendment 1's budget block count with the walk, keeping `leakedBytes` from the budget? *Recommended:
+   yes.* **Accepted.**
+5. Release it as a patch release once it is in, and raise CeeSafe.Web's minimum to it for the streams' part of Web
+   ADR 0016? *Recommended: yes.* **Accepted.**
+
+### 12.6 Tests (proposed)
+
+- `tests/packages/test-command`: an isolated child that captures a `Vector`, a `Box`, a `String`, a `Channel`
+  handle and an `Arc` clone, and traps: passed, natively and in the interpreter; the same, then the test's own
+  leak: leaked; a child that sent its captured vector away before it trapped, and the receiver freed it: passed.
+- CeeSafe.Web's two stream tests (`web_http2` and `web_http3`, each a stream whose handler traps): passed, and
+  the HTTP/2 one in the interpreter too.
+- The fault and cancellation sweeps over those, and the contract suite.
+
+### 12.7 Implementation notes (2026-11-19)
+
+- **Native** (`runtime/core/ceesafe_rt_core.c`): the table is open-addressed by address, under a spin lock (blocks are
+  allocated on every thread), in the platform heap, only while `alloc_counting` is on; `ceesafe_realloc` moves an
+  entry with its block. The roots are the dead unit's root task block and the task that trapped
+  (`ceesafe_alloc_dead_root`, from `cee_unit_crash`). The other task blocks are reached from them: a scope's record
+  is in its owner's frame and lists its children, and a task names its frame-stack chunks. The walk sorts the
+  table (a heap sort, with no C library sort) and searches it for the block that holds each word. **The table and
+  the roots take the C library's heap**, not `ceesafe_platform_alloc`: under a host's allocator hook (ADR 0088
+  §2.5) the platform functions are the host's, which then saw a block it never got back (`tools/embed_check.py`,
+  five of its cases), and are given back at the end. `live_untrack` reads the table's size under the lock: read
+  before it, it raced with a constructor's thread that allocated while counting was turned on (ThreadSanitizer, in
+  the same check).
+- **Interpreter** (`src/interpreter/runtime.cee`, `io.cee`): the roots are the heap blocks the unit's tasks allocated,
+  and, for every task of a dead unit, its environment and its frames' locals and slots. **A channel's handle is now
+  tagged** (0x7C4A in its high 16 bits, `chanHandle`), so the walk follows a handle the unit holds to the channel's
+  buffer while a count of it is held. Before, a handle was the channel's index plus one, a small number the walk
+  could not tell from any other. An allocation's address was already distinctive (`(i + 1) << 32`).
+- **Amendment 1's block count is gone** (the budget's `blocks`, `ceesafe_alloc_isolated_leaked`); the report line
+  and the runner are as amendment 1 made them.
+
+Checked (2026-11-19, macOS arm64, the tree's compiler):
+- `tools/test_command_check.py`: the fixture has seven isolated tests, natively and in the interpreter. Two capture
+  a `Vector`, a `Box`, a `String`, a channel's handle and an `Arc`'s count and trap: passed, and leaked with the
+  test's own leak after. A child that sent its captured vector back before it trapped: passed.
+- CeeSafe.Web's two stream tests (B24): `web_http2`'s, natively and in the interpreter, and `web_http3`'s, natively,
+  passed. Under 0.77.0 they were leaked: 17 live against 3 counted, and 10 against 0. The interpreter found 11 of 16
+  before channel handles were tagged.
+

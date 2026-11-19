@@ -6331,6 +6331,8 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   of an **isolation unit**. `crashed` is an `E`. The result is `Result<u64, E>`: a number that names the child,
   or `Err(oom)` as `spawn`'s. The number is 0 if there was no memory to isolate the child, which then is an
   ordinary one. Hosted only.
+- **`set.trySpawnIsolated(crashed, async move () => …)`** (amendment 1) is `trySpawn` for such a child: `u64?`, its
+  number, or `null` when the set is full or cancelled, the child then not started. Its child follows the same rules.
 - **The unit** is the child and every task made under it, by it or by them: what it awaits, the children of its
   `race`, `all`, `shield` and `timeout`, of each `Async.scope` and task set opened in it. An isolated child started
   inside a unit is a unit of its own, and ends with the outer one. A unit's tasks run on the worker that started
@@ -6363,6 +6365,9 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   each entry from C is counted.
 - **The interpreter** does the same, so a program's handling of a crash runs under `ceesafec test`. There
   `leakedBytes` is 0, and `closer()` is `Unsupported`.
+- **Under `ceesafec test`** a crash is the child's, not the test's: its panic line does not make the test panicked,
+  and the blocks the crashed units still reach at the end, what they captured included (`ceesafe alloc: isolated
+  leaked=<k>`, memory-model.md), are not its leak (tooling.md, the test outcomes; amendments 1 and 2).
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

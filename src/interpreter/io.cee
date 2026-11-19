@@ -2709,9 +2709,10 @@ fn asyncSetSpawn(
     it.asyncIsolatedLast = 0;
     if (it.asyncIsolatePending) {
         it.asyncIsolatePending = false;
+        let outerUnit = unitOfTask(it, it.asyncCurrent);
         it.asyncUnits.push(
             InterpUnit {
-                outer: unitOfTask(it, it.asyncCurrent),
+                outer: outerUnit,
                 root: none(),
                 scope: scope,
                 dead: false,
@@ -3427,7 +3428,8 @@ fn runTasks(
         it.asyncUnitOf.push(none())!; // tasks made before any unit was
     }
     // A run started by a task of a unit (in a function it calls) is that unit's too.
-    it.asyncUnitOf.push(unitOfTask(it, savedCurrent))!;
+    let rootUnit = unitOfTask(it, savedCurrent);
+    it.asyncUnitOf.push(rootUnit)!;
     loop {
         if (it.asyncSetCancelled) {
             // A task set was cancelled (ADR 0053): every waiting task runs again to see it, as for a scope's.
@@ -3627,7 +3629,8 @@ fn runTasks(
                 it.asyncUnits[spawn.unit as usize].root = truncate<u32>(it.asyncTasks.length - 1);
                 it.asyncUnitOf.push(spawn.unit)!;
             } else {
-                it.asyncUnitOf.push(unitOfTask(it, first + k))!;
+                let makerUnit = unitOfTask(it, first + k);
+                it.asyncUnitOf.push(makerUnit)!;
             }
             tasks.push(
                 InterpTask {

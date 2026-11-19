@@ -652,7 +652,8 @@ fn checkSetSpawn(
     // What the set is given for a child that traps: an `E`.
     var crashed = none();
     if (isolated) {
-        crashed = checkArgument(c, c.front.ast.at(arguments, 0), errorType)?;
+        let crashedAt = c.front.ast.at(arguments, 0);
+        crashed = checkArgument(c, crashedAt, errorType)?;
         if (c.isBottom(crashed)) {
             return c.errorResult(span.start, span.end);
         }

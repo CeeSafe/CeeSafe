@@ -9,7 +9,9 @@
   day (§10), with the differences §10 lists; released in 0.75.0. Its check passes on macOS, Linux and Windows on
   ARM64 (MSVC). Amendment 1 (§11, 2026-11-19): `trySpawnIsolated`, and three faults CeeSafe.Web met building on it;
   released in 0.77.0. Amendment 2 (§12, 2026-11-19): what a crashed unit leaves, counted from what it can reach;
-  accepted by the owner ("I accept amendment 2's five questions as written.") and implemented (§12.7).
+  accepted by the owner ("I accept amendment 2's five questions as written.") and implemented (§12.7); released in
+  0.77.1. Amendment 3 (§13, 2026-11-19): what a crashed unit leaves, told to LeakSanitizer; accepted
+  by the owner ("Accept as written").
 - Scope: the hosted runtime (the panic path, `runtime/core/ceesafe_rt_core.c`; the executor,
   `runtime/hosted/ceesafe_rt_async.c`; mutexes, `ceesafe_rt_thread.c`), lib/core (`TaskSet.spawnIsolated`,
   `TaskCrash`, `Critical`), lib/std (`Mutex`, `AsyncMutex`: poisoning; `Isolation`; `AsyncTcpStream.closer`), the
@@ -532,3 +534,68 @@ Checked (2026-11-19, macOS arm64, the tree's compiler):
   passed. Under 0.77.0 they were leaked: 17 live against 3 counted, and 10 against 0. The interpreter found 11 of 16
   before channel handles were tagged.
 
+
+## 13. Amendment 3 (2026-11-19): what a crashed unit leaves, told to LeakSanitizer
+
+### 13.1 Context
+
+Found by CeeSafe.Web's sanitizer job with 0.77.1 (Web ADR 0016 §2.3; its upstream list, B25). That job builds
+every test with `-fsanitize=address,undefined` (`ceesafec test --cflag …`), and LeakSanitizer, which AddressSanitizer
+turns on by default on Linux, looks for unreachable blocks at exit. A unit that traps leaves what it held (§2.4),
+and once its set has counted it as returned (`cee_child_gone`), nothing live points to its task blocks, so
+LeakSanitizer reports them and everything under them ("Indirect leak … in cee_spawn", "… in ceesafe_vec_grow") and
+ends the process with status 1. Each of CeeSafe.Web's five trap tests then ends "exited", natively and in the
+allocation and cancellation sweeps. Its other tests pass. The program behaved as specified. Only the leak check is
+wrong about it. CeeSafe's own check (`tools/isolated_check.py`) ran its sanitized programs with `detect_leaks=0`,
+which also stopped LeakSanitizer from checking anything else those programs leaked.
+
+### 13.2 Options weighed
+
+- **A. Tell LeakSanitizer at the crash (recommended).** Where the runtime is built with AddressSanitizer,
+  `cee_unit_crash` calls `__lsan_ignore_object` on the dead unit's root task block and on the task that trapped:
+  the roots amendment 2 walks from. LeakSanitizer treats an ignored block as a root and marks what it reaches,
+  conservatively, as amendment 2's walk does. So a crash's leaks are not reported, and everything else still is.
+- **B. Leave it to the program's tests** (`ASAN_OPTIONS=detect_leaks=0`, or a suppressions file). That turns off
+  the check for the test's own leaks, which is the case §12.2 C rejected. A suppression by allocation site cannot
+  separate a crash's `Vector` from one the program forgot.
+- **C. Free what the unit held.** That is what §2.4 rules out: the unit may have been half way through changing it.
+
+### 13.3 Decision (A)
+
+1. Built with AddressSanitizer (`__SANITIZE_ADDRESS__`, or `__has_feature(address_sanitizer)`), and where
+   `<sanitizer/lsan_interface.h>` exists, `cee_unit_crash` calls `__lsan_ignore_object` on `u->root` and, if
+   different, on `t`, beside its `ceesafe_alloc_dead_root` calls. Built without it, nothing changes.
+2. Nothing else is ignored, so a block the program leaks outside a dead unit is still reported.
+3. `tools/isolated_check.py` drops `detect_leaks=0`. Its sanitized `survive` and `ends` runs now check leaks too:
+   status 0, with a crash in every one.
+
+### 13.4 What it costs and where it can be wrong
+
+- **Cost.** One call a crash, in sanitized builds only.
+- **Like amendment 2, it can over-cover.** A stale word in a dead frame that holds the address of a block the
+  program leaked elsewhere hides that leak. That errs on the same side §12.4 accepted.
+- **Platforms without LeakSanitizer.** macOS's AddressSanitizer has the function, which does nothing there.
+  Windows is left out (`_WIN32`), and so is a compiler without the header: nothing is called.
+
+### 13.5 Questions for the owner
+
+All three accepted as written ("Accept as written").
+
+1. Option A: when built with AddressSanitizer, the runtime marks a dead unit's root and trapping task as ignored, so
+   LeakSanitizer does not report what a crash leaves? *Recommended: yes.* **Accepted.**
+2. Drop `detect_leaks=0` from `tools/isolated_check.py`, so its sanitized runs check leaks? *Recommended: yes.* **Accepted.**
+3. Release it as 0.77.2, and have CeeSafe.Web's PR #50 (streams in isolated tasks) require it? *Recommended: yes*:
+   the owner has already chosen this ("Fix upstream: 0.77.2"). **Accepted.**
+
+### 13.6 Implementation notes (2026-11-19)
+
+- `runtime/hosted/ceesafe_rt_async.c`: `CEE_LSAN` is defined where `__SANITIZE_ADDRESS__` (GCC) or
+  `__has_feature(address_sanitizer)` (Clang) holds and `<sanitizer/lsan_interface.h>` can be included, not on Windows.
+  `cee_unit_crash` then ignores `u->root` and the trapping task beside its `ceesafe_alloc_dead_root` calls.
+- Checked on Linux (x86-64, GCC 13): a 30-line program whose isolated child traps holding a captured `Vector`, built
+  `-fsanitize=address,undefined`, ended with status 1 and five reported leaks under 0.77.1, and ends with status 0.
+  A C program shows LeakSanitizer's side: blocks reached from an ignored one are not reported, and a block leaked
+  beside it still is. `tools/isolated_check.py`, its sanitized runs now checking leaks: 14 cases, on Linux and
+  macOS (where AddressSanitizer has no LeakSanitizer and the call does nothing). CeeSafe.Web's five trap tests
+  (`web_http2`, `web_http3` and `web_transport`'s three), with ASan and UBSan and their allocation and
+  cancellation sweeps, pass on Linux; under 0.77.1 each exited with status 1.

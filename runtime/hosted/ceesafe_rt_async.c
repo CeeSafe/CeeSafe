@@ -27,6 +27,25 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+/* Built with AddressSanitizer, what a crashed unit leaves is told to LeakSanitizer (ADR 0175 amendment 3). Not on
+   Windows, which has no LeakSanitizer. */
+#if defined(_WIN32)
+#elif defined(__SANITIZE_ADDRESS__)
+#define CEE_LSAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define CEE_LSAN 1
+#endif
+#endif
+#if defined(CEE_LSAN) && defined(__has_include)
+#if __has_include(<sanitizer/lsan_interface.h>)
+#include <sanitizer/lsan_interface.h>
+#else
+#undef CEE_LSAN
+#endif
+#elif defined(CEE_LSAN)
+#undef CEE_LSAN
+#endif
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -2069,6 +2088,14 @@ static void cee_unit_crash(cee_task *t) {
     if (t != u->root) {
         ceesafe_alloc_dead_root(t);
     }
+#if defined(CEE_LSAN)
+    /* The same roots, for LeakSanitizer: an ignored block is one of its roots, so what the unit reaches is not
+       reported at exit, and every other leak still is (amendment 3). */
+    __lsan_ignore_object(u->root);
+    if (t != u->root) {
+        __lsan_ignore_object(t);
+    }
+#endif
     (void)ceesafe_atomic_add_u64(&cee_crashes, 1u);
     (void)ceesafe_atomic_add_u64(&cee_leaked, leaked);
     for (uint32_t i = 0; i < u->lock_count; i++) {

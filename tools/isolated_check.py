@@ -781,7 +781,9 @@ def main():
     windows = os.name == "nt"
     problems = []
     cases = 0
-    environment = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")  # what a trapped task held is leaked: that is the rule
+    # What a trapped task held is leaked, by the rule, and the runtime tells LeakSanitizer so (amendment 3): the
+    # sanitized runs check every other leak.
+    environment = dict(os.environ)
 
     def expect(what, got, wanted, detail=""):
         nonlocal cases

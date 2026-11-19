@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.77.1
+## Releases 0.25.0 to 0.77.2
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.77.2 | 2026-11-19 | Isolated tasks, amendment 3 (ADR 0175 §13): built with AddressSanitizer, the runtime tells LeakSanitizer to ignore what a crashed isolated child left, so a sanitized program whose task trapped no longer fails its leak check; every other leak is still reported | [Async](./ch17-00-async) |
 | 0.77.1 | 2026-11-19 | Isolated tasks, amendment 2 (ADR 0175 §12): `ceesafec test` no longer reports what a crashed isolated child captured as the test's leak; the blocks a crashed child still reaches at the end are counted as its own | [Async](./ch17-00-async) |
 | 0.77.0 | 2026-11-19 | Isolated tasks, amendment 1 (ADR 0175 §11): `set.trySpawnIsolated(crashed, async move () => …)` starts an isolated child without waiting, `null` while the set is full; `stream.closer()`'s `shutdown()` ends a connection whose peer has half-closed, on macOS too; `ceesafec test` no longer reports an isolated child's trap as the test's panic, nor what it leaked as the test's leak | [Async](./ch17-00-async) |
 | 0.76.0 | 2026-11-19 | The bitwise complement (ADR 0176): `~x` flips every bit of an unsigned integer, `~0x0Fu8` is `0xF0`; it is literal arithmetic and may stand in a constant's value. On a signed integer, a float or a `bool` it is N0207, as `&` is. Where `x ^ 0xFFFFFFFF` stood, `~x` | [20.4](./ch20-04-arithmetic) |

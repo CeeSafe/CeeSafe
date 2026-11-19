@@ -1042,6 +1042,13 @@ fn runActivations(
                     sameText(n.functions[f as usize].blocks[block as usize].branchCfg.view(), debugAssertMacro())) {
                     taken = elseBlock; // `debugAssert` with debug assertions off (ADR 0087 §2.5)
                 }
+                match (hostTargetHolds(n.functions[f as usize].blocks[block as usize].branchCfg.view())) {
+                    // A target condition (ADR 0179) is the host's: the interpreter runs the program here.
+                    Some(holds) => {
+                        taken = if (holds) thenBlock else elseBlock;
+                    }
+                    null => {}
+                }
                 stack[top].block = it.blockIndex[f as usize][taken as usize];
             }
             NirTerminator.Switch(value, cases, otherwise) => {
@@ -2303,4 +2310,19 @@ fn runMainSteps(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, 
     };
     finishRuntime(it);
     return Ok(code);
+}
+
+/// Whether a configured branch's target condition (ADR 0179, `!` for its negation) holds on the system the interpreter
+/// runs on; null for a macro's name, which the interpreter takes as 0 (ADR 0080 §3.3).
+fn hostTargetHolds(cfg: Slice<u8>) -> bool? {
+    let negated = cfg.length > 0 && cfg[0] == '!';
+    let name = if (negated) cfg[1..] else cfg;
+    if (!(name.length > 7 && sameText(name[0..7], "target."))) {
+        return null;
+    }
+    let system = hostSystem(); // 1 macOS, 2 Linux, 3 Windows, 4 FreeBSD
+    let holds = (sameText(name, "target.macos") && system == 1) || (sameText(name, "target.linux") && system == 2) ||
+        (sameText(name, "target.windows") && system == 3) || (sameText(name, "target.freebsd") && system == 4) ||
+        (sameText(name, "target.unix") && (system == 1 || system == 2 || system == 4));
+    return Some(holds != negated);
 }

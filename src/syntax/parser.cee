@@ -1528,7 +1528,7 @@ struct Parser {
             let parameters = this.parseTypeList()?;
             let result = if (this.eat(TokenKind.Arrow)) this.parseType()? else none();
             return this.front.ast.addType(
-                TypeNode.FunctionPointer(abi, parameters, result),
+                TypeNode.FunctionPointer(abi, parameters, result, emptyRange()),
                 start,
                 this.endFrom(start),
             );
@@ -1537,6 +1537,23 @@ struct Parser {
             // A function value `fn(T, U) -> R` (type-system.md §36.1), after an effect list `@effects(…)` (§36.3).
             let start = this.current().start;
             let attributes = this.parseAttributes()?;
+            if (this.at(TokenKind.ExternKeyword)) {
+                // `@effects(…) extern "C" fn(…)` (ADR 0181): a C function pointer whose calls have those effects.
+                let pointer = this.parseTypeLevel()?;
+                match (this.front.ast.types[pointer as usize]) {
+                    TypeNode.FunctionPointer(abi, parameters, result, _) => {
+                        this.front.ast.types[pointer as usize] = TypeNode.FunctionPointer(
+                            abi,
+                            parameters,
+                            result,
+                            attributes,
+                        );
+                        this.front.ast.typeSpans[pointer as usize].start = start;
+                    }
+                    _ => {}
+                }
+                return Ok(pointer);
+            }
             this.expect(TokenKind.FnKeyword)?;
             let parameters = this.parseTypeList()?;
             let result = if (this.eat(TokenKind.Arrow)) this.parseType()? else none();

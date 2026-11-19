@@ -190,6 +190,7 @@ struct Manifest {
     dependencies: Vector<DependencySpec>;
     links: Vector<Vector<u8>>;       // ADR 0047: libraries to link, [package]'s then the host's [target.OS]'s
     libDirs: Vector<Vector<u8>>;     // their directories, absolute
+    frameworks: Vector<Vector<u8>>;  // ADR 0184: Apple frameworks to link, from the build's [target.macos]/[target.ios]
     includeDirs: Vector<Vector<u8>>; // for this package's own C files, absolute
     tests: Vector<Vector<u8>>;       // test directories (ADR 0049): sources for `check` and `test` only
     embedRoots: Vector<Vector<u8>>;  // [embed] roots (ADR 0087 §2.8): the directory, `/`, the root as written
@@ -383,6 +384,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         dependencies: Vector<DependencySpec>.create(),
         links: Vector<Vector<u8>>.create(),
         libDirs: Vector<Vector<u8>>.create(),
+        frameworks: Vector<Vector<u8>>.create(),
         includeDirs: Vector<Vector<u8>>.create(),
         tests: Vector<Vector<u8>>.create(),
         embedRoots: Vector<Vector<u8>>.create(),
@@ -461,6 +463,17 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             if (valid) {
                 checkCompilerRequirement(report, file, v.start, v.end, v.text.view())?;
             }
+        } else if (sameText(key, "frameworks")) {
+            // A framework exists only on Apple systems: it belongs in their target tables (ADR 0184).
+            manifestError(
+                report,
+                file,
+                e.keyStart,
+                e.keyEnd,
+                copyBytes(
+                    "'frameworks' belongs in [target.macos] or [target.ios]: a framework exists only there (ADR 0184)".bytes(),
+                )?,
+            )?;
         } else if (isNativeField(key)) {
             valid = readNativeField(mut manifest, file, key, v, true, report)?;
         } else if (sameText(key, "c")) {
@@ -563,12 +576,34 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             continue;
         }
         let apply = sameText(t.name[7..], host);
+        let apple = sameText(t.name[7..], "macos") || sameText(t.name[7..], "ios");
         for (e in t.entries.view()) {
             let key = e.key.view();
-            if (!isNativeField(key)) {
+            if (sameText(key, "frameworks")) {
+                if (!apple) {
+                    var message = copyBytes("'frameworks' is for [target.macos] and [target.ios], not [".bytes())?;
+                    appendBytes(mut message, t.name.view())?;
+                    appendText(mut message, "]: a framework exists only on Apple systems (ADR 0184)")?;
+                    manifestError(report, file, e.keyStart, e.keyEnd, message)?;
+                } else if (!readFrameworks(mut manifest, borrow e.value, apply)?) {
+                    manifestError(
+                        report,
+                        file,
+                        e.value.start,
+                        e.value.end,
+                        copyBytes(
+                            "'frameworks' is an array of framework names, letters, digits, '_', '.', '+' and '-', not starting with '-': [\"IOKit\", \"CoreFoundation\"] (ADR 0184)".bytes(),
+                        )?,
+                    )?;
+                }
+            } else if (!isNativeField(key)) {
                 var message = message2("unknown field '", key, "' in [")?;
                 appendBytes(mut message, t.name.view())?;
-                appendText(mut message, "]: a target table has links, lib-dirs and include-dirs")?;
+                appendText(
+                    mut message,
+                    if (apple) "]: a target table has links, lib-dirs, include-dirs and frameworks"
+                        else "]: a target table has links, lib-dirs and include-dirs",
+                )?;
                 manifestError(report, file, e.keyStart, e.keyEnd, message)?;
             } else if (!readNativeField(mut manifest, file, key, borrow e.value, apply, report)?) {
                 manifestError(
@@ -760,6 +795,25 @@ fn isLibraryName(name: Slice<u8>) -> bool {
         }
     }
     return true;
+}
+
+/// Reads `frameworks` (ADR 0184): an array of names a framework may have (as a library's, no entry is a flag); false if
+/// its shape is wrong. With `apply`, the names are added for the link: `-framework NAME` each.
+fn readFrameworks(manifest: borrow mut Manifest, v: borrow TomlValue, apply: bool) -> Result<bool, AllocError> {
+    if (!v.isArray()) {
+        return Ok(false);
+    }
+    for (s in v.strings.view()) {
+        if (!isLibraryName(s.view())) {
+            return Ok(false);
+        }
+    }
+    if (apply) {
+        for (s in v.strings.view()) {
+            manifest.frameworks.push(copyBytes(s.view())?)?;
+        }
+    }
+    return Ok(true);
 }
 
 /// Reads `links`, `lib-dirs` or `include-dirs` (ADR 0047 §3.1): false if its shape is wrong. With `apply`, the entries

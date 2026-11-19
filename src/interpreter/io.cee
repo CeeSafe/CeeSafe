@@ -25,6 +25,7 @@ struct InterpThread {
     data: u64;        // its environment, or the closure value's environment pointer
     block: u64;       // the thread's record, where the result goes
     resultType: u32;
+    service: bool; // `Thread.service` (ADR 0182): no record; resultType is its environment's type, freed at its end
 }
 
 struct InterpRuntime {
@@ -103,6 +104,7 @@ fn startRuntime(it: borrow mut Interp) -> Result<void, Stop> {
             data: 0,
             block: 0,
             resultType: none(),
+            service: false,
         },
     )!;
     return Ok();
@@ -1864,7 +1866,10 @@ fn callC(
     arguments: borrow Vector<Value>,
 ) -> Result<Value?, Stop> {
     let function = borrow c.hir.functions[hir as usize];
-    let name = copyBytes(c.name(function.name))!;
+    // The C symbol: a `@cname`, as an alias with its own effects has (ADR 0181), else the declared name.
+    let name = copyBytes(
+        if (function.exportName.count > 0) c.hir.textOf(function.exportName) else c.name(function.name),
+    )!;
     let fits = match (cLibraryShape(name.view())) {
         Some(shape) => modelFits(c, function, shape),
         null => false,
@@ -2321,6 +2326,13 @@ fn runThread(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, k: 
     if (t.isClosure) {
         let code = it.memory.loadBits(t.data, 8)?;
         callThrough(it, c, n, code, arguments)?;
+    } else if (t.service) {
+        // A service thread (ADR 0182): ceeTRS_, the body, then its environment freed, as a join would.
+        callFunction(it, c, n, t.function, arguments)?;
+        if (c.types.needsDrop(t.resultType) && !isOnceEnvironmentStruct(c, t.resultType)) {
+            destroy(it, c, n, t.resultType, t.data)?;
+        }
+        freeMemory(it, t.data)?;
     } else {
         match (callFunction(it, c, n, t.function, arguments)?) {
             Some(value) => {
@@ -2361,6 +2373,7 @@ fn addThread(it: borrow mut Interp, isClosure: bool, function: u32, data: u64, b
             data: data,
             block: block,
             resultType: resultType,
+            service: false,
         },
     )!;
     return truncate<u32>(it.runtime.threads.length - 1);
@@ -2423,6 +2436,23 @@ fn threadBuiltin(
         it.runtime.recordAddresses.push(record)!;
         it.runtime.recordThreads.push(started)!;
         return Ok(okValue(c, resultType, valueOf(block, 8))?);
+    }
+    if (b == bfThreadService()) {
+        // ceeTSS_ (ADR 0182): the environment into the heap, and a thread running it that no one joins. The name only
+        // labels the thread for debuggers; the interpreter's threads have none.
+        let environment = argument(it, c, n, frame, arguments, 0)?;
+        let environmentType = builtinArgumentType(n, arguments, 0);
+        let table = dynFunctionTableOf(c, environmentType)?;
+        let data = alloc(it, typeSize(c, environmentType)? as u64, allocSystem())?;
+        if (data == 0) {
+            destroyValue(it, c, n, environmentType, environment)?;
+            return Ok(outOfMemory(c, resultType)?);
+        }
+        it.memory.store(data, environment)?;
+        let body = nirFunctionOf(it, c.hir.at(c.dynTables[table].methods, 0), 0)?;
+        let started = addThread(it, false, body, data, 0, environmentType);
+        it.runtime.threads[started as usize].service = true;
+        return Ok(okValue(c, resultType, null)?);
     }
     if (b == bfThreadSpawnBoxed()) {
         // ceeTSB_: a thread running a boxed closure: the record and the runtime's thread record, as in C.

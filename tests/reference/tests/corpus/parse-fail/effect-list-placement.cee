@@ -1,2 +1,3 @@
-// An effect list goes only before `fn` in a type (type-system.md §36.3): not before a C function pointer type.
-fn f(p: @effects() extern "C" fn(i32)) { } // error[N0100]
+// An effect list goes only before `fn` or `extern "C" fn` in a type (type-system.md §36.3, ADR 0181): not before
+// another type. (Reviewed 2026-11-19: this tested `@effects() extern "C" fn(i32)`, which ADR 0181 makes a type.)
+fn f(p: @effects() [i32; 2]) { } // error[N0100]

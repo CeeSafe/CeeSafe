@@ -1,0 +1,58 @@
+// ADR 0179: target conditions in `cfg`, the build's system as its C compiler knows it. The output is the same on every
+// host: exactly one of the systems holds, `target.unix` holds exactly where `target.windows` does not, and a negated
+// condition is the other branch. The interpreter answers for the host it runs on, as a native build does.
+fn systems() -> u32 {
+    var count: u32 = 0;
+    if (cfg("target.linux")) {
+        count += 1;
+    }
+    if (cfg("target.macos")) {
+        count += 1;
+    }
+    if (cfg("target.windows")) {
+        count += 1;
+    }
+    if (cfg("target.freebsd")) {
+        count += 1;
+    }
+    if (cfg("target.ios")) {
+        count += 1;
+    }
+    if (cfg("target.android")) {
+        count += 1;
+    }
+    return count;
+}
+
+fn unixIsNotWindows() -> bool {
+    var unix = false;
+    var windows = false;
+    if (cfg("target.unix")) {
+        unix = true;
+    }
+    if (cfg("target.windows")) {
+        windows = true;
+    }
+    return unix != windows;
+}
+
+fn negation() -> bool {
+    var a = false;
+    var b = false;
+    if (cfg("target.unix")) {
+        a = true;
+    }
+    if (cfg("!target.unix")) {
+        b = true;
+    }
+    return a != b;
+}
+
+fn main() {
+    Console.writeLine(systems());
+    Console.writeLine(unixIsNotWindows());
+    Console.writeLine(negation());
+}
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: true

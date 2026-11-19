@@ -677,7 +677,7 @@ rejects that at `-O0`, although the tag test means it never runs (found by the M
 | Lifetime of compound literals / temporaries | Not used across statements. Temporaries are named locals |
 | `memcpy` overlap | Moves use `memmove` when the source and destination may alias; NIR knows when they cannot |
 | Float→int conversion out of range (UB in C) | Only via `toIntSaturating`/`checkedCast` helpers that range-check first |
-| Warnings on valid programs (M7d) | CeeSafe accepts code that C compilers warn about, and generated C must still be warning-free. `x = x;` emits nothing (`-Wself-assign`). A comparison of a place with itself is the constant `true`/`false` (`-Wtautological-compare`). So is an ordering comparison against the type's own minimum or maximum, such as `u < 0` or `x <= MAX` (GCC's `-Wtype-limits`, found in Linux CI by `FuzzTests`). A constant index past a fixed array's end, after the check that always panics, goes through `cee_opaque_index` (`-Warray-bounds`). So does a constant slice or vector index too large for any object (index × element size > 2⁶³ − 1), found by the M7e campaign (seeds 1009815, 1014252, 1016777). In the structured form, statements that print nothing are dropped, so no label ends a block (`-Wc23-extensions`). Found by the random program generator; each case is in `run-pass/warning-free.cee` or `run-fail/constant-index-past-end.cee` |
+| Warnings on valid programs (M7d) | CeeSafe accepts code that C compilers warn about, and generated C must still be warning-free. `x = x;` emits nothing (`-Wself-assign`). A comparison of a place with itself is the constant `true`/`false` (`-Wtautological-compare`). So is an ordering comparison against the type's own minimum or maximum, such as `u < 0` or `x <= MAX` (GCC's `-Wtype-limits`, found in Linux CI by `FuzzTests`). A constant index past a fixed array's end, after the check that always panics, goes through `cee_opaque_index` (`-Warray-bounds`). So does a constant slice or vector index too large for any object (index × element size > 2⁶³ − 1), found by the M7e campaign (seeds 1009815, 1014252, 1016777). In the structured form, statements that print nothing are dropped, so no label ends a block (`-Wc23-extensions`). Configured code (`if (cfg(…))`, type-system.md §28.4): a label that only a configured block jumps to is `bbN: CEE_UNUSED;` (`-Wunused-label` in the builds without it), and a function with a result whose configured code may end it with no `return` in some build ends with `CEE_UNREACHABLE_END()` (`__builtin_unreachable()`, MSVC's `__assume(0)`; gcc's `-Wreturn-type`); a suspension point inside a configured block has its async dispatch case inside the same `#if` (ADR 0179). gcc's `-Wmaybe-uninitialized`, which reports locals the definite-assignment analysis has proved assigned and changes with the optimiser's inlining, is disabled in `rt.h` for gcc (CeeUsb, finding F9, 2026-11-19). Found by the random program generator; each case is in `run-pass/warning-free.cee` or `run-fail/constant-index-past-end.cee` |
 | Infinite side-effect-free loops (C11 6.8.5p6 permits assuming termination) | Loops whose controlling expression is not a constant expression and that have no side effects get a `ceesafe_loop_barrier()` (an empty `asm volatile` / volatile access) |
 
 ## 6. Runtime surface (`ceesafe/rt.h`)
@@ -701,6 +701,10 @@ Heap (M3b):
 - **Threads** (M13 G4, type-system.md §38): `runtime/hosted/ceesafe_rt_thread.c`, linked only when the generated C calls
   `ceesafe_thread_*`, `ceesafe_mutex_*` or `ceesafe_atomic_*`.
   - `ceesafe_thread_start`/`join` run over POSIX threads, or Win32 threads on Windows.
+  - `ceesafe_thread_service(body, arg, name, length)` (ADR 0182) starts a thread that is never joined (detached on
+    POSIX, its handle closed on Windows) and names it from its own entry (`pthread_setname_np`, or
+    `SetThreadDescription` when Windows has it), the first 15 bytes. The generated `ceeTSS_` gives it `ceeTRS_`,
+    which runs the literal's body and then frees the environment, as `ceeTJ_` does after a join.
   - Mutexes are allocated: `pthread_mutex_t`, or `SRWLOCK` on Windows.
   - `ceesafe_mutex_once_lock`/`unlock` (ADR 0096) are the one lock `OnceLock`'s initialisers run under: a static
     mutex, not allocated, recursive for its owner (`pthread_self`, `GetCurrentThreadId`, or CosmoOS's
@@ -778,7 +782,8 @@ Heap (M3b):
     into the channel; Windows: `SetConsoleCtrlHandler`, whose handler thread sends. Nothing is installed until a
     program subscribes.
   - Readiness (A2d): a task waits for a descriptor to be readable or writable (`ceesafe_async_wait_readable`,
-    `_wait_writable`); `poll()` is the reactor on every POSIX host, with any number of descriptors. Sockets are
+    `_wait_writable`; for a program's own descriptor through lib/std's `AsyncFd`, ADR 0183, with
+    `ceesafe_async_fd_waits`, 0 on Windows and CosmoOS, and `ceesafe_async_fd_closing`, the close epoch moved); `poll()` is the reactor on every POSIX host, with any number of descriptors. Sockets are
     `ceesafe_async_tcp_*`, `ceesafe_async_read`, `_send`, `_shutdown_write` and `_close` in `ceesafe_rt_io.c`: a value,
     `CEE_ASYNC_WOULD_BLOCK`, or a negated errno. ADR 0044's addresses cross as rt.h's `ceesafe_endpoint` (family 4
     or 6, port, scope, 16 bytes; lib/std passes its fields): `ceesafe_async_tcp_listen_at` (with a backlog and the

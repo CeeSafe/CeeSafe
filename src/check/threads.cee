@@ -16,15 +16,32 @@ fn checkThreadSpawn(
     if (sameText(c.name(memberIdent.symbol), "both")) {
         return checkThreadBoth(c, arguments, span);
     }
+    if (sameText(c.name(memberIdent.symbol), "service")) {
+        return checkThreadService(c, member, arguments, span);
+    }
     if (!sameText(c.name(memberIdent.symbol), "spawn")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'Thread' has no function ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
-        appendText(mut message, "; use 'Thread.spawn(move () => …)' or 'Thread.both(() => …, () => …)'")?;
+        appendText(
+            mut message,
+            "; use 'Thread.spawn(move () => …)', 'Thread.service(name, move () => …)' or 'Thread.both(() => …, () => …)'",
+        )?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    return checkThreadSpawnLiteral(c, member, arguments, expected, span);
+}
+
+/// `Thread.spawn`'s argument (CheckThreadSpawn without its member's dispatch): also `Thread.service`'s literal.
+fn checkThreadSpawnLiteral(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
     let spawnSymbol = c.intern("SpawnError")?;
     let spawnError = match (c.item(spawnSymbol)) {
         Entity.Enum(index) => c.enums[index as usize].typ,
@@ -166,6 +183,55 @@ fn checkThreadSpawn(
     let values = [environment];
     let list = c.hir.list(values[..])?;
     return c.expr(HirExpr.BuiltinCall(bfThreadSpawn(), list), resultType, span.start, span.end);
+}
+
+/// `Thread.service(name, move () => body)` (§38.2, ADR 0182): a `StringView` name and a move literal with no parameters
+/// and a `void` body, checked as `Thread.spawn`'s literal is (its captures Send, moved into the thread). The thread runs
+/// for the process and is never joined: no `Thread<T>`, a `Result<void, SpawnError>`.
+fn checkThreadService(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let isLiteral = arguments.count == 2 && match (c.front.ast.exprs[c.front.ast.at(arguments, 1) as usize]) {
+        ExprNode.Closure(closure) => c.front.ast.closures[closure as usize].isMove &&
+            c.front.ast.closures[closure as usize].parameters.count == 0,
+        _ => false,
+    };
+    if (!isLiteral) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Thread.service' takes a name and a 'move' closure with no parameters: 'Thread.service(\"name\", move () => …)' (type-system.md §38.2)",
+        )?;
+        c.error(moveLiteralPlace(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let view = c.types.stringView;
+    let nameSyntax = c.front.ast.at(arguments, 0);
+    let name = checkArgument(c, nameSyntax, view)?;
+    // The literal, as `Thread.spawn`'s with a `Thread<void>` expected: the same captures, tables and checks.
+    let spawnSymbol = c.intern("SpawnError")?;
+    let spawnError = match (c.item(spawnSymbol)) {
+        Entity.Enum(index) => c.enums[index as usize].typ,
+        _ => c.types.error,
+    };
+    let voidType = c.types.voidType;
+    let voidThread = c.types.threadOf(voidType)?;
+    let expected = resultOf(c, voidThread, spawnError)?;
+    let rest = Range { start: arguments.start + 1, count: 1 };
+    let spawned = checkThreadSpawnLiteral(c, member, rest, expected, span)?;
+    if (c.isBottom(spawned) || c.isBottom(name)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let environment = match (c.hir.exprs[spawned as usize]) {
+        HirExpr.BuiltinCall(_, list) => c.hir.at(list, 0),
+        _ => none(),
+    };
+    if (environment == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let resultType = resultOf(c, voidType, spawnError)?;
+    let values = [environment, name];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(bfThreadService(), list), resultType, span.start, span.end);
 }
 
 /// `Thread.both(a, b)` (CheckThreadBoth, §38.6): each argument a closure literal with no parameters and a `void` result,

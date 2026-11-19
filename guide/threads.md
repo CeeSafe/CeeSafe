@@ -75,6 +75,38 @@ main.cee:3:26: warning[N0403]: this 'move' closure changes its own copy of 'hits
 
 Return the count from the closure (`join` gives it back), or share it as the next sections show.
 
+**A thread for the whole run.** An event loop that a library starts when it is first needed has nowhere to keep a
+`Thread<T>`, and `main` must not wait for it. `Thread.service(name, move () => …)` starts one: its body is a `spawn`
+literal's with no result, it is never joined, and the process ends around it when `main` returns. The name is what
+debuggers and `top` show. This is the one thread that may outlive `main`
+([ADR 0182](../spec/decisions/0182-service-threads.md)):
+
+```ceesafe
+fn main() {
+    let jobs = Channel<u64>.create(4)!;
+    let done = Channel<u64>.create(4)!;
+    let theirJobs = jobs.clone();
+    let theirDone = done.clone();
+    let started = Thread.service("squarer", move () => {
+        loop {
+            match (theirJobs.recv()) {
+                Some(v) => { let _ = theirDone.send(v * v); }
+                null => { return; }
+            }
+        }
+    });
+    Console.writeLine(started.isOk());
+    let _ = jobs.send(7);
+    jobs.close(); // the service returns once it has answered
+    Console.writeLine(done.recv() ?? 0);
+}
+```
+
+```text
+true
+49
+```
+
 ## What may cross: `Send`
 
 A value may move to another thread if it is `Send`. Plain data, strings, vectors and boxes are. Borrows are not,

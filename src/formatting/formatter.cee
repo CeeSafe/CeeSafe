@@ -859,7 +859,8 @@ fn fmtWalkType(l: borrow mut FmtLayout, ast: borrow Ast, t: u32) -> Result<void,
                 fmtWalkType(l, ast, result)?;
             }
         }
-        TypeNode.FunctionPointer(_, parameters, result) => {
+        TypeNode.FunctionPointer(_, parameters, result, attributes) => {
+            fmtWalkAttributes(l, ast, attributes)?; // an effect list (ADR 0181)
             let fnToken = l.find(core.start, TokenKind.FnKeyword);
             l.glueBeforeAt(fnToken + 1);
             for (k in 0..parameters.count) {

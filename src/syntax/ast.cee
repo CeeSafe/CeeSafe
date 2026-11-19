@@ -93,8 +93,9 @@ enum LocalKind {
 enum TypeNode {
     Named(QualifiedName),
     Missing,
-    /// `extern "C" fn(T…) -> R`: the ABI's text, the parameter types, the result type or none.
-    FunctionPointer(Range, Range, u32),
+    /// `@effects(…) extern "C" fn(T…) -> R`: the ABI's text, the parameter types, the result type or none, and the
+    /// attributes before `extern` (an effect list, ADR 0181; empty for none).
+    FunctionPointer(Range, Range, u32, Range),
     /// `@effects(…) fn(T…) -> R`: attributes, parameter types, the result type or none.
     Function(Range, Range, u32),
     /// `*T` or `*mut T`: mutable, pointee.

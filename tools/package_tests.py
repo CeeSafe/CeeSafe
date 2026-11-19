@@ -1312,6 +1312,79 @@ def manifest_targets(compiler, work, problems):
         problems.append("manifest-targets: [target.haiku] was not refused in a message that names [target.android]")
 
 
+def manifest_frameworks(compiler, work, problems):
+    """43. frameworks (ADR 0184): Apple frameworks named in [target.macos] and [target.ios]. `--emit c` for macOS and
+    iOS lists each as `-framework NAME` in the link file, once though two packages name it; for Linux, none. In
+    [package] or a non-Apple target table the field is refused. On a Mac, a program that calls IOKit and
+    CoreFoundation links with no C file and no flag, and runs."""
+    base = os.path.join(work, "manifest-frameworks")
+    for name, extra in (("dep", ""), ("app", '\n[dependencies]\ndep = { path = "../dep" }\n')):
+        os.makedirs(os.path.join(base, name, "src"))
+        kind = "executable" if name == "app" else "library"
+        with open(os.path.join(base, name, "ceesafe.toml"), "w") as f:
+            f.write(f'[package]\nname = "{name}"\nversion = "0.1.0"\nkind = "{kind}"\n\n'
+                    '[target.macos]\nframeworks = ["IOKit", "CoreFoundation"]\n\n'
+                    '[target.ios]\nframeworks = ["UIKit"]\n' + extra)
+    with open(os.path.join(base, "dep", "src", "dep.cee"), "w") as f:
+        f.write("public fn one() -> i32 => 1;\n")
+    with open(os.path.join(base, "app", "src", "main.cee"), "w") as f:
+        f.write("import dep;\nfn main() -> i32 => one() - 1;\n")
+    app = os.path.join(base, "app")
+    p = run([compiler, "fetch"], app)
+    if p.returncode != 0:
+        problems.append(f"frameworks: fetch failed: {p.stderr.strip()[-300:]}")
+        return
+    for target, want in (("macos", ["CoreFoundation", "IOKit"]), ("ios", ["UIKit"]), ("linux", [])):
+        out = "c-" + target
+        p = run([compiler, "build", "--emit", "c", "-o", out, "--target", target], app)
+        link = os.path.join(app, out, "ceesafe_link.txt")
+        lines = open(link).read().split("\n") if os.path.exists(link) else []
+        named = sorted(lines[i + 1] for i in range(len(lines) - 1) if lines[i] == "-framework")
+        if p.returncode != 0 or named != want:
+            problems.append(f"frameworks: --target {target}: the link names frameworks {named}, not {want}: "
+                            f"{p.stderr.strip()[-300:]}")
+    for table in ("[package]", "[target.linux]"):
+        bad = os.path.join(base, "bad-" + table.strip("[]").replace(".", "-"))
+        os.makedirs(os.path.join(bad, "src"))
+        with open(os.path.join(bad, "ceesafe.toml"), "w") as f:
+            if table == "[package]":
+                f.write('[package]\nname = "bad"\nframeworks = ["IOKit"]\n')
+            else:
+                f.write('[package]\nname = "bad"\n\n[target.linux]\nframeworks = ["IOKit"]\n')
+        with open(os.path.join(bad, "src", "main.cee"), "w") as f:
+            f.write("fn main() {}\n")
+        p = run([compiler, "check"], bad)
+        if p.returncode == 0 or "[target.macos]" not in p.stderr or "N0321" not in p.stderr:
+            problems.append(f"frameworks: in {table} the field was not refused (N0321) naming [target.macos]: "
+                            f"{p.returncode} {p.stderr.strip()[-200:]}")
+    if sys.platform == "darwin":
+        real = os.path.join(base, "iokit")
+        os.makedirs(os.path.join(real, "src"))
+        with open(os.path.join(real, "ceesafe.toml"), "w") as f:
+            f.write('[package]\nname = "iokit"\n\n[target.macos]\nframeworks = ["IOKit", "CoreFoundation"]\n')
+        with open(os.path.join(real, "src", "main.cee"), "w") as f:
+            f.write('extern "C" {\n'
+                    '    fn IOServiceMatching(name: *CChar) -> *void;\n'
+                    '    fn CFRelease(cf: *void);\n'
+                    '}\n'
+                    '/// Safety: IOKit returns a dictionary we own; CFRelease frees it.\n'
+                    'fn main() -> i32 {\n'
+                    '    let d = unsafe { IOServiceMatching(c"IOService".ptr()) };\n'
+                    '    if (d.isNull()) {\n'
+                    '        return 1;\n'
+                    '    }\n'
+                    '    unsafe { CFRelease(d); }\n'
+                    '    Console.writeLine("linked");\n'
+                    '    return 0;\n'
+                    '}\n')
+        p = run([compiler, "build"], real)
+        exe = os.path.join(real, "out", "iokit")
+        q = run([exe], real) if p.returncode == 0 else None
+        if p.returncode != 0 or q is None or q.returncode != 0 or q.stdout.strip() != "linked":
+            problems.append(f"frameworks: a program calling IOKit did not build and run on macOS: "
+                            f"{p.stderr.strip()[-300:]}")
+
+
 def pe_subsystem(path):
     """A PE executable's subsystem: 2 GUI, 3 console; None if the file is not one."""
     try:
@@ -2429,9 +2502,10 @@ def main():
         manifest_targets(compiler, work, problems)
         git_subdirectories(compiler, work, problems)
         dependency_patch(compiler, work, problems)
+        manifest_frameworks(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 39 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 40 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

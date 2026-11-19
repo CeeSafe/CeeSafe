@@ -444,11 +444,12 @@ fn namedConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32, 
         HirExpr.BoolConst(b) => { return c.expr(HirExpr.BoolConst(b), t, span.start, span.end); }
         HirExpr.FloatConst(f) => { return c.expr(HirExpr.FloatConst(f), t, span.start, span.end); }
         HirExpr.StringConst(text) => { return c.expr(HirExpr.StringConst(text), t, span.start, span.end); }
-        HirExpr.StructLiteral(_) => {
+        HirExpr.StructLiteral(fields) => {
             if (isCStringValue(c, value)) {
                 return copiedCString(c, value, span); // ADR 0087 §2.4
             }
-            return c.errorResult(span.start, span.end);
+            // A plain struct's folded value (ADR 0180), at the use: its fields are constants, shared.
+            return c.expr(HirExpr.StructLiteral(fields), t, span.start, span.end);
         }
         HirExpr.Cast(inner) => {
             if (isStaticBytesValue(c, value)) {
@@ -905,8 +906,11 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
         c.error(typeMismatch(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
-    if (c.types.is(expected, TypeKind.Function) && c.types.is(t, TypeKind.Function) && sameSignature(c, t, expected)) {
-        // Function types that differ only in their effect lists (§36.3): a named function takes the expected list,
+    if (((c.types.is(expected, TypeKind.Function) && c.types.is(t, TypeKind.Function)) ||
+        (c.types.is(expected, TypeKind.FunctionPointer) && c.types.is(t, TypeKind.FunctionPointer))) &&
+        sameSignature(c, t, expected)) {
+        // Function types, or C function pointer types (ADR 0181), that differ only in their effect lists (§36.3): a
+        // named function takes the expected list,
         // and the effect checker holds it to it; any other value needs its own list to be within the expected one.
         let named = match (c.hir.exprs[e as usize]) {
             HirExpr.FunctionAddress(_) => true,

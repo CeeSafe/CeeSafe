@@ -53,13 +53,14 @@ ceesafec test --filter parse --jobs 4  those whose name contains "parse", four a
 ceesafec test --interp                 in the interpreter: a virtual clock, a fixed run order
 ceesafec test --sweep alloc            each passing test again, once per allocation, that allocation failing
 ceesafec test --sweep cancel           each passing async test again, cancelled at each of its suspensions
+ceesafec test --show-output            the output of tests that pass too
 ceesafec test --format json            one JSON document, for CI
 ```
 
 Each test runs as its own process, so a panic or a crash ends only that test. Tests run in the order of their names.
 Each is reported as passed, failed, panicked, crashed (a signal), exited (it called `Process.exit` itself), timed out
 (`--timeout`, 60 seconds by default) or leaked, natively and with `--interp`. A leak fails a test: CeeSafe has no
-garbage collector, so memory still allocated at the end is a bug. A failing test's output is shown under its name, and
+garbage collector, so memory still allocated at the end is a bug. A failing test's output is shown under its name (a passing test's too with `--show-output`), and
 a test failing with its own enum names the variant. A `--filter` that matches no test is an error, and `--sweep` runs
 natively only. `ceesafec test --help` lists the options.
 

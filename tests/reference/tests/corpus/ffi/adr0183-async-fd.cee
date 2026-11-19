@@ -1,0 +1,90 @@
+// ADR 0183: AsyncFd. A task reads a non-blocking pipe, parks with AsyncFd.readable after EAGAIN, and wakes when another
+// task writes after 50 ms (so it waited at least once); the descriptor is announced with AsyncFd.closing before its
+// close. On Windows, whose executor waits for sockets only, AsyncFd reports Unsupported. Expected output by hand.
+extern "C" {
+    @cfg("target.unix")
+    @effects()
+    fn pipe(fds: *mut i32) -> i32;
+    @cfg("target.unix")
+    @effects()
+    fn fcntl(fd: i32, command: i32, ...) -> i32;
+    @cfg("target.unix")
+    @effects()
+    fn read(fd: i32, buffer: *mut u8, length: usize) -> isize;
+    @cfg("target.unix")
+    @effects()
+    fn write(fd: i32, bytes: *u8, length: usize) -> isize;
+    @cfg("target.unix")
+    @effects()
+    fn close(fd: i32) -> i32;
+}
+
+/// Safety: the buffer is this function's; a negative result is EAGAIN on the non-blocking pipe.
+async fn reader(fd: i32, got: borrow mut u32) -> Result<void, AsyncError> {
+    var buffer = [0u8; 8];
+    var waits: u32 = 0;
+    loop {
+        var n: isize = 0;
+        if (cfg("target.unix")) {
+            n = unsafe { read(fd, borrow mut buffer as *mut [u8; 8] as *mut u8, 8) };
+        }
+        if (n > 0) {
+            *got = buffer[0] as u32 * 1000 + waits;
+            return Ok();
+        }
+        waits += 1;
+        await AsyncFd.readable(fd)?;
+    }
+}
+
+/// Safety: the byte is this function's.
+async fn writer(fd: i32) -> Result<void, AsyncError> {
+    await Timer.sleep(50)?;
+    let byte = [42u8];
+    if (cfg("target.unix")) {
+        let _ = unsafe { write(fd, borrow byte as *[u8; 1] as *u8, 1) };
+    }
+    return Ok();
+}
+
+/// Safety: pipe writes two descriptors into the array; F_SETFL is 4, O_NONBLOCK 0x800 on Linux and 4 on the BSDs.
+async fn run() -> Result<void, AsyncError> {
+    if (cfg("target.windows")) {
+        let unsupported = match (await AsyncFd.writable(0)) {
+            Err(AsyncError.Io(IoError.Unsupported)) => true,
+            _ => false,
+        };
+        await AsyncConsole.writeLine(if (unsupported) "read 42 after waiting" else "no Unsupported")?;
+        await AsyncConsole.writeLine("closed")?;
+        return Ok();
+    }
+    var fds = [0i32; 2];
+    var nonblock: i32 = 4;
+    if (cfg("target.linux")) {
+        nonblock = 0x800;
+    }
+    if (cfg("target.unix")) {
+        let _ = unsafe { pipe(borrow mut fds as *mut [i32; 2] as *mut i32) };
+        let _ = unsafe { fcntl(fds[0], 4, nonblock) };
+    }
+    var got: u32 = 0;
+    await Async.all(async () => await reader(fds[0], mut got), async () => await writer(fds[1]))?;
+    await AsyncConsole.writeLine(if (got > 42000) "read 42 after waiting" else "no wait")?;
+    AsyncFd.closing(fds[0]);
+    AsyncFd.closing(fds[1]);
+    if (cfg("target.unix")) {
+        let _ = unsafe { close(fds[0]) };
+        let _ = unsafe { close(fds[1]) };
+    }
+    await AsyncConsole.writeLine("closed")?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("error"); }
+    }
+}
+// expect-stdout: read 42 after waiting
+// expect-stdout: closed

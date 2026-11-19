@@ -1019,6 +1019,26 @@ void ceesafe_async_wait_readable(int32_t fd) {
     }
 }
 
+/* lib/std's AsyncFd (ADR 0183): 1 where the executor waits for any descriptor's readiness (a POSIX reactor: kqueue,
+   epoll or poll), 0 where descriptors count as ready (Windows, which waits for sockets only; CosmoOS). */
+int32_t ceesafe_async_fd_waits(void) {
+#if !defined(_WIN32) && !defined(CEE_NO_REACTOR)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+/* A descriptor the program closes itself, about to be closed (ADR 0183): its close epoch moves, so the edge-triggered
+   reactor registers the number again if it is reused (c-backend.md §6). Nothing where there is no reactor. */
+void ceesafe_async_fd_closing(int32_t fd) {
+#if !defined(_WIN32) && !defined(CEE_NO_REACTOR)
+    ceesafe_fd_closing(fd);
+#else
+    (void)fd;
+#endif
+}
+
 int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t *ready, uint64_t count, int64_t timeout) {
 #if defined(_WIN32)
     /* Sockets through WSAPoll; any other descriptor counts as ready (as the executor's). */

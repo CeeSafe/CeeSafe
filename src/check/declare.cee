@@ -249,6 +249,7 @@ fn checkProgramWith(
         coreAllowNever: false,
         layoutUses: Vector<LayoutUse>.create(),
         headers: Vector<Vector<u8>>.create(),
+        headerCfgs: Vector<Vector<u8>>.create(),
         builtinUses: Vector<u8>.create(),
         programStructs: Vector<u32>.create(),
         importedEnums: Vector<ImportedEnum>.create(),
@@ -636,16 +637,12 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
     let entry = c.front.ast.items[item as usize];
     var t = c.resolveType(typ, false)?;
     let span = c.front.ast.typeSpans[typ as usize];
-    if ((c.types.is(t, TypeKind.Struct) && !isCStrType(c, t)) ||
-        (c.types.is(t, TypeKind.Array) && !constElementOk(c, t))) {
+    // A struct's fields are checked when the constant is evaluated, once every struct's fields are known (ADR 0180).
+    if (c.types.is(t, TypeKind.Array) && !constElementOk(c, t)) {
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (c.types.is(
-                t,
-                TypeKind.Array,
-            )) "constant arrays hold integers or bools (type-system.md §10)"
-                else "constants of struct type are not supported yet",
+            "constant arrays hold integers, bools, string views or plain structs (type-system.md §10, ADR 0180)",
         )?;
         c.error(unsupported(), span.start, span.end, message)?;
         t = c.types.error;
@@ -685,7 +682,34 @@ fn constElementOk(c: borrow Checker, t: u32) -> bool {
         element,
         TypeKind.Integer,
     ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error) || c.types.isStringView(element) ||
-        isStaticBytesType(c, element); // embedded files' bytes, as a table (ADR 0087 §2.8)
+        isStaticBytesType(c, element) ||                                   // embedded files' bytes, as a table (ADR 0087 §2.8)
+        (c.types.is(element, TypeKind.Struct) && !isCStrType(c, element)); // a table of plain structs (ADR 0180)
+}
+
+/// A struct a constant may have (ADR 0180): no drop, no region, and every field a constant's value can be: an integer,
+/// a bool, a float, a `CChar`, an array of those, or such a struct. (A `CStr` is its own case, ADR 0087 §2.4.)
+fn constStructOk(c: borrow Checker, t: u32, depth: u32) -> bool {
+    let definition = c.types.info(t).structDef;
+    if (definition == none() || depth > 32 || c.types.needsDrop(t) || c.types.isScoped(t)) {
+        return false;
+    }
+    for (field in c.types.structs[definition as usize].fields.view()) {
+        if (!constFieldOk(c, c.types.fields[field as usize].typ, depth + 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn constFieldOk(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Bool) || c.types.is(t, TypeKind.Float) ||
+        c.types.is(t, TypeKind.CChar) || c.types.is(t, TypeKind.Error)) {
+        return true;
+    }
+    if (c.types.is(t, TypeKind.Array)) {
+        return constFieldOk(c, c.types.info(t).element, depth + 1);
+    }
+    return c.types.is(t, TypeKind.Struct) && !isCStrType(c, t) && constStructOk(c, t, depth + 1);
 }
 
 /// A constant's type that may hold loans but only of static data (ADR 0064 §2): `StringView` or `[StringView; N]`,

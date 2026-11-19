@@ -168,6 +168,7 @@ test program, and runs each test whose name matches, in the order of their names
 | `--timeout` | `<seconds>`, a number above 0 | Ends a test that runs longer and reports it as timed out. | 60 |
 | `--sweep` | `alloc` or `cancel` | Runs each passing test again, once for each allocation with that allocation failing (`alloc`), or once for each point where a task can be cancelled (`cancel`) ([11.3](./ch11-03-organising-tests)). | off |
 | `--sweep-strict` | none | With `--sweep alloc`, counts a panic from an unwrap in a test's own file as a sweep failure too ([15.3](./ch15-03-allocators)). | off |
+| `--show-output` | none | Shows the output of tests that pass too, under their names, as a failing test's is shown. | off: only failing tests' output |
 | `--format` | `text` or `json` | Chooses the form of the report. `json` is one document with each test's name, outcome, time and output. | `text` |
 | `--deny-warnings` | none | Reports every warning of the check as an error. With a warning, no test runs and the status is 1. | off |
 
@@ -365,6 +366,7 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 | `--split` | `build`, `test` |
 | `--sweep` | `test` |
 | `--sweep-strict` | `test` |
+| `--show-output` | `test` |
 | `--timeout` | `test` |
 | `--whole-program` | `check` |
 | `--windowed` | `build`, `test` |

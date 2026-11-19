@@ -40,7 +40,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  run      run the package with the NIR reference interpreter (--interp)\n")?;
     appendText(
         out,
-        "  test     run the package's @test functions, each as its own process (ADR 0049): --filter <text>, --list,\n           --interp, --jobs <n>, --timeout <seconds>, --sweep alloc|cancel, --sweep-strict, --format text|json;\n           ceesafec test --help lists them\n",
+        "  test     run the package's @test functions, each as its own process (ADR 0049): --filter <text>, --list,\n           --interp, --jobs <n>, --timeout <seconds>, --sweep alloc|cancel, --sweep-strict, --show-output,\n           --format text|json;\n           ceesafec test --help lists them\n",
     )?;
     appendText(out, "  fmt      rewrite the files (or the .cee files under a directory) in the canonical style\n")?;
     appendText(out, "           (formatting.md); --check lists the files that would change, --stdout prints one\n")?;
@@ -162,6 +162,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "                    (tooling.md §10.2)\n")?;
     appendText(
         out,
+        "  --show-output     (test) print what each passing test wrote to its standard output, under its name; a\n                    failing test's is always shown (ADR 0185)\n",
+    )?;
+    appendText(
+        out,
         "  -o <path>         (build) output file or directory; default: out/<name> in a package, else the name of\n",
     )?;
     appendText(out, "                    the first input\n")?;
@@ -217,7 +221,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --no-placement    (build, run) keep every box on the heap (placement is on by default, optimisations.md §4)\n",
     )?;
     appendText(out, "  --explain-allocations  (build) print where every allocation site's memory comes from\n")?;
-    appendText(out, "  --explain-frames  (build) print each async fn's frame size, and each function's large locals\n")?;
+    appendText(
+        out,
+        "  --explain-frames  (build) print each async fn's frame size, and each function's large locals\n",
+    )?;
     appendText(
         out,
         "  --no-bce          (build, run) keep every index check (no bounds-check elimination, optimisations.md §2)\n",
@@ -334,6 +341,7 @@ struct Options {
     testTimeout: u64;           // test --timeout, in seconds
     testSweep: u32;             // test --sweep: 0 none, 1 alloc, 2 cancel
     testSweepStrict: bool;      // test --sweep-strict (ADR 0075 §2.16)
+    testShowOutput: bool;       // test --show-output: a passing test's output too (ADR 0185)
     testJson: bool;             // test --format json
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
     files: Vector<String>;
@@ -550,6 +558,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             }
         } else if (arg == "--dump-tokens") {
             options.dumpTokens = true;
+        } else if (options.testing && arg == "--show-output") {
+            options.testShowOutput = true; // ADR 0185: what a passing test printed, under its name
         } else if (options.testing && arg == "--sweep-strict") {
             options.testSweepStrict = true; // ADR 0075 §2.16: a test's own unwraps fail the sweep too
         } else if (options.testing && (arg == "--list" || arg == "--interp")) {
@@ -614,7 +624,9 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 return fail(message.view());
             }
             if ((options.running || options.testing) && (name == "ios" || name == "android")) {
-                return fail("--target ios and --target android are for 'build' and 'check': this machine cannot run what it builds for a phone");
+                return fail(
+                    "--target ios and --target android are for 'build' and 'check': this machine cannot run what it builds for a phone",
+                );
             }
         } else if (arg == "--offline") {
             options.offline = true;
@@ -937,6 +949,7 @@ fn parseCommand() -> i32 {
         testTimeout: 60,
         testSweep: 0,
         testSweepStrict: false,
+        testShowOutput: false,
         testJson: false,
         defaultOutput: Vector<u8>.create(),
         files: Vector<String>.create(),
@@ -1304,6 +1317,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     testTimeout: 60,
     testSweep: 0,
     testSweepStrict: false,
+    testShowOutput: false,
     testJson: false,
     defaultOutput: Vector<u8>.create(),
     files: Vector<String>.create(),
@@ -1858,6 +1872,15 @@ fn collectNativeLinks(workspace: borrow Workspace, native: borrow mut NativeBuil
             let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
             for (l in manifest.links.view()) {
                 links.push(copyBytes(l.view())?)?;
+            }
+            for (f in manifest.frameworks.view()) {
+                var seen = false;
+                for (x in native.frameworks.view()) {
+                    seen = seen || sameBytes(x.view(), f.view());
+                }
+                if (!seen) {
+                    native.frameworks.push(copyBytes(f.view())?)?;
+                }
             }
             for (d in manifest.libDirs.view()) {
                 var seen = false;

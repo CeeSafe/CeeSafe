@@ -1190,10 +1190,10 @@ struct TypeTable {
         effects: u32,
     ) -> Result<u32, AllocError> {
         var name = Vector<u8>.create();
+        this.appendEffectList(mut name, effects)?; // before `extern "C"` too, as it is written (ADR 0181)
         if (isKind(kind, TypeKind.FunctionPointer)) {
             appendText(mut name, "extern \"C\" ")?;
         }
-        this.appendEffectList(mut name, effects)?;
         this.appendSignature(mut name, parameters, result)?;
         var info = blankType(kind, this.addName(name)?);
         info.parameters = this.addList(parameters)?;
@@ -1203,13 +1203,22 @@ struct TypeTable {
     }
 
     /// The unique `extern "C" fn(…) -> R` (FunctionPointerTo).
-    fn functionPointerTo(borrow mut this, parameters: Slice<u32>, result: u32) -> Result<u32, AllocError> {
-        let key = this.signatureKey(parameters, result, 0)?;
+    fn functionPointerTo(borrow mut this, parameters: Slice<u32>, result: u32) -> Result<u32, AllocError> =>
+        this.functionPointerWith(parameters, result, allEffects());
+
+    /// The unique `@effects(…) extern "C" fn(…) -> R` (ADR 0181): without a list, both effects, the type it always was.
+    fn functionPointerWith(
+        borrow mut this,
+        parameters: Slice<u32>,
+        result: u32,
+        effects: u32,
+    ) -> Result<u32, AllocError> {
+        let key = this.signatureKey(parameters, result, if (effects == allEffects()) 0 else 0x100 | effects as u64)?;
         let found = foundIn(this.functionPointers, key);
         if (found != none()) {
             return Ok(found);
         }
-        let id = this.signatureType(TypeKind.FunctionPointer, parameters, result, allEffects())?;
+        let id = this.signatureType(TypeKind.FunctionPointer, parameters, result, effects)?;
         this.functionPointers.put(key, id)?;
         this.functionPointerList.push(id)?;
         return Ok(id);

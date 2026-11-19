@@ -1,6 +1,7 @@
 # lib/std
 
 - [struct AsyncConsole](#struct-asyncconsole)
+- [struct AsyncFd](#struct-asyncfd)
 - [struct AsyncTcpListener](#struct-asynctcplistener)
 - [struct StreamCloser](#struct-streamcloser)
 - [struct AsyncTcpStream](#struct-asynctcpstream)
@@ -134,6 +135,50 @@ public async fn writeError(text: StringView) -> Result<void, AsyncError>
 ```
 
 Writes `text` to standard error.
+
+## struct AsyncFd
+
+```ceesafe
+public struct AsyncFd
+```
+
+Readiness of a descriptor the program owns, for tasks (ADR 0183; type-system.md §40.4): a device's or a pipe's, set
+non-blocking by the program, which does its own I/O on it. The executor waits for it with every other descriptor it
+waits for (kqueue, epoll edge-triggered, or poll), so the task parks with no thread of its own.
+
+The executor learns readiness from edges: call `readable` or `writable` only after an operation on the descriptor
+would have blocked (EAGAIN), and retry the operation when it returns, which may be early. A descriptor the program
+closes itself is announced first with `closing`, so a later one under the same number is waited for again.
+
+POSIX hosts only: on Windows, whose executor waits for sockets only, both return `Err(Io(Unsupported))`.
+
+### AsyncFd.readable
+
+```ceesafe
+public async fn readable(fd: i32) -> Result<void, AsyncError>
+```
+
+Parks the task until `fd` may be readable (POLLIN): Err(Cancelled) or Err(TimedOut) if the task is cancelled
+or its shield's time is up, before or while it waits (type-system.md §40.7).
+Safety: the runtime only records the descriptor for the executor's wait.
+
+### AsyncFd.writable
+
+```ceesafe
+public async fn writable(fd: i32) -> Result<void, AsyncError>
+```
+
+Parks the task until `fd` may be writable (POLLOUT; usbfs reports a finished URB so): as `readable`.
+Safety: as `readable`.
+
+### AsyncFd.closing
+
+```ceesafe
+public fn closing(fd: i32)
+```
+
+Before the program closes `fd` with its own call: the executor forgets what it knew of the number.
+Safety: the runtime only moves a counter.
 
 ## struct AsyncTcpListener
 

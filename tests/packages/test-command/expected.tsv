@@ -3,6 +3,7 @@
 # in the names' order, which the runner follows. Reviewed changes (2026-11-02, CeeSafe.Web's report): failsOther names
 # its variant; leaksSafely leaks without C, so --interp finds it; exits ends the process itself ("exited", not
 # "crashed"). 2026-11-19 (ADR 0175 amendment 1): an isolated child's trap is neither the test's panic nor its leak; amendment 2: nor what it captured.
+# 2026-11-19 (ADR 0185): printsAndPasses passes and prints; --show-output shows what it printed.
 adds	passed	passed	-
 allocates	passed	passed	-
 crashes	crashed	skipped	-
@@ -25,4 +26,5 @@ leaksSafely	leaked	leaked	-
 panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25
 passesVoid	passed	passed	-
 printsAndFails	failed	failed	on purpose
+printsAndPasses	passed	passed	-
 sleeps	passed	passed	-

@@ -260,6 +260,10 @@ window when it is started from Explorer, a shortcut or a scheduled task; its sta
   unset one is N0321. Nothing runs (ADR 0013), and the hash (§4.3) is of the manifest's text, not the value.
 - A `[target.OS]` table (`linux`, `macos` or `windows`) holds the same three fields. The host's is added after
   `[package]`'s; every one is checked.
+- **Frameworks** (ADR 0184). `[target.macos]` and `[target.ios]` also take `frameworks`, the Apple frameworks to link
+  (`frameworks = ["IOKit", "CoreFoundation"]`: `-framework IOKit -framework CoreFoundation`), named as `links` are.
+  They reach the link as libraries do, each once. In `[package]`, or another system's table, `frameworks` is N0321:
+  only Apple's linkers have them.
 - The libraries and library directories of every package in the build reach the executable's link, a library's
   included. Packages are taken dependents first (by their longest path from the root). A library named twice keeps
   its last place, so it follows what uses it; a directory keeps its first.
@@ -1028,7 +1032,7 @@ test from anything but the generated harness, is N0348.
 ### 10.2 The command
 
 `ceesafec test [--filter TEXT] [--list] [--interp] [--jobs N] [--timeout SECONDS] [--sweep alloc|cancel]
-[--sweep-strict] [--format text|json]`, in a package:
+[--sweep-strict] [--show-output] [--format text|json]`, in a package:
 
 1. It checks the package with its tests and writes the harness and the list of tests to `out/ceesafe-test/`.
 2. It builds the harness once, as `out/<name>-tests`.
@@ -1054,6 +1058,9 @@ Each test's outcome:
 | leaked | it passed, but allocations were live at the end (`CEESAFE_ALLOC_REPORT`), less those isolated tasks that trapped left (`isolated leaked`) |
 | skipped | with `--interp`, it calls C, which the interpreter cannot run |
 
+- **`--show-output`** (ADR 0185) shows the captured standard output of tests that passed too, under their names, as
+  a failed test's is shown; without it a passing test's output is not shown. `--format json` has every test's output
+  either way.
 - **Exit status.** 1 if any test is not passed or skipped, else 0.
 - **JSON.** `--format json` prints one document: each test's name, outcome, milliseconds, message, standard output and
   error; the sweeps' failures and runs; and the counts.
@@ -1259,7 +1266,7 @@ for it.
 | `--explain-allocations`, `--explain-bounds-checks`, `--explain-closure-calls`, `--explain-frames`, `--explain-overflow-checks` | build, test | build, test (the test program's) | |
 | `--exports-header` | build, test | build, test | |
 | `--target` | parse, check, build, run, fix, test | check, build, test, run: the manifests' `[target.NAME]` tables that apply are the named system's and no other (ADR 0171); without it, this machine's | NAME is `linux`, `macos`, `windows`, `freebsd`, `ios` or `android`, and anything else is a usage error. It names the system and nothing else: `--cc` and `--cflag` choose the C compiler and what it builds for. With `run` or `test`, `ios` and `android` are usage errors: this machine cannot run what it builds for a phone |
-| `--filter`, `--format`, `--list`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
+| `--filter`, `--format`, `--list`, `--show-output`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
 | `--flat-c` | build, test | build, test | |
 | `--interp` | run, test | run, test | |
 | `--jobs` | build, test | build, with `--split` (without it a usage error); test: the tests run at once, and with `--split` the C files compiled at once | check answers `unknown option`: it is one process |

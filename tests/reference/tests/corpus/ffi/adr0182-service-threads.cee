@@ -1,0 +1,45 @@
+// ADR 0182: Thread.service. A service squares requests until its channel closes, then returns (its environment is
+// freed on its own thread); a second service waits on a channel no one closes, and main returns without waiting for
+// it. Expected output by hand: 1 + 4 + 9 + 16 = 30. An ffi test, though it calls no C: see adr0182-service-threads.c.
+fn main() {
+    let requests = Channel<u64>.create(4)!;
+    let replies = Channel<u64>.create(4)!;
+    let theirRequests = requests.clone();
+    let theirReplies = replies.clone();
+    let started = Thread.service("squarer", move () => {
+        loop {
+            match (theirRequests.recv()) {
+                Some(v) => { let _ = theirReplies.send(v * v); }
+                null => { return; }
+            }
+        }
+    });
+    Console.writeLine(started.isOk());
+    for (k in 1u64..5) {
+        let _ = requests.send(k);
+    }
+    requests.close();
+    var total: u64 = 0;
+    var received = 0;
+    while (received < 4) {
+        total += replies.recv() ?? 0;
+        received += 1;
+    }
+    Console.writeLine(total);
+    let never = Channel<u8>.create(1)!;
+    let waiting = never.clone();
+    let name = String.from("idle")!;
+    let idle = Thread.service(name.view(), move () => {
+        let _ = waiting.recv(); // nothing comes: the process ends around it
+    });
+    Console.writeLine(idle.isOk());
+    let quiet = never.clone();
+    let _ = Thread.service("discarded", move () => { let _ = quiet.recv(); }); // its result discarded
+    // The process ends around the services, which still hold their captures: --check-leaks would count those, and the
+    // first service's freeing of its own environment races this exit. Process.exit, like a program whose services
+    // run for its life, ends without the allocation report (ADR 0182 §4, open: should the report leave services out?).
+    Process.exit(0);
+}
+// expect-stdout: true
+// expect-stdout: 30
+// expect-stdout: true

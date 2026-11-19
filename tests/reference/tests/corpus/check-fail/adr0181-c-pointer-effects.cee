@@ -1,0 +1,16 @@
+// ADR 0181: a named C function whose effects exceed a C function pointer type's list, and an async fn calling through
+// a pointer without one (N0295, after effect inference).
+/// Safety: any value.
+@callback
+unsafe fn noisy(x: i32) -> i32 {
+    Console.writeLine(x);
+    return x;
+}
+
+/// Safety: f is a C function.
+async fn task(f: extern "C" fn(i32) -> i32) -> i32 => unsafe { f(20) }; // error[N0295]
+
+fn main() {
+    let f: @effects() extern "C" fn(i32) -> i32 = noisy; // error[N0295]
+    let g: extern "C" fn(i32) -> i32 = noisy;
+}

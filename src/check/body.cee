@@ -659,10 +659,81 @@ fn cfgConditionText(c: borrow mut Checker, condition: u32) -> Result<Vector<u8>,
     }
     let span = c.front.ast.exprSpans[argument as usize];
     let switchMacro = withoutBang(text.view());
-    if (!checkCName(c, switchMacro, Span { start: span.start, end: span.end }, "the configuration macro")?) {
+    if (!checkCfgName(c, switchMacro, Span { start: span.start, end: span.end })?) {
         return Ok(Vector<u8>.create());
     }
     return Ok(text);
+}
+
+/// A target condition (ADR 0179): the system the build is for, as its C compiler knows it. `target.unix` is any of
+/// linux, macos, freebsd, ios and android.
+fn isTargetCondition(name: Slice<u8>) -> bool =>
+    sameText(name, "target.linux") || sameText(name, "target.macos") || sameText(name, "target.windows") ||
+        sameText(name, "target.freebsd") || sameText(name, "target.ios") || sameText(name, "target.android") ||
+        sameText(name, "target.unix");
+
+/// The target condition a compiler's own OS macro means, to suggest instead of it (ADR 0179), or "".
+fn targetConditionFor(name: Slice<u8>) -> StringView {
+    if (sameText(name, "__linux__") || sameText(name, "__linux") || sameText(name, "linux")) {
+        return "target.linux";
+    }
+    if (sameText(name, "__APPLE__") || sameText(name, "__MACH__")) {
+        return "target.macos";
+    }
+    if (sameText(name, "_WIN32") || sameText(name, "_WIN64") || sameText(name, "__WIN32__")) {
+        return "target.windows";
+    }
+    if (sameText(name, "__FreeBSD__")) {
+        return "target.freebsd";
+    }
+    if (sameText(name, "__ANDROID__")) {
+        return "target.android";
+    }
+    if (sameText(name, "__unix__") || sameText(name, "__unix")) {
+        return "target.unix";
+    }
+    return "";
+}
+
+/// The name in a `cfg("X")` or `@cfg("X")` (without its `!`): a target condition (ADR 0179) or the name of a C macro
+/// the build may define (ADR 0080 §3.3, N0292). A compiler's OS macro is reserved by C; the message names the target
+/// condition to write instead.
+fn checkCfgName(c: borrow mut Checker, name: Slice<u8>, span: Span) -> Result<bool, AllocError> {
+    if (name.length > 7 && sameText(name[0..7], "target.")) {
+        if (isTargetCondition(name)) {
+            return Ok(true);
+        }
+        var message = copyBytes("unknown target condition '".bytes())?;
+        appendBytes(mut message, name)?;
+        appendText(
+            mut message,
+            "': cfg takes target.linux, target.macos, target.windows, target.freebsd, target.ios, target.android or target.unix (ADR 0179)",
+        )?;
+        c.error(invalidCName(), span.start, span.end, message)?;
+        return Ok(false);
+    }
+    let suggestion = targetConditionFor(name);
+    if (suggestion.length > 0) {
+        var message = copyBytes("the configuration macro '".bytes())?;
+        appendBytes(mut message, name)?;
+        appendText(mut message, "' is the C compiler's own, which C reserves: write '")?;
+        appendText(mut message, suggestion)?;
+        appendText(mut message, "', the target condition (ADR 0179)")?;
+        c.error(invalidCName(), span.start, span.end, message)?;
+        return Ok(false);
+    }
+    return checkCName(c, name, span, "the configuration macro");
+}
+
+/// Does the condition `held` (one in force where the checker is) imply `wanted`? The same text, or a Unix system for
+/// `target.unix` (ADR 0179).
+fn cfgImplies(held: Slice<u8>, wanted: Slice<u8>) -> bool {
+    if (sameBytes(held, wanted)) {
+        return true;
+    }
+    return sameText(wanted, "target.unix") &&
+        (sameText(held, "target.linux") || sameText(held, "target.macos") || sameText(held, "target.freebsd") ||
+            sameText(held, "target.ios") || sameText(held, "target.android"));
 }
 
 /// The condition that holds where `text` does not: `X` for `!X`, `!X` for `X`.
@@ -680,7 +751,7 @@ fn negatedCfg(text: Slice<u8>) -> Result<Vector<u8>, AllocError> {
 /// block of that condition. (An export's own `@cfg` does not count: its body is compiled in every build, ADR 0043.)
 fn checkCfgUse(c: borrow mut Checker, text: Slice<u8>, what: Slice<u8>, span: Span) -> Result<void, AllocError> {
     for (held in c.cfgStack.view()) {
-        if (sameBytes(held.view(), text)) {
+        if (cfgImplies(held.view(), text)) {
             return Ok();
         }
     }

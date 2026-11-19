@@ -1,0 +1,12 @@
+// ADR 0182: what Thread.service refuses: a closure that is not a move literal, a body with a value (a service returns
+// nothing), a capture that is not Send, and a capture that borrows (the thread outlives every loan).
+fn main() {
+    let a = Thread.service("plain", () => {});     // error[N0333]
+    let b = Thread.service("value", move () => 7); // error[N0225] (a service body is void)
+    let n = 5u64;
+    let pointer = borrow n as *u64;
+    let c = Thread.service("raw", move () => { let _ = pointer.isNull(); }); // error[N0334]
+    let text = String.from("x")!;
+    let view = text.view();
+    let d = Thread.service("loan", move () => { let _ = view.length; }); // error[N0332]
+}

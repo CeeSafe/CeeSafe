@@ -1020,22 +1020,31 @@ fn emitAsyncFunction(
         e.t(")")?;
         e.emit()?;
     }
-    var states: u32 = 0;
+    // One case per suspension point, numbered as emitFlatBody numbers them (block order). A point in a block of
+    // `if (cfg("X"))` (ADR 0080 §3.3, ADR 0179) has its label inside that block's `#if`, so its case is under it too.
+    e.line("    switch (cee_frame->cee_state) {")?;
+    var state: u64 = 0;
     for (block in function.blocks.view()) {
         for (s in block.statements.view()) {
-            if (isSuspension(n, s)) {
-                states += 1;
+            if (!isSuspension(n, s)) {
+                continue;
+            }
+            state += 1;
+            if (block.cfg.length > 0) {
+                e.t("#if ")?;
+                appendCfgTest(mut e.buf, block.cfg.view())?;
+                e.emit()?;
+            }
+            e.t("    case ")?;
+            e.d(state)?;
+            e.t("u: goto cee_resume_")?;
+            e.d(state)?;
+            e.t(";")?;
+            e.emit()?;
+            if (block.cfg.length > 0) {
+                e.line("#endif")?;
             }
         }
-    }
-    e.line("    switch (cee_frame->cee_state) {")?;
-    for (k in 1..states + 1) {
-        e.t("    case ")?;
-        e.d(k as u64)?;
-        e.t("u: goto cee_resume_")?;
-        e.d(k as u64)?;
-        e.t(";")?;
-        e.emit()?;
     }
     e.line("    default: break;")?;
     e.line("    }")?;

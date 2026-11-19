@@ -89,6 +89,16 @@ def main():
                 if "shown because it fails" not in shown:
                     problems.append(f"printsAndFails's output was not captured: {shown!r}")
 
+        # 2b. --show-output (ADR 0185): a passing test's output appears in the text report only when asked for; a
+        #     failing test's always does.
+        p = run(["test", "--filter", "prints"], package)
+        if "printed by a passing test" in p.stdout or "shown because it fails" not in p.stdout:
+            problems.append(f"test without --show-output: a passing test's output shown, or a failing one's not: "
+                            f"{p.stdout[-400:]!r}")
+        p = run(["test", "--filter", "prints", "--show-output"], package)
+        if "printed by a passing test" not in p.stdout or "printsAndPasses: passed" not in p.stdout:
+            problems.append(f"test --show-output did not show printsAndPasses's output under its name: {p.stdout[-400:]!r}")
+
         # 3. list, an empty filter, --interp --sweep, --help
         p = run(["test", "--list", "--filter", "fails"], package)
         want = sorted((e[0] for e in expected if "fails" in e[0]), key=lambda n: n.encode())
@@ -101,7 +111,7 @@ def main():
         if p.returncode != 2 or "--interp" not in p.stderr:
             problems.append(f"--interp --sweep: exit status {p.returncode}, not 2: {p.stderr[-200:]!r}")
         p = run(["test", "--help"], package)
-        if p.returncode != 0 or "--sweep" not in p.stdout or "exited" not in p.stdout:
+        if p.returncode != 0 or "--sweep" not in p.stdout or "exited" not in p.stdout or "--show-output" not in p.stdout:
             problems.append(f"test --help: exit status {p.returncode}, {p.stdout[:200]!r}")
 
         # 4. sweeps, against the harness's own counts

@@ -48,7 +48,7 @@ fn pointers(p: *mut part, q: *part) {
 
 const BYTES: [u8; 3] = [1, 2, 3];
 const REPEATED: [bool; 4] = [false; 4];
-const PAIRS: [Pair; 1] = [Pair { a: 1, b: 2 }]; // error[N0216]
+const PAIRS: [Pair; 1] = [Pair { a: 1, b: 2 }]; // a table of plain structs (reviewed 2026-11-19: N0216 before ADR 0180)
 const NESTED: [[u8; 1]; 1] = [[1]]; // error[N0216]
 const CALLED: [u8; 2] = [1, twice(1)]; // error[N0217]
 const WRONG: [u8; 2] = [1, 300]; // error[N0206]

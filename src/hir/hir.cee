@@ -318,6 +318,8 @@ struct HirStatic {
     imported: bool;
     exported: bool;
     cInitializer: Range;
+    /// An imported static's `@cfg` condition (ADR 0179; Hir.text, empty for none): C data only some builds have.
+    cfgName: Range;
 }
 
 struct HirProgram {

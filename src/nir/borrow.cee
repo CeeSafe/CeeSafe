@@ -911,7 +911,18 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                             if (containsU32(c.hir.functions[callee as usize].deepSources, index)) {
                                 deepSourceEdge(c, n, b, mut edges, references, throughs, local, t.local, 0)?;
                             } else if (holdsLoans(c, n, b, local)) {
-                                addEdge(mut edges, local, t.local)?;
+                                // An argument read through a reference (`f(this.view)`) is a copy of what the
+                                // referent holds, as for any other copy below: the result takes those loans, not
+                                // the reference's own (ADR 0074 §2.4).
+                                let p = toPlaceRef(n, argument);
+                                let through = throughParameter(c, n, b, p);
+                                if (through != none()) {
+                                    addDeepEdge(mut edges, local, t.local, through)?;
+                                } else if (readsThroughLocalReference(c, n, b, p)) {
+                                    deepSourceEdge(c, n, b, mut edges, references, throughs, local, t.local, 0)?;
+                                } else {
+                                    addEdge(mut edges, local, t.local)?;
+                                }
                             }
                         }
                     }

@@ -173,7 +173,7 @@ fn typeNamesSelf(c: borrow Checker, t: u32, depth: u32) -> bool {
             result,
             depth + 1,
         ),
-        TypeNode.FunctionPointer(_, parameters, result) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
+        TypeNode.FunctionPointer(_, parameters, result, _) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
             c,
             result,
             depth + 1,

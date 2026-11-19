@@ -576,6 +576,8 @@ fn testHelp() {
     Console.writeLine("                        cancellation point (native only)");
     Console.writeLine("  --sweep-strict        with --sweep alloc: a panic from an unwrap in a test's own file, or a");
     Console.writeLine("                        stacked await out of memory, fails the sweep too");
+    Console.writeLine("  --show-output         print what each passing test wrote, under its name (a failing test's");
+    Console.writeLine("                        output is always shown; ADR 0185)");
     Console.writeLine("  --format text|json    the report's form");
     Console.writeLine("  --deny-warnings       treat the check's warnings as errors: no test runs");
     Console.writeLine(
@@ -809,7 +811,7 @@ fn testCommand() -> i32 {
     } else {
         for (k in 0..outcomes.length) {
             let o = borrow outcomes[k];
-            if (o.outcome == 0 || o.outcome == 7) {
+            if (o.outcome == 7 || (o.outcome == 0 && (!options.testShowOutput || o.stdout.length == 0))) {
                 continue;
             }
             var text = copyBytes("\n---- ".bytes())!;

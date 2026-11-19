@@ -11,6 +11,10 @@ extern "C" {
     @effects()
     fn ceesafe_async_wait_readable(fd: i32);
     @effects()
+    fn ceesafe_async_fd_waits() -> i32;
+    @effects()
+    fn ceesafe_async_fd_closing(fd: i32);
+    @effects()
     fn ceesafe_async_tcp_listen(address: *u8, length: u64, port: u16) -> i64;
     @effects()
     fn ceesafe_async_tcp_port(fd: i32) -> i64;
@@ -127,6 +131,52 @@ public struct AsyncConsole {
     /// Writes `text` to standard error.
     public async fn writeError(text: StringView) -> Result<void, AsyncError> =>
         await AsyncIo.writeAll(2, text.bytes());
+}
+
+/// Readiness of a descriptor the program owns, for tasks (ADR 0183; type-system.md §40.4): a device's or a pipe's, set
+/// non-blocking by the program, which does its own I/O on it. The executor waits for it with every other descriptor it
+/// waits for (kqueue, epoll edge-triggered, or poll), so the task parks with no thread of its own.
+///
+/// The executor learns readiness from edges: call `readable` or `writable` only after an operation on the descriptor
+/// would have blocked (EAGAIN), and retry the operation when it returns, which may be early. A descriptor the program
+/// closes itself is announced first with `closing`, so a later one under the same number is waited for again.
+///
+/// POSIX hosts only: on Windows, whose executor waits for sockets only, both return `Err(Io(Unsupported))`.
+public struct AsyncFd {
+    /// Parks the task until `fd` may be readable (POLLIN): Err(Cancelled) or Err(TimedOut) if the task is cancelled
+    /// or its shield's time is up, before or while it waits (type-system.md §40.7).
+    /// Safety: the runtime only records the descriptor for the executor's wait.
+    public async fn readable(fd: i32) -> Result<void, AsyncError> {
+        AsyncFd.supported()?;
+        AsyncLeaf.status()?;
+        unsafe { ceesafe_async_wait_readable(fd); }
+        await Async.park();
+        return AsyncLeaf.status();
+    }
+
+    /// Parks the task until `fd` may be writable (POLLOUT; usbfs reports a finished URB so): as `readable`.
+    /// Safety: as `readable`.
+    public async fn writable(fd: i32) -> Result<void, AsyncError> {
+        AsyncFd.supported()?;
+        AsyncLeaf.status()?;
+        unsafe { ceesafe_async_wait_writable(fd); }
+        await Async.park();
+        return AsyncLeaf.status();
+    }
+
+    /// Before the program closes `fd` with its own call: the executor forgets what it knew of the number.
+    /// Safety: the runtime only moves a counter.
+    public fn closing(fd: i32) {
+        unsafe { ceesafe_async_fd_closing(fd); }
+    }
+
+    /// Safety: the runtime only answers a constant.
+    fn supported() -> Result<void, AsyncError> {
+        if (unsafe { ceesafe_async_fd_waits() } == 0) {
+            return Err(AsyncError.Io(IoError.Unsupported));
+        }
+        return Ok();
+    }
 }
 
 /// lib/std's own steps for its waiting I/O: not for programs (type-system.md §40.4).

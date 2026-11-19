@@ -816,7 +816,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                     // (collectFlowNames) are what it gives, not what it can be given to keep.
                     let callable = match (c.front.ast.types[pointee as usize]) {
                         TypeNode.Function(_, _, _) => true,
-                        TypeNode.FunctionPointer(_, _, _) => true,
+                        TypeNode.FunctionPointer(_, _, _, _) => true,
                         _ => false,
                     };
                     if (!callable) {
@@ -1277,7 +1277,7 @@ fn collectFlowNames(
         TypeNode.Function(_, _, result) => {
             return if (result == none()) Ok() else collectFlowNames(c, result, function, inResult, names);
         }
-        TypeNode.FunctionPointer(_, _, result) => {
+        TypeNode.FunctionPointer(_, _, result, _) => {
             return if (result == none()) Ok() else collectFlowNames(c, result, function, inResult, names);
         }
         TypeNode.Generic(name, arguments) => {

@@ -1,0 +1,43 @@
+// ADR 0179: what target conditions and configured C refuse. A compiler's own OS macro (C reserves it) names the target
+// condition to write; an unknown target is listed; a configured C static or function is named only where its condition
+// holds (N0350), `target.unix` held by any Unix system; a configured block imports functions and statics only, its
+// items take its condition and add none, and a configured static is read-only.
+@cfg("target.macos")
+@header("CoreFoundation/CoreFoundation.h")
+extern "C" {
+    static kCFRunLoopDefaultMode: *void;
+    fn CFRunLoopStop(runLoop: *void);
+    @cfg("target.ios") // error[N0290]
+    fn CFRunLoopWakeUp(runLoop: *void);
+    const kCFNumberSInt64Type: i64 = 4; // error[N0290]
+}
+
+@cfg("target.linux")
+@header("sys/epoll.h")
+extern "C" {
+    static mut configuredMutable: i32; // error[N0290]
+}
+
+extern "C" {
+    @cfg("target.unix")
+    fn getpid() -> i32;
+}
+
+/// Safety: the calls are where their conditions hold, or are the errors this file tests.
+fn main() {
+    if (cfg("__APPLE__")) {} // error[N0292] // error[N0200]
+    if (cfg("target.plan9")) {} // error[N0292] // error[N0200]
+    let early = unsafe { kCFRunLoopDefaultMode }; // error[N0350]
+    unsafe { CFRunLoopStop(0 as *void); } // error[N0350]
+    if (cfg("target.linux")) {
+        let pid = unsafe { getpid() }; // target.linux implies target.unix
+        let mode = unsafe { kCFRunLoopDefaultMode }; // error[N0350]
+    }
+    if (cfg("target.macos")) {
+        let mode = unsafe { kCFRunLoopDefaultMode };
+        unsafe { CFRunLoopStop(mode); }
+    }
+    if (cfg("target.windows")) {
+        let pid = unsafe { getpid() }; // error[N0350]
+    }
+}

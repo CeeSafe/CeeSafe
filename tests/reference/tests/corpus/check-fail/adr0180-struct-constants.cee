@@ -1,0 +1,15 @@
+// ADR 0180: what a struct constant refuses: a type that owns memory (drop), one that borrows (a region), a call.
+struct Owned {
+    v: Vector<u8>;
+}
+struct Ref<region r> {
+    s: StringView<r>;
+}
+const A: Owned = Owned { v: Vector<u8>.create() }; // error[N0216]
+const B: Ref<static> = Ref { s: "x" }; // error[N0246]
+struct P {
+    x: i32;
+}
+fn seven() -> i32 => 7;
+const C: P = P { x: seven() }; // error[N0217]
+fn main() {}

@@ -18,6 +18,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h> /* TARGET_OS_IPHONE: target.ios and target.macos (ADR 0179) */
+#endif
 
 /* Floats (type-system.md §35.6): IEEE binary32/binary64, each operation rounded once to its type. Only programs
    that use floats define CEE_FLOATS (the generated main.c, and the float formatter); the others need not meet these
@@ -45,12 +48,33 @@
 #pragma GCC optimize("no-optimize-crc")
 #endif
 
+/* GCC's -Wmaybe-uninitialized (in -Wall at -O1 and above) is a heuristic, and the generated C trips it where nothing is
+ * uninitialised: an enum value is a struct with a union, built by a compound literal that names one member, and copying
+ * it copies the others' bytes, which C leaves indeterminate and never reads (c-backend.md §2). CeeSafe's own checker has
+ * already proved every value initialised before use (type-system.md §13), so the warning says nothing about the
+ * program; this header is included by generated C only, never by a package's own C files. Clang has no such
+ * heuristic. */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 #define CEE_UNUSED __attribute__((unused))
 #define CEE_COLD __attribute__((cold))
 #else
 #define CEE_UNUSED
 #define CEE_COLD
+#endif
+
+/* The end of a function with configured code (ADR 0080 §3.3) that no build reaches: every path returned before it.
+ * Only for the C compiler's -Wreturn-type, which looks for a return statement and finds none in a build whose
+ * configured code ends in an endless loop (c-backend.md §3). */
+#if defined(__GNUC__) || defined(__clang__)
+#define CEE_UNREACHABLE_END() __builtin_unreachable()
+#elif defined(_MSC_VER)
+#define CEE_UNREACHABLE_END() __assume(0)
+#else
+#define CEE_UNREACHABLE_END() ((void)0)
 #endif
 
 /* A compiler temporary (`t_<n>`, c-backend.md §7): unused-tolerant, and under clang left out of the debug info. An
@@ -1062,6 +1086,9 @@ typedef struct cee_thread cee_thread;
 cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg);
 /* Waits for the thread to end, then frees its record. */
 void ceesafe_thread_join(cee_thread *t);
+/* A service thread (type-system.md §38.2, ADR 0182): starts body(arg) named `name` (the first 15 bytes, where the
+   platform names threads) and never joins it; the thread frees its own record. 0 if it could not be started. */
+int ceesafe_thread_service(void *(*body)(void *), void *arg, const uint8_t *name, uint64_t length);
 /* A platform mutex in allocated memory, or NULL. */
 void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);
@@ -1744,6 +1771,9 @@ uint64_t ceesafe_async_now(void);
 void ceesafe_async_wait_until(uint64_t deadline);
 void ceesafe_async_wait_writable(int32_t fd);
 void ceesafe_async_wait_readable(int32_t fd);
+/* lib/std's AsyncFd (ADR 0183): whether descriptors are waited for, and a program's own close of one. */
+int32_t ceesafe_async_fd_waits(void);
+void ceesafe_async_fd_closing(int32_t fd);
 /* Async sockets (runtime/hosted/ceesafe_rt_io.c): non-blocking descriptors; a value >= 0, CEE_ASYNC_WOULD_BLOCK, or a
  * negated errno. Windows: L1 A4. */
 #define CEE_ASYNC_WOULD_BLOCK INT64_MIN

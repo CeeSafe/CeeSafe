@@ -1021,9 +1021,12 @@ struct AstPrinter {
 
                 this.text(")")?;
             }
-            TypeNode.FunctionPointer(abi, parameters, result) => {
+            TypeNode.FunctionPointer(abi, parameters, result, attributes) => {
                 this.text("(fn-ptr ")?;
                 quote(mut this.out, ast.textOf(abi), '"')?;
+                if (attributes.count > 0) {
+                    this.typeAttributes(ast, symbols, attributes)?; // ADR 0181
+                }
                 this.signature(ast, symbols, parameters, result)?;
             }
             TypeNode.Function(attributes, parameters, result) => {

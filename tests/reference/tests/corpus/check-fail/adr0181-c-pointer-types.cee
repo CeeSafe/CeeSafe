@@ -1,0 +1,17 @@
+// ADR 0181: a value without an effect list where a C function pointer type with one is expected (N0299); an alias
+// whose signature differs from the C function's other declaration is a clash (N0201).
+extern "C" {
+    fn plainOf() -> extern "C" fn(i32) -> i32;
+    fn abs(x: i32) -> i32;
+    @cname("abs")
+    @effects()
+    fn wrongAbs(x: i64) -> i32; // error[N0201]
+}
+
+/// Safety: plainOf returns a C function.
+fn narrow() {
+    let g: extern "C" fn(i32) -> i32 = unsafe { plainOf() };
+    let h: @effects() extern "C" fn(i32) -> i32 = g; // error[N0299]
+}
+
+fn main() {}

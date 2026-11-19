@@ -1,0 +1,17 @@
+// The other side of check-pass/call-argument-read-through-reference: a call whose argument is a borrow *of* the
+// referent's own storage (a view of a vector it owns) still borrows from the parameter, and a result that names only
+// the referent's regions is refused.
+struct Walk<region r> {
+    bytes: Slice<r, u8>;
+}
+
+fn make<region r>(bytes: Slice<r, u8>) -> Walk<r> => Walk { bytes: bytes };
+
+struct Owner<region r> {
+    data: Vector<u8>;
+    tag: Slice<r, u8>;
+
+    fn wrong(borrow this) -> Walk<r> => make(this.data.view()); // error[N0245]
+}
+
+fn main() {}

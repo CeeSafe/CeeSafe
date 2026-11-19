@@ -69,6 +69,93 @@ cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg) {
     return t;
 }
 
+/* ---- Service threads (ADR 0182): started, named and never joined ---------------------------------------------- */
+
+typedef struct {
+    void *(*body)(void *);
+    void *arg;
+    char name[16]; /* NUL-terminated; Linux's limit (15 bytes and the NUL), the shortest of the platforms' */
+} cee_service;
+
+#if defined(_WIN32) && !defined(CEE_COSMOOS)
+typedef HRESULT(WINAPI *cee_set_description)(HANDLE, PCWSTR);
+#endif
+
+/* The service's own entry: it names its thread (macOS names only the calling thread), frees its record, and runs. */
+static void *cee_service_entry(void *p) {
+    cee_service s = *(cee_service *)p;
+    ceesafe_free(p, CEE_ALLOC_SYSTEM);
+#if defined(CEE_COSMOOS)
+#elif defined(_WIN32)
+    /* SetThreadDescription is Windows 10 1607 and later: looked up, so older systems run unnamed. */
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    cee_set_description describe = kernel == NULL ? NULL
+        : (cee_set_description)(void (*)(void))GetProcAddress(kernel, "SetThreadDescription");
+    if (describe != NULL && s.name[0] != 0) {
+        WCHAR wide[16];
+        int k = 0;
+        for (; k < 15 && s.name[k] != 0; k++) {
+            wide[k] = (WCHAR)(unsigned char)s.name[k];
+        }
+        wide[k] = 0;
+        (void)describe(GetCurrentThread(), wide);
+    }
+#elif defined(__APPLE__)
+    if (s.name[0] != 0) {
+        (void)pthread_setname_np(s.name);
+    }
+#elif defined(__linux__)
+    if (s.name[0] != 0) {
+        (void)pthread_setname_np(pthread_self(), s.name);
+    }
+#endif
+    return s.body(s.arg);
+}
+
+#if defined(_WIN32) && !defined(CEE_COSMOOS)
+static DWORD WINAPI cee_service_entry_win(LPVOID p) {
+    (void)cee_service_entry(p);
+    return 0;
+}
+#endif
+
+int ceesafe_thread_service(void *(*body)(void *), void *arg, const uint8_t *name, uint64_t length) {
+    cee_service *s = (cee_service *)ceesafe_alloc(sizeof *s, CEE_ALLOC_SYSTEM);
+    if (s == NULL) {
+        return 0;
+    }
+    s->body = body;
+    s->arg = arg;
+    uint64_t n = length < 15u ? length : 15u;
+    for (uint64_t k = 0; k < n; k++) {
+        /* A name is text; a NUL inside it ends it early, as C would read it. */
+        s->name[k] = (char)name[k];
+    }
+    s->name[n] = 0;
+#if defined(CEE_COSMOOS)
+    cosmo_thread_t thread; /* CosmoOS has no detach: the handle is not kept, and the thread ends with the process */
+    if (cosmo_thread_start(&thread, cee_service_entry, s, 0) != 0) {
+        ceesafe_free(s, CEE_ALLOC_SYSTEM);
+        return 0;
+    }
+#elif defined(_WIN32)
+    HANDLE handle = CreateThread(NULL, 0, cee_service_entry_win, s, 0, NULL);
+    if (handle == NULL) {
+        ceesafe_free(s, CEE_ALLOC_SYSTEM);
+        return 0;
+    }
+    (void)CloseHandle(handle);
+#else
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, cee_service_entry, s) != 0) {
+        ceesafe_free(s, CEE_ALLOC_SYSTEM);
+        return 0;
+    }
+    (void)pthread_detach(thread);
+#endif
+    return 1;
+}
+
 void ceesafe_thread_join(cee_thread *t) {
 #if defined(CEE_COSMOOS)
     (void)cosmo_thread_join(&t->thread, NULL);

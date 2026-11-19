@@ -496,7 +496,7 @@ fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, Al
         appendBytes(mut switchName, c.front.ast.textOf(text))?;
         // `@cfg("!X")` for the builds where `X` is zero (ADR 0080 §3.3).
         let switchMacro = withoutBang(switchName.view());
-        if (!checkCName(c, switchMacro, Span { start: a.start, end: a.end }, "the configuration macro")?) {
+        if (!checkCfgName(c, switchMacro, Span { start: a.start, end: a.end })?) {
             continue;
         }
         match (ownEntity(c, name)) {

@@ -1,0 +1,47 @@
+// ADR 0181: effect lists on C function pointer types, and a @cname alias of a C function with its own list. Expected
+// values by hand: quiet doubles (21 -> 42, 5 -> 10, 20 -> 40); abs(-3) = 3, abs(-4) = 4.
+/// Safety: any value.
+@callback
+unsafe fn quiet(x: i32) -> i32 => x * 2;
+
+/// Safety: any value.
+@callback
+unsafe fn noisy(x: i32) -> i32 {
+    Console.writeLine(x);
+    return x;
+}
+
+/// Safety: f is a C function of this signature.
+@effects()
+fn applyQuiet(f: @effects() extern "C" fn(i32) -> i32, x: i32) -> i32 => unsafe { f(x) };
+
+/// Safety: f is a C function of this signature.
+async fn task(f: @effects() extern "C" fn(i32) -> i32) -> i32 => unsafe { f(20) };
+
+/// Safety: plain is quiet.
+fn main() {
+    let f: @effects() extern "C" fn(i32) -> i32 = quiet;
+    Console.writeLine(applyQuiet(f, 21));
+    let plain: extern "C" fn(i32) -> i32 = f; // a list converts to none
+    Console.writeLine(unsafe { plain(5) });
+    Console.writeLine(Async.run(task(quiet)));
+    aliases();
+}
+extern "C" {
+    fn abs(x: i32) -> i32;
+    @cname("abs")
+    @effects()
+    fn quietAbs(x: i32) -> i32;
+}
+/// Safety: abs takes any value but i32's minimum.
+async fn t2() -> i32 => unsafe { quietAbs(-4) };
+/// Safety: as above.
+fn aliases() {
+    Console.writeLine(unsafe { abs(-3) });
+    Console.writeLine(Async.run(t2()));
+}
+// expect-stdout: 42
+// expect-stdout: 10
+// expect-stdout: 40
+// expect-stdout: 3
+// expect-stdout: 4

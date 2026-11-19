@@ -207,6 +207,12 @@ fn emitFunction(
         Some(s) => { printTree(e, c, n, sources, s, s.root, 1)?; }
         null => { emitFlatBody(e, c, n, sources, f)?; }
     }
+    if (!c.types.is(c.hir.functions[source as usize].returnType, TypeKind.Void) && hasConfiguredCode(function)) {
+        // Every path returns in every build, but a build may compile no `return` at all: code after a `cfg` block
+        // that never exits (a thread's endless loop) is reached only through `#else`. GCC then warns that a static
+        // function has no return statement (-Wreturn-type). The end is unreachable in every build, and says so.
+        e.line("    CEE_UNREACHABLE_END();")?;
+    }
     e.line("}")?;
     endMapping(e)?;
     e.function = none();
@@ -490,6 +496,16 @@ fn isInPlaceConstruction(e: borrow CEmitter, s: u32) -> bool {
     return false;
 }
 
+/// Whether a function has code only some builds compile (ADR 0080 §3.3): a `cfg` block or a configured branch.
+fn hasConfiguredCode(function: borrow NirFunction) -> bool {
+    for (block in function.blocks.view()) {
+        if (block.cfg.length > 0 || block.branchCfg.length > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// The flat form (EmitFlatBody, c-backend.md §3): one label per jump target, terminators as goto, switch, return.
 fn emitFlatBody(
     e: borrow mut CEmitter,
@@ -500,21 +516,30 @@ fn emitFlatBody(
 ) -> Result<void, AllocError> {
     let function = borrow n.functions[f as usize];
     var targeted = Vector<bool>.create();
+    // A block some build always jumps to: one edge into it comes from code outside every `cfg` block and is not one
+    // arm of a configured branch. A block jumped to only from configured code may be jumped to by no code at all in
+    // a given build (a `?`'s exit inside `if (cfg("X"))`, emitted after it): its label is marked as possibly unused,
+    // so that build's C compiles without -Wunused-label. Functions without `cfg` keep their labels as they were.
+    var always = Vector<bool>.create();
     for (block in function.blocks.view()) {
         for (s in block.successors.view()) {
             markType(mut targeted, s)?;
+            if (block.cfg.length == 0 && block.branchCfg.length == 0) {
+                markType(mut always, s)?;
+            }
         }
     }
     for (block in function.blocks.view()) {
         if (inSet(targeted, block.id)) {
             var label = copyBytes("bb".bytes())?;
             appendDecimal(mut label, block.id as u64)?;
+            let maybeUnused = !inSet(always, block.id);
             if (e.lineDirectives) {
-                appendText(mut label, ": ")?;
+                appendText(mut label, if (maybeUnused) ": CEE_UNUSED; " else ": ")?;
                 e.pendingLabel = label;
                 e.hasPendingLabel = true;
             } else {
-                label.push(':')?;
+                appendText(mut label, if (maybeUnused) ": CEE_UNUSED;" else ":")?;
                 e.writeLine(label.view(), true)?;
             }
         }
@@ -1168,7 +1193,8 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfFloatFromBits() ||
         b == bfFloatSqrt() || b == bfFloatAbs() || b == bfFloatFloor() || b == bfFloatCeil() ||
         b == bfFloatMin() || b == bfFloatMax() || b == bfThreadSpawn() || b == bfThreadJoin() ||
-        b == bfThreadSpawnBoxed() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
+        b == bfThreadSpawnBoxed() ||
+        b == bfThreadService() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
         b == bfAsyncWorkers() || b == bfIntAbs() || b == bfIntUnsignedAbs() ||
         (b >= bfIntRotateLeft() && b <= bfIntByteSwap());
 
@@ -2156,6 +2182,9 @@ fn appendBuiltinRvalue(
         name.push('_')?;
         appendMangle(c, mut name, argumentType(n, arguments, 1))?;
         return appendBuiltinCall(e, c, n, sources, f, out, name.view(), arguments);
+    }
+    if (b == bfThreadService()) {
+        return appendHelperCall(e, c, n, sources, f, out, "ceeTSS_", argumentType(n, arguments, 0), arguments);
     }
     if (b == bfThreadSpawnBoxed()) {
         return appendHelperCall(e, c, n, sources, f, out, "ceeTSB_", c.types.info(resultOkOf(c, t)).element, arguments);

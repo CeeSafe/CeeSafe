@@ -312,6 +312,35 @@ fn isEsp(table: borrow gpt_table, i: usize) -> bool {
 }
 ```
 
+A constant may be a plain struct too (integers, floats, `bool`, arrays and such structs, nothing that owns or
+borrows): a Windows `GUID` is one, written as its literal and copied where it is used
+([ADR 0180](../spec/decisions/0180-struct-constants.md)):
+
+```ceesafe
+@repr(C)
+struct Guid {
+    data1: u32;
+    data2: u16;
+    data3: u16;
+    data4: [u8; 8];
+}
+
+const USB_DEVICE: Guid = Guid {
+    data1: 0xA5DCBF10,
+    data2: 0x6530,
+    data3: 0x11D2,
+    data4: [0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED],
+};
+
+fn main() {
+    Console.writeLine(USB_DEVICE.data4[7]);
+}
+```
+
+```text
+237
+```
+
 This is how CosmoOS's GPT parser is written (`integrations/cosmoos/c9.py` checks it; the rules are
 [ADR 0014](../spec/decisions/0014-c9-c-arrays-and-exported-constants.md)).
 
@@ -485,6 +514,74 @@ unsafe fn arm(fs: *mut cfs) {
         cfs_debug_note(fs);
     }
 }
+```
+
+**Code for one system.** `cfg("target.linux")`, `"target.macos"`, `"target.windows"`, `"target.ios"`,
+`"target.android"`, `"target.freebsd"` and `"target.unix"` name the system the C is built for, as each C compiler
+says it (Android is not `target.linux`, iOS is not `target.macos`). Use them rather than `__linux__` or `__APPLE__`,
+which the compiler refuses with the name to use. `@cfg` on an `extern "C"` block configures everything in it,
+its `@header` included, so a header that only one system has is named only there; a C static in it is read where its
+condition holds ([ADR 0179](../spec/decisions/0179-target-conditions-and-configured-c.md)). The interpreter answers
+the conditions for the system it runs on:
+
+```ceesafe
+fn main() {
+    if (cfg("target.windows")) {
+        Console.writeLine("one back end");
+    } else {
+        Console.writeLine("another");
+    }
+    Console.writeLine(true);
+}
+```
+
+```text
+another
+true
+```
+
+<!-- ceesafe: check -->
+```ceesafe
+@cfg("target.macos")
+@header("CoreFoundation/CoreFoundation.h")
+extern "C" {
+    static kCFRunLoopDefaultMode: *void; // configured: read only inside cfg("target.macos")
+    fn CFRunLoopRun();
+}
+
+/// Safety: CoreFoundation's mode name is set before main.
+fn defaultMode() -> bool {
+    if (cfg("target.macos")) {
+        return !unsafe { kCFRunLoopDefaultMode }.isNull();
+    }
+    return false;
+}
+```
+
+Link the frameworks such a block needs with `frameworks` in `[target.macos]` ([Packages](packages.md)).
+
+**Effects of C you call.** A call into C counts as sleeping and allocating unless its declaration says otherwise
+(`@effects()`), so async code cannot make it. When one C function has calls of both kinds, declare it a second time
+under its own name, with `@cname` and its own effects. A C function pointer type takes an effect list too: a COM
+method that returns at once is `@effects() extern "C" fn(…)`
+([ADR 0181](../spec/decisions/0181-effects-on-c-function-pointers.md)):
+
+<!-- ceesafe: check -->
+```ceesafe
+extern "C" {
+    fn ioctl(fd: i32, request: u64, argument: *mut void) -> i32;  // may block
+    @cname("ioctl")
+    @effects()
+    fn ioctlPrompt(fd: i32, request: u64, argument: *mut void) -> i32; // only for requests that return at once
+}
+
+struct Pipe {
+    read: @effects() extern "C" fn(*mut void, *mut u8, u32) -> i32;
+}
+
+/// Safety: `self` is the interface the pointer belongs to, `buffer` holds `length` bytes.
+async fn readSome(pipe: Pipe, self: *mut void, buffer: *mut u8, length: u32) -> i32 =>
+    unsafe { pipe.read(self, buffer, length) }; // allowed in an async fn: the type says it does not sleep
 ```
 
 `CChar` is C's `char` by value as well as behind a pointer (`b as CChar`, `c as u8`), `CLong` and `CULong` are C's

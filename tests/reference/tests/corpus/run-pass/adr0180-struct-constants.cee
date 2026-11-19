@@ -1,0 +1,53 @@
+// ADR 0180: constants of plain struct type: a GUID, a struct holding one, a table of points. Expected values computed
+// independently in Python (scratch oracle, 2026-11-19): 0xA5DCBF10 = 2782707472, the sum of the GUID's fields.
+@repr(C)
+struct Guid {
+    data1: u32;
+    data2: u16;
+    data3: u16;
+    data4: [u8; 8];
+}
+
+@repr(C)
+struct PropKey {
+    fmtid: Guid;
+    pid: u32;
+}
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+const BASE: u32 = 0xA5DCBF10;
+const USB_DEVICE: Guid = Guid { data1: BASE, data2: 0x6530, data3: 0x11D2, data4: [0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED] };
+const KEY: PropKey = PropKey { fmtid: USB_DEVICE, pid: 256 };
+const CORNERS: [Point; 3] = [Point { x: 0, y: 0 }, Point { x: 3, y: 4 }, Point { x: -1, y: 2 * 5 }];
+
+fn sum(g: Guid) -> u64 {
+    var total: u64 = g.data1 as u64 + g.data2 as u64 + g.data3 as u64;
+    for (b in g.data4) {
+        total += b as u64;
+    }
+    return total;
+}
+
+fn main() {
+    Console.writeLine(USB_DEVICE.data1);
+    Console.writeLine(KEY.fmtid.data4[7]);
+    Console.writeLine(KEY.pid);
+    Console.writeLine(sum(USB_DEVICE));
+    var total = 0;
+    for (p in CORNERS) {
+        total += p.x * p.y;
+    }
+    Console.writeLine(total);
+    let copy = USB_DEVICE;
+    Console.writeLine(copy.data4.length);
+}
+// expect-stdout: 2782707472
+// expect-stdout: 237
+// expect-stdout: 256
+// expect-stdout: 2782738887
+// expect-stdout: 2
+// expect-stdout: 8

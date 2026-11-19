@@ -133,8 +133,8 @@ fn isAtomicLoad(c: borrow Checker, function: u32) -> bool {
 
 /// The effect list of a function or closure type (TypeEffects, §36.3): both effects without one.
 fn typeEffects(c: borrow Checker, typ: u32) -> u32 {
-    if (c.types.is(typ, TypeKind.Function)) {
-        return c.types.info(typ).effects;
+    if (c.types.is(typ, TypeKind.Function) || c.types.is(typ, TypeKind.FunctionPointer)) {
+        return c.types.info(typ).effects; // a C function pointer's list (ADR 0181): both effects without one
     }
     if (c.types.isClosure(typ)) {
         return c.types.info(c.types.info(typ).pointee).effects;
@@ -703,7 +703,7 @@ fn builtinOperation(
         function == bfTcpShutdownRead()) {
         return Ok(textOp(sleep, 2));
     }
-    if (function == bfThreadSpawn() || function == bfThreadSpawnBoxed()) {
+    if (function == bfThreadSpawn() || function == bfThreadSpawnBoxed() || function == bfThreadService()) {
         return Ok(textOp(sleep | alloc, 3));
     }
     if (function == bfThreadJoin()) {
@@ -728,7 +728,10 @@ fn builtinOperation(
         return Ok(textOp(suspendEffect(), 13)); // the body's effects are its worker's
     }
     if (function == bfCallPointer()) {
-        return Ok(textOp(sleep | alloc | writeEffect(), 6));
+        // A call through a C function pointer has its type's effect list (ADR 0181), both effects without one. It may
+        // write either way (debugAssert's purity, ADR 0087 §2.5).
+        let listed = typeEffects(c, n.operandTypes[n.at(arguments, 0) as usize]) & (sleep | alloc);
+        return Ok(textOp(listed | writeEffect(), 6));
     }
     if (function == bfPtrWrite() || function == bfPtrWriteVolatile() || function == bfPtrWriteUnaligned() ||
         function == bfPtrPlace()) {
@@ -1670,8 +1673,8 @@ fn checkFunctionEffects(
                 match (n.rvalues[value as usize]) {
                     NirRvalue.FunctionAddress(target) => {
                         let typ = n.rvalueTypes[value as usize];
-                        if ((c.types.is(typ, TypeKind.Function) || c.types.is(typ, TypeKind.Closure)) &&
-                            !c.hir.functions[target as usize].isClosure) {
+                        if ((c.types.is(typ, TypeKind.Function) || c.types.is(typ, TypeKind.Closure) ||
+                            c.types.is(typ, TypeKind.FunctionPointer)) && !c.hir.functions[target as usize].isClosure) {
                             let op = effectOp(0, opNames(), none(), target, target);
                             let forbidden = effectsAsValue(c, e, target) & (maskEffects() ^ c.types.info(typ).effects);
                             reportEffect(c, n, e, function, s, forbidden, op, contextValue(), typ, target)?;

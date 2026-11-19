@@ -48,9 +48,13 @@ include-dirs = ["$OPENSSL_DIR/include"]  # for this package's own C files and it
 
 [target.windows]                         # added on Windows; also [target.macos], [target.linux], [target.freebsd]
 links = ["libssl", "libcrypto"]
+
+[target.macos]                           # and [target.ios]: Apple's frameworks, -framework IOKit
+frameworks = ["IOKit", "CoreFoundation"]
 ```
 
-Nothing runs to find the library: no pkg-config, no scripts. A directory is literal, or starts with an environment
+`frameworks` exists only in `[target.macos]` and `[target.ios]`, since only Apple's linkers have frameworks
+([ADR 0184](../spec/decisions/0184-apple-frameworks.md)). Nothing runs to find the library: no pkg-config, no scripts. A directory is literal, or starts with an environment
 variable, which must be set. The include directories are where the package's C files find their headers, and where
 the program's generated C finds the headers the package names with `@header`. `ceesafec build --emit c` writes the link line to `ceesafe_link.txt`, for building by hand.
 

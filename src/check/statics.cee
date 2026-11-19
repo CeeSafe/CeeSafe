@@ -50,6 +50,7 @@ fn declareStatic(c: borrow mut Checker, item: u32, mutable: bool, typeSyntax: u3
             imported: false,
             exported: false,
             cInitializer: emptyRange(),
+            cfgName: emptyRange(),
         },
     )?;
     let hir = truncate<u32>(c.hir.statics.length - 1);
@@ -134,6 +135,15 @@ fn staticUse(c: borrow mut Checker, entry: u32, span: Span) -> Result<u32, Alloc
         let address = c.expr(HirExpr.StaticAddress(hir), c.types.referenceTo(s.typ, s.mutable)?, span.start, span.end)?;
         return c.expr(HirExpr.Deref(address), s.typ, span.start, span.end);
     }
+    if (s.cfgName.count > 0 && function != none()) {
+        // C data only some builds have (ADR 0179): named only where its condition holds (N0350).
+        var what = Vector<u8>.create();
+        appendText(mut what, "'")?;
+        appendBytes(mut what, name.view())?;
+        appendText(mut what, "'")?;
+        let condition = copyBytes(c.hir.textOf(s.cfgName))?;
+        checkCfgUse(c, condition.view(), what.view(), span)?;
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         appendText(mut message, "static '")?;
@@ -153,6 +163,12 @@ fn staticUse(c: borrow mut Checker, entry: u32, span: Span) -> Result<u32, Alloc
         if (!requireUnsafe(c, span, what.view())?) {
             return c.errorResult(span.start, span.end);
         }
+    }
+    if (s.cfgName.count > 0) {
+        // C data only some builds have (ADR 0179): its address is taken here, inside its condition, rather than in a
+        // local declared at the function's start, which every build would compile. (Such a static is read-only.)
+        let address = c.expr(HirExpr.StaticAddress(hir), c.types.referenceTo(s.typ, false)?, span.start, span.end)?;
+        return c.expr(HirExpr.Deref(address), s.typ, span.start, span.end);
     }
     var local = none();
     for (l in c.staticLocals.view()) {

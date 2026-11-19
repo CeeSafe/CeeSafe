@@ -425,30 +425,40 @@ fn hasDynSignature(c: borrow Checker, dyn: u32) -> bool {
 }
 
 /// The (environment, result) of each `Thread.spawn`, in first-use order (Spawns, §38.2).
-fn threadSpawns(c: borrow Checker, n: borrow NirProgram, out: borrow mut Vector<PairKey>) -> Result<void, AllocError> {
+fn threadSpawns(c: borrow Checker, n: borrow NirProgram, out: borrow mut Vector<PairKey>) -> Result<void, AllocError> =>
+    builtinSpawns(c, n, bfThreadSpawn(), out);
+
+/// Each distinct (environment, result type) of a `builtin` call: `Thread.spawn`'s, or `Thread.service`'s (ADR 0182).
+fn builtinSpawns(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    builtin: u32,
+    out: borrow mut Vector<PairKey>,
+) -> Result<void, AllocError> {
     for (function in n.functions.view()) {
         if (functionIsGeneric(c, function.source)) {
             continue;
         }
         for (block in function.blocks.view()) {
             for (s in block.statements.view()) {
-                match (n.statements[s as usize]) {
-                    NirStatement.Assign(_, r) => {
-                        if (builtinOf(n, r) == bfThreadSpawn()) {
-                            let environment = n.operandTypes[builtinArgument(n, r, 0) as usize];
-                            let key = pairKey(environment as u64, n.rvalueTypes[r as usize] as u64);
-                            var seen = false;
-                            for (other in out.view()) {
-                                if (other.a == key.a && other.b == key.b) {
-                                    seen = true;
-                                }
-                            }
-                            if (!seen) {
-                                out.push(key)?;
-                            }
+                // Assigned, or evaluated for its effect alone (`let _ = Thread.service(…)`, ADR 0182).
+                let r = match (n.statements[s as usize]) {
+                    NirStatement.Assign(_, value) => value,
+                    NirStatement.Eval(value) => value,
+                    _ => none(),
+                };
+                if (r != none() && builtinOf(n, r) == builtin) {
+                    let environment = n.operandTypes[builtinArgument(n, r, 0) as usize];
+                    let key = pairKey(environment as u64, n.rvalueTypes[r as usize] as u64);
+                    var seen = false;
+                    for (other in out.view()) {
+                        if (other.a == key.a && other.b == key.b) {
+                            seen = true;
                         }
                     }
-                    _ => {}
+                    if (!seen) {
+                        out.push(key)?;
+                    }
                 }
             }
         }
@@ -810,6 +820,82 @@ fn emitThreadHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirPro
         e.t("    return ")?;
         e.b(ok.view())?;
         e.t(";")?;
+        e.emit()?;
+        e.line("}")?;
+        e.line("")?;
+    }
+    return emitServiceHelpers(e, c, n);
+}
+
+/// Per `Thread.service` environment (ADR 0182): `ceeTRS_`, the thread's body, which runs the literal once and frees its
+/// environment as `ceeTJ_` would after a join (no one joins it); and `ceeTSS_`, which starts it, named, never joined.
+fn emitServiceHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    var services = Vector<PairKey>.create();
+    builtinSpawns(c, n, bfThreadService(), mut services)?;
+    for (service in services.view()) {
+        let environment = truncate<u32>(service.a);
+        let resultType = truncate<u32>(service.b);
+        let env = cTypeName(c, environment)?;
+        let name = cTypeName(c, resultType)?;
+        let drops = c.types.needsDrop(environment);
+        var table = copyBytes("ceeDT_".bytes())?;
+        appendThreadBodyMangle(c, mut table, c.types.voidType)?;
+        e.t("static CEE_UNUSED void *ceeTRS_")?;
+        appendMangle(c, mut e.buf, environment)?;
+        e.t("(void *p) {")?;
+        e.emit()?;
+        e.t("    const ")?;
+        e.b(table.view())?;
+        e.t(" *vt = &ceeVT_")?;
+        appendMangle(c, mut e.buf, environment)?;
+        e.t("_")?;
+        appendThreadBodyMangle(c, mut e.buf, c.types.voidType)?;
+        e.t(";")?;
+        e.emit()?;
+        e.line("    vt->m0(p);")?;
+        e.line("    if (vt->drop != NULL) vt->drop(p);")?;
+        e.line("    ceesafe_free(p, CEE_ALLOC_SYSTEM);")?;
+        e.line("    return NULL;")?;
+        e.line("}")?;
+        var error = Vector<u8>.create();
+        appendAllocErrorResult(e, c, mut error, resultType)?;
+        e.t("static CEE_UNUSED ")?;
+        e.b(name.view())?;
+        e.t(" ceeTSS_")?;
+        appendMangle(c, mut e.buf, environment)?;
+        e.t("(")?;
+        e.b(env.view())?;
+        e.t(" v, ")?;
+        appendCTypeName(c, mut e.buf, c.types.stringView)?;
+        e.t(" name) {")?;
+        e.emit()?;
+        e.t("    ")?;
+        e.b(env.view())?;
+        e.t(" *e = (")?;
+        e.b(env.view())?;
+        e.t(" *)ceesafe_alloc(sizeof(*e), CEE_ALLOC_SYSTEM);")?;
+        e.emit()?;
+        e.line("    if (e == NULL) {")?;
+        emitDropOrVoid(e, c, environment, drops, "&v")?;
+        emitThreadError(e, error.view(), "        ")?;
+        e.line("    }")?;
+        e.line("    *e = v;")?;
+        e.t("    if (!ceesafe_thread_service(ceeTRS_")?;
+        appendMangle(c, mut e.buf, environment)?;
+        e.t(", e, name.ptr, name.len)) {")?;
+        e.emit()?;
+        if (drops) {
+            e.t("        ")?;
+            appendDropGlueName(c, mut e.buf, environment)?;
+            e.t("(e);")?;
+            e.emit()?;
+        }
+        e.line("        ceesafe_free(e, CEE_ALLOC_SYSTEM);")?;
+        emitThreadError(e, error.view(), "        ")?;
+        e.line("    }")?;
+        e.t("    return ((")?;
+        e.b(name.view())?;
+        e.t("){ .tag = 0 });")?;
         e.emit()?;
         e.line("}")?;
         e.line("")?;

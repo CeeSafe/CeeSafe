@@ -343,14 +343,21 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is
-  a string literal or a `c"…"`, or a `Slice<u8>` of static bytes (below); other struct types are N0216.
-- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool`, `StringView` or
-  `Slice<u8>` (static bytes, below), and
+  a string literal or a `c"…"`, or a `Slice<u8>` of static bytes (below), or a plain struct (below); other struct
+  types are N0216.
+- **Constant structs** (ADR 0180). `T` may be a **plain struct**: one that needs no drop and has no region, whose
+  every field is an integer, `bool`, a float, a `CChar`, an array of these, or a plain struct (a `GUID`, a `PROPERTYKEY`,
+  a table row). `e` is its literal, `T { f: e1, … }`, every field's value a constant expression (a call is N0217), or
+  another constant of the type. A use is the value, like the literal: its fields are read (`KEY.fmtid.data4[7]`),
+  and it is copied, passed and bound as any value. A struct that owns memory or holds a loan is N0216 (N0246 for a
+  region parameter), at the constant's type.
+- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool`, `StringView`,
+  `Slice<u8>` (static bytes, below) or a plain struct (ADR 0180), and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
   sliced or borrowed. A table to
   be sliced where it is named is a `static` instead (§39.2, ADR 0066). Arrays of other types, and of arrays, are
-  N0216.
+  N0216 (a plain struct may hold an array).
 - **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
   the constant expressions. The value is static data, so a constant view holds no loans. The other reference types a
   constant may have are `CStr`, `Slice<u8>` and an array of `Slice<u8>`, all holding static data; any other is N0246.
@@ -4105,6 +4112,11 @@ attribute twice is N0290.
 - Parameter and result types must be **FFI-safe** (§28.3), or N0291.
 - **`@cname("symbol")`** on an extern function (ADR 0080 §3.5) gives its C symbol when its CeeSafe name must differ,
   as when a struct has the name (`struct cosmofs_stats` and `cosmofs_stats()`). The symbol follows the rules above.
+- **Effect aliases** (ADR 0181). One package may declare a C function a second time, under its own CeeSafe name with
+  `@cname`, when the two differ only in their effect lists (§32.2): the same parameter and result types, both
+  variadic or neither, both `unsafe` or neither. `ioctl` for its blocking requests and, as
+  `@cname("ioctl") @effects() fn ioctlPrompt(…)`, for the ones that return at once. Each call has its declaration's
+  effects; the C is one symbol. Any other second declaration of the name is N0201, as above.
 - **C constants** (ADR 0080 §3.1; grammar.md §2's `ExternConst`). In a block with a `@header`:
   - `const NAME: T = v;` is an ordinary constant (§10) with that value, which the generated C asserts equal to C's
     `NAME` (an object-like macro or an enumerator): `_Static_assert((NAME) == v, "…")`, naming the declaration's file
@@ -4206,8 +4218,8 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
     prototype and wrapper are emitted inside `#if NAME`. On a field of an imported struct or union, for a member only
     some builds' struct has: its `_Generic` and `sizeof` checks (§31.3) are inside `#if NAME`.
   - `if (cfg("NAME")) { … } else { … }`, whose condition is the call `cfg` of one string literal (`"NAME"` or
-    `"!NAME"`, a C identifier: N0292) while nothing the program declares is named `cfg`, is C's `#if NAME` … `#else` …
-    `#endif`: the blocks are compiled in the builds where the condition holds, or does not. `else if (cfg(…))` chains
+    `"!NAME"`, a C identifier or a target condition below: N0292) while nothing the program declares is named `cfg`,
+    is C's `#if NAME` … `#else` … `#endif`: the blocks are compiled in the builds where the condition holds, or does not. `else if (cfg(…))` chains
     and `cfg` blocks nest. It is a statement: `cfg` as a value (`let x = if (cfg("X")) 1 else 2;`) is an unknown
     function (N0200). Both blocks are checked in every build, as one program.
   - A configured C function or field may be used only inside a `cfg` block of its own condition (N0350), so every
@@ -4215,7 +4227,25 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
   - A macro the build does not define is 0, as in C's `#if`. The emitted test is written `#if defined(NAME) && NAME`
     (`#if !(defined(NAME) && NAME)` for `"!NAME"`), here and for a configured export, which is `#if NAME` without
     `-Wundef`'s warning (c-backend.md §1) in a build that leaves the macro undefined.
-  - The interpreter takes every macro as 0: `cfg("NAME")` is false, `cfg("!NAME")` true.
+  - The interpreter takes every macro as 0: `cfg("NAME")` is false, `cfg("!NAME")` true. A target condition is the
+    interpreter's own host's (ADR 0179).
+  - **Target conditions** (ADR 0179). `"target.linux"`, `"target.android"`, `"target.macos"`, `"target.ios"`,
+    `"target.windows"`, `"target.freebsd"` and `"target.unix"` (any of Linux, Android, macOS, iOS and FreeBSD), each
+    also with `!`, name the system the C is compiled for, as each C compiler says it: `linux` is `__linux__` without
+    `__ANDROID__`; `macos` and `ios` are `__APPLE__` told apart by `TARGET_OS_IPHONE` (`<TargetConditionals.h>`, which
+    `rt.h` includes on Apple systems); `windows` is `_WIN32`; `freebsd` is `__FreeBSD__`; `unix` is `__unix__` or
+    `__APPLE__`. They are allowed wherever a `cfg` name is (`@cfg` on a C function, field, static or block, and
+    `if (cfg(…))`). Another `target.` name is N0292 with the list. A compiler's own macro (`__linux__`, `_WIN32`,
+    `__APPLE__`…) is N0292 with the target condition that replaces it, since those differ by compiler and mix Android
+    with Linux and iOS with macOS. A block of `"target.linux"` (or any Unix target) may use what is configured for
+    `"target.unix"`.
+  - **Configured C blocks** (ADR 0179). `@cfg("NAME")` on an `extern "C"` block configures every function and static
+    in it, and its `@header` includes, which are emitted inside `#if` (in the generated C and in `ceesafe_exports.h`):
+    a header that only some systems have (`<IOKit/IOKitLib.h>`). Such a block declares functions and statics only
+    (a struct, enum or constant there is N0290), and a member's own `@cfg` there is N0290.
+  - **Configured statics** (ADR 0179). `@cfg("NAME")` on a C static (§39.4), or its block's, makes it configured
+    code as a configured function is (N0350 outside a `cfg` block of its condition). It is read-only: a configured
+    `static mut` is N0290. Its address is taken where it is used, inside the `#if`.
   - A switch read at run time through a C constant macro (§39.4, `static DEBUG: bool = CONFIG_DEBUG_ON();`) remains
     for code every build can compile.
 - **`callerAddress()`** (ADR 0030), valid only in an `@export` function's own body (N0340; not in a closure inside it),
@@ -4471,7 +4501,15 @@ alignment to at least `n` (its size is rounded up to it). In C, the first member
   as `n as *T` is a raw pointer (§27.2), so a hook can be published in an `AtomicUSize` and read back. Making it is safe;
   calling through it is unsafe, as for any C function pointer, and a wrong address is that call's obligation.
 - **Calls.** `f(args)`, with `f` a local, parameter or field of such a type, calls through the
-  pointer. It is unsafe (N0280): the pointer may be null or point to anything.
+  pointer. It is unsafe (N0280): the pointer may be null or point to anything. Its effects are the type's effect list
+  (below), `sleep` and `alloc` without one (§32.1).
+- **Effect lists** (ADR 0181). `@effects(e, …) extern "C" fn(…) -> R` is a C function pointer type whose calls have
+  those effects, as §36.3's are for `fn` types: a COM method that returns at once (`@effects() extern "C" fn(…)`) can
+  be called from an async fn or under `@context(atomic)`. The list is part of the type, and without one it is both
+  effects, the type it always was. A named C function (an `extern "C"`, `@export` or `@callback` function) given such
+  a type is checked after effect inference, its effects among the list (N0295); any other value converts only to a
+  type whose list includes its own (N0299). The list is CeeSafe's promise about C it cannot see, made where the type
+  is written, as `@effects` on an `extern "C"` declaration is (§32.2). In C the types are one.
 - CeeSafe functions that are neither exported nor `@callback` (§34.1, C7d) have no C address. CeeSafe-level function
   values (`fn(…) -> R`) and closures are §36 (M11 G8).
 
@@ -5319,8 +5357,8 @@ fn demo(lock: *mut spinlock_t, values: Slice<i32>) {
 ```
 - **Syntax** (grammar.md §2): `@effects(e, …)` written immediately before `fn` in a function type, with each `e`
   `sleep`, `alloc` or `suspend` as in §32.2: `@effects() fn(i32) -> bool`, and for closures `borrow @effects() fn(i32)` and
-  `borrow mut @effects(alloc) fn(i32)`. No other attribute is allowed there (N0290), and only `fn` may follow
-  it (a syntax error otherwise): C function pointer types (`extern "C" fn`, §29.5) take no effect list.
+  `borrow mut @effects(alloc) fn(i32)`. No other attribute is allowed there (N0290), and only `fn` or
+  `extern "C" fn` may follow it (a syntax error otherwise): a C function pointer type's list is §29.5's (ADR 0181).
 - **The type.** The effect list is part of a function or closure type: `@effects() fn(i32)` and `fn(i32)` are different
   types. A type without a list may have `sleep` and `alloc`, so `fn(i32)` is the same type as
   `@effects(sleep, alloc) fn(i32)`. It never has `suspend`: only an async closure's call suspends, and that is a task
@@ -5673,9 +5711,19 @@ fn main() {
   - A capture that holds a loan is **N0332**, as for any move literal: the thread could outlive it.
 - **`Thread<T>`** is a move type that needs drop. `t.join()` consumes it, waits for the thread to finish, and
   returns its `T`. Dropping a `Thread<T>` that was not joined waits for it and destroys its result. There are no
-  detached threads: every thread a program starts has ended before `main` returns.
+  detached threads: every thread a program starts has ended before `main` returns, except a service thread (below).
+- **Service threads** (ADR 0182). `Thread.service(name, move () => body)` starts a thread that runs for the process:
+  an event loop that library code starts when it is first needed, with nowhere to keep a handle and nothing to wait
+  for at exit. `name` is a `StringView` naming the thread to debuggers and the system's tools (its first 15 bytes, where
+  the system names threads: Linux, macOS, Windows 10 and later). The literal is checked as `spawn`'s, with a `void`
+  body: no parameters, captures `Send` (N0334) and owned (a capture that holds a loan is N0332, as it could outlive
+  it), a move literal (N0333). The result is `Result<void, SpawnError>`: there is no `Thread<T>`, so it is never
+  joined. `main` returning ends the process with the thread wherever it is; the captures it still holds are not
+  dropped, as nothing of the process is. A body that returns drops what it did not move and frees its environment,
+  on its own thread. This is the one exception to "no detached threads", and named so where it is written.
 - A panic in any thread aborts the process (OD-5).
-- **Effects** (§32): `spawn` has `sleep` and `alloc`. `join`, and dropping a `Thread<T>`, have `sleep`.
+- **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, and dropping a `Thread<T>`, have
+  `sleep`.
 
 ### 38.3 Shared state (library types: `lib/std/sync.cee`, and the atomics in `lib/core/atomics.cee`)
 - **`Arc<T: Share>`**: shared ownership.
@@ -6075,7 +6123,11 @@ other). The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
 console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
-`AsyncSockets`, the same calls on raw descriptors for code with its own wait loop; their addresses below), `AsyncMutex<T>` (a guard that may be
+`AsyncSockets`, the same calls on raw descriptors for code with its own wait loop; their addresses below), a
+descriptor the program owns (`AsyncFd`, ADR 0183: `await AsyncFd.readable(fd)` and `writable(fd)` park the task until
+the executor's reactor says the descriptor may be ready, after an operation on it would have blocked, as the reactor
+learns readiness from edges; the program retries, since a wake may be early; `AsyncFd.closing(fd)` before the
+program's own `close`; POSIX hosts, `IoError.Unsupported` on Windows), `AsyncMutex<T>` (a guard that may be
 held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
 `tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or

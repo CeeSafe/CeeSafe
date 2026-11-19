@@ -1,0 +1,40 @@
+// A call's argument read through a reference parameter (`make(this.body)`) is a copy of what the referent holds:
+// a result built from it borrows the referent's regions, not the reference itself (ADR 0074 §2.4), exactly as the
+// same field copied into a struct literal does. Found porting CeeUsb (CEESAFE_FINDINGS F1).
+struct Walk<region r> {
+    bytes: Slice<r, u8>;
+
+    fn create(bytes: Slice<r, u8>) -> Walk<r> => Walk { bytes: bytes };
+}
+
+fn make<region r>(bytes: Slice<r, u8>) -> Walk<r> => Walk { bytes: bytes };
+
+struct Filter<region r> {
+    inner: Walk<r>;
+    n: u8;
+}
+
+struct Group<region r> {
+    body: Slice<r, u8>;
+    n: u8;
+
+    fn direct(borrow this) -> Walk<r> => make(this.body);
+
+    fn filter(borrow this) -> Filter<r> => Filter { inner: Walk.create(this.body), n: this.n };
+}
+
+fn outlives<region r>(g: borrow Group<r>) -> Walk<r> => make(g.body);
+
+fn main() {
+    let data = [1u8, 2, 3];
+    var walk = Walk.create(data[0..0]);
+    {
+        let g = Group { body: data[..], n: 2 };
+        walk = g.direct(); // the Walk outlives `g`: it borrows `data`, not `g`
+        let other = outlives(borrow g);
+        Console.writeLine(other.bytes.length + g.filter().inner.bytes.length);
+    }
+    Console.writeLine(walk.bytes.length);
+}
+// expect-stdout: 6
+// expect-stdout: 3

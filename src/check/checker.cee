@@ -206,6 +206,7 @@ struct Checker {
     coreAllowNever: bool;                            // resolveTypeWith's allowNever, for resolveTypeCore
     layoutUses: Vector<LayoutUse>;                   // struct types used by value before members are known
     headers: Vector<Vector<u8>>;                     // `@header`s of extern blocks, each once, in order (§31.3)
+    headerCfgs: Vector<Vector<u8>>;                  // by header: its block's `@cfg` condition, empty for none (ADR 0179)
     importedEnums: Vector<ImportedEnum>;             // in declaration order (ADR 0079)
     cfgStack: Vector<Vector<u8>>;                    // the `cfg` conditions holding where the checker is (ADR 0080 §3.3)
     fieldCfgs: Vector<FieldCfg>;                     // configured fields of imported structs (ADR 0080 §3.3)
@@ -668,8 +669,19 @@ struct Checker {
             }
             TypeNode.Optional(inner) => { return resolveOptionalType(this, inner, allowSources); }
             TypeNode.Array(element, length) => { return resolveArrayType(this, element, length, allowImported); }
-            TypeNode.FunctionPointer(abi, parameters, result) => {
-                return resolveFunctionPointerType(this, abi, parameters, result, span);
+            TypeNode.FunctionPointer(abi, parameters, result, attributes) => {
+                let pointer = resolveFunctionPointerType(this, abi, parameters, result, span)?;
+                if (attributes.count == 0 || pointer == this.types.error) {
+                    return Ok(pointer);
+                }
+                // An effect list on a C function pointer type (ADR 0181): read as on a function type (§36.3).
+                let effects = functionTypeEffects(this, attributes)?;
+                let info = this.types.info(pointer);
+                var types = Vector<u32>.create();
+                for (k in 0..info.parameters.count) {
+                    types.push(this.types.listAt(info.parameters, k))?;
+                }
+                return this.types.functionPointerWith(types.view(), info.result, effects);
             }
             TypeNode.Reference(mutable, hasSources, sources, pointee) => {
                 return resolveReferenceType(this, mutable, hasSources, sources, pointee, allowSources, span);

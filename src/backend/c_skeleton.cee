@@ -191,11 +191,21 @@ fn emitProgram(
     e.line("#if CEESAFE_ABI_VERSION != 1")?;
     e.line("#error \"this C was generated for CeeSafe's runtime ABI version 1\"")?;
     e.line("#endif")?;
-    for (header in c.headers.view()) {
+    for (k in 0..c.headers.length) {
+        let configured = c.headerCfgs[k].length > 0;
+        if (configured) {
+            // A configured block's header (ADR 0179): only the builds where its condition holds have it.
+            e.t("#if ")?;
+            appendCfgTest(mut e.buf, c.headerCfgs[k].view())?;
+            e.emit()?;
+        }
         e.t("#include \"")?;
-        e.b(header.view())?;
+        e.b(c.headers[k].view())?;
         e.t("\"")?;
         e.emit()?; // imported C types (type-system.md §31.3)
+        if (configured) {
+            e.line("#endif")?;
+        }
     }
     if (e.headerStructs.length > 0) {
         // The @repr(C) structs are defined once, in the exports header, which a @header may include too (ADR 0030).

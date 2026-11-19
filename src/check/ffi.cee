@@ -257,7 +257,16 @@ fn functionAddress(c: borrow mut Checker, function: u32, expected: u32, span: Sp
         parameters.push(c.hir.locals[p as usize].typ)?;
     }
     let actual = c.types.functionPointerTo(parameters.view(), returnType)?;
-    if (actual != expected) {
+    // A type with an effect list (ADR 0181) takes a function of the same signature; its effects are checked against
+    // the list after inference, as a named function's are for a `fn` type (§36.3).
+    let expectedEffects = c.types.info(expected).effects;
+    let sameSignatureOtherList = c.types.is(expected, TypeKind.FunctionPointer) &&
+        c.types.info(
+            expected,
+        ).result == returnType && c.types.info(expected).parameters.count as usize == parameters.length &&
+        c.types.functionPointerTo(parameters.view(), returnType)? == actual &&
+        c.types.functionPointerWith(parameters.view(), returnType, expectedEffects)? == expected;
+    if (actual != expected && !sameSignatureOtherList) {
         var message = Vector<u8>.create();
         appendText(mut message, "expected ")?;
         appendQuotedType(mut message, c, expected)?;
@@ -324,8 +333,24 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         _ => {}
     }
     var known = Vector<u32>.create();
-    knownAttributes(c, entry.attributes, "an 'extern' block", "header", mut known)?;
-    let header = if (known.length > 0) known[0] else none();
+    knownAttributes(c, entry.attributes, "an 'extern' block", "header cfg", mut known)?;
+    var header = none();
+    // `@cfg("X")` on the block (ADR 0179): its headers are included, and its functions and statics declared, only in
+    // the builds where X holds (a framework's header, which other systems lack).
+    var blockCfg = Vector<u8>.create();
+    for (attribute in known.view()) {
+        if (sameText(attributeName(c, attribute), "cfg")) {
+            let a = c.front.ast.attributes[attribute as usize];
+            let text = attributeString(c, attribute)?;
+            if (text.length == 0) {
+                attributeError(c, attribute, "'@cfg' takes the condition as a string: '@cfg(\"target.macos\")'")?;
+            } else if (checkCfgName(c, withoutBang(text.view()), Span { start: a.start, end: a.end })?) {
+                blockCfg = text;
+            }
+        } else {
+            header = attribute;
+        }
+    }
     if (!sameText(c.front.ast.textOf(abi), "C")) {
         let abiIdent = c.front.ast.idents[entry.name as usize];
         var message = Vector<u8>.create();
@@ -377,13 +402,15 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
                 attributeErrorBytes(c, header, message.view())?;
             } else {
                 var present = false;
-                for (h in c.headers.view()) {
-                    if (sameBytes(h.view(), path.view())) {
+                for (j in 0..c.headers.length) {
+                    if (sameBytes(c.headers[j].view(), path.view()) &&
+                        sameBytes(c.headerCfgs[j].view(), blockCfg.view())) {
                         present = true;
                     }
                 }
                 if (!present) {
                     c.headers.push(path)?;
+                    c.headerCfgs.push(copyBytes(blockCfg.view())?)?;
                 }
             }
         }
@@ -399,8 +426,28 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
     }
     for (k in 0..structs.count) {
         let member = c.front.ast.at(structs, k);
+        if (blockCfg.length > 0) {
+            // A configured block brings in functions and statics only: C types, enums and constants are checked against
+            // their header in every build (§31.3), and this header exists in some (ADR 0179).
+            let isStatic = match (c.front.ast.items[member as usize].kind) {
+                ItemKind.Static(_, _, _) => true,
+                _ => false,
+            };
+            if (!isStatic) {
+                let id = c.front.ast.idents[c.front.ast.items[member as usize].name as usize];
+                c.error(
+                    invalidAttribute(),
+                    id.start,
+                    id.end,
+                    copyBytes(
+                        "a configured 'extern' block ('@cfg') imports C functions and statics only: C types, enums and constants are checked against their header in every build (ADR 0179)".bytes(),
+                    )?,
+                )?;
+                continue;
+            }
+        }
         declareExternConstant(c, member)?;
-        declareExternStatic(c, member)?;
+        declareExternStatic(c, member, blockCfg.view())?;
     }
     for (k in 0..functions.count) {
         let f = c.front.ast.at(functions, k);
@@ -465,12 +512,13 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
                         attribute,
                         "'@cfg' takes the C macro's name as a string: '@cfg(\"CONFIG_DEBUG\")'",
                     )?;
-                } else if (checkCName(
-                    c,
-                    switchMacro,
-                    Span { start: a.start, end: a.end },
-                    "the configuration macro",
-                )?) {
+                } else if (blockCfg.length > 0) {
+                    attributeError(
+                        c,
+                        attribute,
+                        "this function is in a configured 'extern' block, whose '@cfg' it has already: one condition per item (ADR 0179)",
+                    )?;
+                } else if (checkCfgName(c, switchMacro, Span { start: a.start, end: a.end })?) {
                     c.hir.functions[function as usize].cfgName = c.hir.addText(cfgText.view())?;
                 }
                 continue;
@@ -491,6 +539,10 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
                 continue;
             }
             c.hir.functions[function as usize].exportName = c.hir.addText(c.front.ast.textOf(text))?;
+        }
+        if (blockCfg.length > 0) {
+            // A configured block's function (ADR 0179): its prototype and uses are its block's condition's.
+            c.hir.functions[function as usize].cfgName = c.hir.addText(blockCfg.view())?;
         }
     }
     return Ok();
@@ -698,7 +750,7 @@ fn reportDuplicate(c: borrow mut Checker, id: Ident) -> Result<bool, AllocError>
 
 /// `static NAME: T;` and `static mut NAME: T;` in an `extern "C"` block (ADR 0080 §3.2): C data its headers define,
 /// named `NAME` in C or its `@cname`, of a type C can spell.
-fn declareExternStatic(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
+fn declareExternStatic(c: borrow mut Checker, item: u32, blockCfg: Slice<u8>) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     var mutable = false;
     var typ = none();
@@ -711,11 +763,51 @@ fn declareExternStatic(c: borrow mut Checker, item: u32) -> Result<void, AllocEr
     }
     let id = c.front.ast.idents[entry.name as usize];
     var known = Vector<u32>.create();
-    knownAttributes(c, entry.attributes, "a C static", "cname", mut known)?;
+    knownAttributes(c, entry.attributes, "a C static", "cname cfg", mut known)?;
     var symbol = Vector<u8>.create();
     appendBytes(mut symbol, c.name(id.symbol))?;
     var span = Span { start: id.start, end: id.end };
+    // `@cfg("X")` (ADR 0179): C data only some builds have (a framework's), used only where `X` holds (N0350).
+    var cfgText = Vector<u8>.create();
     for (attribute in known.view()) {
+        if (!sameText(attributeName(c, attribute), "cfg")) {
+            continue;
+        }
+        let a = c.front.ast.attributes[attribute as usize];
+        let text = attributeString(c, attribute)?;
+        if (text.length == 0) {
+            attributeError(c, attribute, "'@cfg' takes the condition as a string: '@cfg(\"target.macos\")'")?;
+            return Ok();
+        }
+        if (!checkCfgName(c, withoutBang(text.view()), Span { start: a.start, end: a.end })?) {
+            return Ok();
+        }
+        if (blockCfg.length > 0) {
+            attributeError(
+                c,
+                attribute,
+                "this static is in a configured 'extern' block, whose '@cfg' it has already: one condition per item (ADR 0179)",
+            )?;
+            return Ok();
+        }
+        cfgText = text;
+    }
+    if (blockCfg.length > 0) {
+        cfgText = copyBytes(blockCfg)?;
+    }
+    if (cfgText.length > 0 && mutable) {
+        c.error(
+            invalidAttribute(),
+            id.start,
+            id.end,
+            copyBytes("a configured C static is read-only: 'static', not 'static mut' (ADR 0179)".bytes())?,
+        )?;
+        return Ok();
+    }
+    for (attribute in known.view()) {
+        if (sameText(attributeName(c, attribute), "cfg")) {
+            continue;
+        }
         let a = c.front.ast.attributes[attribute as usize];
         var text = Range { start: 0, count: 0xFFFFFFFF };
         if (a.arguments.count == 1) {
@@ -746,6 +838,9 @@ fn declareExternStatic(c: borrow mut Checker, item: u32) -> Result<void, AllocEr
     let k = c.hir.statics.length - 1;
     c.hir.statics[k].imported = true; // C data, even if refused below
     c.hir.statics[k].cName = c.hir.addText(symbol.view())?;
+    if (cfgText.length > 0) {
+        c.hir.statics[k].cfgName = c.hir.addText(cfgText.view())?;
+    }
     let t = c.hir.statics[k].typ;
     if (t != c.types.error && !isFfiSafe(c, t, false, true)) {
         let typeSpan = c.front.ast.typeSpans[typ as usize];
@@ -1153,6 +1248,41 @@ fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
     return wholeLines(text, start, decl.end);
 }
 
+/// Two extern declarations of one C function that differ only in their effect lists (ADR 0181): the later names it
+/// with `@cname`, and both have the same parameter types, result, variadic part and C safety.
+fn isEffectsAlias(c: borrow Checker, a: u32, b: u32) -> bool {
+    if (a == none() || b == none()) {
+        return false;
+    }
+    let fa = borrow c.hir.functions[a as usize];
+    let fb = borrow c.hir.functions[b as usize];
+    let da = c.front.ast.functions[fa.syntax as usize];
+    let db = c.front.ast.functions[fb.syntax as usize];
+    if (!da.isExtern || !db.isExtern || fa.exported || fb.exported || fa.returnType != fb.returnType ||
+        fa.parameters.length != fb.parameters.length || (da.variadicStart == none()) != (db.variadicStart == none()) ||
+        da.isUnsafe != db.isUnsafe) {
+        return false;
+    }
+    if (fa.exportName.count == 0 && fb.exportName.count == 0) {
+        return false; // two declarations under one name are N0201 as before
+    }
+    // Only a different effect list makes a second declaration useful; an identical one is a duplicate (N0201).
+    // From the `@effects` attributes as recorded: HirFunction.declaredEffects is set later (finishFunctionFacts).
+    let la = effectAttributesOf(c, fa.syntax);
+    let lb = effectAttributesOf(c, fb.syntax);
+    let ea = if (la == none()) allEffects() else c.effectAttributes[la as usize].declared;
+    let eb = if (lb == none()) allEffects() else c.effectAttributes[lb as usize].declared;
+    if (ea == eb) {
+        return false;
+    }
+    for (k in 0..fa.parameters.length) {
+        if (c.hir.locals[fa.parameters[k] as usize].typ != c.hir.locals[fb.parameters[k] as usize].typ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// N0201 for each claim of a C name that another claim owns (type-system.md §28.2; ADR 0081 §2.2): reported at the
 /// declaration that clashes (a dependant's own, or the later in a package's file order), with a note at the owner's.
 /// When the owner is an extern declaration of a dependency, a hint says to call it through its package, and a fix
@@ -1169,6 +1299,9 @@ fn reportCNameClashes(c: borrow mut Checker, claims: borrow Vector<CNameClaim>) 
         let myPackage = packageOfFile(c, mine.file);
         let ownerPackage = packageOfFile(c, theirs.file);
         let otherPackage = ownerPackage != none() && ownerPackage != myPackage;
+        if (!otherPackage && isEffectsAlias(c, mine.function, theirs.function)) {
+            continue; // one C function, a second CeeSafe name with its own effect list (ADR 0181)
+        }
         var message = Vector<u8>.create();
         appendText(mut message, "the C name '")?;
         appendBytes(mut message, mine.name.view())?;

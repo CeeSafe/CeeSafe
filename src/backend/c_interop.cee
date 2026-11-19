@@ -817,6 +817,14 @@ fn emitExports(
 fn appendCfgTest(out: borrow mut Vector<u8>, cfg: Slice<u8>) -> Result<void, AllocError> {
     let negated = cfg.length > 0 && cfg[0] == '!';
     let name = if (negated) cfg[1..] else cfg;
+    let target = targetTest(name);
+    if (target.length > 0) {
+        // A target condition (ADR 0179): the test the C compiler's own macros answer, the same for every C compiler
+        // CeeSafe drives. iOS and macOS both define __APPLE__; TargetConditionals.h's TARGET_OS_IPHONE tells them apart.
+        appendText(out, if (negated) "!(" else "(")?;
+        appendText(out, target)?;
+        return appendText(out, ")");
+    }
     appendText(out, if (negated) "!(defined(" else "defined(")?;
     appendBytes(out, name)?;
     appendText(out, ") && ")?;
@@ -825,6 +833,32 @@ fn appendCfgTest(out: borrow mut Vector<u8>, cfg: Slice<u8>) -> Result<void, All
         appendText(out, ")")?;
     }
     return Ok();
+}
+
+/// The C test of a target condition (ADR 0179), or "" for a macro's name.
+fn targetTest(name: Slice<u8>) -> StringView {
+    if (sameText(name, "target.linux")) {
+        return "defined(__linux__) && !defined(__ANDROID__)";
+    }
+    if (sameText(name, "target.android")) {
+        return "defined(__ANDROID__)";
+    }
+    if (sameText(name, "target.macos")) {
+        return "defined(__APPLE__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)";
+    }
+    if (sameText(name, "target.ios")) {
+        return "defined(__APPLE__) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE";
+    }
+    if (sameText(name, "target.windows")) {
+        return "defined(_WIN32)";
+    }
+    if (sameText(name, "target.freebsd")) {
+        return "defined(__FreeBSD__)";
+    }
+    if (sameText(name, "target.unix")) {
+        return "defined(__unix__) || defined(__APPLE__)";
+    }
+    return "";
 }
 
 /// `#if NAME` before an `@cfg("NAME")` export's C (ADR 0043): its symbol is in the builds where the macro is non-zero.
@@ -958,10 +992,19 @@ fn exportsHeader(
     appendText(out, "\n#define ")?;
     appendBytes(out, guard.view())?;
     appendText(out, "\n\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n")?;
-    for (header in c.headers.view()) {
+    for (k in 0..c.headers.length) {
+        let configured = c.headerCfgs[k].length > 0;
+        if (configured) {
+            appendText(out, "#if ")?;
+            appendCfgTest(out, c.headerCfgs[k].view())?;
+            appendText(out, "\n")?;
+        }
         appendText(out, "#include \"")?;
-        appendBytes(out, header.view())?;
+        appendBytes(out, c.headers[k].view())?;
         appendText(out, "\"\n")?; // imported C types (type-system.md §31.3)
+        if (configured) {
+            appendText(out, "#endif\n")?;
+        }
     }
     var ordered = Vector<u32>.create();
     headerStructsOf(c, mut ordered)?;

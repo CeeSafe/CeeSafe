@@ -124,12 +124,15 @@ fn isCSourceName(name: Slice<u8>) -> bool =>
 /// directories, in the library directories' order, for the generated C, whose `@header`s they find (ADR 0120).
 struct NativeBuild {
     links: Vector<Vector<u8>>;
+    /// Apple frameworks (ADR 0184), each once: `-framework NAME` after the libraries.
+    frameworks: Vector<Vector<u8>>;
     libDirs: Vector<Vector<u8>>;
     separate: Vector<SeparateC>;
     includeDirs: Vector<Vector<u8>>;
 
     fn create() -> NativeBuild => NativeBuild {
         links: Vector<Vector<u8>>.create(),
+        frameworks: Vector<Vector<u8>>.create(),
         libDirs: Vector<Vector<u8>>.create(),
         separate: Vector<SeparateC>.create(),
         includeDirs: Vector<Vector<u8>>.create(),
@@ -256,6 +259,10 @@ fn pushGnuLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow Nat
         var flag = copyBytes("-l".bytes())?;
         appendBytes(mut flag, l.view())?;
         arguments.push(flag)?;
+    }
+    for (f in native.frameworks.view()) {
+        pushText(arguments, "-framework")?;
+        arguments.push(copyBytes(f.view())?)?;
     }
     return Ok();
 }

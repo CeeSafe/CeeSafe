@@ -1,0 +1,35 @@
+// ADR 0179: an `await` inside `if (cfg(…))` in an async fn. Its resume point is compiled only where the condition
+// holds, so the state dispatch's case for it is under the same `#if` (a C compile error before, an undeclared label
+// on every other target). Every target takes exactly one of the two branches; the expected output is by hand.
+async fn step(n: u32) -> Result<u32, AsyncError> {
+    await Timer.sleep(1)?;
+    return Ok(n + 1);
+}
+
+async fn run() -> Result<void, AsyncError> {
+    var total: u32 = 0;
+    if (cfg("target.windows")) {
+        total = await step(total)?;
+        total = await step(total)?;
+    } else {
+        total = await step(total)?;
+        total = await step(total)?;
+    }
+    if (cfg("target.unix")) {
+        total = await step(total)?;
+    }
+    if (cfg("target.windows")) {
+        total = await step(total)?;
+    }
+    total = await step(total)?;
+    await AsyncConsole.writeLine(if (total == 4) "four steps" else "wrong count")?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("error"); }
+    }
+}
+// expect-stdout: four steps

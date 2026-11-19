@@ -100,3 +100,9 @@ fn printsAndFails() -> Result<void, TestFailure> {
     Console.writeLine("shown because it fails");
     return Check.fail("on purpose");
 }
+
+/// Its output is shown only with --show-output (ADR 0185).
+@test
+fn printsAndPasses() {
+    Console.writeLine("printed by a passing test");
+}

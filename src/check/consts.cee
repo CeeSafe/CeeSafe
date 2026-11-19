@@ -57,12 +57,30 @@ fn evaluateConstant(c: borrow mut Checker, k: u32) -> Result<u32, AllocError> {
         ItemKind.Const(_, value) => value,
         _ => none(),
     };
+    let element = if (c.types.is(hirConstant.typ, TypeKind.Array)) c.types.info(hirConstant.typ).element else none();
+    let plainNeeded = if (element != none()) element else hirConstant.typ;
+    if (c.types.is(plainNeeded, TypeKind.Struct) && !isCStrType(c, plainNeeded) && !constStructOk(c, plainNeeded, 0)) {
+        let typeSpan = match (item.kind) {
+            ItemKind.Const(typ, _) => c.front.ast.typeSpans[typ as usize],
+            _ => Span { start: id.start, end: id.end },
+        };
+        var message = Vector<u8>.create();
+        appendText(mut message, "a constant of type '")?;
+        appendBytes(mut message, c.typeName(plainNeeded))?;
+        appendText(
+            mut message,
+            "' needs a plain struct: no drop and no region, every field an integer, a bool, a float, a 'CChar', an array of these or such a struct (ADR 0180)",
+        )?;
+        c.error(unsupported(), typeSpan.start, typeSpan.end, message)?;
+        c.hir.constants[entry.hir as usize].typ = c.types.error;
+    }
+    let constantType = c.hir.constants[entry.hir as usize].typ;
     let savedConstant = c.inConstantInitializer;
     c.inConstantInitializer = true;
-    let checked = checkExpr(c, valueSyntax, hirConstant.typ)?;
+    let checked = checkExpr(c, valueSyntax, constantType)?;
     c.inConstantInitializer = savedConstant;
     let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
-    let value = if (hirConstant.typ == c.types.error) c.errorResult(
+    let value = if (constantType == c.types.error) c.errorResult(
         valueSpan.start,
         valueSpan.end,
     )? else fold(c, checked)?;
@@ -93,9 +111,35 @@ fn fold(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
         HirExpr.BoolConst(_) => { return Ok(e); }
         HirExpr.FloatConst(_) => { return Ok(e); }
         HirExpr.StringConst(_) => { return Ok(e); } // static data (ADR 0064 §2)
-        HirExpr.StructLiteral(_) => {
+        HirExpr.StructLiteral(fields) => {
             if (isCStringValue(c, e)) {
                 return Ok(e); // `c"…"`, static data too (ADR 0087 §2.4)
+            }
+            if (constStructOk(c, typ, 0)) {
+                // A plain struct (ADR 0180): each field folded to a constant.
+                var folded = Vector<HirFieldValue>.create();
+                var failed = false;
+                for (k in 0..fields.count) {
+                    let fv = c.hir.fieldValues[(fields.start + k) as usize];
+                    let value = fold(c, fv.value)?;
+                    if (isErrorExpr(c, value)) {
+                        failed = true;
+                    }
+                    folded.push(HirFieldValue { field: fv.field, value: value })?;
+                }
+                if (failed) {
+                    return c.errorResult(span.start, span.end);
+                }
+                let start = truncate<u32>(c.hir.fieldValues.length);
+                for (fv in folded.view()) {
+                    c.hir.fieldValues.push(fv)?;
+                }
+                return c.expr(
+                    HirExpr.StructLiteral(Range { start: start, count: fields.count }),
+                    typ,
+                    span.start,
+                    span.end,
+                );
             }
             var message = Vector<u8>.create();
             appendText(

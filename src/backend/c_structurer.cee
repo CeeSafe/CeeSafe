@@ -41,6 +41,9 @@ struct Structurer {
     follows: Vector<Vector<u32>>;     // by block index: the blocks emitted after its code (Follow)
     exitFollows: Vector<Vector<u32>>; // by loop header index: the blocks emitted after its loop (ExitFollow)
     root: u32;                        // the tree's list
+    /// The blocks some goto outside every `if (cfg("X"))` jumps to: every build's C uses their labels. A label jumped
+    /// to only from inside configured code is printed as possibly unused (no -Wunused-label in the other builds).
+    always: Vector<bool>;
 }
 
 /// The first byte of an if node's text that is a `cfg` condition (ADR 0080 §3.3), which no C expression starts with.
@@ -190,6 +193,7 @@ fn structureFunction(
         follows: Vector<Vector<u32>>.create(),
         exitFollows: Vector<Vector<u32>>.create(),
         root: 0,
+        always: Vector<bool>.create(),
     };
     for (k in 0..n.functions[f as usize].blocks.length) {
         s.follows.push(Vector<u32>.create())?;
@@ -215,8 +219,10 @@ fn structureFunction(
     };
     while (eliminate(mut s, tree, nothing, root)?) {}
     var targets = Vector<bool>.create();
-    collectGotos(s, tree, mut targets)?;
+    var always = Vector<bool>.create();
+    collectGotos(s, tree, mut targets, mut always, false)?;
     removeLabels(mut s, tree, targets)?; // before hoisting: an arm holding only a dead label is empty
+    s.always = always;
     hoist(mut s, tree)?;
     s.root = tree;
     return Ok(Some(s));
@@ -708,19 +714,31 @@ fn breaksList(s: borrow Structurer, list: u32) -> bool {
 
 // ---- Labels (step 6) ----
 
-fn collectGotos(s: borrow Structurer, list: u32, targets: borrow mut Vector<bool>) -> Result<void, AllocError> {
+/// The blocks gotos jump to (`targets`), and of those the ones a goto outside every configured `if` jumps to
+/// (`always`); `configured` says the list is inside one.
+fn collectGotos(
+    s: borrow Structurer,
+    list: u32,
+    targets: borrow mut Vector<bool>,
+    always: borrow mut Vector<bool>,
+    configured: bool,
+) -> Result<void, AllocError> {
     for (id in s.lists[list as usize].view()) {
         let node = s.nodes[id as usize];
         if (node.kind == nodeGoto()) {
             markType(targets, node.block)?;
+            if (!configured) {
+                markType(always, node.block)?;
+            }
         } else if (node.kind == nodeIf()) {
-            collectGotos(s, node.first, targets)?;
-            collectGotos(s, node.second, targets)?;
+            let inner = configured || isCfgText(s.texts[node.text as usize].view());
+            collectGotos(s, node.first, targets, always, inner)?;
+            collectGotos(s, node.second, targets, always, inner)?;
         } else if (node.kind == nodeLoop()) {
-            collectGotos(s, node.first, targets)?;
+            collectGotos(s, node.first, targets, always, configured)?;
         } else if (node.kind == nodeSwitch()) {
             for (k in s.lists[node.first as usize].view()) {
-                collectGotos(s, s.nodes[k as usize].second, targets)?;
+                collectGotos(s, s.nodes[k as usize].second, targets, always, configured)?;
             }
         }
     }
@@ -782,12 +800,16 @@ fn printTree(
                 }
                 appendText(mut e.pendingLabel, "bb")?;
                 appendDecimal(mut e.pendingLabel, node.block as u64)?;
-                appendText(mut e.pendingLabel, ": ")?;
+                appendText(mut e.pendingLabel, if (inSet(s.always, node.block)) ": " else ": CEE_UNUSED; ")?;
                 e.hasPendingLabel = true;
             } else {
                 e.t("bb")?;
                 e.d(node.block as u64)?;
-                e.t(if (i + 1 < count) ":" else ": ;")?;
+                if (inSet(s.always, node.block)) {
+                    e.t(if (i + 1 < count) ":" else ": ;")?;
+                } else {
+                    e.t(": CEE_UNUSED;")?;
+                }
                 e.emitNoCode()?;
             }
         } else if (node.kind == nodeCode()) {

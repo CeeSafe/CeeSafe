@@ -1,7 +1,7 @@
 # ADR 0178 — Printing a PDF through the system's print dialog
 
 - Status: **Accepted** by the owner, 2026-11-19 (asked what IPos's Print should do for the A4 invoice and the voucher:
-  "System print dialog"). macOS implemented the same day (§5); not released.
+  "System print dialog"). macOS and iOS implemented the same day (§5); not released.
 - Scope: lib/std's `FileDialog.printFile` (type-system.md §26.13), the window runtime's dialogs (a sixth kind), the
   guide. No change to the language.
 
@@ -33,8 +33,13 @@ system knows: CeeSafe had no way to reach its print dialog. (Receipts go to a Bl
 
 ## 4. Order of work
 
-1. macOS (done, §5). 2. iOS. 3. Android. 4. Windows. Until a system's step, `printFile` is `Unsupported` there.
+1. macOS (done, §5). 2. iOS (done, §5). 3. Android. 4. Windows. Until a system's step, `printFile` is `Unsupported` there.
 
 ## 5. Implementation (2026-11-19)
 
 macOS: `cee_native_print` (ceesafe_rt_window.c). IPos's preview has Print… (every document), beside Save PDF.
+
+iOS: `cee_native_print` (ceesafe_rt_window.c), `UIPrintInteractionController` given the file's URL (`canPrintURL:`
+first: `Resources` when it is not a PDF it reads), presented as a sheet; the run loop runs until its completion handler,
+a block without captures, says printed, cancelled or failed (an error is `Resources`). `Unsupported` when the device
+has no printing (`isPrintingAvailable`).

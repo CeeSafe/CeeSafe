@@ -245,7 +245,9 @@ struct cee_access_node {
 
 /* The element at point (x, y) of the content, in points, among the first `count` of `nodes`: of those that hold it,
    the highest layer's, and of one layer the latest in the list (drawn later, so on top); -1 for none. The list is in
-   reading order, so a popup read before the page it covers is above it by its layer, not by its place. */
+   reading order, so a popup read before the page it covers is above it by its layer, not by its place. Only AppKit's
+   and UI Automation's hit tests ask; UIKit and Android choose for themselves. */
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT))
 static inline int64_t cee_access_at(const struct cee_access_node *nodes, uint32_t count, double x, double y) {
     int64_t found = -1;
     for (uint32_t k = 0; k < count; k++) {
@@ -257,6 +259,7 @@ static inline int64_t cee_access_at(const struct cee_access_node *nodes, uint32_
     }
     return found;
 }
+#endif
 #define CEE_ACCESS_CHECKED 1u
 #define CEE_ACCESS_SELECTED 2u
 #define CEE_ACCESS_FOCUSED 4u
@@ -3309,6 +3312,75 @@ static int32_t cee_native_export(struct cee_window *w, const char *title, const 
     }
     cee_uikit.pool_pop(pool);
     return result;
+}
+
+/* Printing a PDF (ADR 0178): AirPrint's UIPrintInteractionController, given the file's URL, presented as a sheet;
+   the call is modal as the pickers are, the run loop running until the sheet's completion handler (a block without
+   captures, as the background task's) says printed, cancelled or failed. */
+static int cee_ios_print_state; /* 0 waiting, 1 printed, 2 cancelled, 3 failed */
+struct cee_ios_print_block {
+    void *isa;
+    int flags, reserved;
+    void (*invoke)(void *, cee_id, signed char, cee_id);
+    const struct cee_ios_block_descriptor *descriptor;
+};
+static void cee_ios_print_done(void *block, cee_id controller, signed char completed, cee_id error) {
+    (void)block;
+    (void)controller;
+    if (cee_ios_print_state == 0) {
+        cee_ios_print_state = error != NULL ? 3 : completed ? 1 : 2;
+    }
+}
+static const struct cee_ios_block_descriptor cee_ios_print_descriptor = {0ul, sizeof(struct cee_ios_print_block)};
+static struct cee_ios_print_block cee_ios_print_handler = {NULL, 1 << 28, 0, cee_ios_print_done,
+                                                           &cee_ios_print_descriptor};
+
+#define CEE_HAS_NATIVE_PRINT 1
+static int32_t cee_native_print(struct cee_window *w, const char *title, const char *file) {
+    (void)w; /* the sheet is presented over the app's key window */
+    cee_id controller_class = cee_ios_cls("UIPrintInteractionController");
+    if (cee_ios_print_handler.isa == NULL) {
+        cee_ios_print_handler.isa = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
+    }
+    if (controller_class == NULL || cee_ios_print_handler.isa == NULL ||
+        !((signed char (*)(cee_id, cee_sel))cee_uikit.send)(controller_class, cee_ios_sel("isPrintingAvailable"))) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    void *pool = cee_uikit.pool_push();
+    cee_id path = cee_ios_string(file);
+    cee_id url = path != NULL ? ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(
+                                    cee_ios_cls("NSURL"), cee_ios_sel("fileURLWithPath:"), path)
+                              : NULL;
+    if (url == NULL ||
+        !((signed char (*)(cee_id, cee_sel, cee_id))cee_uikit.send)(controller_class, cee_ios_sel("canPrintURL:"), url)) {
+        cee_uikit.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES; /* not a PDF the system reads */
+    }
+    cee_id controller = cee_ios_send(controller_class, "sharedPrintController");
+    cee_id info = cee_ios_send(cee_ios_cls("UIPrintInfo"), "printInfo");
+    if (controller == NULL || info == NULL) {
+        cee_uikit.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(info, cee_ios_sel("setOutputType:"), 0l); /* General */
+    cee_ios_send_v_id(info, "setJobName:",
+                      title[0] != '\0' ? cee_ios_string(title) : cee_ios_send(path, "lastPathComponent"));
+    cee_ios_send_v_id(controller, "setPrintInfo:", info);
+    cee_ios_send_v_id(controller, "setPrintingItem:", url);
+    cee_ios_print_state = 0;
+    signed char shown = ((signed char (*)(cee_id, cee_sel, signed char, void *))cee_uikit.send)(
+        controller, cee_ios_sel("presentAnimated:completionHandler:"), 1, &cee_ios_print_handler);
+    if (!shown) {
+        cee_ios_print_state = 3;
+    }
+    while (cee_ios_print_state == 0) {
+        void *inner = cee_uikit.pool_push();
+        (void)cee_uikit.run_in_mode(*cee_uikit.default_mode, 0.1, 1);
+        cee_uikit.pool_pop(inner);
+    }
+    cee_ios_send_v_id(controller, "setPrintingItem:", NULL);
+    cee_uikit.pool_pop(pool);
+    return cee_ios_print_state == 1 ? 1 : cee_ios_print_state == 2 ? 0 : -CEE_WINDOW_RESOURCES;
 }
 
 #elif defined(__APPLE__)

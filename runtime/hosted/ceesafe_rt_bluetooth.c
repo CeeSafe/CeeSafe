@@ -1262,8 +1262,250 @@ static void cee_bt_native_close(struct cee_bt_link *link) {
     pthread_mutex_unlock(&cee_bt_lock);
 }
 
+#elif defined(_WIN32)
+/* Windows: Classic through Winsock's RFCOMM (AF_BTH) to the Serial Port Profile, the paired devices from
+   BluetoothApis.dll (bthprops.cpl before Windows 8), loaded at the first call. Low Energy (WinRT's) is not yet here
+   (ADR 0177 §5): a scan finds nothing and a Low Energy link is Unsupported. Winsock is the I/O runtime's library
+   (ws2_32). One call at a time. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2bth.h>
+#include <windows.h>
+#include <bluetoothapis.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "ws2_32.lib")
+#endif
+
+static SRWLOCK cee_bt_lock = SRWLOCK_INIT;
+
+/* SerialPortServiceClass_UUID, 00001101-0000-1000-8000-00805F9B34FB. */
+static const GUID cee_bt_spp = {0x00001101, 0x0000, 0x1000, {0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB}};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 not there */
+    HBLUETOOTH_RADIO_FIND(WINAPI *first_radio)(const BLUETOOTH_FIND_RADIO_PARAMS *, HANDLE *);
+    BOOL(WINAPI *radio_close)(HBLUETOOTH_RADIO_FIND);
+    HBLUETOOTH_DEVICE_FIND(WINAPI *first_device)(const BLUETOOTH_DEVICE_SEARCH_PARAMS *, BLUETOOTH_DEVICE_INFO *);
+    BOOL(WINAPI *next_device)(HBLUETOOTH_DEVICE_FIND, BLUETOOTH_DEVICE_INFO *);
+    BOOL(WINAPI *device_close)(HBLUETOOTH_DEVICE_FIND);
+    DWORD(WINAPI *services)(HANDLE, const BLUETOOTH_DEVICE_INFO *, DWORD *, GUID *);
+} cee_bt_win;
+
+static FARPROC cee_bt_proc(HMODULE module, const char *name) { return GetProcAddress(module, name); }
+
+static int cee_bt_win_load(void) {
+    if (cee_bt_win.state == 0) {
+        cee_bt_win.state = -1;
+        HMODULE module = LoadLibraryA("BluetoothApis.dll");
+        if (module == NULL) {
+            module = LoadLibraryA("bthprops.cpl");
+        }
+        WSADATA data;
+        if (module != NULL && WSAStartup(MAKEWORD(2, 2), &data) == 0) {
+            /* GetProcAddress gives a FARPROC; each is the function of that name's type. */
+            FARPROC f[6] = {cee_bt_proc(module, "BluetoothFindFirstRadio"), cee_bt_proc(module, "BluetoothFindRadioClose"),
+                            cee_bt_proc(module, "BluetoothFindFirstDevice"), cee_bt_proc(module, "BluetoothFindNextDevice"),
+                            cee_bt_proc(module, "BluetoothFindDeviceClose"),
+                            cee_bt_proc(module, "BluetoothEnumerateInstalledServices")};
+            int all = 1;
+            for (int k = 0; k < 6; k++) {
+                all = all && f[k] != NULL;
+            }
+            if (all) {
+                memcpy(&cee_bt_win.first_radio, &f[0], sizeof f[0]);
+                memcpy(&cee_bt_win.radio_close, &f[1], sizeof f[1]);
+                memcpy(&cee_bt_win.first_device, &f[2], sizeof f[2]);
+                memcpy(&cee_bt_win.next_device, &f[3], sizeof f[3]);
+                memcpy(&cee_bt_win.device_close, &f[4], sizeof f[4]);
+                memcpy(&cee_bt_win.services, &f[5], sizeof f[5]);
+                cee_bt_win.state = 1;
+            }
+        }
+    }
+    return cee_bt_win.state == 1;
+}
+
+/* The first radio (its handle, to close), or NULL when there is none: the adapter is off or missing. */
+static HANDLE cee_bt_win_radio(void) {
+    BLUETOOTH_FIND_RADIO_PARAMS params;
+    memset(&params, 0, sizeof params);
+    params.dwSize = sizeof params;
+    HANDLE radio = NULL;
+    HBLUETOOTH_RADIO_FIND find = cee_bt_win.first_radio(&params, &radio);
+    if (find == NULL) {
+        return NULL;
+    }
+    cee_bt_win.radio_close(find);
+    return radio;
+}
+
+/* "00:11:22:AA:BB:CC" from the address's six bytes, the most significant first. */
+static void cee_bt_win_text(BTH_ADDR address, char *out) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int k = 0; k < 6; k++) {
+        unsigned byte = (unsigned)((address >> (8 * (5 - k))) & 0xFF);
+        out[k * 3] = hex[byte >> 4];
+        out[k * 3 + 1] = hex[byte & 15];
+        out[k * 3 + 2] = k < 5 ? ':' : '\0';
+    }
+}
+
+/* The address from its text, or 0 when it is not one. */
+static BTH_ADDR cee_bt_win_address(const char *text, size_t length) {
+    if (length != 17) {
+        return 0;
+    }
+    BTH_ADDR address = 0;
+    for (size_t k = 0; k < 17; k++) {
+        char c = text[k];
+        if (k % 3 == 2) {
+            if (c != ':' && c != '-') {
+                return 0;
+            }
+            continue;
+        }
+        int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                                     : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+        if (digit < 0) {
+            return 0;
+        }
+        address = (address << 4) | (BTH_ADDR)digit;
+    }
+    return address;
+}
+
+/* Whether a paired device may be a printer: it has the Serial Port Profile installed; or none is known and its class
+   is imaging (a printer's), miscellaneous or unclassified. */
+static int cee_bt_win_printer(HANDLE radio, const BLUETOOTH_DEVICE_INFO *info) {
+    GUID services[32];
+    DWORD count = 32;
+    if (cee_bt_win.services(radio, info, &count, services) == ERROR_SUCCESS && count > 0) {
+        for (DWORD k = 0; k < count && k < 32; k++) {
+            if (memcmp(&services[k], &cee_bt_spp, sizeof cee_bt_spp) == 0) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    ULONG major = (info->ulClassofDevice >> 8) & 0x1F;
+    return info->ulClassofDevice != 0 && (major == 6 || major == 0 || major == 0x1F);
+}
+
+static int64_t cee_bt_native_list(uint32_t scan, uint32_t milliseconds, uint8_t **out) {
+    (void)milliseconds;
+    AcquireSRWLockExclusive(&cee_bt_lock);
+    int64_t result;
+    HANDLE radio = NULL;
+    if (!cee_bt_win_load()) {
+        result = -CEE_BT_UNSUPPORTED;
+    } else if ((radio = cee_bt_win_radio()) == NULL) {
+        result = -CEE_BT_OFF;
+    } else if (scan) {
+        result = 0; /* Low Energy is not yet here (ADR 0177 §5) */
+    } else {
+        struct cee_bt_list l;
+        memset(&l, 0, sizeof l);
+        BLUETOOTH_DEVICE_SEARCH_PARAMS params;
+        memset(&params, 0, sizeof params);
+        params.dwSize = sizeof params;
+        params.fReturnAuthenticated = TRUE;
+        params.fReturnRemembered = TRUE;
+        params.hRadio = radio;
+        BLUETOOTH_DEVICE_INFO info;
+        memset(&info, 0, sizeof info);
+        info.dwSize = sizeof info;
+        HBLUETOOTH_DEVICE_FIND find = cee_bt_win.first_device(&params, &info);
+        while (find != NULL) {
+            if (info.fAuthenticated && cee_bt_win_printer(radio, &info)) {
+                char address[18];
+                cee_bt_win_text(info.Address.ullLong, address);
+                char name[248 * 3];
+                int n = WideCharToMultiByte(CP_UTF8, 0, info.szName, -1, name, (int)sizeof name, NULL, NULL);
+                cee_bt_add(&l, CEE_BT_CLASSIC, address, 17, name, n > 0 ? (size_t)n - 1 : 0);
+            }
+            memset(&info, 0, sizeof info);
+            info.dwSize = sizeof info;
+            if (!cee_bt_win.next_device(find, &info)) {
+                cee_bt_win.device_close(find);
+                find = NULL;
+            }
+        }
+        result = cee_bt_finish(&l, out);
+    }
+    if (radio != NULL) {
+        CloseHandle(radio);
+    }
+    ReleaseSRWLockExclusive(&cee_bt_lock);
+    return result;
+}
+
+static int cee_bt_native_open(struct cee_bt_link *link, uint32_t transport, const char *address, size_t length) {
+    if (transport != CEE_BT_CLASSIC) {
+        return CEE_BT_UNSUPPORTED; /* Low Energy is not yet here (ADR 0177 §5) */
+    }
+    BTH_ADDR to = cee_bt_win_address(address, length);
+    if (to == 0) {
+        return CEE_BT_NOT_FOUND;
+    }
+    AcquireSRWLockExclusive(&cee_bt_lock);
+    int error = 0;
+    HANDLE radio = NULL;
+    if (!cee_bt_win_load()) {
+        error = CEE_BT_UNSUPPORTED;
+    } else if ((radio = cee_bt_win_radio()) == NULL) {
+        error = CEE_BT_OFF;
+    } else {
+        SOCKET s = socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
+        if (s == INVALID_SOCKET) {
+            error = CEE_BT_RESOURCES;
+        } else {
+            SOCKADDR_BTH target;
+            memset(&target, 0, sizeof target);
+            target.addressFamily = AF_BTH;
+            target.btAddr = to;
+            target.serviceClassId = cee_bt_spp;
+            target.port = 0; /* the channel, found by the service's record */
+            if (connect(s, (struct sockaddr *)&target, (int)sizeof target) != 0) {
+                int why = WSAGetLastError();
+                closesocket(s);
+                error = why == WSAEACCES ? CEE_BT_DENIED : why == WSAEADDRNOTAVAIL ? CEE_BT_NOT_FOUND : CEE_BT_REFUSED;
+            } else {
+                link->device = (void *)(uintptr_t)s;
+                link->piece = 0x10000;
+            }
+        }
+    }
+    if (radio != NULL) {
+        CloseHandle(radio);
+    }
+    ReleaseSRWLockExclusive(&cee_bt_lock);
+    return error;
+}
+
+static int32_t cee_bt_native_write(struct cee_bt_link *link, const uint8_t *bytes, size_t length) {
+    SOCKET s = (SOCKET)(uintptr_t)link->device;
+    while (length > 0) {
+        int n = (int)(length < link->piece ? length : link->piece);
+        int sent = send(s, (const char *)bytes, n, 0);
+        if (sent <= 0) {
+            return -CEE_BT_LOST;
+        }
+        bytes += sent;
+        length -= (size_t)sent;
+    }
+    return 0;
+}
+
+static void cee_bt_native_close(struct cee_bt_link *link) {
+    SOCKET s = (SOCKET)(uintptr_t)link->device;
+    shutdown(s, SD_SEND);
+    closesocket(s);
+}
+
 #else
-/* Not yet (ADR 0177 §5): Windows answers Unsupported until its step; Linux, FreeBSD and CosmoOS are deferred. */
+/* Linux, FreeBSD and CosmoOS: deferred (ADR 0177 §2.3). */
 static int64_t cee_bt_native_list(uint32_t scan, uint32_t milliseconds, uint8_t **out) {
     (void)scan;
     (void)milliseconds;

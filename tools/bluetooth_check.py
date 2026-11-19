@@ -10,7 +10,7 @@ that receives what each link does:
 3. a device that is not there is `NotFound` (a Classic address opened as Low Energy too), one that will not connect
    `Refused`, a link that breaks `Lost` once the bytes before the break are written;
 4. `off` makes every call `Off`, `denied` every call `Denied`;
-5. with no script on a system whose step has not come (ADR 0177 §5; macOS's has), and under `ceesafec run
+5. with no script on a system whose step has not come (ADR 0177 §5; macOS's and Windows's have), and under `ceesafec run
    --interp`, every call is `Unsupported`.
 
 usage: python3 tools/bluetooth_check.py --compiler out/ceesafec
@@ -171,7 +171,7 @@ def main():
         run("off\n" + DEVICES, "off\noff\n" + "off\n" * 6, "", label="off")
         run("denied\n" + DEVICES, "denied\ndenied\n" + "denied\n" * 6, "", label="denied")
         run("", "0\n0\n" + "not found\n" * 6, "", label="empty")
-        if sys.platform not in ("darwin",):  # the systems whose step is done use the radio (ADR 0177 §5)
+        if sys.platform not in ("darwin", "win32"):  # the systems whose step is done use the radio (ADR 0177 §5)
             run(None, "unsupported\n" * 8, label="no script")
         run(DEVICES, "unsupported\n" * 8, interp=True, label="interpreter")
     for p in problems:

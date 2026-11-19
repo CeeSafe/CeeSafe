@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Writes the Android window's Java class into runtime/hosted/ceesafe_rt_window.c as an embedded dex (ADR 0157).
 
-runtime/android/org/ceesafe/window/InputView.java (ADR 0157), Picker.java (ADR 0158) and AccessView.java (ADR 0164)
-are the sources. They are compiled with javac against the Android SDK's
+runtime/android/org/ceesafe/window/InputView.java (ADR 0157), Picker.java (ADR 0158), AccessView.java (ADR 0164) and
+Bluetooth.java (ADR 0177) are the sources. They are compiled with javac against the Android SDK's
 android.jar and turned into one classes.dex by the SDK's d8 (release mode, minimum API 28, ADR 0154's floor); the bytes
 replace the array between the two marker lines of the runtime's window file. The array is committed, so building a
 program needs neither a JDK nor the SDK: run this only when the Java source changes, then tools/gen_runtime.py.
@@ -26,7 +26,7 @@ import tempfile
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 SOURCES = [os.path.join(ROOT, "runtime", "android", "org", "ceesafe", "window", name)
-           for name in ("InputView.java", "Picker.java", "AccessView.java")]
+           for name in ("InputView.java", "Picker.java", "AccessView.java", "Bluetooth.java")]
 TARGET = os.path.join(ROOT, "runtime", "hosted", "ceesafe_rt_window.c")
 BEGIN = "/* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */\n"
 END = "/* END android dex */\n"

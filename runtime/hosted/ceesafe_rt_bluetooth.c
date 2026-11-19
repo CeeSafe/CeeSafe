@@ -1074,9 +1074,196 @@ static void cee_bt_native_close(struct cee_bt_link *link) {
     pthread_mutex_unlock(&cee_bt_lock);
 }
 
+#elif defined(__ANDROID__)
+/* Android: org.ceesafe.window.Bluetooth (runtime/android), a class of the window runtime's embedded dex, called over
+   JNI from the program's thread, attached to the VM for the call. The window runtime gives the VM, the activity and
+   the class (ceesafe_android_vm, ceesafe_android_bluetooth); they are weak here, so a program that opens no window
+   links without them and has no Bluetooth (Unsupported), as one before its activity is made. One call at a time. */
+#include <jni.h>
+#include <pthread.h>
+
+JavaVM *ceesafe_android_vm(void) __attribute__((weak));
+jclass ceesafe_android_bluetooth(JNIEnv *env, jobject *activity) __attribute__((weak));
+
+static pthread_mutex_t cee_bt_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* The calling thread's env, attached for the call when it was not (`*attached` set): NULL without a VM. */
+static JNIEnv *cee_bt_env(JavaVM **vm, int *attached) {
+    *attached = 0;
+    *vm = ceesafe_android_vm != NULL ? ceesafe_android_vm() : NULL;
+    if (*vm == NULL) {
+        return NULL;
+    }
+    JNIEnv *env = NULL;
+    if ((**vm)->GetEnv(*vm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if ((**vm)->AttachCurrentThread(*vm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        *attached = 1;
+    }
+    return env;
+}
+
+static void cee_bt_env_done(JavaVM *vm, int attached) {
+    if (attached) {
+        (void)(*vm)->DetachCurrentThread(vm);
+    }
+}
+
+/* Whether a Java exception is pending, which is cleared. */
+static int cee_bt_thrown(JNIEnv *env) {
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 1;
+    }
+    return 0;
+}
+
+static int64_t cee_bt_native_list(uint32_t scan, uint32_t milliseconds, uint8_t **out) {
+    pthread_mutex_lock(&cee_bt_lock);
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_bt_env(&vm, &attached);
+    int64_t result = -CEE_BT_UNSUPPORTED;
+    if (env != NULL && (*env)->PushLocalFrame(env, 16) == 0) {
+        jobject activity = NULL;
+        jclass bluetooth = ceesafe_android_bluetooth != NULL ? ceesafe_android_bluetooth(env, &activity) : NULL;
+        jmethodID method =
+            bluetooth == NULL ? NULL
+            : scan ? (*env)->GetStaticMethodID(env, bluetooth, "scan", "(Landroid/app/Activity;I)[B")
+                   : (*env)->GetStaticMethodID(env, bluetooth, "paired", "(Landroid/app/Activity;)[B");
+        jbyteArray answer = NULL;
+        if (method != NULL && !cee_bt_thrown(env)) {
+            answer = scan ? (jbyteArray)(*env)->CallStaticObjectMethod(env, bluetooth, method, activity,
+                                                                         (jint)milliseconds)
+                          : (jbyteArray)(*env)->CallStaticObjectMethod(env, bluetooth, method, activity);
+            if (cee_bt_thrown(env)) {
+                answer = NULL;
+                result = -CEE_BT_RESOURCES;
+            }
+        }
+        jsize length = answer != NULL ? (*env)->GetArrayLength(env, answer) : 0;
+        if (length > 0) {
+            jbyte first = 0;
+            (*env)->GetByteArrayRegion(env, answer, 0, 1, &first);
+            if (first != 0) {
+                result = -(int64_t)first;
+            } else if (length == 1) {
+                result = 0;
+            } else {
+                uint8_t *bytes = (uint8_t *)ceesafe_platform_alloc((size_t)length - 1);
+                if (bytes == NULL) {
+                    result = -CEE_BT_RESOURCES;
+                } else {
+                    (*env)->GetByteArrayRegion(env, answer, 1, length - 1, (jbyte *)bytes);
+                    *out = bytes;
+                    result = (int64_t)length - 1;
+                }
+            }
+        }
+        (void)cee_bt_thrown(env);
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (env != NULL) {
+        cee_bt_env_done(vm, attached);
+    }
+    pthread_mutex_unlock(&cee_bt_lock);
+    return result;
+}
+
+static int cee_bt_native_open(struct cee_bt_link *link, uint32_t transport, const char *address, size_t length) {
+    (void)length;
+    pthread_mutex_lock(&cee_bt_lock);
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_bt_env(&vm, &attached);
+    int error = CEE_BT_UNSUPPORTED;
+    if (env != NULL && (*env)->PushLocalFrame(env, 16) == 0) {
+        jobject activity = NULL;
+        jclass bluetooth = ceesafe_android_bluetooth != NULL ? ceesafe_android_bluetooth(env, &activity) : NULL;
+        jmethodID open = bluetooth != NULL ? (*env)->GetStaticMethodID(
+                                                 env, bluetooth, "open",
+                                                 "(Landroid/app/Activity;ILjava/lang/String;)"
+                                                 "Lorg/ceesafe/window/Bluetooth$Link;")
+                                           : NULL;
+        jstring text = open != NULL ? (*env)->NewStringUTF(env, address) : NULL;
+        jobject made = NULL;
+        if (text != NULL && !cee_bt_thrown(env)) {
+            made = (*env)->CallStaticObjectMethod(env, bluetooth, open, activity, (jint)transport, text);
+            error = cee_bt_thrown(env) || made == NULL ? CEE_BT_RESOURCES : 0;
+        }
+        if (made != NULL) {
+            jclass link_class = (*env)->GetObjectClass(env, made);
+            jfieldID field = (*env)->GetFieldID(env, link_class, "error", "I");
+            error = field != NULL ? (int)(*env)->GetIntField(env, made, field) : CEE_BT_RESOURCES;
+            if (error == 0) {
+                link->device = (void *)(*env)->NewGlobalRef(env, made);
+                error = link->device != NULL ? 0 : CEE_BT_RESOURCES;
+            }
+        }
+        (void)cee_bt_thrown(env);
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (env != NULL) {
+        cee_bt_env_done(vm, attached);
+    }
+    pthread_mutex_unlock(&cee_bt_lock);
+    return error;
+}
+
+static int32_t cee_bt_native_write(struct cee_bt_link *link, const uint8_t *bytes, size_t length) {
+    if (length > 0x7FFFFFFF) {
+        return -CEE_BT_RESOURCES;
+    }
+    pthread_mutex_lock(&cee_bt_lock);
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_bt_env(&vm, &attached);
+    int32_t result = -CEE_BT_LOST;
+    if (env != NULL && (*env)->PushLocalFrame(env, 8) == 0) {
+        jobject made = (jobject)link->device;
+        jclass link_class = (*env)->GetObjectClass(env, made);
+        jmethodID write = (*env)->GetMethodID(env, link_class, "write", "([B)I");
+        jbyteArray array = (*env)->NewByteArray(env, (jsize)length);
+        if (write != NULL && array != NULL && !cee_bt_thrown(env)) {
+            (*env)->SetByteArrayRegion(env, array, 0, (jsize)length, (const jbyte *)bytes);
+            jint error = (*env)->CallIntMethod(env, made, write, array);
+            result = cee_bt_thrown(env) ? -CEE_BT_LOST : -(int32_t)error;
+        } else {
+            result = -CEE_BT_RESOURCES;
+        }
+        (void)cee_bt_thrown(env);
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (env != NULL) {
+        cee_bt_env_done(vm, attached);
+    }
+    pthread_mutex_unlock(&cee_bt_lock);
+    return result;
+}
+
+static void cee_bt_native_close(struct cee_bt_link *link) {
+    pthread_mutex_lock(&cee_bt_lock);
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_bt_env(&vm, &attached);
+    if (env != NULL) {
+        jobject made = (jobject)link->device;
+        jclass link_class = (*env)->GetObjectClass(env, made);
+        jmethodID close = link_class != NULL ? (*env)->GetMethodID(env, link_class, "close", "()V") : NULL;
+        if (close != NULL) {
+            (*env)->CallVoidMethod(env, made, close);
+        }
+        (void)cee_bt_thrown(env);
+        (*env)->DeleteLocalRef(env, link_class);
+        (*env)->DeleteGlobalRef(env, made);
+        cee_bt_env_done(vm, attached);
+    }
+    pthread_mutex_unlock(&cee_bt_lock);
+}
+
 #else
-/* Not yet (ADR 0177 §5): Android and Windows answer Unsupported until their steps; Linux, FreeBSD and CosmoOS are
-   deferred. */
+/* Not yet (ADR 0177 §5): Windows answers Unsupported until its step; Linux, FreeBSD and CosmoOS are deferred. */
 static int64_t cee_bt_native_list(uint32_t scan, uint32_t milliseconds, uint8_t **out) {
     (void)scan;
     (void)milliseconds;

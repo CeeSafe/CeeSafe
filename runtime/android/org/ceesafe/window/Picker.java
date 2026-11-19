@@ -35,6 +35,7 @@ public final class Picker extends Fragment {
     private static final int FILE = 0;
     private static final int FILES = 1;
     private static final int EXPORT = 4;
+    private static final int PRINT = 5;
     private static final int SAVED = 1;
     private static final int CANCELLED = 0;
     private static final int FAILED = -1;
@@ -46,10 +47,20 @@ public final class Picker extends Fragment {
         cancel, -1 a failure. */
     private static native void nativePicked(int status, byte[] paths);
 
-    /** Starts the picker for the dialog of `kind` (0 a file, 1 files, 4 an export of `file` as `name`); `extensions`
-        is the comma-separated list the open dialogs offer. On the activity's thread. */
+    /** A dialog's answer, from another class of the runtime's (Printing). */
+    static void answer(int status, byte[] paths) {
+        nativePicked(status, paths);
+    }
+
+    /** Starts the picker for the dialog of `kind` (0 a file, 1 files, 4 an export of `file` as `name`, 5 printing the
+        PDF `file` as the job `name`: ADR 0178); `extensions` is the comma-separated list the open dialogs offer. On
+        the activity's thread. */
     public static void start(Activity activity, int kind, String extensions, String name, String file) {
         try {
+            if (kind == PRINT) {
+                Printing.start(activity, name, file);
+                return;
+            }
             FragmentManager manager = activity.getFragmentManager();
             Picker picker = (Picker) manager.findFragmentByTag(TAG);
             if (picker == null) {

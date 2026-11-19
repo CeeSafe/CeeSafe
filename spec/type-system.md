@@ -3750,7 +3750,7 @@ Diagnostics: none new.
 - **Printing a PDF** (ADR 0178): `FileDialog.printFile(window, title, file)` gives the PDF at `file` to the system's
   print dialog, `title` naming the job: `Ok(true)` when it was printed, `Ok(false)` when the user cancelled,
   `Resources` when the file is not a PDF the system reads. Modal, as the file dialogs are. macOS (PDFKit's print
-  operation), iOS (AirPrint's print sheet); `Unsupported` on Android and Windows until ADR 0178 §4's steps, and on Linux and FreeBSD.
+  operation), iOS (AirPrint's print sheet), Android (PrintManager's dialog); `Unsupported` on Windows until ADR 0178 §4's steps, and on Linux and FreeBSD.
 
 ### 26.14 Process limits (ADR 0104)
 - `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft

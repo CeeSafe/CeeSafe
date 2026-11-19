@@ -4332,5 +4332,6 @@ public fn printFile(
 
 Gives the PDF at `file` to the system's print dialog (ADR 0178), `title` naming the job: true when it was
 printed (sent to a printer, or saved by the dialog's own PDF button), false when the user cancelled. Modal, as
-the other dialogs are. macOS: PDFKit's print operation; iOS: AirPrint's print sheet. `Unsupported` on a system
-not yet done (ADR 0178 §4) and on Linux and FreeBSD; `Resources` when the file is not a PDF the system reads.
+the other dialogs are. macOS: PDFKit's print operation; iOS: AirPrint's print sheet; Android: PrintManager's
+dialog. `Unsupported` on a system not yet done (ADR 0178 §4) and on Linux and FreeBSD; `Resources` when the
+file is not a PDF the system reads.

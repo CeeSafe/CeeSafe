@@ -1,7 +1,7 @@
 # ADR 0178 — Printing a PDF through the system's print dialog
 
 - Status: **Accepted** by the owner, 2026-11-19 (asked what IPos's Print should do for the A4 invoice and the voucher:
-  "System print dialog"). macOS and iOS implemented the same day (§5); not released.
+  "System print dialog"). macOS, iOS and Android implemented the same day (§5); not released.
 - Scope: lib/std's `FileDialog.printFile` (type-system.md §26.13), the window runtime's dialogs (a sixth kind), the
   guide. No change to the language.
 
@@ -33,7 +33,7 @@ system knows: CeeSafe had no way to reach its print dialog. (Receipts go to a Bl
 
 ## 4. Order of work
 
-1. macOS (done, §5). 2. iOS (done, §5). 3. Android. 4. Windows. Until a system's step, `printFile` is `Unsupported` there.
+1. macOS (done, §5). 2. iOS (done, §5). 3. Android (done, §5). 4. Windows. Until a system's step, `printFile` is `Unsupported` there.
 
 ## 5. Implementation (2026-11-19)
 
@@ -43,3 +43,10 @@ iOS: `cee_native_print` (ceesafe_rt_window.c), `UIPrintInteractionController` gi
 first: `Resources` when it is not a PDF it reads), presented as a sheet; the run loop runs until its completion handler,
 a block without captures, says printed, cancelled or failed (an error is `Resources`). `Unsupported` when the device
 has no printing (`isPrintingAvailable`).
+
+Android: `cee_native_print` (ceesafe_rt_window.c) starts and waits for the dialog as a picker is (ADR 0158), with the
+runtime's `Printing.java` in the embedded dex: a file that does not begin as a PDF is `Resources` at once; else
+`PrintManager.print` with a document adapter that copies the file. When the dialog is gone (`onFinish`) the job is
+still "created" for a while (a quarter of a second on Android 16): its state is read every tenth of a second until
+it is set, for 30 seconds at most. Queued, started, blocked or completed (the dialog's own "Save as PDF") is printed;
+cancelled, or still created, is not; failed is `Resources`.

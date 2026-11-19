@@ -1321,8 +1321,23 @@ public struct FileDialog {
         return Ok(paths.pop());
     }
 
+    /// Gives the PDF at `file` to the system's print dialog (ADR 0178), `title` naming the job: true when it was
+    /// printed (sent to a printer, or saved by the dialog's own PDF button), false when the user cancelled. Modal, as
+    /// the other dialogs are. macOS: PDFKit's print operation. `Unsupported` on a system not yet done (ADR 0178 §4)
+    /// and on Linux and FreeBSD; `Resources` when the file is not a PDF the system reads.
+    public fn printFile(
+        window: borrow mut Window,
+        title: StringView,
+        file: StringView,
+    ) -> Result<bool, WindowError> {
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 5, title, "", file, mut paths)?;
+        return Ok(paths.length > 0);
+    }
+
     /// Runs the dialog of `kind` (0 a file, 1 files, 2 save, 3 a folder, 4 an export of the file at `extensions`, whose
-    /// one path is empty when the system saved it) and appends its paths to `out`.
+    /// one path is empty when the system saved it, 5 printing the PDF at `extensions`, one empty path when printed) and
+    /// appends its paths to `out`.
     /// Safety: the runtime reads the three texts during the call, and gives its copy of the answer, each path followed
     /// by a zero byte, which it keeps until the window's next dialog; the paths are copied before this returns.
     fn run(

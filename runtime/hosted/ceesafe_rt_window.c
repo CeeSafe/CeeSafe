@@ -136,6 +136,10 @@
    the file's path. On iOS and Android the system saves it, and the answer is one empty path; elsewhere the answer is
    the save dialog's path, which lib/std copies the file to. */
 #define CEE_DIALOG_EXPORT 4
+/* ADR 0178: the PDF at `extensions` given to the system's print dialog, `title` the job's name. The answer is one
+   empty path when it was printed, none when the user cancelled. A backend that prints defines CEE_HAS_NATIVE_PRINT
+   and cee_native_print (1 printed, 0 cancelled, or minus an error); elsewhere it is Unsupported. */
+#define CEE_DIALOG_PRINT 5
 #define CEE_DIALOG_ANSWERS 64u
 
 /* WindowSurface's numbers (ADR 0137): who draws the content. */
@@ -5450,6 +5454,49 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
             }
         }
     }
+    cee_send_v_id(m->window, "makeKeyAndOrderFront:", NULL);
+    cee_objc.pool_pop(pool);
+    return result;
+}
+
+/* Printing a PDF (ADR 0178): PDFKit's PDFDocument and its print operation (the pages scaled to the paper, turned to
+   fit), whose print panel runs app-modally, as the file dialogs do. PDFKit is loaded with dlopen, as AppKit is. */
+#define CEE_HAS_NATIVE_PRINT 1
+static int32_t cee_native_print(struct cee_window *w, const char *title, const char *file) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    static int pdfkit; /* 0 not tried, 1 loaded, -1 not there */
+    if (pdfkit == 0) {
+        void *kit = dlopen("/System/Library/Frameworks/PDFKit.framework/PDFKit", RTLD_NOW | RTLD_GLOBAL);
+        pdfkit = kit != NULL && cee_mac_cls("PDFDocument") != NULL ? 1 : -1;
+    }
+    if (pdfkit != 1) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
+    void *pool = cee_objc.pool_push();
+    cee_id url = cee_send_id_id(cee_mac_cls("NSURL"), "fileURLWithPath:", cee_nsstring(file));
+    cee_id document = url != NULL ? cee_send_id_id(cee_send(cee_mac_cls("PDFDocument"), "alloc"), "initWithURL:", url)
+                                  : NULL;
+    if (document == NULL) {
+        cee_objc.pool_pop(pool);
+        return -CEE_WINDOW_RESOURCES; /* not a PDF this can read */
+    }
+    cee_id info = cee_send(cee_mac_cls("NSPrintInfo"), "sharedPrintInfo");
+    /* kPDFPrintPageScaleToFit (1), and autoRotate. */
+    cee_id operation = ((cee_id(*)(cee_id, cee_sel, cee_id, long, signed char))cee_objc.send)(
+        document, cee_mac_sel("printOperationForPrintInfo:scalingMode:autoRotate:"), info, 1l, 1);
+    int32_t result = -CEE_WINDOW_RESOURCES;
+    if (operation != NULL) {
+        if (title[0] != '\0') {
+            cee_send_v_id(operation, "setJobTitle:", cee_nsstring(title));
+        }
+        cee_send_v_bool(operation, "setShowsPrintPanel:", 1);
+        cee_send_v_bool(operation, "setShowsProgressPanel:", 1);
+        cee_send_v_bool(cee_objc.app, "activateIgnoringOtherApps:", 1);
+        signed char printed =
+            ((signed char (*)(cee_id, cee_sel))cee_objc.send)(operation, cee_mac_sel("runOperation"));
+        result = printed ? 1 : 0;
+    }
+    cee_send_v(document, "release");
     cee_send_v_id(m->window, "makeKeyAndOrderFront:", NULL);
     cee_objc.pool_pop(pool);
     return result;
@@ -12929,7 +12976,7 @@ int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, 
     struct cee_window *w = (struct cee_window *)window;
     *answer = NULL;
     w->answer_length = 0;
-    if (kind < CEE_DIALOG_FILE || kind > CEE_DIALOG_EXPORT || title_length > 0x7fffffffu ||
+    if (kind < CEE_DIALOG_FILE || kind > CEE_DIALOG_PRINT || title_length > 0x7fffffffu ||
         name_length > 0x7fffffffu || extensions_length > 0x7fffffffu) {
         return -CEE_WINDOW_UNSUPPORTED;
     }
@@ -12955,6 +13002,19 @@ int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, 
         char *x = cee_window_cstring(extensions, extensions_length);
         if (t == NULL || n == NULL || x == NULL) {
             result = -CEE_WINDOW_RESOURCES;
+        } else if (kind == CEE_DIALOG_PRINT) {
+#if defined(CEE_HAS_NATIVE_PRINT)
+            result = cee_native_print(w, t, x);
+            if (result == 1) {
+                result = cee_window_reserve(&w->answer, &w->answer_capacity, 1u) ? 0 : -CEE_WINDOW_RESOURCES;
+                if (result == 0) {
+                    w->answer[0] = '\0'; /* one empty path: printed */
+                    w->answer_length = 1;
+                }
+            }
+#else
+            result = -CEE_WINDOW_UNSUPPORTED; /* not yet on this system (ADR 0178 §4) */
+#endif
         } else if (kind != CEE_DIALOG_EXPORT) {
             result = cee_native_dialog(w, (int)kind, t, n, x, (size_t)extensions_length);
         } else {

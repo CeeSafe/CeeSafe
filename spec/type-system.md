@@ -3227,7 +3227,7 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157, ADR 0158, ADR 0159)
+### 26.13 Native windows (ADR 0069, ADR 0137, ADR 0141, ADR 0142, ADR 0145, ADR 0146, ADR 0150, ADR 0154, ADR 0155, ADR 0156, ADR 0157, ADR 0158, ADR 0159, ADR 0178)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
   WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows. macOS keeps at
@@ -3746,6 +3746,11 @@ Diagnostics: none new.
   to `open` and `openWith`, so no window is open there and no call on a `Window` is reached, the file dialogs, drops
   and drags included. A `Menu`, a `WindowDrop` and a `WindowDragOver` are built there as natively. `Window.waitAny`, which
   needs no window, sleeps there for its timeout on the virtual clock (ADR 0075 §2.6).
+
+- **Printing a PDF** (ADR 0178): `FileDialog.printFile(window, title, file)` gives the PDF at `file` to the system's
+  print dialog, `title` naming the job: `Ok(true)` when it was printed, `Ok(false)` when the user cancelled,
+  `Resources` when the file is not a PDF the system reads. Modal, as the file dialogs are. macOS (PDFKit's print
+  operation); `Unsupported` on iOS, Android and Windows until ADR 0178 §4's steps, and on Linux and FreeBSD.
 
 ### 26.14 Process limits (ADR 0104)
 - `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft

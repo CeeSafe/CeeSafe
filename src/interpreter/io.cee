@@ -1679,6 +1679,21 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_window_open")) {
         return "PsuuuP:P";
     }
+    if (sameText(name, "ceesafe_bluetooth_list")) {
+        return "uuP:l"; // ADR 0177
+    }
+    if (sameText(name, "ceesafe_bluetooth_open")) {
+        return "uPs:l";
+    }
+    if (sameText(name, "ceesafe_bluetooth_free")) {
+        return "P:-";
+    }
+    if (sameText(name, "ceesafe_bluetooth_write")) {
+        return "lPs:i";
+    }
+    if (sameText(name, "ceesafe_bluetooth_close")) {
+        return "l:-";
+    }
     if (sameText(name, "ceesafe_window_wait_any")) {
         return "u:-";
     }
@@ -2090,6 +2105,11 @@ fn callC(
         it.memory.storeBits(arguments[0].bits(0, 8)?, 946684800 + ms / 1000, 8)?;
         it.memory.storeBits(arguments[1].bits(0, 8)?, (ms % 1000) * 1000000, 4)?;
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_bluetooth_list") || sameText(n0, "ceesafe_bluetooth_open")) {
+        // Bluetooth printers (ADR 0177): the interpreter has no radio, so listing and opening are
+        // BluetoothError.Unsupported, and no link is ever made for the other calls to reach.
+        return Ok(hostFailure(1));
     }
     if (sameText(n0, "ceesafe_window_open")) {
         // Window.open and openWith (type-system.md §26.13, ADR 0069, ADR 0137): the interpreter has no window system,

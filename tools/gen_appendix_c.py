@@ -893,8 +893,10 @@ REST_ROWS = [
      [], link("lib/core", "reference/api/core#struct-textwriter")),
     ("`Layout`, `Allocator`, `Volatile<T>`, `MmioPtr`, `Cpu`", "Programs without an operating system: allocators of your own, device registers, the processor.",
      ["ch22-01", "ch22-02"], link("kernel code", "guide/kernel")),
-    ("`Crc32c`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `AsyncUdpSocket`, `AsyncDns`, `Window`",
-     "Checksums and hashes, authenticated encryption and comparing secrets, UDP and name lookup, native windows.", [],
+    ("`Crc32c`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `AsyncUdpSocket`, `AsyncDns`, `Window`, "
+     "`Bluetooth`, `BluetoothLink`",
+     "Checksums and hashes, authenticated encryption and comparing secrets, UDP and name lookup, native windows, "
+     "Bluetooth printers.", [],
      link("lib/std", "reference/api/std")),
 ]
 

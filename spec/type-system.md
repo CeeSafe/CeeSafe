@@ -3873,6 +3873,35 @@ Diagnostics: none new.
   Under `ceesafec run --interp` `spawnWith`, `Handover`'s listings and `SharedMemory.anonymous` are `Unsupported`,
   and `Process.inherited()` is empty.
 
+### 26.19 Bluetooth printers (ADR 0177)
+- **`Bluetooth.pairedPrinters()`** (lib/std): `Result<Vector<BluetoothDevice>, BluetoothError>`, the paired devices
+  that offer a serial port (Classic Bluetooth's Serial Port Profile), in the system's order.
+  **`Bluetooth.scanPrinters(milliseconds)`**: the Bluetooth Low Energy devices in range that advertise a printer's
+  service (`18F0`, `FF00`, `E7810A71-73AE-499D-8C15-FAA9AEF0C3F2`), found within the time, each once.
+- A **`BluetoothDevice`** is a `name` (as the system shows it; may be empty), an `address` (the system's id for it:
+  `00:11:22:AA:BB:CC`, or on Apple's systems for a Low Energy device a UUID) and a `transport`,
+  `BluetoothTransport.Classic` or `LowEnergy`. A program may keep the address and build the value again later.
+- **`BluetoothLink.open(device)`** connects: Classic, an RFCOMM channel to the device's Serial Port Profile; Low
+  Energy, the first characteristic of a printer's service that takes writes. **`link.write(bytes)`** writes all of
+  them, in order, and returns once the system has taken them (Low Energy: in pieces of the largest length the
+  connection allows, acknowledged where the characteristic acknowledges writes). The link is a move type that needs
+  drop; dropping it closes the connection.
+- **Every call blocks** until it is done and may be made from any thread; a windowed program makes them off its UI
+  thread. None needs the window's run loop.
+- **`BluetoothError`**: `Unsupported` (the system has no such Bluetooth), `Off` (the adapter is off), `Denied` (the
+  user refused, or the program does not say why it uses Bluetooth where the system requires it), `NotFound` (not
+  paired, not in range), `Refused` (it would not connect), `Lost` (the link broke), `Resources`.
+- **Permissions.** Android asks the user at the first call that needs one (`BLUETOOTH_CONNECT`, and `BLUETOOTH_SCAN`
+  for a scan); iOS and a bundled macOS app need `NSBluetoothAlwaysUsageDescription` in their Info.plist, and the
+  system asks at the first use. Windows asks nothing.
+- **Testing.** `CEESAFE_BLUETOOTH_SCRIPT=<file>` replaces the system's devices, on every system, by the file's lines:
+  `paired ADDRESS NAME`, `nearby ADDRESS NAME`, `off`, `denied`, `refuse ADDRESS`, `lose ADDRESS N` (the link breaks
+  once `N` bytes are written). `CEESAFE_BLUETOOTH_DUMP=<file>` receives `open ADDRESS`, `write HEX` and
+  `close ADDRESS` lines for what the links do.
+- **Where** (ADR 0177 §5, step by step): Android, macOS and Windows, both transports; iOS, Low Energy
+  (`pairedPrinters` and a Classic link are `Unsupported`). Linux, FreeBSD, CosmoOS and `ceesafec run --interp`:
+  `Unsupported`. Until a system's step is done, its calls are `Unsupported` too.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

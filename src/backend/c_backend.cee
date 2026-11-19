@@ -202,6 +202,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_window_")) {
             out.push(runtimeFile(8, "")?)?; // native windows (type-system.md §26.13, ADR 0069)
         }
+        if (containsBytes(mainText.view(), "ceesafe_bluetooth_")) {
+            out.push(runtimeFile(10, "")?)?; // Bluetooth printers (type-system.md §26.19, ADR 0177)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

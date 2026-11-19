@@ -7,6 +7,11 @@
 - [struct AsyncUdpSocket](#struct-asyncudpsocket)
 - [struct AsyncSockets](#struct-asyncsockets)
 - [struct AsyncFiles](#struct-asyncfiles)
+- [enum BluetoothTransport](#enum-bluetoothtransport)
+- [enum BluetoothError](#enum-bluetootherror)
+- [struct BluetoothDevice](#struct-bluetoothdevice)
+- [struct Bluetooth](#struct-bluetooth)
+- [struct BluetoothLink](#struct-bluetoothlink)
 - [struct Budget](#struct-budget)
 - [enum SendError](#enum-senderror)
 - [struct Channel](#struct-channel)
@@ -818,6 +823,112 @@ public async fn syncDirectory(path: StringView) -> Result<void, AsyncError>
 ```
 
 Makes a directory's entries durable (ADR 0075 §2.1).
+
+## enum BluetoothTransport
+
+```ceesafe
+public enum BluetoothTransport {
+    Classic,
+    LowEnergy,
+}
+```
+
+How a device is reached: Classic Bluetooth's serial port (RFCOMM, the Serial Port Profile), or Bluetooth Low
+Energy (a GATT characteristic that takes writes).
+
+## enum BluetoothError
+
+```ceesafe
+public enum BluetoothError {
+    Unsupported,
+    Off,
+    Denied,
+    NotFound,
+    Refused,
+    Lost,
+    Resources,
+}
+```
+
+Why a Bluetooth call failed.
+
+## struct BluetoothDevice
+
+```ceesafe
+public struct BluetoothDevice {
+    public name: String;
+    public address: String;
+    public transport: BluetoothTransport;
+}
+```
+
+A printer the system knows (paired) or found (a scan).
+
+## struct Bluetooth
+
+```ceesafe
+public struct Bluetooth
+```
+
+The printers a program can reach (ADR 0177). Every call blocks until done and may be made from any thread: a
+windowed program makes them off its UI thread.
+
+```
+let printers = Bluetooth.pairedPrinters()?;          // Android, macOS, Windows
+var link = BluetoothLink.open(printers[0])?;
+link.write(receipt.view())?;                          // ESC/POS bytes
+```
+
+### Bluetooth.pairedPrinters
+
+```ceesafe
+public fn pairedPrinters() -> Result<Vector<BluetoothDevice>, BluetoothError>
+```
+
+The paired devices that offer a serial port (Classic), in the system's order. Android, macOS and Windows;
+`Unsupported` on iOS, which lets no program use Classic Bluetooth's serial port.
+
+### Bluetooth.scanPrinters
+
+```ceesafe
+public fn scanPrinters(milliseconds: u32) -> Result<Vector<BluetoothDevice>, BluetoothError>
+```
+
+The Low Energy devices in range that advertise a printer's service (`18F0`, `FF00`, or
+`E7810A71-73AE-499D-8C15-FAA9AEF0C3F2`), found within `milliseconds`. Every system; on iOS the only way to find
+a printer.
+
+## struct BluetoothLink
+
+```ceesafe
+@noncopy
+public struct BluetoothLink {
+    drop { … }
+}
+```
+
+A connection to a printer (ADR 0177): bytes written in order, each `write` returning once the system has taken
+them (Low Energy: once the printer has acknowledged them, where its characteristic acknowledges writes). Dropping
+it closes it.
+
+### BluetoothLink.open
+
+```ceesafe
+public fn open(device: borrow BluetoothDevice) -> Result<BluetoothLink, BluetoothError>
+```
+
+Connects to `device`: Classic, to its Serial Port Profile's channel; Low Energy, to the first characteristic of
+a printer's service that takes writes.
+Safety: the runtime reads the address during the call; the link it gives is kept and given back once (drop).
+
+### BluetoothLink.write
+
+```ceesafe
+public fn write(borrow mut this, bytes: Slice<u8>) -> Result<void, BluetoothError>
+```
+
+Writes `bytes`, all of them, in order.
+Safety: the link is the runtime's, open until drop; the runtime reads the bytes during the call.
 
 ## struct Budget
 

@@ -1,7 +1,7 @@
 name: release
 
 # A tag v<version> publishes ceesafec's prebuilt binaries as a GitHub release (docs/release.md). One C seed for every
-# platform: a Linux job bootstraps ceesafec from the released ceesafec 0.3.2 (tools/bootstrap_release.sh, Decision 0009)
+# platform: a Linux job bootstraps ceesafec from the released ceesafec 0.78.1 (tools/bootstrap_release.sh, Decision 0009)
 # and writes ceesafec's own C, checking
 # the fixed point; each platform compiles the seed with its C compiler, lets that ceesafec rebuild itself with its own
 # `build`, and checks that the result emits the seed byte for byte. The macOS binaries are signed with the project's
@@ -19,9 +19,9 @@ permissions:
 env:
   SIGNING_IDENTITY: "Developer ID Application: Veeran Puthumkara (68PG74DU2D)"
   # The stage-0 compiler (Decision 0009; bootstrap/reference.md, "Release stage 0"): this repository's own release.
-  STAGE0_TAG: v0.3.2
+  STAGE0_TAG: v0.78.1
   STAGE0_ASSET: ceesafec-linux-x64.tar.gz
-  STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
+  STAGE0_SHA256: e0a437eb4ef4c43ee241e1f5f1f08d33557806b9d453019424161d5fe926f80a # v0.78.1's SHA256SUMS
 
 jobs:
   version:
@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # a stage 0's chain (tools/bootstrap_release.sh) may build earlier commits
-      - name: ceesafec 0.3.2 (the stage-0 compiler)
+      - name: ceesafec 0.78.1 (the stage-0 compiler)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -23,8 +23,13 @@ OUTPUT=${3:-out/ceesafec}
 version=$("$STAGE0" --version)
 CHAIN_FLAGS=""
 case "$version" in
+"ceesafec 0.78.1")
+    # The release's stage 0 since 2026-11-20 (the owner: "we need to replace it with a latest version"): it builds the
+    # tree at once, so the compiler's sources may use what 0.78.1 accepts, not only 0.8.0's language.
+    CHAIN=""
+    ;;
 "ceesafec 0.3.2")
-    # The release's stage 0 since 2026-11-01. ADR 0044 crosses two commits: f7a7d57 adds AsyncSockets' address calls
+    # The release's stage 0 from 2026-11-01 to 2026-11-20. ADR 0044 crosses two commits: f7a7d57 adds AsyncSockets' address calls
     # to lib/std, and 93c433f uses them in the interpreter and adds TcpStream's setters to the compiler, which the
     # interpreter's own models of them (the next commit) call on the host's TcpStream. So 0.3.2 builds f7a7d57, whose
     # compiler builds 93c433f, whose compiler builds the tree. ADR 0050 adds a step the same way: 71d5c13 adds

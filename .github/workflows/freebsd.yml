@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # A released ceesafec that builds the tree (any release does: the tree's sources use only what 0.8.0 accepts).
+  # A released ceesafec that builds the tree (a recent one: the tree's sources may use what the release stage 0, 0.78.1, accepts).
   STAGE1_TAG: v0.51.1
   STAGE1_ASSET: ceesafec-linux-x64.tar.gz
 

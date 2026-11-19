@@ -27,9 +27,9 @@ concurrency:
 
 env:
   # The fallback's stage 0 (Decision 0009; the same as release.yml's).
-  STAGE0_TAG: v0.3.2
+  STAGE0_TAG: v0.78.1
   STAGE0_ASSET: ceesafec-linux-x64.tar.gz
-  STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
+  STAGE0_SHA256: e0a437eb4ef4c43ee241e1f5f1f08d33557806b9d453019424161d5fe926f80a # v0.78.1's SHA256SUMS
 
 jobs:
   documents:

@@ -9,10 +9,10 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 
 | Item | Value |
 |---|---|
-| Compiler | `ceesafec 0.3.2`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz` |
-| sha256 | `59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22` (v0.3.2's `SHA256SUMS`) |
-| Chain | `f7a7d57`, then `93c433f` (ADR 0044's library calls, used by the next commit's compiler sources), then `71d5c13` (ADR 0050's UDP calls, used by the next commit's interpreter): `tools/bootstrap_release.sh` |
-| Checked | 2026-11-01 at `ef7820d`: macOS arm64 (the released, notarized binary) and Debian 12 x86-64 (its linux-x64 archive), fixed point reached on both, seed `main.c` `fc5ce1d4…` on both |
+| Compiler | `ceesafec 0.78.1`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.78.1/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
+| sha256 | `e0a437eb4ef4c43ee241e1f5f1f08d33557806b9d453019424161d5fe926f80a` (linux-x64), `3771acd3cd13fb1703247bff82465a6708f88ae0c1e4f20b283c3737d1b3d91a` (osx-arm64) (v0.78.1's `SHA256SUMS`) |
+| Chain | none: 0.78.1 builds the tree directly (`tools/bootstrap_release.sh`) |
+| Checked | CHECKED |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.
@@ -33,6 +33,7 @@ A platform with no release builds a first `ceesafec` from a release's C seed (`c
 | 2026-10-30 | the reference compiler 0.3.1 to 0.6.0 | the port: CeeSafe was built by the compiler it was ported from until it built itself (P6) |
 | 2026-11-01 | ceesafec 0.2.0 (Decision 0009) | the reference compiler's releases are no longer public |
 | 2026-11-01 | ceesafec 0.3.2 | the first release built from a CeeSafe release; it builds the tree with no chain (`tools/bootstrap_release.sh` keeps 0.2.0's) |
+| 2026-11-20 | ceesafec 0.78.1 | the owner: "we need to replace it with a latest version": 0.3.2's chain ended in 0.8.0, which held the compiler's own sources to 0.8.0's language (no `let _`, no two-phase borrows) |
 
 ## Fixed points
 

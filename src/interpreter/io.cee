@@ -3122,7 +3122,9 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
         return Ok(null);
     }
     if (sameText(name, "ceesafe_async_lock_released")) {
-        unitForgetLock(it, unitOfTask(it, it.asyncCurrent), arguments[0].bits(0, 8)?);
+        let holder = unitOfTask(it, it.asyncCurrent);
+        let released = arguments[0].bits(0, 8)?;
+        unitForgetLock(it, holder, released);
         return Ok(null);
     }
     if (sameText(name, "ceesafe_async_isolation_report")) {

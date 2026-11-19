@@ -424,9 +424,11 @@ def main():
                             function = m.group(1)
                         if "ceesafe_platform_abort();" in line:
                             calls.append((name, function))
+        # panic_end is where every panic that ends the process ends (panic_report, for one that an isolated task does
+        # not end alone for, ADR 0175).
         check.expect("ceesafe_platform_abort is called only from the panic functions",
                      sorted(set(calls)) == [("ceesafe_rt_core.c", "ceesafe_panic_reentered"),
-                                            ("ceesafe_rt_core.c", "panic_report")], str(calls))
+                                            ("ceesafe_rt_core.c", "panic_end")], str(calls))
 
         # Bun's link flags.
         if platform.system() == "Darwin":

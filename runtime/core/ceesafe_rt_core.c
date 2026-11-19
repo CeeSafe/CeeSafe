@@ -402,6 +402,7 @@ static uint64_t alloc_attempts;   /* every allocation attempt, failed ones inclu
 static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
 static uint32_t alloc_foreign_used; /* C has allocated: the report gives alloc_foreign (ceesafe_atomic_*) */
+static uint64_t alloc_isolated; /* blocks isolated units that trapped left behind (ADR 0175; ceesafe_atomic_*) */
 static uint64_t alloc_given;      /* blocks a host adopted (Vector.intoForeign, ADR 0090): no longer in alloc_live */
 static uint64_t alloc_taken;      /* blocks taken from a host (Vector.fromForeign): now in alloc_live */
 static uint32_t alloc_moved_used; /* a block changed sides: the report gives both counts (ceesafe_atomic_*) */
@@ -571,6 +572,8 @@ static void alloc_count_live(uint32_t allocator, uint64_t delta) {
 typedef struct cee_budget {
     uint64_t limit;
     uint64_t held;
+    uint64_t blocks; /* blocks allocated under it and not freed under it, never below zero: what an isolated unit
+                        that traps leaves, for the leak count of `ceesafec test` (ADR 0175 amendment 1) */
     uint32_t refs;
     struct cee_budget *parent;
 } cee_budget;
@@ -592,6 +595,21 @@ static void budget_give_back(cee_budget *b, uint64_t bytes) {
                 break;
             }
             held = seen;
+        }
+    }
+}
+
+/* One block more (`up`) or fewer under `b` and the budgets it is inside, never below zero. */
+static void budget_blocks(cee_budget *b, bool up) {
+    for (; b != NULL; b = b->parent) {
+        uint64_t had = ceesafe_atomic_load_u64(&b->blocks);
+        for (;;) {
+            uint64_t next = up ? had + 1u : (had > 0u ? had - 1u : 0u);
+            uint64_t seen = ceesafe_atomic_cas_u64(&b->blocks, had, next);
+            if (seen == had) {
+                break;
+            }
+            had = seen;
         }
     }
 }
@@ -646,6 +664,7 @@ void *ceesafe_budget_enter(uint64_t limit) {
     }
     b->limit = limit;
     b->held = 0u;
+    b->blocks = 0u;
     b->refs = 1u;
     b->parent = cee_budget_now;
     if (b->parent != NULL) {
@@ -669,6 +688,14 @@ void *ceesafe_budget_make(uint64_t limit) {
 
 uint64_t ceesafe_budget_held_of(void *budget) {
     return budget == NULL ? 0u : ceesafe_atomic_load_u64(&((cee_budget *)budget)->held);
+}
+
+void ceesafe_alloc_isolated_leaked(uint64_t blocks) {
+    (void)ceesafe_atomic_add_u64(&alloc_isolated, blocks);
+}
+
+uint64_t ceesafe_budget_blocks_of(void *budget) {
+    return budget == NULL ? 0u : ceesafe_atomic_load_u64(&((cee_budget *)budget)->blocks);
 }
 
 void ceesafe_budget_leave(void *budget) {
@@ -716,6 +743,9 @@ static void *budget_new_block(void *p, uint32_t allocator) {
     if (b != NULL && !budget_take(b, (uint64_t)ceesafe_platform_block_size(p), false)) {
         ceesafe_platform_free(p);
         return NULL;
+    }
+    if (b != NULL) {
+        budget_blocks(b, true);
     }
     return p;
 }
@@ -792,6 +822,7 @@ void ceesafe_free(void *p, uint32_t allocator) {
     cee_budget *b = budget_for(allocator);
     if (b != NULL) {
         budget_give_back(b, (uint64_t)ceesafe_platform_block_size(p));
+        budget_blocks(b, false);
     }
     if (config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */
@@ -1024,8 +1055,10 @@ int32_t ceesafe_rt_init_main(const ceesafe_config *config) {
 }
 
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
-   with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak; then, if a
-   vector's block changed sides, "ceesafe alloc: given=<k> taken=<m>\n" (ADR 0090), for information too. */
+   with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak; then, if
+   isolated units trapped, "ceesafe alloc: isolated leaked=<k>\n" (ADR 0175 amendment 1), the blocks they left, which
+   `live` counts and `ceesafec test` takes off it; then, if a vector's block changed sides, "ceesafe alloc: given=<k>
+   taken=<m>\n" (ADR 0090), for information too. */
 uint64_t ceesafe_shutdown(void) {
     /* Before ceesafe_init has published the config (never called, or still under way on another thread), nothing
        was asked for: 0. The load orders that config before the reads below. */
@@ -1042,6 +1075,11 @@ uint64_t ceesafe_shutdown(void) {
         if (ceesafe_atomic_load_u32(&alloc_foreign_used) != 0u) {
             write_err_cstr("ceesafe alloc: foreign held=");
             write_err_u64(ceesafe_atomic_load_u64(&alloc_foreign));
+            write_err_cstr("\n");
+        }
+        if (ceesafe_atomic_load_u64(&alloc_isolated) != 0u) {
+            write_err_cstr("ceesafe alloc: isolated leaked=");
+            write_err_u64(ceesafe_atomic_load_u64(&alloc_isolated));
             write_err_cstr("\n");
         }
         if (ceesafe_atomic_load_u32(&alloc_moved_used) != 0u) {

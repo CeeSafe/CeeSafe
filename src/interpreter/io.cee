@@ -2721,6 +2721,7 @@ fn asyncSetSpawn(
                 critical: 0,
                 crashedAt: it.asyncIsolateAt,
                 crashedSize: it.asyncIsolateSize,
+                blocks: 0,
                 lockKinds: Vector<u32>.create(),
                 locks: Vector<u64>.create(),
                 flags: Vector<u64>.create(),
@@ -2877,9 +2878,20 @@ struct InterpUnit {
     critical: u32;  // Critical guards its tasks hold
     crashedAt: u64; // the Result<void, E> its set is given, in a block of its own
     crashedSize: usize;
+    blocks: u64;            // heap blocks its tasks allocated and did not free, never below zero (ADR 0175 amendment 1)
     lockKinds: Vector<u32>; // the locks its tasks hold: 1 a Mutex, 2 an AsyncMutex's token channel
     locks: Vector<u64>;
     flags: Vector<u64>; // each one's poison mark
+}
+
+/// One heap block more (`up`) or fewer under the current task's unit and those it is inside, never below zero.
+fn unitBlocks(it: borrow mut Interp, up: bool) {
+    var u = unitOfTask(it, it.asyncCurrent);
+    while (u != none()) {
+        let had = it.asyncUnits[u as usize].blocks;
+        it.asyncUnits[u as usize].blocks = if (up) had + 1 else (if (had > 0) had - 1 else 0u64);
+        u = it.asyncUnits[u as usize].outer;
+    }
 }
 
 /// The unit of task `task`, or none.
@@ -2988,6 +3000,7 @@ fn unitCrashed(it: borrow mut Interp, unit: u32, code: u32) -> Result<void, Stop
     let u = unit as usize;
     it.asyncUnits[u].dead = true;
     it.asyncCrashes += 1;
+    it.isolatedLeaked += it.asyncUnits[u].blocks; // what `ceesafec test` takes off the live count
     loop {
         let last = it.asyncUnits[u].locks.length;
         if (last == 0) {
@@ -3090,7 +3103,14 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
         let scope = truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 8)? - 1);
         for (w in 0..it.asyncWatchScopes.length) {
             if (it.asyncWatchScopes[w] == scope && it.asyncWatchChannels[w] != 0) {
-                it.runtime.channels[(it.asyncWatchChannels[w] - 1) as usize].refs -= 1;
+                let k = (it.asyncWatchChannels[w] - 1) as usize;
+                it.runtime.channels[k].refs -= 1;
+                if (it.runtime.channels[k].refs == 0) {
+                    // The set held the last count: the program's own handle went first (a channel made in the
+                    // set's body). Its values are TaskCrash, Copy: freeing the storage is all its drop does.
+                    let data = it.runtime.channels[k].data;
+                    freeMemory(it, data)?;
+                }
                 it.asyncWatchScopes[w] = none();
                 it.asyncWatchChannels[w] = 0;
             }

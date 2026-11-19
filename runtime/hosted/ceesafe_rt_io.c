@@ -3580,9 +3580,16 @@ void ceesafe_host_handover_release(uint32_t kind, uint64_t held) {
 }
 
 /* Ends the connection of a socket held for `stream.closer()` (ADR 0175 §2.7), for both directions and for every
-   holder of the socket: 0, or a negated errno. */
+   holder of the socket: 0, or a negated errno. On macOS (and the BSDs) a socket whose peer has already sent its FIN
+   refuses SHUT_RDWR with ENOTCONN and sends nothing, though it still takes SHUT_WR, which is what the peer must see:
+   each direction is then shut on its own (ADR 0175 amendment 1). */
 int64_t ceesafe_host_handover_shutdown(uint64_t held) {
-    return shutdown((int)held, SHUT_RDWR) == 0 ? 0 : -(int64_t)errno;
+    if (shutdown((int)held, SHUT_RDWR) == 0) return 0;
+    int failed = errno;
+    if (failed != ENOTCONN) return -(int64_t)failed;
+    bool wrote = shutdown((int)held, SHUT_WR) == 0;
+    bool read = shutdown((int)held, SHUT_RD) == 0;
+    return wrote || read ? 0 : -(int64_t)ENOTCONN;
 }
 
 /* How many places this process was handed, with their kinds in `kinds` (0: taken). */

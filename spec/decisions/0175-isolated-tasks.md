@@ -6,8 +6,8 @@
   (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`, S3: a trap ends the process, so a task cannot fail alone) and
   from the three things that review's proposal left open: what happens to the tasks under a child that traps, a
   trap with C frames beneath it, and shared state a child was half way through changing. Implemented the same
-  day (§10), with the differences §10 lists; not released. Its check passes on macOS, Linux and Windows on ARM64
-  (MSVC).
+  day (§10), with the differences §10 lists; released in 0.75.0. Its check passes on macOS, Linux and Windows on
+  ARM64 (MSVC). Amendment 1 (§11, 2026-11-19): `trySpawnIsolated`, and three faults CeeSafe.Web met building on it.
 - Scope: the hosted runtime (the panic path, `runtime/core/ceesafe_rt_core.c`; the executor,
   `runtime/hosted/ceesafe_rt_async.c`; mutexes, `ceesafe_rt_thread.c`), lib/core (`TaskSet.spawnIsolated`,
   `TaskCrash`, `Critical`), lib/std (`Mutex`, `AsyncMutex`: poisoning; `Isolation`; `AsyncTcpStream.closer`), the
@@ -371,3 +371,44 @@ What was not done:
 - **A unit under `Async.runWorkers`** with other workers running is not tested: its tasks stay on one worker by
   construction.
 - **Tests:** `tools/isolated_check.py`, in the contract suite as `isolated`: 14 cases.
+
+## 11. Amendment 1 (2026-11-19): `trySpawnIsolated`, and what CeeSafe.Web met
+
+From CeeSafe.Web's Web ADR 0016 (isolated connections and streams), accepted by the owner the same day, and its
+`docs/ceesafe-upstream-work.md` (U25, B21, B22, B23). The owner, asked whether to do them in CeeSafe for a release:
+"Yes, go ahead."
+
+1. **`set.trySpawnIsolated(crashed, async move () => …)`** (U25): `spawnIsolated` without the wait, as `trySpawn`
+   is `spawn` without it. Its result is `u64?`: the child's number (0 if there was no memory to isolate it, as for
+   `spawnIsolated`), or `null` when the set is full or cancelled, and the child is then not started. Its child
+   follows `spawnIsolated`'s rules (N0349, N0334, hosted only). It is for a task that cannot wait for room: an
+   HTTP/2 or HTTP/3 connection's frame loop starts each stream's handler and refuses the stream when the set is
+   full, and the streams it would wait for wait on that loop to send their data. The checker joins `tryRoom`,
+   `isolating` and the start as for `trySpawn`, and `TaskSet.startedIsolated` gives the result.
+2. **`StreamCloser.shutdown()` ends a connection whose peer has half-closed** (B21). It was `shutdown(SHUT_RDWR)`,
+   which macOS (and the BSDs) refuse with `ENOTCONN` once the peer's FIN has arrived, sending nothing: the peer of a
+   crashed connection that had ended its side waited for its own timeout. On `ENOTCONN` each direction is now shut
+   on its own; `SHUT_WR` is taken there, and the peer reads the end. Linux took `SHUT_RDWR` in that state already.
+3. **`ceesafec test` reports an isolated child's trap as neither the test's panic nor its leak** (B22). The runner
+   called any test whose standard error held `ceesafe panic` panicked, and an isolated task that ends alone writes
+   that line too (§2.5). It now looks for a panic line that does not say `ended alone)`, and reports that one. What
+   the crashed units left was counted as live allocations at the end: each budget record (ADR 0170) now counts its
+   blocks beside its bytes, a crash adds its unit's blocks (and its root's frame, allocated before the unit was
+   made) to a process total, and `ceesafe_shutdown`'s report gives it as `ceesafe alloc: isolated leaked=<k>`, which
+   the runner takes off `live`. The interpreter counts the same per unit. A block allocated in a unit and freed
+   outside it stays in the unit's count, as its bytes do, so a test whose unit crashed may have that many of its
+   own leaks unreported; a block of nested units that both crash is counted twice, and the runner never takes off
+   more than `live`.
+4. **The interpreter frees a watched channel at its set's end** when the set held the last count (B23): a channel
+   made in the set's body and given to `Isolation.watch` was left live, which `ceesafec test --interp` reported as
+   a leak. The runtime did this already.
+5. **The executor's jump point is a function of its own** (`cee_resume_isolated`), so that the executor's loop keeps
+   no local across a `setjmp`: gcc 13.3 warned (`-Wclobbered`) of two (`t`, `outer`) when a program used isolated
+   tasks. They were set before the `setjmp` and not changed, which C11 §7.13.2.1 says keeps them; the warning is
+   gone without a `volatile`.
+
+Checked (2026-11-19, macOS arm64, the tree's compiler): `tools/isolated_check.py` 14 cases, with `trySpawnIsolated`
+in its first program and a peer that half-closes before the owner's closer in its sockets case (which 0.75.0
+fails: "the peer saw no end"); `tools/test_command_check.py`, whose fixture gains four tests: an isolated child's
+trap that leaves the test passed, one followed by the test's own panic (reported at the test's line) and by the
+test's own leak, and a watcher made in the set's body.

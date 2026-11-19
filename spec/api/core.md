@@ -273,7 +273,8 @@ public struct TaskSet<E: Copy>
 
 The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
 children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
-`set.trySpawn(async move () => …)`, which is false instead. A child owns what it captures: no loans, so it cannot
+`set.trySpawn(async move () => …)`, which is false instead. `await set.spawnIsolated(crashed, async move () => …)`
+and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175). A child owns what it captures: no loans, so it cannot
 capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
 
 ### TaskSet.crashes

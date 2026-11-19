@@ -15,6 +15,12 @@ fn finishRuntime(it: borrow mut Interp) {
         appendText(mut m, " live=")!;
         appendDecimal(mut m, it.liveAllocations)!;
         m.push('\n')!;
+        if (it.isolatedLeaked != 0) {
+            // The blocks isolated units that trapped left (ADR 0175 amendment 1), as the runtime prints them.
+            appendText(mut m, "ceesafe alloc: isolated leaked=")!;
+            appendDecimal(mut m, it.isolatedLeaked)!;
+            m.push('\n')!;
+        }
         if (it.givenAllocations != 0 || it.takenAllocations != 0) {
             // Blocks that changed sides (ADR 0090 §2.3): for information, as the runtime prints them.
             appendText(mut m, "ceesafe alloc: given=")!;
@@ -48,6 +54,7 @@ fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> 
         return Ok(0); // malloc would fail, or the sandbox has no more memory (tooling.md §6.3)
     }
     it.liveAllocations += 1;
+    unitBlocks(it, true);
     return it.memory.allocate(
         allocationHeap(),
         if (size == 0) 1 else size as usize,
@@ -60,6 +67,7 @@ fn freeMemory(it: borrow mut Interp, pointer: u64) -> Result<void, Stop> {
     // Wraps as the runtime's counter does: a program that breaks Vector.fromRaw's contract can free a block that
     // is not in the count (ADR 0090 §2.3).
     it.liveAllocations = it.liveAllocations.wrappingSub(1);
+    unitBlocks(it, false);
     return it.memory.free(pointer);
 }
 

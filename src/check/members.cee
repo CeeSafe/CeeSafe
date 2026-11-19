@@ -600,10 +600,12 @@ fn checkMethodCall(
     if (isTaskSet(c, structType) &&
         (sameText(c.name(memberIdent.symbol), "spawn") || sameText(c.name(memberIdent.symbol), "trySpawn") ||
             sameText(c.name(memberIdent.symbol), "spawnSend") ||
-            sameText(c.name(memberIdent.symbol), "spawnIsolated"))) {
-        let trying = sameText(c.name(memberIdent.symbol), "trySpawn");
+            sameText(c.name(memberIdent.symbol), "spawnIsolated") ||
+            sameText(c.name(memberIdent.symbol), "trySpawnIsolated"))) {
+        let tryIsolated = sameText(c.name(memberIdent.symbol), "trySpawnIsolated"); // ADR 0175 amendment 1
+        let trying = sameText(c.name(memberIdent.symbol), "trySpawn") || tryIsolated;
         let send = sameText(c.name(memberIdent.symbol), "spawnSend");
-        let isolated = sameText(c.name(memberIdent.symbol), "spawnIsolated");                             // ADR 0175
+        let isolated = sameText(c.name(memberIdent.symbol), "spawnIsolated") || tryIsolated;              // ADR 0175
         return checkSetSpawn(c, target, structType, arguments, trying, send, isolated, targetSpan, span); // ADR 0053
     }
     // Own methods, impl methods, or a type parameter's bound methods (§21).

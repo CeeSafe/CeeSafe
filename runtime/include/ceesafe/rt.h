@@ -928,6 +928,8 @@ void *ceesafe_budget_enter(uint64_t limit);
 void ceesafe_budget_leave(void *budget);
 void *ceesafe_budget_make(uint64_t limit);
 uint64_t ceesafe_budget_held_of(void *budget);
+uint64_t ceesafe_budget_blocks_of(void *budget);
+void ceesafe_alloc_isolated_leaked(uint64_t blocks);
 int64_t ceesafe_budget_held(void);
 int64_t ceesafe_budget_limit(void);
 void *ceesafe_budget_retain(void);

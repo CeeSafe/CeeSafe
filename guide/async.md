@@ -203,6 +203,23 @@ task 3 failed; the others ran to the end
 - A task may outlive the function that started it, so it owns what it captures: no borrows or views (N0349).
   Share through `Arc` or a `Channel`, or pass values in.
 
+### A task that may trap: isolated tasks
+
+A trap (an index out of bounds, an overflow, an unwrapped `Err`) ends the process. A server that serves each
+connection in a task of a set can have one connection's trap end that task alone instead (ADR 0175):
+
+- `await set.spawnIsolated(crashed, async move () => …)` starts a task whose trap ends it and every task under it,
+  and nothing else. The set counts it as returned `Err(crashed)`, and `set.crashes()` says how many trapped. Its
+  result is a number that names the task. `set.trySpawnIsolated(crashed, …)` does not wait for room: it is `null`
+  while `limit` tasks run, as `trySpawn` is `false`.
+- What the task held is left as it was, never freed: its memory, which `Isolation.report()` counts, and its
+  sockets. Keep a socket's `stream.closer()` before you give the stream away, and call `shutdown()` on it when the
+  task traps, so the peer is not left waiting. `Isolation.watch(set, channel)` tells you of each crash.
+- What it captures must also be `Send` (N0334). A `Mutex` it held at the trap is poisoned: the next `lock()` traps
+  too, and `recover()` takes it anyway. A change to state with no lock, such as two atomics that must agree, goes
+  inside `Critical.enter()`, where a trap still ends the process.
+- `ceesafec test` reports a test whose isolated task trapped by the test's own outcome.
+
 ## Racing and joining two tasks
 
 `Async.race(a, b)` runs two async closures and keeps the first to finish; `Async.all(a, b)` runs both and fails with

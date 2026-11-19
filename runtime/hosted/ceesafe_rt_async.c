@@ -247,7 +247,7 @@ static _Thread_local cee_executor cee_exec;
 struct cee_unit;
 struct cee_task;
 static bool cee_unit_dead(const struct cee_unit *u);
-static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size);
+static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size, bool root_counted);
 static void cee_unit_crash(struct cee_task *t);
 static void cee_unit_end(struct cee_unit *u);
 static void cee_child_gone(struct cee_task *t, bool keep);
@@ -1245,7 +1245,8 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     t->block_size = block_size;
 #if !defined(CEE_FREESTANDING)
     if (isolated && scope->set) {
-        cee_unit_begin(t, crashed, crashed_size); /* without memory for it, the child is an ordinary one */
+        /* without memory for it, the child is an ordinary one */
+        cee_unit_begin(t, crashed, crashed_size, allocate == NULL);
     } else if (crashed != NULL) {
         ceesafe_platform_free(crashed);
     }
@@ -1955,6 +1956,7 @@ typedef struct cee_unit {
     uint32_t critical;      /* Critical guards held by its tasks: a trap then ends the process */
     void *budget;           /* what it holds: its own record, or its maker's where a block's size cannot be told */
     bool counted;           /* budget is its own */
+    bool root_counted;      /* the root's block came from ceesafe_alloc before the unit was made: one more it leaves */
     void *crashed;          /* the Result<void, E> its set is given, copied when it was started */
     size_t crashed_size;
     cee_unit_lock *locks;   /* held by its tasks and by those of the units inside it */
@@ -2005,7 +2007,7 @@ static void cee_isolate_panic(const ceesafe_panic_info *info) {
 }
 
 /* Makes `t`, a set's new child, the root of a unit of its own. */
-static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
+static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size, bool root_counted) {
     cee_unit *u = (cee_unit *)ceesafe_platform_alloc_zeroed(sizeof *u);
     if (u == NULL) {
         if (crashed != NULL) ceesafe_platform_free(crashed);
@@ -2017,6 +2019,7 @@ static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
     u->root = t;
     u->crashed = copy;
     u->crashed_size = crashed_size;
+    u->root_counted = root_counted;
     void *own = ceesafe_budget_make(UINT64_MAX); /* inside its maker's, with no bound of its own */
     if (own != NULL) {
         ceesafe_budget_release(t->budget);
@@ -2054,6 +2057,9 @@ static void cee_unit_crash(cee_task *t) {
     cee_unit *u = t->unit;
     u->dead = true;
     uint64_t leaked = u->counted ? ceesafe_budget_held_of(u->budget) : 0u;
+    if (u->counted) {
+        ceesafe_alloc_isolated_leaked(ceesafe_budget_blocks_of(u->budget) + (u->root_counted ? 1u : 0u));
+    }
     (void)ceesafe_atomic_add_u64(&cee_crashes, 1u);
     (void)ceesafe_atomic_add_u64(&cee_leaked, leaked);
     for (uint32_t i = 0; i < u->lock_count; i++) {
@@ -3099,6 +3105,28 @@ static void cee_child_gone(cee_task *t, bool keep) {
     }
 }
 
+/* Resumes `t`: whether it returned. */
+static bool cee_resume(cee_task *t) {
+    return t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
+}
+
+#if !defined(CEE_FREESTANDING)
+/* Resumes `t`, a task of an isolation unit, over a jump point: 1 if it returned, 0 if it waits, -1 if it trapped and
+   the panic path jumped back here (ADR 0175 §2.3). The jump point is this function's own, so that the loop that calls
+   it keeps no local across a setjmp (gcc's -Wclobbered named two), and nothing here is read after the jump. gcc and
+   clang never inline a function that calls setjmp. cee_exec.jump points at `crash` only until the loop restores it,
+   right after the return, with no CeeSafe code between. */
+static int cee_resume_isolated(cee_task *t) {
+    jmp_buf crash;
+    cee_exec.jump = &crash;
+    cee_exec.jump_depth = ceesafe_entry_depth();
+    if (setjmp(crash) != 0) {
+        return -1;
+    }
+    return cee_resume(t) ? 1 : 0;
+}
+#endif
+
 /* Runs tasks until `root` returns, or, for a worker (root NULL), until the run is done. */
 static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
     for (;;) {
@@ -3124,22 +3152,18 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         /* The task's budget is the thread's while the task runs (ADR 0170), and what the task left current is the
            task's when it parks. */
         void *outer = ceesafe_budget_swap(t->budget);
-        /* A task of an isolation unit is resumed over a jump point: a trap in it comes back here (ADR 0175 §2.3).
-           What is read after the jump was set before it and not changed since. */
-        jmp_buf crash;
+        /* A task of an isolation unit is resumed over a jump point (cee_resume_isolated): a trap in it comes back
+           as -1 (ADR 0175 §2.3). */
         jmp_buf *outer_jump = cee_exec.jump;
         int32_t outer_depth = cee_exec.jump_depth;
-        bool crashed = false;
+        int resumed;
         if (t->unit != NULL) {
-            cee_exec.jump = &crash;
-            cee_exec.jump_depth = ceesafe_entry_depth();
-            if (setjmp(crash) != 0) {
-                crashed = true;
-            }
+            resumed = cee_resume_isolated(t);
         } else {
             cee_exec.jump = NULL; /* a trap in a task of no unit ends the process, also under an outer executor's unit */
+            resumed = cee_resume(t) ? 1 : 0;
         }
-        if (crashed) {
+        if (resumed < 0) {
             cee_exec.jump = outer_jump;
             cee_exec.jump_depth = outer_depth;
             cee_exec.current = NULL;
@@ -3152,8 +3176,10 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
             }
             continue;
         }
+        bool done = resumed > 0;
+#else
+        bool done = cee_resume(t);
 #endif
-        bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
 #if !defined(CEE_FREESTANDING)
         cee_exec.jump = outer_jump;

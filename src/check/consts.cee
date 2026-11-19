@@ -111,19 +111,15 @@ fn fold(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
             match (op) {
                 UnaryOp.Complement => {
                     // Every bit of an unsigned value of at most 64 bits flipped (§6, ADR 0176): never fails.
-                    return match (c.hir.exprs[folded as usize]) {
+                    match (c.hir.exprs[folded as usize]) {
                         HirExpr.IntConst(i) => {
                             let bits = c.types.info(typ).bits;
                             let mask: u64 = if (bits >= 64) 0xFFFFFFFFFFFFFFFF else (1u64 << truncate<u32>(bits)) - 1;
-                            c.expr(
-                                HirExpr.IntConst(IntValue { negative: false, magnitude: i.magnitude ^ mask }),
-                                typ,
-                                span.start,
-                                span.end,
-                            )
-                        },
-                        _ => Ok(folded),
-                    };
+                            let flipped = IntValue { negative: false, magnitude: i.magnitude ^ mask };
+                            return c.expr(HirExpr.IntConst(flipped), typ, span.start, span.end);
+                        }
+                        _ => { return Ok(folded); }
+                    }
                 }
                 _ => {}
             }

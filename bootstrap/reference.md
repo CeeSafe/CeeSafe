@@ -12,7 +12,7 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 | Compiler | `ceesafec 0.78.1`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.78.1/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
 | sha256 | `e0a437eb4ef4c43ee241e1f5f1f08d33557806b9d453019424161d5fe926f80a` (linux-x64), `3771acd3cd13fb1703247bff82465a6708f88ae0c1e4f20b283c3737d1b3d91a` (osx-arm64) (v0.78.1's `SHA256SUMS`) |
 | Chain | none: 0.78.1 builds the tree directly (`tools/bootstrap_release.sh`) |
-| Checked | CHECKED |
+| Checked | 2026-11-20 at the 0.79.0 release commit: macOS arm64 (the released, notarized binary) and Ubuntu 24.04 x86-64 (its linux-x64 archive), fixed point reached on both, seed `main.c` `a4214ab9…` on both |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.

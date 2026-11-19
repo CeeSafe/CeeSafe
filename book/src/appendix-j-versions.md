@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.75.0
+## Releases 0.25.0 to 0.76.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.76.0 | 2026-11-19 | The bitwise complement (ADR 0176): `~x` flips every bit of an unsigned integer, `~0x0Fu8` is `0xF0`; it is literal arithmetic and may stand in a constant's value. On a signed integer, a float or a `bool` it is N0207, as `&` is. Where `x ^ 0xFFFFFFFF` stood, `~x` | [20.4](./ch20-04-arithmetic) |
 | 0.75.0 | 2026-11-19 | Isolated tasks (ADR 0175): a task set's child started with `await set.spawnIsolated(crashed, async move () => …)` ends alone if it panics, with every task made under it, and its set is given `Err(crashed)`; the process goes on. What the task held is not freed: `Isolation.report()` counts the crashes and the bytes, and `Isolation.watch(set, channel)` sends a `TaskCrash` for each. A `Mutex` or `AsyncMutex` it held is poisoned: `lock()` on it panics, and `recover()` and the guard's `heal()` are for code that repairs the data. A panic while a `Critical.enter()` value lives, under a `@callback` C called, on another thread, or in a child started with `spawn` ends the process as before. `stream.closer()` lets an owner end a connection it gave away. The interpreter does the same | [Appendix C](./appendix-c-built-in-types) |
 | 0.74.0 | 2026-11-19 | A root manifest's `[patch]` gives a package of its build another source, wherever the graph reaches it (ADR 0174): a program working on a dependency that another of its dependencies names by git (`claywind = { path = "../Clay/claywind" }` under `[patch]`) builds against the one checkout, where two sources for one package were N0326. Only the root's patches apply; a patch with no source, a package patched twice, or a patch naming no package of the build is N0321 | [Chapter 14](./ch14-00-more-about-packages) |
 | 0.73.1 | 2026-11-19 | 0.73.0's runtime did not compile on FreeBSD, nor on any system without glibc but macOS and Windows: a test of glibc's version stood in the condition that asks whether glibc is there. 0.73.0 was tagged and never published; this is what it has, with that fixed | [Appendix C](./appendix-c-built-in-types) |

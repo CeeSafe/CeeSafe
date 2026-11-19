@@ -1,7 +1,7 @@
 # ADR 0176 — Bitwise complement: unary `~` on unsigned integers
 
 - Status: **Accepted** by the owner, 2026-11-19 (asked how to add a complement after ClayWind's finding P6: "Unary
-  ~"). Implemented the same day (§5); not released.
+  ~"). Implemented the same day (§5); released in ceesafec 0.76.0.
 - Scope: the grammar (precedence level 11), type-system.md §6 (the operator table and literal arithmetic), the
   checker, constant evaluation, the interpreter, the C backend, the guide, the book and the agents template.
 

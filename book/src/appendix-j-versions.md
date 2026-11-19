@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.78.0
+## Releases 0.25.0 to 0.78.1
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.78.1 | 2026-11-19 | Windows: a package's git dependencies are fetched (0.78.0 and before moved each checkout into place with `mv`, which Windows has not, so every git dependency failed there), and `File.remove` removes a read-only file as POSIX does (git's objects are read-only, so a failed checkout could not be cleared for the next try) | [Appendix C](./appendix-c-built-in-types) |
 | 0.78.0 | 2026-11-19 | Bluetooth printers and the system's print dialog. `Bluetooth.pairedPrinters()` lists the paired Classic printers and `Bluetooth.scanPrinters(ms)` the Low Energy ones in range; `BluetoothLink.open(device)` connects and `write(bytes)` sends a receipt's ESC/POS bytes (ADR 0177): Classic and Low Energy on macOS and Android, Low Energy on iOS, Classic on Windows (its Low Energy is not yet done: a scan finds nothing, a link is `Unsupported`). `FileDialog.printFile(window, title, file)` gives a PDF to the system's print dialog, true when it was printed (ADR 0178): PDFKit on macOS, AirPrint on iOS, PrintManager on Android, the print dialog and Windows.Data.Pdf on Windows. On Linux, a read raced again and again against a deadline already passed (a loop running behind its frames) now reads what came; before, epoll left those bytes unread | [Appendix C](./appendix-c-built-in-types) |
 | 0.77.2 | 2026-11-19 | Isolated tasks, amendment 3 (ADR 0175 §13): built with AddressSanitizer, the runtime tells LeakSanitizer to ignore what a crashed isolated child left, so a sanitized program whose task trapped no longer fails its leak check; every other leak is still reported | [Async](./ch17-00-async) |
 | 0.77.1 | 2026-11-19 | Isolated tasks, amendment 2 (ADR 0175 §12): `ceesafec test` no longer reports what a crashed isolated child captured as the test's leak; the blocks a crashed child still reaches at the end are counted as its own | [Async](./ch17-00-async) |

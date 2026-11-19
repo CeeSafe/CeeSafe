@@ -821,7 +821,10 @@ Heap (M3b):
       (`EPOLLIN | EPOLLRDHUP | EPOLLET`, with `EPOLLOUT` added by `MOD` the first time a writer waits), and stays
       registered until it is closed. Its slot keeps the directions registered and `ready`, the directions not known to
       block: a park clears its direction (a task parks only after an attempt that would block), an event sets it, so an
-      event with no task waiting is kept for the next attempt. While a direction is registered and not ready, lib/std's
+      event with no task waiting is kept for the next attempt, and so does a wait that ends without an event (its task
+      cancelled, or due), since an event may still be uncollected in epoll and the task may not try again: a read
+      raced against a deadline already passed, again and again, as a loop running behind does, makes the system call
+      each time and reads what came. While a direction is registered and not ready, lib/std's
       read, send and accept (`ceesafe_async_op_read`, `_send`, `_accept`) wait without the system call; on a stream
       socket (`SO_TYPE`, asked once at registration), a read that returns fewer bytes than asked took everything there
       was, so it clears `ready` too, unless the peer has shut down (`EPOLLRDHUP`, `EPOLLHUP`, `EPOLLERR` make the slot

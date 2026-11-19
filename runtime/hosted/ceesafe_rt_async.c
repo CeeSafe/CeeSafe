@@ -919,6 +919,15 @@ static void cee_unpark(cee_task *t) {
                 cee_exec.file_count -= 1u; /* a socket stays selected until the run ends: another task may wait on it */
             }
 #elif !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
+#if defined(CEE_EPOLL)
+            if (cee_exec.edge && (uint32_t)t->fd < cee_exec.slot_count) {
+                /* Edge-triggered: an event already set `ready`; anything else (a cancellation, a deadline) ends the
+                   wait with an event perhaps still uncollected in epoll, and its task may never try again. The
+                   descriptor is no longer known to block, so the next attempt makes the system call
+                   (cee_known_blocked): a read raced against a passed deadline, again and again, reads what came. */
+                cee_exec.slots[t->fd].ready |= (uint8_t)(1u << cee_direction(t));
+            }
+#endif
             cee_fd_detach(t);
 #endif
         }

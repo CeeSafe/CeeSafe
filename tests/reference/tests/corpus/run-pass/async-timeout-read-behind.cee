@@ -1,0 +1,47 @@
+// A read raced again and again against a deadline already passed (Async.timeout(0, …)), as a frame loop that runs
+// behind its frames does: each attempt parks and is cancelled before the executor waits for events. Bytes the peer
+// sent meanwhile must still be read. With epoll, edge-triggered, an attempt that parks makes no system call when the
+// descriptor is known to block, and only a collected event says otherwise; a wait cancelled before any event leaves
+// it not known to block, so the next attempt reads (ClayWind's browser host lost its input on Linux without this).
+
+async fn attempt(stream: borrow AsyncTcpStream, buffer: borrow mut [u8; 64], ms: u64) -> Result<usize, AsyncError> {
+    return await Async.timeout(ms, AsyncError.TimedOut, async () => await stream.read(mut buffer[..]));
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let client = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    let server = await listener.accept()?;
+    var buffer = [0u8; 64];
+    // One real wait with nothing to read: the descriptor is registered, and known to block.
+    match (await attempt(borrow server, mut buffer, 5)) {
+        Err(AsyncError.TimedOut) => {}
+        _ => { return Ok(1); }
+    }
+    await client.write("hello".bytes())?;
+    for (k in 0u32..100) {
+        let _ = k;
+        match (await attempt(borrow server, mut buffer, 0)) {
+            Ok(n) => { return Ok(1000 + truncate<u32>(n)); }
+            Err(AsyncError.TimedOut) => {}
+            Err(e) => { return Err(e); }
+        }
+    }
+    return Ok(2); // the bytes were never read
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 1005

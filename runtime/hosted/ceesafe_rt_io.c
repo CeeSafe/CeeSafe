@@ -366,7 +366,18 @@ cee_io_result ceesafe_file_remove(cee_str path) {
 #ifdef _WIN32
     wchar_t wide[4096];
     if (!cee_win_path(name, wide)) return ceesafe_io_fail(EINVAL);
-    return _wunlink(wide) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+    if (_wunlink(wide) == 0) return ceesafe_io_ok(0);
+    /* As POSIX's unlink: a file's own read-only attribute does not keep it (git's objects have it, so a git
+       checkout could not be removed). The attribute is cleared and the remove tried again; put back if it fails. */
+    int error = errno;
+    DWORD attributes = GetFileAttributesW(wide);
+    if (error == EACCES && attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) != 0 &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 && SetFileAttributesW(wide, attributes & ~FILE_ATTRIBUTE_READONLY)) {
+        if (_wunlink(wide) == 0) return ceesafe_io_ok(0);
+        error = errno;
+        (void)SetFileAttributesW(wide, attributes);
+    }
+    return ceesafe_io_fail(error);
 #else
     return unlink(name) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
 #endif

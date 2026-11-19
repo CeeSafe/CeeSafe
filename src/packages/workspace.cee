@@ -607,14 +607,16 @@ struct GitCache {
         if (this.run(temporary.view(), check)? == null) {
             return Ok(null);
         }
-        // Directory.Move: lib/std has no rename (docs/p8-plan.md, upstream gaps), so `mv` does it.
-        var moving = Vector<Vector<u8>>.create();
-        moving.push(copyBytes(temporary.view())?)?;
-        moving.push(copyBytes(checkout.view())?)?;
-        let moved = runTool("mv".bytes(), moving)?;
-        if (!moved.started || moved.status != 0) {
+        // C's rename (renameFile), which moves a directory on every system; `mv` did it before, and Windows has none.
+        if (!renameFile(temporary.view(), checkout.view())?) {
+            if (isDirectory(checkout.view())) {
+                removeTree(temporary.view()); // another build put the same checkout in place first
+                return Ok(checkout);
+            }
             var message = copyBytes("cannot move the checkout into place: ".bytes())?;
-            appendBytes(mut message, trimAscii(moved.stderr.view()))?;
+            appendBytes(mut message, temporary.view())?;
+            appendText(mut message, " to ")?;
+            appendBytes(mut message, checkout.view())?;
             this.lastError = message;
             return Ok(null);
         }

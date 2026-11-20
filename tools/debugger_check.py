@@ -3,7 +3,7 @@
 
 Under lldb on macOS, gdb elsewhere (or the one given): breakpoints at source lines, `ceesafe-locals` and `ceesafe-bt`
 showing CeeSafe names, a breakpoint on ceesafe_panic stopping at the failed check, the same through `--split` with
-CEESAFE_PROGRAM, `ceesafe-tasks` listing an async program's tasks (L1 A3), and the name demangling of ceesafe_names.py; a breakpoint on ceesafe_panic stops at the failed check. The assertions are DebuggerTests'.
+CEESAFE_PROGRAM, `ceesafe-tasks` listing an async program's tasks (L1 A3), a unit paused past its slice among them (ADR 0191), and the name demangling of ceesafe_names.py; a breakpoint on ceesafe_panic stops at the failed check. The assertions are DebuggerTests'.
 
 usage: python3 tools/debugger_check.py --ceesafec out/ceesafec [--debugger lldb|gdb]
 """
@@ -92,6 +92,61 @@ fn main() {
 }
 """
 
+# Line numbers matter: the breakpoint is in mark (line 7), which the plain task calls on line 37 while the unit started
+# on line 34 computes, paused past its 10 ms slice (ADR 0189, listed since ADR 0191). Built with polls.
+PAUSED = """enum Failure {
+    OutOfMemory,
+    Bad,
+}
+
+fn mark(n: u32) -> u32 {
+    return n + 1;
+}
+
+async fn pause(ms: u64) -> Result<void, Failure> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(Failure.Bad); }
+    }
+}
+
+fn busy(ms: u64) -> u64 {
+    let start = Timer.now();
+    var x: u64 = 0;
+    while (Timer.now() - start < ms) {
+        x = (x ^ (x >> 1)) | 1;
+    }
+    return x;
+}
+
+async fn computes() -> Result<void, Failure> {
+    await pause(1)?;
+    let x = busy(300);
+    return if (x == 0) Err(Failure.Bad) else Ok();
+}
+
+async fn both() -> Result<void, Failure> {
+    let r = await Async.tasks(4, Failure.OutOfMemory, async (set) => {
+        await set.spawnIsolated(Failure.Bad, async move () => await computes())?;
+        await set.spawn(async move () => {
+            await pause(50)?;
+            let m = mark(1);
+            return Ok();
+        })?;
+        return Ok();
+    });
+    return r;
+}
+
+fn main() {
+    let sliced = Async.runSlice(10);
+    match (Async.run(both())) {
+        Ok() => { Console.writeLine(if (sliced) "done" else "no slice"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+"""
+
 def debug(cee, debugger, work, name, text, commands, extra=(), env=None):
     with open(os.path.join(work, f"{name}.cee"), "w") as f:
         f.write(text)
@@ -163,7 +218,10 @@ def main():
                                              "  async closure at tasks.cee:20 (running)\n"
                                              "  async closure at tasks.cee:25 (waiting for a deadline)",
                                              "mark at tasks.cee:7\nasync closure at tasks.cee:21"])
-            checked += ["breakpoints", "split", "panic", "tasks"]
+            text = debug(cee, debugger, work, "paused", PAUSED,
+                         [breakAt.format("paused.cee:7"), "run", "ceesafe-tasks", "ceesafe-bt"], ["--polls"])
+            expect(problems, "paused", text, ["(paused past its slice)", "mark at paused.cee:7"])
+            checked += ["breakpoints", "split", "panic", "tasks", "paused"]
         finally:
             shutil.rmtree(work, ignore_errors=True)
     for p in problems:

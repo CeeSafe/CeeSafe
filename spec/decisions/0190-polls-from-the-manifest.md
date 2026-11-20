@@ -1,13 +1,14 @@
 # ADR 0190 — Polls asked for by the manifest
 
-- Status: **Proposed**, 2026-11-20. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept all the above ADRs as written": §8's five questions as
+  recommended). Proposed the same day. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
   httpserver against Elixir's process isolation that followed ceesafec 0.80.0. Of the five places where Elixir is
   still ahead, this is the compiler's part of the third, "isolation is opt-in": a server package cannot make the
   bound of ADR 0186 its default, because polls exist only in a build whose command line says
   `--cflag -DCEE_POLLS=1`. ADR 0186 §8 question 1 foresaw it: "A manifest setting (`[build] polls = true`) could
   set the macro later". The other gaps are ADR 0189 (a task past its slice paused, not ended), CeeSafe.Web's ADR
   0017 (a request isolated apart from its connection) and httpserver's plan (`docs/elixir-gaps.md`: isolation as
-  its default, a supervisor for tasks, recycling with no refused connection). **Not implemented.**
+  its default, a supervisor for tasks, recycling with no refused connection).
 - Scope: the manifest (`src/packages/manifest.cee`, tooling.md §4.1), the command line (`--polls`, `--no-polls`,
   tooling.md §12.1), the C files the build writes (`src/host/build.cee`, `src/host/toolchain.cee`), c-backend.md
   §3b, type-system.md §40.11's first item. No change to the language, to NIR, to the runtime or to where polls go:

@@ -2913,6 +2913,9 @@ fn asyncPark(it: borrow mut Interp) -> Result<Value?, Stop> => Err(parkStop());
 
 // ---- Tasks (type-system.md §40.8): one thread, a run queue, the virtual clock ----
 
+/// The most real time a poll for sockets waits before the virtual clock jumps to a deadline (§40.8).
+fn socketGraceMs() -> u64 => 100;
+
 fn parkStop() -> Stop =>
     Stop { kind: 3, message: Vector<u8>.create(), location: Vector<u8>.create(), hasLocation: false, code: 0 };
 
@@ -3597,6 +3600,7 @@ fn runTasks(
             var events = Vector<u32>.create();
             var owners = Vector<u32>.create();
             var anyDeadline = false;
+            var soonest: u64 = 0xFFFFFFFFFFFFFFFF;
             for (j in 0..tasks.length) {
                 if (tasks[j].parked && !tasks[j].onScope && tasks[j].fd >= 0) {
                     fds.push(tasks[j].fd)!;
@@ -3605,6 +3609,9 @@ fn runTasks(
                 }
                 if (tasks[j].parked && tasks[j].deadline != 0xFFFFFFFFFFFFFFFF) {
                     anyDeadline = true;
+                    if (tasks[j].deadline < soonest) {
+                        soonest = tasks[j].deadline;
+                    }
                 }
             }
             if (fds.length > 0) {
@@ -3612,9 +3619,17 @@ fn runTasks(
                 for (fd in fds.view()) {
                     readiness.push(0)!;
                 }
+                // A deadline on the virtual clock comes without real time passing, but bytes on a socket come in
+                // real time: a task's write reaches its peer's descriptor a little later on some hosts (macOS's
+                // loopback, under load). So the poll waits real time before the clock jumps to the deadline: the
+                // virtual time left to it, at most socketGraceMs, so a long timeout stays fast.
+                var wait: i64 = -1;
+                if (anyDeadline) {
+                    let left = if (soonest > it.asyncClock) soonest - it.asyncClock else 0;
+                    wait = if (left > socketGraceMs()) truncate<i64>(socketGraceMs()) else truncate<i64>(left);
+                }
                 // A test's timeout (ADR 0049 §3.3) holds while every task waits on a socket too: `step` counts no
                 // statement then, so the wait itself ends at the deadline.
-                var wait: i64 = if (anyDeadline) 0 else -1;
                 if (wait < 0 && it.testDeadline != 0) {
                     let now = Timer.now();
                     if (now >= it.testDeadline) {

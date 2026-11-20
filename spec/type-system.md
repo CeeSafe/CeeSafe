@@ -6345,7 +6345,9 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 - The interpreter runs tasks on one thread with a virtual clock (timers fire in deadline order without waiting; the wall
   clock, §26.11, is 2000-01-01 plus it) and a
   run order fixed by a seed. A program whose output does not depend on timing prints the same in C and in the
-  interpreter. It has one worker: `Async.runWorkers(n, …)` is `Async.run`, and `spawnSend` is `spawn` (ADR 0038). A
+  interpreter. Bytes on a socket come in real time, so while a task waits on one, the interpreter waits for the
+  sockets before the clock jumps to a deadline: for the virtual time left to it, at most 100 ms of real time. A read
+  whose bytes another task wrote just before is so not overtaken by a later deadline. It has one worker: `Async.runWorkers(n, …)` is `Async.run`, and `spawnSend` is `spawn` (ADR 0038). A
   program's output must not depend on which worker ran what.
 - **Profiles** (profiles.md §4, ADR 0039): in the freestanding profile the executor runs over its environment's hooks.
   Children need `Async.scopeIn`, and threads and I/O stay hosted.

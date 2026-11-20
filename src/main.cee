@@ -199,6 +199,12 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
+        "  --polls           (build, test) built with polls, so Async.runBound can bound a task (ADR 0186), over\n",
+    )?;
+    appendText(out, "                    the root manifest's polls (tooling.md §4.1, ADR 0190)\n")?;
+    appendText(out, "  --no-polls        (build, test) built without polls, over the root manifest's polls = true\n")?;
+    appendText(
+        out,
         "  --exports-header <name>\n                    (build) the exports header's name (default ceesafe_exports.h)\n",
     )?;
     appendText(out, "  --line-directives (build) map the generated C to CeeSafe lines with #line\n")?;
@@ -327,6 +333,8 @@ struct Options {
     split: bool;                // --split (build)
     libMain: bool;              // --lib-main (build --emit lib)
     windowed: bool;             // --windowed (build), or the manifest's windowed (ADR 0151)
+    polls: bool;                // --polls (build, test), or the root manifest's polls (ADR 0190): CEE_POLLS in the C
+    pollsGiven: u8;             // 1 --polls, 2 --no-polls, 0 neither: the root's polls decides
     programName: Vector<u8>;    // --program (build), or the package's name
     cc: Vector<u8>;             // --cc, else $CC (build)
     cflags: Vector<Vector<u8>>; // --cflag (build)
@@ -462,6 +470,13 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.libMain = true;
         } else if (options.building && arg == "--windowed") {
             options.windowed = true;
+        } else if (options.building && (arg == "--polls" || arg == "--no-polls")) {
+            let given: u8 = if (arg == "--polls") 1 else 2;
+            if (options.pollsGiven != 0 && options.pollsGiven != given) {
+                return fail("--polls and --no-polls contradict: give one (ADR 0190)");
+            }
+            options.pollsGiven = given;
+            options.polls = given == 1;
         } else if (options.building && (arg == "--emit" || arg == "-o" || arg == "--exports-header" || arg == "--cc" ||
             arg == "--cflag" || arg == "--ld" || arg == "--ar" || arg == "--program")) {
             let value = match (Process.argument(a)) {
@@ -663,6 +678,16 @@ fn readOptions(options: borrow mut Options) -> i32 {
         sameText(options.emit.view(), "lib"))) {
         return fail(windowedUsage());
     }
+    if (options.pollsGiven == 2) {
+        for (flag in options.cflags.view()) {
+            if (definesPolls(flag.view())) {
+                return fail(noPollsUsage());
+            }
+        }
+    }
+    if (options.pollsGiven == 1 && options.freestanding) {
+        return fail(pollsUsage());
+    }
     if (options.linker.length > 0 && sameText(options.emit.view(), "lib")) {
         return fail("--ld does not apply to --emit lib, which archives with --ar instead of linking (ADR 0088 §2.1)");
     }
@@ -671,6 +696,27 @@ fn readOptions(options: borrow mut Options) -> i32 {
 
 fn windowedUsage() -> StringView =>
     "--windowed is for an executable of the hosted profile: an object or a library is linked by its host (ADR 0151)";
+
+fn pollsUsage() -> StringView =>
+    "--polls is for the hosted profile: a freestanding program has no monitor thread to bound its tasks (ADR 0190)";
+
+fn noPollsUsage() -> StringView =>
+    "--no-polls and --cflag -DCEE_POLLS contradict: the flag would define the macro anyway (ADR 0190)";
+
+/// Whether a --cflag defines CEE_POLLS (ADR 0190): `-DCEE_POLLS`, `-DCEE_POLLS=…`, or `cl`'s `/D` spelling.
+fn definesPolls(flag: Slice<u8>) -> bool {
+    if (flag.length < 11 || (flag[0] != '-' && flag[0] != '/') || flag[1] != 'D') {
+        return false;
+    }
+    if (!sameBytes(flag[2..11], "CEE_POLLS".bytes())) {
+        return false;
+    }
+    return flag.length == 11 || flag[11] == '=';
+}
+
+/// The line that turns polls on in a C file the build writes (ADR 0190 §2.2).
+fn pollsLine() -> StringView =>
+    "#define CEE_POLLS 1 /* polls: the root manifest's polls = true, or --polls (ADR 0190) */\n";
 
 /// One of `test`'s options with its value (ADR 0049 §3.3), or `run`'s hidden `--ceesafe-harness`.
 fn readTestOption(options: borrow mut Options, arg: StringView, value: StringView) -> i32 {
@@ -935,6 +981,8 @@ fn parseCommand() -> i32 {
         split: false,
         libMain: false,
         windowed: false,
+        polls: false,
+        pollsGiven: 0,
         programName: Vector<u8>.create(),
         cc: match (Environment.variable("CC")) {
             Some(v) => copyBytes(v.bytes())!,
@@ -1117,6 +1165,14 @@ fn loadPackage(
     if (workspace.root.windowed && !options.freestanding &&
         (sameText(options.emit.view(), "exe") || sameText(options.emit.view(), "c"))) {
         options.windowed = true;
+    }
+    // Polls (ADR 0190): the root's key unless --polls or --no-polls was given; a dependency's has no effect. A
+    // freestanding build (`--profile freestanding` over a hosted manifest) has none, as the manifest's check says.
+    if (options.pollsGiven == 1 && options.freestanding) {
+        return fail(pollsUsage());
+    }
+    if (options.pollsGiven == 0) {
+        options.polls = workspace.root.polls && !options.freestanding;
     }
     options.defaultOutput = joinPath(workspace.root.directory.view(), "out".bytes())!;
     options.defaultOutput.push('/')!;
@@ -1308,6 +1364,8 @@ fn defaultOptions(building: bool) -> Options => Options {
     split: false,
     libMain: false,
     windowed: false,
+    polls: false,
+    pollsGiven: 0,
     programName: Vector<u8>.create(),
     cc: match (Environment.variable("CC")) {
         Some(v) => copyBytes(v.bytes())!,
@@ -1676,6 +1734,17 @@ fn compileFiles(
             explainChecks(checker, nir, sources, checks, true, options.oce, mut printed)!;
         }
         Console.writeBytes(printed.view());
+        if (options.polls) {
+            // Every C file the build writes defines the macro itself (ADR 0190 §2.2): --emit c stays complete, and
+            // cl, gcc and clang read the same line. The program's own C files (below) are not the build's.
+            for (k in 0..files.length) {
+                if (files[k].name.view().endsWith(".c".bytes())) {
+                    var text = copyBytes(pollsLine().bytes())!;
+                    appendBytes(mut text, files[k].text.view())!;
+                    files[k].text = text;
+                }
+            }
+        }
         for (k in 0..options.cNames.length) {
             var name = copyBytes("c/".bytes())!;
             appendBytes(mut name, options.cNames[k].view())!;

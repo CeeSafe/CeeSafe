@@ -180,6 +180,14 @@
 44. library-build-default (ADR 0187, tooling.md §4.1, CeeUsb's finding F13): `build` with no `--emit` in a package of
     kind "library" writes its static library out/<name>.a and ceesafe/embed.h beside it, with no N0300; `--emit exe`
     there is still N0300.
+45. polls (ADR 0190, tooling.md §4.1, §12.1): with `polls = true` in the root's [package], `build` makes a program
+    whose `Async.runBound` answers true and whose bound ends an isolated child that spins; without the key, with
+    `polls = false` or with `--no-polls` it answers false, and `--polls` turns them on without the key. A
+    dependency's `polls = true` changes nothing for a root without it. `test` builds its harness with them: a test of
+    `Async.runBound` passes with the key and fails with `--no-polls`. `--emit c`'s C files each start with the
+    `#define CEE_POLLS 1` line and, compiled with no flag (POSIX), give the same program. `polls` that is not a
+    boolean, in a [target.OS] table or in a freestanding package is one N0321; `--polls` with `--no-polls`,
+    `--no-polls` with `--cflag -DCEE_POLLS=1`, and `--polls` with `--profile freestanding` are usage errors.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1511,6 +1519,151 @@ def windowed_executables(compiler, work, problems):
         problems.append(f"windowed: --windowed in a freestanding package is not a usage error: {p.returncode}")
 
 
+POLLS_PROGRAM = '''enum Fail {
+    Crashed,
+    NoMemory,
+}
+
+// Computes for up to 3 s without waiting: the bound ends it long before, where there are polls.
+fn spin() -> u64 {
+    let until = Clock.monotonicNanos() + 3000000000;
+    var n: u64 = 0;
+    while (Clock.monotonicNanos() < until) {
+        n += 1;
+    }
+    return n;
+}
+
+async fn spinner() -> Result<void, Fail> {
+    let _ = spin();
+    return Ok();
+}
+
+async fn work() -> Result<void, Fail> {
+    return await Async.tasks(4, Fail.NoMemory, async (set) => {
+        await set.spawnIsolated(Fail.Crashed, async move () => await spinner())?;
+        return Ok();
+    });
+}
+
+fn main() {
+    if (!Async.runBound(50, RunBound.Count)) {
+        Console.writeLine("no polls");
+        return;
+    }
+    match (Async.run(work())) {
+        Err(Fail.Crashed) => { Console.write("ended, overruns "); }
+        _ => { Console.write("not ended, overruns "); }
+    }
+    Console.writeLine(Async.overruns());
+}
+'''
+
+POLLS_LINE = "#define CEE_POLLS 1 /* polls: the root manifest's polls = true, or --polls (ADR 0190) */"
+
+
+def polls_from_manifest(compiler, work, problems):
+    """45. Polls asked for by the root manifest (ADR 0190): the key, the options, a dependency's key, `test`, the C."""
+    base = os.path.join(work, "polls")
+    app = os.path.join(base, "app")
+    dep = os.path.join(base, "dep")
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def manifest(fields, extra=""):
+        write(os.path.join(app, "ceesafe.toml"), '[package]\nname = "app"\n' + fields + extra)
+
+    def codes(p):
+        try:
+            return [(d["code"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            return [p.stdout[:200] + p.stderr[:200]]
+
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    write(os.path.join(app, "src", "main.cee"), POLLS_PROGRAM)
+    write(os.path.join(app, "tests", "bound.cee"),
+          "@test\nfn bounded() {\n    assert(Async.runBound(50, RunBound.Count));\n}\n")
+    ended, none = "ended, overruns 1", "no polls"
+    for name, fields, flags, expected in (("key", "polls = true\n", [], ended), ("no key", "", [], none),
+                                          ("false", "polls = false\n", [], none),
+                                          ("--no-polls", "polls = true\n", ["--no-polls"], none),
+                                          ("--polls", "", ["--polls"], ended),
+                                          ("--split", "polls = true\n", ["--split"], ended)):
+        manifest(fields)
+        p = run([compiler, "build"] + flags, app)
+        if p.returncode != 0:
+            problems.append(f"polls: build ({name}) failed: {p.stderr[-400:]}")
+            continue
+        q = run([exe], app)
+        if q.stdout.strip() != expected:
+            problems.append(f"polls: the program ({name}) printed {q.stdout.strip()!r}, not {expected!r}")
+    # A dependency's key changes nothing for a root without it.
+    write(os.path.join(dep, "ceesafe.toml"), '[package]\nname = "dep"\nkind = "library"\npolls = true\n')
+    write(os.path.join(dep, "src", "dep.cee"), "public fn one() -> i32 => 1;\n")
+    manifest("", '\n[dependencies]\ndep = { path = "../dep" }\n')
+    p = run([compiler, "fetch"], app)
+    p = run([compiler, "build"], app) if p.returncode == 0 else p
+    q = run([exe], app) if p.returncode == 0 else p
+    if p.returncode != 0 or q.stdout.strip() != none:
+        problems.append(f"polls: a dependency's key reached the root: {q.stdout.strip()!r} {p.stderr[-300:]}")
+    lock = os.path.join(app, "ceesafe.lock")
+    if os.path.exists(lock):
+        os.remove(lock)
+    # `test` builds its harness with the root's polls.
+    manifest("polls = true\n")
+    p = run([compiler, "test"], app)
+    if p.returncode != 0:
+        problems.append(f"polls: test with the key failed: {p.stdout[-300:]} {p.stderr[-300:]}")
+    p = run([compiler, "test", "--no-polls"], app)
+    if p.returncode == 0:
+        problems.append("polls: test --no-polls passed a test that needs polls")
+    # --emit c: each C file the build writes defines the macro, and builds the same program with no flag.
+    directory = os.path.join(base, "c")
+    p = run([compiler, "build", "--emit", "c", "-o", directory], app)
+    sources = sorted(f for f in os.listdir(directory) if f.endswith(".c")) if p.returncode == 0 else []
+    if not sources:
+        problems.append(f"polls: --emit c wrote no C: {p.stderr[-300:]}")
+    for source in sources:
+        with open(os.path.join(directory, source), encoding="utf-8") as f:
+            if f.readline().rstrip("\n") != POLLS_LINE:
+                problems.append(f"polls: --emit c: {source} does not start with the polls line")
+    if sources and not WINDOWS:
+        program = os.path.join(base, "from-c")
+        p = run(["cc", "-std=c11", "-O2", "-I", directory] + [os.path.join(directory, s) for s in sources] +
+                ["-o", program, "-lpthread", "-lm"], base)
+        q = run([program], base) if p.returncode == 0 else p
+        if p.returncode != 0 or q.stdout.strip() != ended:
+            problems.append(f"polls: --emit c compiled with no flag printed {q.stdout.strip()!r}: {p.stderr[-300:]}")
+    manifest("")
+    none_c = os.path.join(base, "c-none")
+    p = run([compiler, "build", "--emit", "c", "-o", none_c], app)
+    first = ""
+    if p.returncode == 0:
+        with open(os.path.join(none_c, "main.c"), encoding="utf-8") as f:
+            first = f.readline()
+    if p.returncode != 0 or "CEE_POLLS" in first:
+        problems.append(f"polls: --emit c without the key: {p.returncode} {first.strip()!r}")
+    # The key's errors: one N0321 each.
+    for name, fields, extra, line in (("not a boolean", 'polls = "yes"\n', "", 3),
+                                      ("freestanding", 'profile = "freestanding"\npolls = true\n', "", 4),
+                                      ("target table", "", "\n[target.linux]\npolls = true\n", 5)):
+        manifest(fields, extra)
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        if p.returncode != 1 or codes(p) != [("N0321", line)]:
+            problems.append(f"polls: {name}: expected one N0321 on line {line}: {codes(p)}")
+    # The options' usage errors (status 2).
+    manifest("")
+    for flags, text in ((["--polls", "--no-polls"], "--polls and --no-polls contradict"),
+                        (["--no-polls", "--cflag", "-DCEE_POLLS=1"], "--no-polls and --cflag -DCEE_POLLS contradict"),
+                        (["--polls", "--profile", "freestanding"], "--polls is for the hosted profile")):
+        p = run([compiler, "build"] + flags, app)
+        if p.returncode != 2 or text not in p.stderr:
+            problems.append(f"polls: build {' '.join(flags)} is not a usage error: {p.returncode} {p.stderr[:200]}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
@@ -2528,9 +2681,10 @@ def main():
         dependency_patch(compiler, work, problems)
         manifest_frameworks(compiler, work, problems)
         library_build_default(compiler, work, problems)
+        polls_from_manifest(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 41 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 42 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

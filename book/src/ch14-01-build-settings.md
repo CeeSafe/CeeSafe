@@ -232,6 +232,7 @@ flags. The manifest holds what is true of the package in every build. Beside the
 | `c = ["src/shim.c"]` | C files compiled and linked with the program. Chapter 20 covers calling C. |
 | `links`, `lib-dirs`, `include-dirs` | System libraries to link, and where they and their headers are. |
 | `windowed = true` | The program has a window. On Windows no console window opens beneath it when it is started from Explorer or a shortcut; its output still reaches a terminal that starts it. Nothing changes on other systems. The option `--windowed` says the same. |
+| `polls = true` | The program is built with polls, so `Async.runBound` can bound how long a task runs without waiting ([17](./ch17-00-async)). Only the root package's key applies. The options `--polls` and `--no-polls` say the same for one build. |
 
 A table `[target.windows]`, `[target.macos]` or `[target.linux]` holds `links`, `lib-dirs` and `include-dirs` for
 one system. `[embed]` holds `roots`, which the first mistake below uses.

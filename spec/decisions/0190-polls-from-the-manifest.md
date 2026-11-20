@@ -1,7 +1,7 @@
 # ADR 0190 — Polls asked for by the manifest
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept all the above ADRs as written": §8's five questions as
-  recommended). Proposed the same day. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
+  recommended); implemented, not released (§10). Proposed the same day. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
   httpserver against Elixir's process isolation that followed ceesafec 0.80.0. Of the five places where Elixir is
   still ahead, this is the compiler's part of the third, "isolation is opt-in": a server package cannot make the
   bound of ADR 0186 its default, because polls exist only in a build whose command line says
@@ -204,3 +204,38 @@ the program.
    - The contract suite's `bound` step unchanged otherwise; the fixed point (the compiler's own manifest has no key).
 5. httpserver then sets `polls = true` in `bench/ceesafe.toml` and, per its plan, says what its users' manifests
    need.
+
+## 10. Implementation notes (2026-11-20)
+
+Implemented on `adr/0190-polls-from-manifest`, from `main` at 0.80.0 (`33e43bda`), §9's steps 1 to 4; step 5 is
+httpserver's own.
+
+- **Manifest** (`src/packages/manifest.cee`): `polls` in `[package]`, beside `windowed`. N0321 for a value that is
+  not a boolean ("'polls' is true or false (ADR 0190)"), for `polls = true` with `profile = "freestanding"` (at the
+  value), and for `polls` in any `[target.OS]` table ("'polls' belongs in [package], not [target.linux]: polls do not
+  depend on the system"), each one diagnostic. `polls = false` with the freestanding profile is accepted.
+- **Options** (`src/main.cee`): `--polls` and `--no-polls`, read where `build`'s options are, so `build` and `test`
+  take them (`test` builds its harness with `build`'s reader). `run` is the interpreter's alone (`'run' needs
+  --interp`), so it does not take them: §2.3's "`build`, `run`, `test`" is `build` and `test`, and `run --interp`
+  is §2.5's. Neither given, the root's key decides, and a freestanding build (`--profile freestanding` over a
+  hosted manifest) has no polls whatever its key. Usage errors (status 2): both options; `--no-polls` with a
+  `--cflag` that defines the macro (`-DCEE_POLLS`, `-DCEE_POLLS=…`, or `/D` for `cl`); and, beyond §2.3, `--polls`
+  with `--profile freestanding`, which the C compiler's `#error` would otherwise report.
+- **The C**: with polls on, every `.c` file the backend returns (the program's and the runtime's) gets the line of
+  §2.2 before its first byte, in `compileFiles` before the build writes them, so `--emit c`, `--split`, `--emit
+  obj` and `--emit lib` all have it. The program's own C files (`c = [...]`, files given on the command line) and the
+  packages' separately compiled ones are added after and do not get it; headers do not need it.
+- **Documents**: tooling.md §4.1 (the example manifest and a **Polls** paragraph), §12.1's table; c-backend.md §3b;
+  type-system.md §40.11's first item; `ceesafec --help`; the book's §14.1 table and appendix E (both option tables
+  and the manifest table).
+- **Tests**: `tools/package_tests.py` check 43 (§9 step 4's list: the key, `false`, no key, `--polls`, `--no-polls`,
+  `--split`; a dependency's key under a root without it; `test` with the key and with `--no-polls`; `--emit c`'s six
+  files each starting with the line, and compiled by `cc` with no flag, the spinning child ended; the three N0321
+  and the three usage errors). Against 0.80.0 it reports 11 problems. `tools/bound_check.py` builds `survive` with
+  `--polls` and keeps `ends` on `--cflag -DCEE_POLLS=1`; `windows.yml` runs `bound_check` and needed no change.
+- **Results** (macOS, Apple clang 21, a load of 40 to 150 from other work): the fixed point; `package_tests` 41
+  checks, 0 problems; `bound_check` 33 cases, 0 problems; `cli_check` 54 options against the help texts and
+  tooling.md §12.1, 0 problems; the corpus's check-fail 383, check-pass 48, emit-c 31, no failure; `spec_check` 0
+  problems; `book_appendix_check` and `book_check` one problem each, appendix J's missing row for 0.80.1, a release
+  tagged after this branch's base (not this change's).
+

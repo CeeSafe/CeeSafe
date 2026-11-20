@@ -665,6 +665,12 @@ it, a poll is a relaxed load of `ceesafe_poll_any`, a global, and a branch to `c
 reads the thread's own `ceesafe_poll_word`: the global counts the threads whose word the monitor set, so a poll
 touches no thread-local storage, which costs a call in every function that does on Mach-O.
 
+`CEE_POLLS` is defined by the build itself when the root manifest says `polls = true` or the command line `--polls`
+(ADR 0190, tooling.md §4.1): every C file the build writes, the generated ones and the runtime's, starts with
+`#define CEE_POLLS 1 /* polls: the root manifest's polls = true, or --polls (ADR 0190) */`, before its first
+`#include`, so the files of `--emit c`, `--split`, `--emit obj` and `--emit lib` each carry it. `--cflag
+-DCEE_POLLS=1` defines it too, as before.
+
 ## 4. Evaluation order and temporaries
 
 NIR has already sequenced every side effect into separate statements, so the C

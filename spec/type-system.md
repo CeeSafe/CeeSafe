@@ -6436,15 +6436,16 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   …)`** are §40.10's isolated starts with the unit's own bound, `ms: u64`, in place of the program's: every task of
   the unit has its innermost unit's bound, else the program's. Their results and rules are `spawnIsolated`'s and
   `trySpawnIsolated`'s (N0209 for a child that is not a literal, N0205 for a bound that is not a `u64`).
-- **Polls.** A build with `--cflag -DCEE_POLLS=1` has a poll wherever a task could run without end: at the head of
-  every block a retreating edge of a function's graph targets (a loop's header), and at the entry of every function
-  on a cycle of the call graph, a call through a function value, a closure or a `dyn` method counting as a call to
-  every function that may be its target. An innermost counted loop (a `for` over a range or a sequence, with no
-  loop in its body) whose end is known only when it starts polls once on entry and then once every 1 024
-  iterations; one whose bounds are constants at most 1 024 apart has no poll, since it ends by itself. A function or method marked
-  **`@noPoll`** has none (it takes no arguments: N0290). A build without the macro has the polls' places in its C,
-  but they compile to nothing, and the program's code is what it would be without them (c-backend.md §3b). The
-  freestanding profile has none (`CEE_POLLS` there is the C compiler's error).
+- **Polls.** A build with polls (`polls = true` in the root manifest, `--polls`, or `--cflag -DCEE_POLLS=1`: tooling.md
+  §4.1, ADR 0190) has a poll wherever a task could run without end: at the head of every block a retreating edge of a
+  function's graph targets (a loop's header), and at the entry of every function on a cycle of the call graph, a call
+  through a function value, a closure or a `dyn` method counting as a call to every function that may be its target. An
+  innermost counted loop (a `for` over a range or a sequence, with no loop in its body) whose end is known only when it
+  starts polls once on entry and then once every 1 024 iterations; one whose bounds are constants at most 1 024 apart
+  has no poll, since it ends by itself. A function or method marked **`@noPoll`** has none (it takes no arguments:
+  N0290). A build without the macro has the polls' places in its C, but they compile to nothing, and the program's code
+  is what it would be without them (c-backend.md §3b). The freestanding profile has none (`CEE_POLLS` there is the C
+  compiler's error).
 - **A task past its bound** is caught at its next poll, between its bound and about a quarter of it later, never
   before it:
   - **in an isolated unit**, it panics with `PanicKind.Overran` (§14.5), and §40.10 ends its unit alone: `ceesafe

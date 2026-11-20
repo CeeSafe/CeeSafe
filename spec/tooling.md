@@ -206,6 +206,7 @@ float = true                 # false is --no-float (type-system.md §35.9)
 kernel = "cosmoos"           # with profile = "freestanding": include lib/kernel, as --kernel cosmoos (ADR 0025)
 trusted = true               # its types may be declared @threadSafe (ADR 0025 §3.2); listed for reviewers
 windowed = true              # an executable with a window: on Windows no console window (ADR 0151)
+polls = true                 # built with polls: Async.runBound can bound its tasks (ADR 0186, ADR 0190)
 sources = ["src"]
 c = ["src/shim.c"]           # C files compiled and linked with an executable (type-system.md §28.6)
 tests = ["tests"]            # test directories (§10): default "tests"; their files are sources for check and test only
@@ -257,6 +258,24 @@ window when it is started from Explorer, a shortcut or a scheduled task; its sta
   passes §8.3's flags). It does nothing for `--emit obj` and `--emit lib` and for `--profile freestanding` given on
   the command line, where `--windowed` itself is a usage error (status 2), and nothing for `test`, whose test program
   is a console program, for `check` and for `run --interp`.
+
+**Polls** (ADR 0190). `polls = true` builds the program with polls (ADR 0186, type-system.md §40.11): its loops and
+the functions that may recurse poll, and `Async.runBound` can bound how long a task runs without waiting. `false`,
+the default, builds without them, at no cost. `--polls` and `--no-polls` override the key for one build.
+- **The root's key decides**, as for `profile`, `float` and `windowed`. A dependency's `polls` is read and checked
+  and has no effect on a build whose root it is not: a library cannot turn on a cost in its users' loops, nor turn
+  off a bound they asked for. It applies to a library's own tests and examples, where it is the root.
+- With polls on, **every C file the build writes starts with `#define CEE_POLLS 1`** (c-backend.md §3b): the
+  generated files and the runtime's, with `--emit c`, `--split`, `--emit obj` and `--emit lib` alike, so the C of
+  `--emit c` builds with polls with no flag. The program's own C files (`c = [...]`) and the packages' separately
+  compiled ones are not the build's and do not get it. `--cflag -DCEE_POLLS=1` does what it did, and with the key it
+  is the same definition again, which C allows.
+- It applies to `build` and to `test`, whose test program then has polls. It changes nothing for `check`, `fix`,
+  `fmt`, `doc` and the language server, which make no C, and nothing for `run --interp` and `test --interp`: the
+  interpreter bounds a task by fuel whatever the key says (ADR 0186 §2.5).
+- A value that is not a boolean is N0321, and so is `polls` in a `[target.OS]` table (polls do not depend on the
+  system) and with `profile = "freestanding"` (no monitor thread: ADR 0186 §3). A freestanding build of a hosted
+  package (`--profile freestanding`) has no polls, whatever its key; `--polls` there is a usage error (status 2).
 
 **System libraries** (ADR 0047):
 - `links` names libraries: letters, digits, `_`, `.`, `+` and `-`, not starting with `-`. `lib-dirs` and `include-dirs`
@@ -1283,6 +1302,7 @@ for it.
 | `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-oce`, `--no-placement`, `--no-temporary-forwarding` | build, run, test | build, run, test | |
 | `--offline` | parse, check, build, run, fix, test | all six, in a package | `fetch` and `index-check` have their own |
 | `--package`, `--record`, `--whole-program` | check | check | |
+| `--polls`, `--no-polls` | build, test | build, test (§4.1, ADR 0190): polls on or off for one build, over the root manifest's `polls` | Both, `--no-polls` with a `--cflag` that defines `CEE_POLLS`, and `--polls` with `--profile freestanding` (or in a freestanding package) are usage errors |
 | `--program`, `--split` | build, test | build, test | |
 | `-o` | build, test | build | test: nothing, the test program is `out/<name>-tests` |
 | `--windowed` | build, test | build, with `--emit exe` or `--emit c` in the hosted profile (§4.1) | test: nothing, the test program is a console program. With `--emit obj`, `--emit lib` or `--profile freestanding` it is a usage error in both |

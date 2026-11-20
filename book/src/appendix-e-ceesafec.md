@@ -108,6 +108,8 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--ar` | `<archiver>` | With `--emit lib`, names the archiver that makes the library. Without `--emit lib` it is a usage error. | `llvm-ar` beside an LLVM clang, else `ar` |
 | `--lib-main` | none | With `--emit lib`, keeps the C `main` of a package that has a CeeSafe `main`. Without `--emit lib` it is a usage error. | off: a library has no C `main`, since its host has one |
 | `--windowed` | none | Builds a program with a window: on Windows it is linked as a GUI program, so no console window opens beneath it, and its output still reaches a terminal that starts it. Nothing changes on other systems. With `--emit obj`, `--emit lib` or the freestanding profile it is a usage error. | off, or the manifest's `windowed` |
+| `--polls` | none | Builds the program with polls, so `Async.runBound` can bound how long a task runs without waiting ([17](./ch17-00-async)). It overrides the root manifest's `polls`. With `--profile freestanding` it is a usage error. | the root manifest's `polls`, else off |
+| `--no-polls` | none | Builds the program without polls, over the root manifest's `polls = true`. With a `--cflag` that defines `CEE_POLLS` it is a usage error. | the root manifest's `polls`, else off |
 | `--exports-header` | `<name>` | Names the header that declares the program's `@export` items for C. | `ceesafe_exports.h` |
 | `-g` | none | Makes a debug build: `#line` directives, the C compiled with `-g -O0`, and debug assertions on ([14.1](./ch14-01-build-settings)). | off |
 | `--line-directives` | none | Maps the generated C to CeeSafe lines with `#line`, without changing the optimisation level. | off; on with `-g` |
@@ -361,9 +363,11 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 | `--no-float` | `parse`, `check`, `build`, `run`, `fix`, `test` |
 | `--no-oce` | `build`, `run`, `test` |
 | `--no-placement` | `build`, `run`, `test` |
+| `--no-polls` | `build`, `test` |
 | `--offline` | `parse`, `check`, `build`, `run`, `fix`, `test` |
 | `--package` | `check` |
 | `--profile` | `parse`, `check`, `build`, `run`, `fix`, `test` |
+| `--polls` | `build`, `test` |
 | `--program` | `build`, `test` |
 | `--record` | `check` |
 | `--split` | `build`, `test` |
@@ -441,6 +445,7 @@ unknown key is `N0321`. Taught in [7.1](./ch07-01-package-and-manifest), [7.4](.
 | `[package]` | `kernel` | `"cosmoos"` | With `profile = "freestanding"`, includes the kernel library, as `--kernel cosmoos`. | none |
 | `[package]` | `trusted` | `true` or `false` | `true` lets the package declare its own types `@threadSafe`. | `false` |
 | `[package]` | `windowed` | `true` or `false` | `true` makes the executable a program with a window: on Windows no console window opens beneath it, as `--windowed`. Only for an executable of the hosted profile. | `false` |
+| `[package]` | `polls` | `true` or `false` | `true` builds the program with polls, so `Async.runBound` can bound its tasks, as `--polls`. Only the root package's applies. Not in a `[target.OS]` table, and not with `profile = "freestanding"`. | `false` |
 | `[package]` | `sources` | an array of directories | Where the package's `.cee` files are. | `["src"]` |
 | `[package]` | `tests` | an array of directories | The test directories. Their files are sources for `check` and `test` only. | `["tests"]` |
 | `[package]` | `c` | an array of files | C files compiled and linked with the executable. | none |

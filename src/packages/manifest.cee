@@ -185,6 +185,7 @@ struct Manifest {
     kernel: bool;       // kernel = "cosmoos": lib/kernel is part of the build (ADR 0025)
     trusted: bool;      // trusted = true: the package's types may be declared @threadSafe (ADR 0025 §3.2)
     windowed: bool;     // windowed = true: on Windows, linked for the Windows subsystem (ADR 0151)
+    polls: bool;        // polls = true: built with polls, CEE_POLLS (ADR 0190); the root's decides
     sources: Vector<Vector<u8>>;
     cFiles: Vector<Vector<u8>>;
     dependencies: Vector<DependencySpec>;
@@ -379,6 +380,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         kernel: false,
         trusted: false,
         windowed: false,
+        polls: false,
         sources: sources,
         cFiles: Vector<Vector<u8>>.create(),
         dependencies: Vector<DependencySpec>.create(),
@@ -440,6 +442,11 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             valid = v.isBool();
             if (valid) {
                 manifest.windowed = v.flag;
+            }
+        } else if (sameText(key, "polls")) {
+            valid = v.isBool();
+            if (valid) {
+                manifest.polls = v.flag;
             }
         } else if (sameText(key, "sources")) {
             valid = v.isArray() && v.strings.length > 0;
@@ -510,6 +517,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 "windowed",
             )) "'windowed' is true or false" else if (sameText(
                 key,
+                "polls",
+            )) "'polls' is true or false (ADR 0190)" else if (sameText(
+                key,
                 "sources",
             )) "'sources' is a non-empty array of directories: [\"src\"]" else if (sameText(
                 key,
@@ -567,6 +577,27 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             )?,
         )?;
     }
+    if (manifest.polls && manifest.freestanding) {
+        // Polls need the hosted runtime's monitor thread (ADR 0186 §3): a freestanding build has none.
+        var start = package.start;
+        var end = package.end;
+        match (package.find("polls")) {
+            Some(k) => {
+                start = package.entries[k].value.start;
+                end = package.entries[k].value.end;
+            }
+            null => {}
+        }
+        manifestError(
+            report,
+            file,
+            start,
+            end,
+            copyBytes(
+                "'polls' is for the hosted profile: a freestanding program has no monitor thread to bound its tasks (ADR 0186 §3, ADR 0190)".bytes(),
+            )?,
+        )?;
+    }
     // The [target.OS] tables (ADR 0047): each checked, the build's (ADR 0171: the host's without --target) added
     // after [package].
     let host = manifestTarget();
@@ -596,6 +627,11 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                         )?,
                     )?;
                 }
+            } else if (sameText(key, "polls")) {
+                var message = copyBytes("'polls' belongs in [package], not [".bytes())?;
+                appendBytes(mut message, t.name.view())?;
+                appendText(mut message, "]: polls do not depend on the system (ADR 0190)")?;
+                manifestError(report, file, e.keyStart, e.keyEnd, message)?;
             } else if (!isNativeField(key)) {
                 var message = message2("unknown field '", key, "' in [")?;
                 appendBytes(mut message, t.name.view())?;

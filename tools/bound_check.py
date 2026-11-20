@@ -2,14 +2,15 @@
 """A bound on running without waiting (ADR 0186): checks the corpus cannot make, since a task past its bound is
 ended by time natively and by fuel in the interpreter, and several cases end the process or need the clock.
 
-1. `survive`, built with --cflag -DCEE_POLLS=1 and run natively, and run in the interpreter, the same lines each time:
+1. `survive`, built with --polls (ADR 0190) and run natively, and run in the interpreter, the same lines each time:
    a unit's own bound (`spawnIsolatedBound`) ends its spinning child where the program has none; then, with the
    program's bound, nine ways to spin each end their isolated child alone, with PanicKind.Overran (a `while` and a
    `for` in an async body, a `loop`, a recursion with no loop, a sync helper's `while`, a counted `for` in a sync
    helper, a recursion through a function value, through two functions, and through a `dyn` method), while a sibling that waits on a timer finishes; a child that waits
    often is never ended; a child that holds a `Critical` past its bound is ended after it, not in it; and
    `Async.overruns()` counts each.
-2. `ends`, built so, one case an argument, natively (they need the clock):
+2. `ends`, built with --cflag -DCEE_POLLS=1 (the macro, as before ADR 0190), one case an argument, natively (they
+   need the clock):
    - `count`: a task in no unit that computes for 100 ms past a 30 ms bound is counted and reported, not ended;
    - `panic`: with RunBound.Panic, such a task ends the process with the overrun's panic line;
    - `critical`: an isolated child in a `Critical` for 100 ms, past a 30 ms bound, is ended only after it;
@@ -662,7 +663,8 @@ def main():
         stale = os.path.join(work, "stale.c")
         with open(stale, "w", encoding="utf-8") as f:
             f.write(STALE_C)
-        for stem, source, flags in (("survive", SURVIVE, ["--cflag", "-DCEE_POLLS=1"]),
+        # `survive` asks for polls as a package would (ADR 0190), `ends` by the macro, as before it.
+        for stem, source, flags in (("survive", SURVIVE, ["--polls"]),
                                     ("ends", ENDS, ["--cflag", "-DCEE_POLLS=1", stale]), ("nopolls", NOPOLLS, [])):
             path = os.path.join(work, stem + ".cee")
             with open(path, "w", encoding="utf-8") as f:

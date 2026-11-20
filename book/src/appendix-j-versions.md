@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.82.0
+## Releases 0.25.0 to 0.83.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.83.0 | 2026-11-21 | A busy executor runs its due timers and sees socket events every millisecond, not only when no task is ready, and a task paused past its slice waits in a queue of its own, so the tasks woken behind it run first (ADR 0191): a heartbeat timer under HTTP/2 load, and requests beside computing ones, no longer wait for the queue to empty | [Async](./ch17-00-async) |
 | 0.82.0 | 2026-11-20 | An isolated task past its time slice is paused and goes to the back of the queue, not ended (ADR 0189): `Async.runSlice(ms)` in a build with polls, `Async.pauses()`; `Async.runBound`, summed over a resume's slices, still ends a runaway with `PanicKind.Overran`. Polls asked for by the manifest (ADR 0190): `polls = true` in the root's `[package]`, and `--polls` and `--no-polls` for `build` and `test`. In the interpreter, a socket's bytes are no longer overtaken by a virtual deadline. | [14.1](./ch14-01-build-settings), [Appendix E](./appendix-e-ceesafec), [Async](./ch17-00-async) |
 | 0.81.0 | 2026-11-20 | Temporary forwarding (ADR 0162, accepted again): a value is not copied through a compiler temporary it only passes through, so gcc builds copy large values less (an HTTP/2 proxy relayed 2.7 % more); `--no-temporary-forwarding` turns it off. `--explain-frames` leaves forwarded temporaries out | [Appendix E](./appendix-e-ceesafec) |
 | 0.80.2 | 2026-11-20 | `ceesafec build` in a package of kind `library` makes its static library, `out/<name>.a` (`--emit lib`), instead of stopping with N0300 for want of a `main` (ADR 0187; CeeUsb's finding F13) | [Packages and the manifest](./ch07-01-package-and-manifest) |

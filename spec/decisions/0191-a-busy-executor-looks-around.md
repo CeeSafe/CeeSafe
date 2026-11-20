@@ -1,7 +1,7 @@
 # ADR 0191 — A busy executor looks around: events and timers while the queue is full, paused tasks in a queue of their own
 
 - Status: **Accepted** by the owner, 2026-11-20 ("yes, fix it in CeeSafe's executor"), after httpserver's benchmark
-  against Elixir (httpserver's `docs/elixir-benchmark.md`) found the two faults below; implemented, not released.
+  against Elixir (httpserver's `docs/elixir-benchmark.md`) found the two faults below; implemented, released in 0.83.0.
 - Scope: the hosted runtime's executor (`runtime/hosted/ceesafe_rt_async.c`, `cee_exec_tasks` and `cee_collect`),
   `tools/slice_check.py` (two cases), c-backend.md §3b and §6. No language or library change.
 - It amends ADR 0189 §2.3 step 3 (a paused task "goes to the back of the ready queue") and the epoll paragraph of

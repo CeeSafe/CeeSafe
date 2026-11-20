@@ -3,6 +3,15 @@
 // sent meanwhile must still be read. With epoll, edge-triggered, an attempt that parks makes no system call when the
 // descriptor is known to block, and only a collected event says otherwise; a wait cancelled before any event leaves
 // it not known to block, so the next attempt reads (ClayWind's browser host lost its input on Linux without this).
+// Between attempts the thread spins for a millisecond without the executor, which so collects no event: FreeBSD
+// delivers loopback bytes from its network thread, not within the write, and 100 attempts back to back ended before
+// they came (the test printed 2 there).
+
+/// Waits `ms` milliseconds on the clock, in the thread and outside the executor.
+fn spin(ms: u64) {
+    let end = Timer.now() + ms;
+    while (Timer.now() < end) {}
+}
 
 async fn attempt(stream: borrow AsyncTcpStream, buffer: borrow mut [u8; 64], ms: u64) -> Result<usize, AsyncError> {
     return await Async.timeout(ms, AsyncError.TimedOut, async () => await stream.read(mut buffer[..]));
@@ -30,7 +39,7 @@ async fn work() -> Result<u32, AsyncError> {
         let _ = k;
         match (await attempt(borrow server, mut buffer, 0)) {
             Ok(n) => { return Ok(1000 + truncate<u32>(n)); }
-            Err(AsyncError.TimedOut) => {}
+            Err(AsyncError.TimedOut) => { spin(1); }
             Err(e) => { return Err(e); }
         }
     }

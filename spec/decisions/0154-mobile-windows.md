@@ -123,3 +123,9 @@ backend and its activity glue; the program's thread on Android for `Window`'s fi
 
 **Tests** are recorded in ROADMAP §10 (2026-11-16, ADR 0154): a test program in the iOS 26 simulator (as an app
 bundle) and in the Android 16 emulator (as an APK), and the window runtime under strict flags on every system.
+
+## Amendment (2026-11-20, ADR 0188): the Android floor is API level 25
+
+ADR 0188, accepted by the owner, lowers the floor from API level 28 (Android 9) to 25 (Android 7.1), for a Sunmi V2
+till. Below 26 the runtime's Java is loaded from a file in the app's code cache instead of from memory; below 28 a
+process is started with `vfork` and `exec` instead of `posix_spawn`. Nothing else in this ADR changes.

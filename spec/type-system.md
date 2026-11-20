@@ -9,7 +9,7 @@ section's heading or text names the milestone or ADR that added it. Error codes 
 |---|---|---|
 | `i8 i16 i32 i64` | two's complement, −2^(n−1) … 2^(n−1)−1 | |
 | `u8 u16 u32 u64` | 0 … 2^n−1 | |
-| `isize` / `usize` | pointer width of the **target** (64 on every supported target) | from `TargetInfo`, never the host |
+| `isize` / `usize` | pointer width of the **target**: 64, or 32 on a 32-bit target (`--arch armv7`, `--arch x86`; ADR 0191) | from `TargetInfo`, never the host |
 | `f32 f64` | IEEE 754 binary32 and binary64 | since M11 (§35) |
 | `bool` | `true`, `false` | |
 | `void` | no value | a function's return type, and the `T` of `Result<void, E>` (§17.1) |
@@ -247,8 +247,12 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - `uN → uM` and `iN → iM` for M ≥ N;
   - `uN → iM` for M > N;
   - `bool →` any integer type (`false`→0, `true`→1).
-  `isize`/`usize` use the target width. Floats (M11, §35.4): `f32 → f64`, and the integers that a float type holds
-  exactly.
+  `isize`/`usize` are taken as 64 bits wide for this check on every target (ADR 0191 §2.4), so that a program that
+  checks on one target checks on all: `u64 as usize` and `i64 as isize` are accepted everywhere. On a 32-bit target
+  such a conversion is emitted as a checked one: a value that does not fit
+  panics ("conversion loses information on this 32-bit target", the runtime's `CEE_PANIC_NARROWING`), as an index
+  out of range does. So `as` never loses information on any target: it is exact or it stops. Floats (M11, §35.4):
+  `f32 → f64`, and the integers that a float type holds exactly.
 - `truncate<T>(e)`: `e` of any integer type, `T` any integer type. The result is `e`
   modulo 2^bits(T), reinterpreted in `T` (two's complement). It is always defined. Use it for
   narrowing and for signed↔unsigned reinterpretation.
@@ -1428,7 +1432,7 @@ fn main() -> i32 {
 - `Box<T, A>` owns exactly one value of type `T` in memory obtained from allocator type `A`
   (H1). `Box<T>` means `Box<T, SystemHeap>`. `A` must be an allocator type (N0263). `T` is any
   value type except `void` and references or slices (N0246).
-- A box is a **move type** that needs drop, and is one pointer wide (8 bytes on LP64).
+- A box is a **move type** that needs drop, and is one pointer wide (8 bytes on a 64-bit target, 4 on a 32-bit one).
   Destroying it destroys `T` (its drop glue), then returns the memory to `A`.
 - A type does **not** contain the target of a `Box` by value, so recursive types are built with
   boxes: `enum List { Nil, Cons(i32, Box<List>) }` is allowed (no N0227).
@@ -2385,7 +2389,8 @@ fn main() -> i32 {
   exactly as for a place and its fields. The vector makes **no address-stability promise**:
   growth moves the elements.
 - No `==`, no `Copy`.
-- **Layout (v0):** `{ T *ptr; u64 length; u64 capacity }` (24 bytes on LP64). An empty vector's
+- **Layout (v0):** `{ T *ptr; usize length; usize capacity }` (24 bytes on a 64-bit target, 12 on a 32-bit one;
+  ADR 0191 §2.3). An empty vector's
   pointer is a valid, aligned, never-dereferenced address (not null), so views of it are valid.
   `v.viewMut().ptr` is the buffer's address, also for an empty vector that has capacity (§23.3).
 
@@ -3691,7 +3696,9 @@ Diagnostics: none new.
     `UIPasteboard`'s. Text input is the soft keyboard's (ADR 0157). There is no title, cursor, menu or file dialog
     (`setMenu` and the dialogs are `Unsupported`), and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
   - **Android** (ADR 0154): a NativeActivity's library (built with the NDK's clang, `--cflag -shared --cflag -fPIC
-    --cflag -landroid --cflag -llog`, `--windowed`, API level 28 or later). The runtime's `ANativeActivity_onCreate`
+    --cflag -landroid --cflag -llog`, `--windowed`, API level 25 or later: ADR 0188; 28 before it). Below API level
+    26 the runtime's Java is written to the app's code cache and loaded from there, and below 28 a process is started
+    with `vfork` and `exec` instead of `posix_spawn` (ADR 0188 §2.1, §2.2). The runtime's `ANativeActivity_onCreate`
     starts `main` on a thread of its own, which is the program's first thread for `Window`; when `main` returns, the
     activity is finished and the process ends with its code. Standard output and error go to logcat (tag `ceesafe`).
     One window, the activity's, waited for by `open` (ten seconds at most, else `NoDisplay`): its size in points is
@@ -3944,7 +3951,7 @@ fn main() -> i32 {
   `void` for an untyped pointer (`*void`, C's `void *`). It may not be a reference, slice,
   `StringView` or other scoped type (§19.1, §25.3), or `never` (N0281). Since M8d it may be a type
   parameter: an instantiation with a scoped type argument is then N0274, as for a box of `T`.
-- A raw pointer is one machine address: 8 bytes, aligned to 8 on LP64. It is **Copy**, needs no
+- A raw pointer is one machine address: 8 bytes, aligned to 8, on a 64-bit target; 4 and 4 on a 32-bit one. It is **Copy**, needs no
   drop, holds no loans and is not scoped (U3). So it may appear anywhere a Copy value may: locals,
   parameters, results, fields, payloads and array elements. Constants of pointer type are not
   supported (N0216).
@@ -4188,7 +4195,8 @@ of the layouts ceesafec computes and asserts, so `[CULong; 3]` is 12 bytes on Wi
 file that uses one asserts `sizeof(long)`, so C generated for one target and compiled for another whose `long` is
 another width fails to compile.
 
-**The width is decided where `check` or `build` runs, not by the C compiler.** ceesafec has no target option, and
+**The width is decided where `check` or `build` runs, not by the C compiler.** `--target` names the system (ADR 0171)
+but not `long`'s width, and
 `check` runs no C compiler, so the width is the rule above applied to the host: the target C compiler's `long` only
 when the C is compiled for the host's own kind of system (hosted Windows, or anything else LP64). Two consequences:
 - **A program's validity can depend on the host.** `n as CLong`, with `n` an `i64`, is accepted on macOS and Linux
@@ -4477,7 +4485,7 @@ value.
 ### 29.3 CPU and target queries
 - `Cpu.spinHint()`: a hint inside a busy-wait loop (`pause` on x86-64, `yield` on AArch64, nothing
   elsewhere). `void`, safe, allowed in both profiles.
-- `Target.pointerBits()`: `u32`, the target's pointer width (64 on every target CeeSafe supports).
+- `Target.pointerBits()`: `u32`, the target's pointer width: 64, or 32 for `--arch armv7` and `--arch x86` (ADR 0191).
   `Target.isX86_64()` and `Target.isAArch64()`: `bool`, the architecture the generated C is
   compiled for. They are decided by the C compiler, not by `ceesafec` (the generated C is the same for
   every LP64 target), so they are not constants: use them in ordinary conditions. The interpreter

@@ -104,6 +104,7 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--emit` | `exe`, `c`, `obj` or `lib` | Chooses what is written: `exe` an executable, `c` the generated C sources in a directory, `obj` one relocatable object, `lib` a static library with the headers a host program needs ([14.3](./ch14-03-libraries-for-other-programs)). | `exe` |
 | `--cc` | `<compiler>` | Names the C compiler. | `$CC`; else `cc`; on Windows the first found of clang, gcc and Visual Studio's `cl` |
 | `--cflag` | `<flag>` | Passes one more flag to the C compiler. It can be given several times ([14.1](./ch14-01-build-settings)). | none; the C is compiled with `-O2` |
+| `--arch` | `arm64`, `x86_64`, `armv7` or `x86` | Names the processor the program is built for, whose pointer width lays out every type: `usize` is 32 bits on `armv7` and `x86`. A 32-bit one is for `--target android`, or `--target linux` to test it; with `--target linux --arch x86` on an x86_64 Linux, also pass `--cflag -m32 --cflag -msse2 --cflag -mfpmath=sse`. | this machine's |
 | `--ld` | `<linker>` | With `--emit obj`, joins the objects with `<linker> -r` instead of the C compiler, as `ld.lld` does for another processor ([22.1](./ch22-01-the-freestanding-profile)). With `--emit lib` it is a usage error. | the C compiler joins them |
 | `--ar` | `<archiver>` | With `--emit lib`, names the archiver that makes the library. Without `--emit lib` it is a usage error. | `llvm-ar` beside an LLVM clang, else `ar` |
 | `--lib-main` | none | With `--emit lib`, keeps the C `main` of a package that has a CeeSafe `main`. Without `--emit lib` it is a usage error. | off: a library has no C `main`, since its host has one |
@@ -327,6 +328,7 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 |---|---|
 | `--all` | `check` |
 | `--ar` | `build`, `test` |
+| `--arch` | `parse`, `check`, `build`, `run`, `fix`, `test` |
 | `--cc` | `build`, `test` |
 | `--ceesafe-harness` | `run` |
 | `--cflag` | `build`, `test` |

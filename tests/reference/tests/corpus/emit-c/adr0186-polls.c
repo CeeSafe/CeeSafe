@@ -33,15 +33,15 @@ typedef struct ceeA3_u64 ceeA3_u64;
 typedef struct ceeA3_u32 ceeA3_u32;
 typedef uint32_t (*ceeN_N1u32u32)(uint32_t);
 
-struct ceeSl_u8 { const uint8_t *ptr; uint64_t len; };
+struct ceeSl_u8 { const uint8_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u8) == 16, "ceesafec layout: sizeof(Slice<u8>)");
 _Static_assert(_Alignof(ceeSl_u8) == 8, "ceesafec layout: alignof(Slice<u8>)");
 
-struct ceeSl_u64 { const uint64_t *ptr; uint64_t len; };
+struct ceeSl_u64 { const uint64_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u64) == 16, "ceesafec layout: sizeof(Slice<u64>)");
 _Static_assert(_Alignof(ceeSl_u64) == 8, "ceesafec layout: alignof(Slice<u64>)");
 
-struct ceeSl_u32 { const uint32_t *ptr; uint64_t len; };
+struct ceeSl_u32 { const uint32_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u32) == 16, "ceesafec layout: sizeof(Slice<u32>)");
 _Static_assert(_Alignof(ceeSl_u32) == 8, "ceesafec layout: alignof(Slice<u32>)");
 

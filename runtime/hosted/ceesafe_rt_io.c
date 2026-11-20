@@ -371,8 +371,10 @@ cee_io_result ceesafe_file_remove(cee_str path) {
        checkout could not be removed). The attribute is cleared and the remove tried again; put back if it fails. */
     int error = errno;
     DWORD attributes = GetFileAttributesW(wide);
+    /* The complement is of a DWORD: FILE_ATTRIBUTE_READONLY is an int, whose ~ is -2 (-Wsign-conversion). */
+    DWORD writable = attributes & ~(DWORD)FILE_ATTRIBUTE_READONLY;
     if (error == EACCES && attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) != 0 &&
-        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 && SetFileAttributesW(wide, attributes & ~FILE_ATTRIBUTE_READONLY)) {
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 && SetFileAttributesW(wide, writable)) {
         if (_wunlink(wide) == 0) return ceesafe_io_ok(0);
         error = errno;
         (void)SetFileAttributesW(wide, attributes);

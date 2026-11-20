@@ -405,9 +405,10 @@ fn dynFramePartsWith(
     memo: borrow mut FrameMemo,
 ) -> Result<DynFrameParts, AllocError> {
     var l = LayoutBuilder { size: 0, align: 1 };
+    let p = c.types.pointerBytes() as u64;
     layoutAdd(mut l, 4, 4); // cee_state
-    layoutAdd(mut l, 8, 8); // cee_resume
-    layoutAdd(mut l, 8, 8); // cee_size
+    layoutAdd(mut l, p, p); // cee_resume, a function pointer (ADR 0187)
+    layoutAdd(mut l, 8, c.types.target.wideAlign as u64); // cee_size, a uint64_t
     let result = c.hir.functions[callee as usize].returnType;
     if (!c.types.is(result, TypeKind.Void)) {
         addLayout(mut l, typeLayout(c, result));

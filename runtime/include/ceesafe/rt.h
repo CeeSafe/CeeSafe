@@ -1326,8 +1326,8 @@ extern cee_max_align_t ceesafe_vec_empty;
  * len + extra) holding the old bytes, after the old one (if any) is freed, with *cap updated.
  * NULL, with nothing changed, if the size overflows or the allocation fails.
  */
-void *ceesafe_vec_grow(void *ptr, uint64_t len, uint64_t *cap, uint64_t extra, uint64_t size, uint32_t allocator);
-void *ceesafe_vec_zeroed(uint64_t *cap, uint64_t count, uint64_t size, uint32_t allocator);
+void *ceesafe_vec_grow(void *ptr, uint64_t len, cee_usize *cap, uint64_t extra, uint64_t size, uint32_t allocator);
+void *ceesafe_vec_zeroed(cee_usize *cap, uint64_t count, uint64_t size, uint32_t allocator);
 
 /* ---- Stable vectors and slot maps (type-system.md §24) ------------------------------------ */
 

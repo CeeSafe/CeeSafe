@@ -159,29 +159,34 @@ void ceesafe_write_str(const char *text, size_t length) {
 
 cee_max_align_t ceesafe_vec_empty;
 
-void *ceesafe_vec_grow(void *ptr, uint64_t len, uint64_t *cap, uint64_t extra, uint64_t size, uint32_t allocator) {
+void *ceesafe_vec_grow(void *ptr, uint64_t len, cee_usize *cap, uint64_t extra, uint64_t size, uint32_t allocator) {
     if (extra > UINT64_MAX - len) return NULL;
     uint64_t need = len + extra;
-    if (need <= *cap) return ptr;
-    uint64_t next = *cap > UINT64_MAX / 2u ? UINT64_MAX : *cap * 2u;
+    uint64_t have = (uint64_t)*cap;
+    if (need <= have) return ptr;
+    uint64_t next = have > UINT64_MAX / 2u ? UINT64_MAX : have * 2u;
     if (next < 4u) next = 4u;
     if (next < need) next = need;
-    if (size == 0u || next > (uint64_t)SIZE_MAX / size) return NULL;
+    if (size == 0u) return NULL;
+    /* At most what the address space holds (a 32-bit target's 4 GiB, ADR 0187), but never less than is needed. */
+    uint64_t most = (uint64_t)SIZE_MAX / size;
+    if (next > most) next = most;
+    if (next < need) return NULL;
     /* A first buffer is allocated; a later one is reallocated, which keeps the old block on failure. */
     void *fresh = *cap == 0u ? ceesafe_alloc((size_t)(next * size), allocator) : ceesafe_realloc(ptr, (size_t)(next * size), allocator);
     if (fresh == NULL) return NULL;
-    *cap = next;
+    *cap = (cee_usize)next; /* next * size fits size_t, so next fits cee_usize */
     return fresh;
 }
 
 /* A first buffer of at least `count` elements, every byte zero (ADR 0099): what ceesafe_vec_grow gives a vector with
    no buffer, from the zeroed allocation. One attempt and one live block, as there. */
-void *ceesafe_vec_zeroed(uint64_t *cap, uint64_t count, uint64_t size, uint32_t allocator) {
+void *ceesafe_vec_zeroed(cee_usize *cap, uint64_t count, uint64_t size, uint32_t allocator) {
     uint64_t next = count < 4u ? 4u : count;
     if (size == 0u || next > (uint64_t)SIZE_MAX / size) return NULL;
     void *fresh = ceesafe_alloc_zeroed((size_t)(next * size), allocator);
     if (fresh == NULL) return NULL;
-    *cap = next;
+    *cap = (cee_usize)next;
     return fresh;
 }
 

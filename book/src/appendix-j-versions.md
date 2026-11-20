@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.80.1
+## Releases 0.25.0 to 0.80.2
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.80.2 | 2026-11-20 | `ceesafec build` in a package of kind `library` makes its static library, `out/<name>.a` (`--emit lib`), instead of stopping with N0300 for want of a `main` (ADR 0187; CeeUsb's finding F13) | [Packages and the manifest](./ch07-01-package-and-manifest) |
 | 0.80.1 | 2026-11-20 | A wake for a task that is already ready (a cancelled channel wait, still on the channel's list until its task runs) no longer makes the next wait walk every task waiting to be woken; an HTTP/2 proxy whose streams run as isolated tasks relayed about 4 % less | [Async](./ch17-00-async) |
 | 0.80.0 | 2026-11-20 | A bound on how long a task runs without waiting (ADR 0186). In a build with `--cflag -DCEE_POLLS=1`, `Async.runBound(ms, RunBound.Count \| RunBound.Panic)` bounds one resume of a task; a task of an isolated unit past it traps with `PanicKind.Overran` and ends alone, a task in no unit is counted (`Async.overruns()`) or ends the process. `set.spawnIsolatedBound(ms, …)` and `trySpawnIsolatedBound` give a unit a bound of its own, and `@noPoll` leaves a function without polls. Polls go at loop headers and at the entry of functions that may recurse; a build without the macro has none | [Appendix A](./appendix-a-keywords), [Async](./ch17-00-async) |
 | 0.79.2 | 2026-11-20 | Linux: a read that loses a race, as an HTTP/2 connection's read loses to its streams' work, no longer costs a failed system call at its next attempt (0.78.0's fix for a read raced against a passed deadline did; an HTTP/2 proxy relayed about 7 % less). Instead, an executor that never runs out of ready tasks collects events without blocking every 61 resumes, once such a race has been lost | [Async](./ch17-00-async) |

@@ -1098,6 +1098,9 @@ fn loadPackage(
     if (!options.emitGiven && workspace.root.kind == 2) {
         options.emit = copyBytes("obj".bytes())!;
     }
+    if (!options.emitGiven && workspace.root.kind == 1) {
+        options.emit = copyBytes("lib".bytes())!; // a library package builds its static library (ADR 0187)
+    }
     // A windowed executable (ADR 0151): --windowed in a freestanding or object package is a usage error; the manifest's field
     // applies where an executable or its C is made, and does nothing for an object, a library or a freestanding build.
     if (options.windowed && (options.freestanding || sameText(options.emit.view(), "obj"))) {

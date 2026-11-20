@@ -237,6 +237,11 @@ that reads it), a ceesafec whose version does not satisfy `ceesafec` reports N03
 checked: `this package needs ceesafec >=0.20.0; this is ceesafec 0.19.1`. A development version (`0.20.0-dev`) counts
 as its MAJOR.MINOR.PATCH. A compiler older than the field reports it as an unknown field at the same line.
 
+**What `build` makes** without `--emit` follows the root package's `kind`: an executable for `executable`, a static
+library for `library` (`--emit lib`, §8, ADR 0187: `out/<name>.a` and the host's headers beside it), one relocatable
+object for `object` (`--emit obj`, profiles.md §4.3). An `--emit` on the command line is kept: `--emit exe` in a library
+without `main` is N0300.
+
 A dependency's key is its package's `name`: a dependency is known by the name its own manifest gives it. A
 dependency of kind `executable` is N0321: only a library's items are used. Errors in the manifest are N0320 (its
 syntax) and N0321 (a missing, unknown or invalid field), with the line.

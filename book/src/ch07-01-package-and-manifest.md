@@ -134,6 +134,9 @@ it. The line beginning `///` is a documentation comment.
 The file names `main.cee` and `lib.cee` are what `ceesafec new` chooses. The compiler reads every `.cee` file under
 `src/` and does not care what they are called.
 
+Other CeeSafe packages use a library through `[dependencies]`. `ceesafec build` in a library makes a static library,
+`out/tally.a`, with its C headers beside it, for a program written in C or another language to link.
+
 ::: tip Rule
 An executable package has a `fn main()` and can be run and built. A library package has none, and can only be
 checked by itself. Only a library can be a dependency.

@@ -176,6 +176,10 @@
     from the patch, `check` is clean and the program prints the patched package's values, in the interpreter and
     compiled. A patch that names no package of the build, and one given as a version requirement, are N0321; a
     dependency's own [patch] is not read.
+43. manifest-frameworks (ADR 0184): see manifest_frameworks.
+44. library-build-default (ADR 0187, tooling.md §4.1, CeeUsb's finding F13): `build` with no `--emit` in a package of
+    kind "library" writes its static library out/<name>.a and ceesafe/embed.h beside it, with no N0300; `--emit exe`
+    there is still N0300.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1385,6 +1389,26 @@ def manifest_frameworks(compiler, work, problems):
                             f"{p.stderr.strip()[-300:]}")
 
 
+def library_build_default(compiler, work, problems):
+    """44. library-build-default (ADR 0187): a library package's `build` makes its static library."""
+    pkg = os.path.join(work, "library-build-default")
+    os.makedirs(os.path.join(pkg, "src"))
+    with open(os.path.join(pkg, "ceesafe.toml"), "w") as f:
+        f.write('[package]\nname = "shelf"\nversion = "0.1.0"\nkind = "library"\n')
+    with open(os.path.join(pkg, "src", "shelf.cee"), "w") as f:
+        f.write("public fn width() -> i32 => 3;\n")
+    p = run([compiler, "build"], pkg)
+    archive = os.path.join(pkg, "out", "shelf.a")
+    header = os.path.join(pkg, "out", "ceesafe", "embed.h")
+    if p.returncode != 0 or "N0300" in p.stderr or not os.path.isfile(archive) or not os.path.isfile(header):
+        problems.append(f"library-build-default: build did not write out/shelf.a and out/ceesafe/embed.h "
+                        f"(status {p.returncode}): {p.stderr.strip()[-300:]}")
+    p = run([compiler, "build", "--emit", "exe"], pkg)
+    if p.returncode == 0 or "N0300" not in p.stderr:
+        problems.append(f"library-build-default: --emit exe in a library was not N0300 (status {p.returncode}): "
+                        f"{p.stderr.strip()[-300:]}")
+
+
 def pe_subsystem(path):
     """A PE executable's subsystem: 2 GUI, 3 console; None if the file is not one."""
     try:
@@ -2503,9 +2527,10 @@ def main():
         git_subdirectories(compiler, work, problems)
         dependency_patch(compiler, work, problems)
         manifest_frameworks(compiler, work, problems)
+        library_build_default(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
-    print(f"package_tests: 40 checks; {len(problems)} problems{skipped}")
+    print(f"package_tests: 41 checks; {len(problems)} problems{skipped}")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

@@ -285,9 +285,17 @@ class Reader:
         return text
 
 
+def default_signals():
+    """The programs start with these signals at their default action, however the check was started: a background job
+    of a non-interactive shell (`nohup ... &` in a script) has SIGINT and SIGQUIT ignored, an ignored signal stays
+    ignored across exec, and a CeeSafe program, as any, keeps it so; every case here sends SIGINT."""
+    for number in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP, signal.SIGTERM):
+        signal.signal(number, signal.SIG_DFL)
+
+
 def start(argv, env):
     return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=dict(os.environ, **env))
+                            env=dict(os.environ, **env), preexec_fn=default_signals)
 
 
 def finish(p):

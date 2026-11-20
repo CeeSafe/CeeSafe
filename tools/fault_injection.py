@@ -30,7 +30,8 @@ ALLOCATION_CALLS = ("ceesafe_alloc(", "ceesafe_alloc_zeroed(", "ceesafe_region_a
                     "ceesafe_scratch_enter_root(", "ceesafe_pool_take(", "ceesafe_vec_grow(", "ceesafe_svec_slot(",
                     "ceesafe_async_spawn(",  # a scope's child (type-system.md §40.5): its task and frame
                     "ceesafe_async_stack_push(")  # a stacked await's frame (ADR 0056)
-P5_SWITCHES = ["--flat-c", "--no-closure-specialisation", "--no-placement", "--no-bce", "--no-oce"]
+P5_SWITCHES = ["--flat-c", "--no-closure-specialisation", "--no-temporary-forwarding", "--no-placement", "--no-bce",
+               "--no-oce"]
 SWITCHES = []  # the default form; --flat sets P5_SWITCHES
 # The sanitizers are clang's, or GCC's where there is no clang (the Linux box: ROADMAP L1 A2's gate).
 SANITIZER_CC = "clang" if shutil.which("clang") else "gcc"

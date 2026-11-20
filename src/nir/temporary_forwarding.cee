@@ -1,0 +1,587 @@
+// Temporary forwarding (optimisations.md §6, ADR 0162): a value is not copied through a temporary it only passes
+// through. In a block, `T = R; D = use(T)` becomes `D = R`, and `T = R; return T` returns R's operand, when T is a
+// compiler temporary mentioned nowhere else, R is a Use or an ordinary Call, and R does not read D's local. The
+// temporary is then no local of the C function (NirProgram.forwarded). It runs after closure-call specialisation, on
+// the NIR that is compiled and the NIR that is interpreted; checks and `--dump-nir` see the NIR before it.
+
+/// Counts a place's mentions of locals into `counts`: the local it starts from, and the places among its indices.
+fn forwardCountPlace(n: borrow NirProgram, place: u32, counts: borrow mut Vector<u32>) {
+    let p = n.places[place as usize];
+    counts[p.local as usize] = counts[p.local as usize].wrappingAdd(1);
+    for (k in 0..p.projections.count) {
+        forwardCountOperand(n, n.projections[(p.projections.start + k) as usize].index, mut counts);
+    }
+}
+
+fn forwardCountOperand(n: borrow NirProgram, operand: u32, counts: borrow mut Vector<u32>) {
+    if (operand == none()) {
+        return;
+    }
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => { forwardCountPlace(n, place, mut counts); }
+        _ => {}
+    }
+}
+
+fn forwardCountOperands(n: borrow NirProgram, operands: Range, counts: borrow mut Vector<u32>) {
+    for (k in 0..operands.count) {
+        forwardCountOperand(n, n.at(operands, k), mut counts);
+    }
+}
+
+fn forwardCountRvalue(n: borrow NirProgram, r: u32, counts: borrow mut Vector<u32>) {
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Use(a) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.Binary(_, a, b) => {
+            forwardCountOperand(n, a, mut counts);
+            forwardCountOperand(n, b, mut counts);
+        }
+        NirRvalue.Unary(_, a) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.Cast(a) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.Truncate(a) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.FloatToInt(a, _) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.Ref(_, place) => { forwardCountPlace(n, place, mut counts); }
+        NirRvalue.Discriminant(place) => { forwardCountPlace(n, place, mut counts); }
+        NirRvalue.EnumAggregate(_, operands) => { forwardCountOperands(n, operands, mut counts); }
+        NirRvalue.Aggregate(operands) => { forwardCountOperands(n, operands, mut counts); }
+        NirRvalue.Array(operands) => { forwardCountOperands(n, operands, mut counts); }
+        NirRvalue.ArrayRepeat(a) => { forwardCountOperand(n, a, mut counts); }
+        NirRvalue.Slice(_, place, low, high) => {
+            forwardCountPlace(n, place, mut counts);
+            forwardCountOperand(n, low, mut counts);
+            forwardCountOperand(n, high, mut counts);
+        }
+        NirRvalue.Length(place) => { forwardCountPlace(n, place, mut counts); }
+        NirRvalue.Call(_, operands) => { forwardCountOperands(n, operands, mut counts); }
+        NirRvalue.Builtin(_, operands) => { forwardCountOperands(n, operands, mut counts); }
+        NirRvalue.FunctionAddress(_) => {}
+        NirRvalue.StaticAddress(_) => {}
+    }
+}
+
+/// Every mention of a local in a function, but its StorageDeads: `counts[local]`.
+fn forwardCountFunction(n: borrow NirProgram, function: borrow NirFunction, counts: borrow mut Vector<u32>) {
+    for (block in function.blocks.view()) {
+        for (statement in block.statements.view()) {
+            match (n.statements[statement as usize]) {
+                NirStatement.StorageDead(_) => {}
+                NirStatement.Drop(place, flag) => {
+                    forwardCountPlace(n, place, mut counts);
+                    if (flag != none()) {
+                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+                    }
+                }
+                NirStatement.Assign(target, r) => {
+                    forwardCountPlace(n, target, mut counts);
+                    forwardCountRvalue(n, r, mut counts);
+                }
+                NirStatement.BoundsCheck(a, b) => {
+                    forwardCountOperand(n, a, mut counts);
+                    forwardCountOperand(n, b, mut counts);
+                }
+                NirStatement.RangeCheck(low, high, length, text) => {
+                    forwardCountOperand(n, low, mut counts);
+                    forwardCountOperand(n, high, mut counts);
+                    forwardCountOperand(n, length, mut counts);
+                    if (text != none()) {
+                        forwardCountPlace(n, text, mut counts);
+                    }
+                }
+                NirStatement.LengthCheck(a, b) => {
+                    forwardCountOperand(n, a, mut counts);
+                    forwardCountOperand(n, b, mut counts);
+                }
+                NirStatement.Unpack(source, _, targets) => {
+                    forwardCountPlace(n, source, mut counts);
+                    for (k in 0..targets.count) {
+                        let target = n.at(targets, k);
+                        if (target != none()) {
+                            counts[target as usize] = counts[target as usize].wrappingAdd(1);
+                        }
+                    }
+                }
+                NirStatement.BoxFree(place, flag) => {
+                    forwardCountPlace(n, place, mut counts);
+                    if (flag != none()) {
+                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+                    }
+                }
+                NirStatement.Eval(r) => { forwardCountRvalue(n, r, mut counts); }
+            }
+        }
+        if (block.terminator != none()) {
+            match (n.terminators[block.terminator as usize]) {
+                NirTerminator.Branch(condition, _, _) => { forwardCountOperand(n, condition, mut counts); }
+                NirTerminator.Switch(value, _, _) => { forwardCountOperand(n, value, mut counts); }
+                NirTerminator.Return(value) => { forwardCountOperand(n, value, mut counts); }
+                NirTerminator.Exit(code) => { forwardCountOperand(n, code, mut counts); }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Whether a place mentions `local`: where it starts, or in a place among its indices.
+fn forwardPlaceReads(n: borrow NirProgram, place: u32, local: u32) -> bool {
+    let p = n.places[place as usize];
+    if (p.local == local) {
+        return true;
+    }
+    for (k in 0..p.projections.count) {
+        if (forwardOperandReads(n, n.projections[(p.projections.start + k) as usize].index, local)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn forwardOperandReads(n: borrow NirProgram, operand: u32, local: u32) -> bool {
+    if (operand == none()) {
+        return false;
+    }
+    return match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => forwardPlaceReads(n, place, local),
+        _ => false,
+    };
+}
+
+/// Whether rvalue `r` may be forwarded (rule 3: a Use, or a Call that is an ordinary call) and does not read
+/// `local` (rule 4).
+fn forwardableRvalue(n: borrow NirProgram, r: u32, local: u32) -> bool {
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Use(a) => { return !forwardOperandReads(n, a, local); }
+        NirRvalue.Call(_, operands) => {
+            if (n.rvalueTasks[r as usize] != 0) {
+                return false; // awaited, run or spawned: its result reaches the task's frame another way
+            }
+            for (k in 0..operands.count) {
+                if (forwardOperandReads(n, n.at(operands, k), local)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        _ => { return false; }
+    }
+}
+
+/// The local a place is, when it is a whole local (no projection); none otherwise.
+fn forwardWholeLocal(n: borrow NirProgram, place: u32) -> u32 =>
+    if (n.places[place as usize].projections.count == 0) n.places[place as usize].local else none();
+
+/// The whole local an operand is, or none.
+fn forwardOperandLocal(n: borrow NirProgram, operand: u32) -> u32 {
+    if (operand == none()) {
+        return none();
+    }
+    return match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => forwardWholeLocal(n, place),
+        _ => none(),
+    };
+}
+
+/// Whether local `t` of `function` may be a forwarded temporary at all (rule 1): the compiler's own, not a parameter,
+/// not a `using` local, not a debugAssert's.
+fn forwardCandidate(function: borrow NirFunction, protected: borrow Vector<bool>, t: u32) -> bool {
+    if (t == none() || t < function.parameterCount || protected[t as usize]) {
+        return false;
+    }
+    let local = function.locals[t as usize];
+    return local.name == none() && !local.isUsing;
+}
+
+/// The position of statement `s` in block `b` of the function, or none.
+fn forwardPosition(function: borrow NirFunction, b: u32, s: u32) -> u32 {
+    let statements = borrow function.blocks[b as usize].statements;
+    for (k in 0..statements.length) {
+        if (statements[k] == s) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// Walks from the statement after position `from` of block `b` to `target` (a statement of block `end`, or none for
+/// `end`'s terminator): whether the way is straight (the rest of a block, then the block its `goto` names, from its
+/// start) and holds nothing but StorageDeads, none of a local that place `guard` mentions (none: no place to guard).
+/// Each block entered through a `goto` is counted in `arrivals` and listed in `touched`.
+fn forwardStraight(
+    n: borrow NirProgram,
+    function: borrow NirFunction,
+    indexOf: borrow Vector<u32>,
+    b: u32,
+    from: u32,
+    target: u32,
+    end: u32,
+    guard: u32,
+    arrivals: borrow mut Vector<u32>,
+    touched: borrow mut Vector<u32>,
+) -> Result<bool, AllocError> {
+    var block = b;
+    var position = (from as usize) + 1;
+    var steps: usize = 0;
+    loop {
+        let statements = borrow function.blocks[block as usize].statements;
+        while (position < statements.length) {
+            let s = statements[position];
+            if (target != none() && block == end && s == target) {
+                return Ok(true);
+            }
+            match (n.statements[s as usize]) {
+                NirStatement.StorageDead(local) => {
+                    if (guard != none() && forwardPlaceReads(n, guard, local)) {
+                        return Ok(false);
+                    }
+                }
+                _ => { return Ok(false); }
+            }
+            position += 1;
+        }
+        if (target == none() && block == end) {
+            return Ok(true); // the block's terminator
+        }
+        let terminator = function.blocks[block as usize].terminator;
+        if (terminator == none()) {
+            return Ok(false);
+        }
+        var next = none();
+        match (n.terminators[terminator as usize]) {
+            NirTerminator.Goto(id) => {
+                if ((id as usize) < indexOf.length) {
+                    next = indexOf[id as usize];
+                }
+            }
+            _ => {}
+        }
+        steps += 1;
+        if (next == none() || steps > function.blocks.length) {
+            return Ok(false);
+        }
+        if (arrivals[next as usize] == 0) {
+            touched.push(next)?;
+        }
+        arrivals[next as usize] += 1;
+        block = next;
+        position = 0;
+    }
+}
+
+/// One whole assignment of a temporary: `T = R`, as statement `statement` of block `block`; `next` links the
+/// assignments of one temporary (none ends the list).
+struct ForwardDef {
+    statement: u32;
+    block: u32;
+    next: u32;
+}
+
+/// Forwards the temporaries of function `f`; how many went.
+fn forwardFunction(n: borrow mut NirProgram, f: u32) -> Result<u32, AllocError> {
+    let localCount = n.functions[f as usize].locals.length;
+    let blockCount = n.functions[f as usize].blocks.length;
+    var counts = Vector<u32>.create();
+    var protected = Vector<bool>.create();
+    var gone = Vector<bool>.create();
+    var defHead = Vector<u32>.create();
+    var defCount = Vector<u32>.create();
+    for (k in 0..localCount) {
+        counts.push(0)?;
+        protected.push(false)?;
+        gone.push(false)?;
+        defHead.push(none())?;
+        defCount.push(0)?;
+    }
+    forwardCountFunction(n, n.functions[f as usize], mut counts);
+    // A debugAssert's own temporaries (ADR 0087 §2.5) stay: its statements are compiled conditionally.
+    for (a in n.debugAsserts.view()) {
+        if (a.function == f) {
+            for (k in a.firstTemp..a.endTemp) {
+                if ((k as usize) < localCount) {
+                    protected[k as usize] = true;
+                }
+            }
+        }
+    }
+    // Blocks by id, how many blocks lead to each, and each temporary's whole assignments.
+    var indexOf = Vector<u32>.create();
+    var predecessors = Vector<u32>.create();
+    var arrivals = Vector<u32>.create();
+    for (b in 0..blockCount) {
+        let id = n.functions[f as usize].blocks[b].id as usize;
+        while (indexOf.length <= id) {
+            indexOf.push(none())?;
+        }
+        indexOf[id] = truncate<u32>(b);
+        predecessors.push(0)?;
+        arrivals.push(0)?;
+    }
+    var defs = Vector<ForwardDef>.create();
+    for (b in 0..blockCount) {
+        for (id in n.functions[f as usize].blocks[b].successors.view()) {
+            if ((id as usize) < indexOf.length && indexOf[id as usize] != none()) {
+                predecessors[indexOf[id as usize] as usize] += 1;
+            }
+        }
+        for (s in n.functions[f as usize].blocks[b].statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, _) => {
+                    let t = forwardWholeLocal(n, target);
+                    if (forwardCandidate(n.functions[f as usize], protected, t)) {
+                        defs.push(ForwardDef { statement: s, block: truncate<u32>(b), next: defHead[t as usize] })?;
+                        defHead[t as usize] = truncate<u32>(defs.length - 1);
+                        defCount[t as usize] += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    var touched = Vector<u32>.create();
+    var total: u32 = 0;
+    for (b in 0..blockCount) {
+        // The uses in this block: `D = use(T)`, then the block's `return T`.
+        var i: usize = 0;
+        loop {
+            let length = n.functions[f as usize].blocks[b].statements.length;
+            if (i > length) {
+                break;
+            }
+            // What is read here, and into what: a statement's `D = use(T)`, or (at the end) the terminator's T.
+            var t = none();
+            var d = none();
+            var useStatement = none();
+            if (i < length) {
+                useStatement = n.functions[f as usize].blocks[b].statements[i];
+                match (n.statements[useStatement as usize]) {
+                    NirStatement.Assign(target, second) => {
+                        match (n.rvalues[second as usize]) {
+                            NirRvalue.Use(operand) => {
+                                let local = forwardOperandLocal(n, operand);
+                                if (local != none() &&
+                                    n.rvalueTypes[second as usize] ==
+                                        n.functions[f as usize].locals[local as usize].typ) {
+                                    t = local;
+                                    d = target;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                let terminator = n.functions[f as usize].blocks[b].terminator;
+                if (terminator != none()) {
+                    match (n.terminators[terminator as usize]) {
+                        NirTerminator.Return(value) => { t = forwardOperandLocal(n, value); }
+                        _ => {}
+                    }
+                }
+            }
+            // Rule 2: every other mention of T is one of its whole assignments. A `return` takes one assignment.
+            var ok = forwardCandidate(n.functions[f as usize], protected, t) && defCount[t as usize] > 0 &&
+                counts[t as usize] == defCount[t as usize] + 1 &&
+                (d != none() || defCount[t as usize] == 1);
+            // Each assignment: its rvalue may go to D (rules 3 to 5), and the way from it to here is straight.
+            var entry = if (ok) defHead[t as usize] else none();
+            while (ok && entry != none()) {
+                let def = defs[entry as usize];
+                var r = none();
+                match (n.statements[def.statement as usize]) {
+                    NirStatement.Assign(_, value) => { r = value; }
+                    _ => {}
+                }
+                let from = forwardPosition(n.functions[f as usize], def.block, def.statement);
+                if (r == none() || from == none() ||
+                    n.rvalueTypes[r as usize] != n.functions[f as usize].locals[t as usize].typ) {
+                    ok = false;
+                    break;
+                }
+                var guard = d;
+                if (d != none()) {
+                    ok = forwardableRvalue(n, r, n.places[d as usize].local);
+                } else {
+                    // `return T`: T's rvalue is a Use, whose place (if it is one) is read at the return instead.
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.Use(operand) => {
+                            match (n.operands[operand as usize]) {
+                                NirOperand.Place(place, _) => { guard = place; }
+                                _ => {}
+                            }
+                        }
+                        _ => { ok = false; }
+                    }
+                }
+                if (ok) {
+                    ok = forwardStraight(
+                        n,
+                        n.functions[f as usize],
+                        indexOf,
+                        def.block,
+                        from,
+                        if (d != none()) useStatement else none(),
+                        truncate<u32>(b),
+                        guard,
+                        mut arrivals,
+                        mut touched,
+                    )?;
+                }
+                entry = def.next;
+            }
+            // Every block the ways pass into is entered only by them: nothing else reaches the use.
+            for (block in touched.view()) {
+                if (arrivals[block as usize] != predecessors[block as usize]) {
+                    ok = false;
+                }
+                arrivals[block as usize] = 0;
+            }
+            touched.clear();
+            if (!ok) {
+                i += 1;
+                continue;
+            }
+            // Each `T = R` becomes `D = R` where it stands, and the use goes; or the block returns R's operand.
+            entry = defHead[t as usize];
+            while (entry != none()) {
+                let def = defs[entry as usize];
+                let at = forwardPosition(n.functions[f as usize], def.block, def.statement) as usize;
+                var r = none();
+                match (n.statements[def.statement as usize]) {
+                    NirStatement.Assign(_, value) => { r = value; }
+                    _ => {}
+                }
+                if (d != none()) {
+                    let span = n.statementSpans[def.statement as usize];
+                    n.statements.push(NirStatement.Assign(d, r))?;
+                    n.statementSpans.push(span)?;
+                    let merged = truncate<u32>(n.statements.length - 1);
+                    n.functions[f as usize].blocks[def.block as usize].statements[at] = merged;
+                    // The new statement is an assignment of D's local, if D is a temporary itself: a chain goes whole.
+                    let outer = forwardWholeLocal(n, d);
+                    if (forwardCandidate(n.functions[f as usize], protected, outer)) {
+                        defs.push(ForwardDef { statement: merged, block: def.block, next: defHead[outer as usize] })?;
+                        defHead[outer as usize] = truncate<u32>(defs.length - 1);
+                    }
+                } else {
+                    var operand = none();
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.Use(value) => { operand = value; }
+                        _ => {}
+                    }
+                    let terminator = n.functions[f as usize].blocks[b].terminator;
+                    let span = n.terminatorSpans[terminator as usize];
+                    n.terminators.push(NirTerminator.Return(operand))?;
+                    n.terminatorSpans.push(span)?;
+                    n.functions[f as usize].blocks[b].terminator = truncate<u32>(n.terminators.length - 1);
+                    forwardRemoveAt(mut n.functions[f as usize].blocks[def.block as usize].statements, at);
+                }
+                entry = def.next;
+            }
+            if (d != none()) {
+                // The use, and the assignments of D that were D's before: the old use was one of them.
+                let outer = forwardWholeLocal(n, d);
+                if (forwardCandidate(n.functions[f as usize], protected, outer)) {
+                    forwardUnlink(mut defs, mut defHead, outer, useStatement);
+                    defCount[outer as usize] = defCount[outer as usize] + defCount[t as usize] - 1;
+                    counts[outer as usize] = counts[outer as usize] + defCount[t as usize] - 1;
+                }
+                forwardRemoveAt(mut n.functions[f as usize].blocks[b].statements, i);
+                // D stands in each of T's assignments now: its place's mentions, once for each beyond the first.
+                for (k in 1..defCount[t as usize]) {
+                    forwardCountPlace(n, d, mut counts);
+                }
+                if (forwardCandidate(n.functions[f as usize], protected, outer)) {
+                    counts[outer as usize] = counts[outer as usize] - (defCount[t as usize] - 1); // counted above
+                }
+            }
+            gone[t as usize] = true;
+            counts[t as usize] = 0;
+            defCount[t as usize] = 0;
+            defHead[t as usize] = none();
+            total += 1;
+            // The statement now at `i` (or the terminator) is looked at next.
+        }
+    }
+    if (total == 0) {
+        return Ok(0);
+    }
+    // The StorageDeads of the temporaries that went, and the record the C backend declares locals by.
+    for (b in 0..blockCount) {
+        var kept = Vector<u32>.create();
+        var removed = false;
+        for (s in n.functions[f as usize].blocks[b].statements.view()) {
+            var dead = false;
+            match (n.statements[s as usize]) {
+                NirStatement.StorageDead(local) => { dead = gone[local as usize]; }
+                _ => {}
+            }
+            if (dead) {
+                removed = true;
+            } else {
+                kept.push(s)?;
+            }
+        }
+        if (removed) {
+            n.functions[f as usize].blocks[b].statements = kept;
+        }
+    }
+    for (k in 0..localCount) {
+        if (gone[k]) {
+            n.forwarded.push(((f as u64) << 32) | (k as u64))?;
+        }
+    }
+    return Ok(total);
+}
+
+/// Removes the element at `at`, keeping the order of the rest.
+fn forwardRemoveAt(statements: borrow mut Vector<u32>, at: usize) {
+    var j = at;
+    while (j + 1 < statements.length) {
+        statements[j] = statements[j + 1];
+        j += 1;
+    }
+    let last = statements.pop();
+}
+
+/// Takes the assignment that is statement `statement` out of local `local`'s list.
+fn forwardUnlink(defs: borrow mut Vector<ForwardDef>, defHead: borrow mut Vector<u32>, local: u32, statement: u32) {
+    var previous = none();
+    var entry = defHead[local as usize];
+    while (entry != none()) {
+        if (defs[entry as usize].statement == statement) {
+            if (previous == none()) {
+                defHead[local as usize] = defs[entry as usize].next;
+            } else {
+                defs[previous as usize].next = defs[entry as usize].next;
+            }
+            return;
+        }
+        previous = entry;
+        entry = defs[entry as usize].next;
+    }
+}
+
+/// Forwards the temporaries of every function of the program; how many went.
+fn forwardTemporaries(n: borrow mut NirProgram) -> Result<u32, AllocError> {
+    var total: u32 = 0;
+    for (f in 0..n.functions.length) {
+        total += forwardFunction(n, truncate<u32>(f))?;
+    }
+    return Ok(total);
+}
+
+/// Whether local `local` of NIR function `f` was forwarded away: it is declared nowhere in the C.
+fn isForwarded(n: borrow NirProgram, f: u32, local: u32) -> bool {
+    let key = ((f as u64) << 32) | (local as u64);
+    // Sorted by construction (functions in order, locals in order): a binary search.
+    var low: usize = 0;
+    var high = n.forwarded.length;
+    while (low < high) {
+        let mid = low + (high - low) / 2;
+        if (n.forwarded[mid] < key) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low < n.forwarded.length && n.forwarded[low] == key;
+}

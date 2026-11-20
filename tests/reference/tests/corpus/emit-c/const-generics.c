@@ -108,26 +108,22 @@ static void ceeF_main(void) {
 }
 
 static uint32_t ceeG_4flag1Lbool1_(void) {
-    CEE_TEMP uint32_t t_0 = 0;
     CEE_TEMP uint32_t t_1 = 0;
     if (true) {
-        t_0 = ((uint32_t)1);
+        t_1 = ((uint32_t)1);
     } else {
-        t_0 = ((uint32_t)0);
+        t_1 = ((uint32_t)0);
     }
-    t_1 = t_0;
     return t_1;
 }
 
 static uint32_t ceeG_4flag1Lbool0_(void) {
-    CEE_TEMP uint32_t t_0 = 0;
     CEE_TEMP uint32_t t_1 = 0;
     if (false) {
-        t_0 = ((uint32_t)1);
+        t_1 = ((uint32_t)1);
     } else {
-        t_0 = ((uint32_t)0);
+        t_1 = ((uint32_t)0);
     }
-    t_1 = t_0;
     return t_1;
 }
 
@@ -140,7 +136,6 @@ static int32_t ceeM_S6Offset1Li32n3__apply(CEE_UNUSED const ceeT_6Offset1Li32n3_
 }
 
 static uint32_t ceeG_4mode1LE4Mode1_(void) {
-    CEE_TEMP uint32_t t_0 = 0;
     CEE_TEMP ceeE_Mode t_1;
     CEE_TEMP uint32_t t_2 = 0;
     CEE_TEMP uint32_t t_3 = 0;
@@ -148,15 +143,14 @@ static uint32_t ceeG_4mode1LE4Mode1_(void) {
     t_2 = (uint32_t)t_1.tag;
     switch (t_2) {
     case ((uint32_t)0):
-        t_0 = ((uint32_t)1);
+        t_3 = ((uint32_t)1);
         break;
     case ((uint32_t)1):
-        t_0 = ((uint32_t)2);
+        t_3 = ((uint32_t)2);
         break;
     default:
         ceesafe_panic(CEE_PANIC_UNREACHABLE, CEE_LOC(cee_file_0, 15u, 4u));
     }
-    t_3 = t_0;
     return t_3;
 }
 

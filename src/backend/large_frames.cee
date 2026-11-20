@@ -236,7 +236,8 @@ fn largeFrame(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<LargeFr
     for (k in 0..count) {
         let t = function.locals[k as usize].typ;
         var is = false;
-        if (k >= function.parameterCount && layoutComputable(c, t, 0)) {
+        // A temporary forwarded away (optimisations.md §6) is declared nowhere: not a value of the frame.
+        if (k >= function.parameterCount && !isForwarded(n, f, k) && layoutComputable(c, t, 0)) {
             let size = cLayout(c, t).size;
             is = size >= 0 && truncate<u64>(size) >= largeLocalBytes();
         }

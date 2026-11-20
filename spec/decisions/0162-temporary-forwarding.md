@@ -1,10 +1,9 @@
 # ADR 0162 — A value is not copied through a temporary it only passes through
 
-- Status: **Withdrawn** by the owner, 2026-11-17 ("Go ahead drop it"), after it was accepted ("I accept ADR 0162 as
-  written"), implemented and measured: the pass was sound and gained nothing in a release build (§5). **Nothing of
-  it is in the compiler.** This document stays as the record of what was tried, why its premise was wrong, and what
-  the numbers were; the implementation is in the history of branch `adr/0162-temporary-forwarding` (commit
-  `d49106ca`).
+- Status: **Accepted again** by the owner, 2026-11-20 ("Reinstate 0162, continue"), on the numbers of §6: with gcc,
+  which cee-proxy's release builds use, the pass gains 2.7 % on its TLS HTTP/2 relay. It had been accepted ("I accept
+  ADR 0162 as written"), implemented and measured with clang, where it gained nothing, and **withdrawn** on
+  2026-11-17 ("Go ahead drop it"; §5). The implementation is d49106ca's, unchanged, on 0.80.1.
 - Scope (as proposed): a new pass over NIR (`src/nir/`), run where closure-call specialisation runs, before the C backend and
   before the interpreter; `src/main.cee` (its switch); `optimisations.md` (a new §6),
   `intermediate-representation.md` §3, `c-backend.md` §2.1; the corpus's C snapshots, which change. No change to
@@ -203,3 +202,27 @@ was wrong; both are recorded here so that the owner decides with them whether th
     §6, and `--no-temporary-forwarding` is not an option.
   - **For whoever takes O13 up again**: measure the binary's frames first (`otool`, `-fstack-usage`), with the
     optimisation level a release uses, before counting what the C declares.
+
+## 6. Measured again with gcc, and accepted again (2026-11-20)
+
+§5 measured clang, which forwards a copy through a variable written once and read once. gcc 15 at `-O2` (Ubuntu
+26.04, x86-64) does not, for aggregates of a few hundred bytes or more: it copies each with `rep movsq`. cee-proxy's
+Linux builds use gcc, and its findings (cee-proxy's CEESAFE_FINDINGS.md F30) measured that, by instruction:
+
+- **In cee-proxy's TLS HTTP/2 relay, 10.96 % of every sample (kernel included) was a `rep movs` or `rep stos` in its
+  own code**: large values copied through chains of temporaries and zero-filled. One line, cp_relay's
+  `let parsed = match (parseResponseHead(…)) { Ok(x) => x, … }`, copied a 1,360-byte `ParsedResponse` five times.
+- **d49106ca's pass, unchanged, on 0.80.1**, the same cee-proxy commit, binfadel, four alternated 20 s rounds of
+  h2load (100 connections × 10 streams over TLS):
+
+  | | without the pass | with it |
+  |---|---|---|
+  | TLS h2 relay (req/s) | 88,664 · 87,609 · 88,432 · 88,444 (88.3k) | 91,476 · 91,013 · 90,278 · 90,247 (90.8k) |
+  | C temporaries in the program | 111,121 | 99,307 |
+  | `rep movs`/`rep stos` in the binary | 4,026 | 3,757 |
+  | samples on them | 10.96 % | 10.08 % |
+
+- So **the gain depends on the C compiler**: none with clang (§5), 2.7 % with gcc on a server that moves large
+  values. The owner accepted the pass again on these numbers. What §5 says of clang still holds; the rest of the
+  copies (a value matched out of a `Result` and moved on, a large value moved into a call) are ADR 0163's Parts 2
+  and 3.

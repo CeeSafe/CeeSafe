@@ -1171,6 +1171,7 @@ fn generateCompiled(
         programName: copyBytes("program".bytes())!,
         exportsHeader: copyBytes("ceesafe_exports.h".bytes())!,
         closureSpecialisation: true,
+        temporaryForwarding: true,
         placement: true,
         bce: true,
         oce: true,

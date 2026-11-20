@@ -115,7 +115,8 @@ implementation)
 
 ## 3. Alternatives considered
 
-- **Temporary forwarding** (ADR 0162, withdrawn): removes what clang already removes.
+- **Temporary forwarding** (ADR 0162, withdrawn 2026-11-17, accepted again 2026-11-20): removes what clang already
+  removes; gcc does not, and there it gains (ADR 0162 §6).
 - **Coalescing by liveness** (ADR 0162 §3): merges locals that are never live together. In §1.1's program `r`, the
   temporary and `big` are already one slot in the binary; what is left is not three locals but a `Result`, a local
   and a struct, which are live together or differ in type. It would not reach two.

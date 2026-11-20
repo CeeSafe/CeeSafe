@@ -118,6 +118,11 @@ The **coroutine pass** (`src/nir/coroutines.cee`) runs after the effect checker.
 awaits which and reports each awaited call on a cycle as N0343 (type-system.md §40.1). It changes nothing. Closure
 specialisation and placement (`optimisations.md`) skip async functions.
 
+**Temporary forwarding** (`src/nir/temporary_forwarding.cee`; `optimisations.md` §6, ADR 0162) runs after closure-call
+specialisation, on the NIR the C backend and the interpreter take: a temporary a value only passes through goes, its
+assignments writing where the value was going. The temporaries that went stay in `NirFunction.locals`, mentioned
+nowhere, and are listed in `NirProgram.forwarded`. `--dump-nir` prints the NIR before it.
+
 The **interpreter** runs an awaited call as a call, on the same activation stack. `Async.run` runs a scheduler
 (`runTasks`): the root task and each spawned child have their own activation stack, and run one at a time from a
 queue, children in spawn order after their parent parks. `AsyncPark` returns to the scheduler with the stack intact;

@@ -1003,6 +1003,9 @@ fn emitAsyncFunction(
     e.emit()?;
     let inFrame = frameLocals(n, f)?;
     for (k in 0..truncate<u32>(function.locals.length)) {
+        if (!inFrame[k as usize] && isForwarded(n, f, k)) {
+            continue; // forwarded away (optimisations.md §6): mentioned nowhere
+        }
         if (!inFrame[k as usize]) {
             // Not live across a suspension point: a C local, zero-initialised as a sync function's (§5).
             let t = function.locals[k as usize].typ;

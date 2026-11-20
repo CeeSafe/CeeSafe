@@ -18,22 +18,16 @@ static CEE_UNUSED int32_t ceeF_main(void);
 
 static int32_t ceeF_classify(CEE_UNUSED int32_t v_n_0) {
     CEE_TEMP bool t_1 = false;
-    CEE_TEMP int32_t t_2 = 0;
     CEE_TEMP bool t_3 = false;
-    CEE_TEMP int32_t t_4 = 0;
-    CEE_TEMP int32_t t_5 = 0;
     t_1 = (v_n_0 < ((int32_t)0));
     if (t_1) {
-        t_2 = ((int32_t)-1);
-        return t_2;
+        return ((int32_t)-1);
     }
     t_3 = (v_n_0 == ((int32_t)0));
     if (t_3) {
-        t_4 = ((int32_t)0);
-        return t_4;
+        return ((int32_t)0);
     }
-    t_5 = ((int32_t)1);
-    return t_5;
+    return ((int32_t)1);
 }
 
 static uint8_t ceeF_bits(CEE_UNUSED uint64_t v_x_0, CEE_UNUSED int32_t v_n_1) {
@@ -51,16 +45,13 @@ static int32_t ceeF_main(void) {
     CEE_TEMP int32_t t_1 = 0;
     CEE_TEMP bool t_2 = false;
     CEE_TEMP bool t_3 = false;
-    CEE_TEMP bool t_4 = false;
     CEE_TEMP int32_t t_5 = 0;
     CEE_TEMP bool t_6 = false;
     CEE_TEMP bool t_7 = false;
     CEE_TEMP bool t_8 = false;
-    CEE_TEMP bool t_9 = false;
     CEE_TEMP bool t_10 = false;
     CEE_TEMP bool t_11 = false;
     CEE_TEMP uint8_t t_12 = 0;
-    CEE_TEMP int32_t t_13 = 0;
     v_i_0 = ((int32_t)0);
     for (;;) {
         CEE_POLL(&ceeL_1);
@@ -72,11 +63,10 @@ static int32_t ceeF_main(void) {
             if (t_3) {
                 t_5 = ceeF_classify(v_i_0);
                 t_6 = (t_5 == ((int32_t)1));
-                t_4 = t_6;
+                t_7 = t_6;
             } else {
-                t_4 = false;
+                t_7 = false;
             }
-            t_7 = t_4;
             if (t_7) {
                 break;
             }
@@ -84,20 +74,18 @@ static int32_t ceeF_main(void) {
     }
     t_8 = (v_i_0 == ((int32_t)0));
     if (t_8) {
-        t_9 = true;
+        t_11 = true;
     } else {
         t_10 = (v_i_0 > ((int32_t)100));
-        t_9 = t_10;
+        t_11 = t_10;
     }
-    t_11 = t_9;
     if (t_11) {
         ceesafe_exit(((int32_t)1));
     }
     t_12 = ceeF_bits(((uint64_t)65280), ((int32_t)8));
     ceesafe_write_u64((uint64_t)t_12);
     ceesafe_write_newline();
-    t_13 = ((int32_t)0);
-    return t_13;
+    return ((int32_t)0);
 }
 
 int main(int argc, char **argv) {

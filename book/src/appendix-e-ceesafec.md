@@ -127,6 +127,7 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--no-bce` | none | Keeps every index check. By default a check the compiler proves cannot fail is removed. | off |
 | `--no-oce` | none | Keeps every overflow check. By default a check the compiler proves cannot fail is removed. | off |
 | `--no-closure-specialisation` | none | Keeps every call through a closure indirect. By default a function called with a known closure gets a variant that calls it directly ([13.4](./ch13-04-what-they-cost)). | off |
+| `--no-temporary-forwarding` | none | Keeps every temporary a value passes through. By default a value that is put in a temporary only to be moved on by the statement that follows goes straight to where it is going, so a function's frame holds fewer copies of it. | off |
 | `--explain-allocations` | none | Prints, for every allocation site, where its memory comes from and why ([15.1](./ch15-01-box)). | off |
 | `--explain-bounds-checks` | none | Prints each index check and whether it was removed ([13.4](./ch13-04-what-they-cost)). | off |
 | `--explain-overflow-checks` | none | Prints each checked `+`, `-`, `*` and negation and whether its check was removed ([20.4](./ch20-04-arithmetic)). | off |
@@ -150,6 +151,7 @@ in [1.3](./ch01-03-hello-package).
 | `--no-bce` | none | Keeps every index check. | off |
 | `--no-oce` | none | Keeps every overflow check. | off |
 | `--no-closure-specialisation` | none | Keeps every call through a closure indirect. | off |
+| `--no-temporary-forwarding` | none | Keeps every temporary a value passes through. | off |
 | `--offline` | none | In a package, uses only the dependencies that are already fetched, and never runs `git`. | off |
 | `--diagnostics-format` | `text` or `json` | Chooses how the check's diagnostics are printed. With `json` the document comes on standard output after the program's own output. | `text` |
 
@@ -354,6 +356,7 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 | `--list` | `test` |
 | `--no-bce` | `build`, `run`, `test` |
 | `--no-closure-specialisation` | `build`, `run`, `test` |
+| `--no-temporary-forwarding` | `build`, `run`, `test` |
 | `--no-debug-assertions` | `build`, `run`, `test` |
 | `--no-float` | `parse`, `check`, `build`, `run`, `fix`, `test` |
 | `--no-oce` | `build`, `run`, `test` |

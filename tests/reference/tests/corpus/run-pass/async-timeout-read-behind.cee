@@ -1,8 +1,10 @@
 // A read raced again and again against a deadline already passed (Async.timeout(0, …)), as a frame loop that runs
 // behind its frames does: each attempt parks and is cancelled before the executor waits for events. Bytes the peer
 // sent meanwhile must still be read. With epoll, edge-triggered, an attempt that parks makes no system call when the
-// descriptor is known to block, and only a collected event says otherwise; a wait cancelled before any event leaves
-// it not known to block, so the next attempt reads (ClayWind's browser host lost its input on Linux without this).
+// descriptor is known to block, and only a collected event says otherwise; an executor that never runs out of ready
+// tasks, once a wait has ended without its event, collects events every 61 resumes without blocking, so an attempt
+// within that many reads (ClayWind's browser host lost its input on Linux without this; 0.78.0 to 0.79.1 made the
+// next attempt's system call instead, which cost a failed one each time a read lost a race: cee-proxy's F28).
 // Between attempts the thread spins for a millisecond without the executor, which so collects no event: FreeBSD
 // delivers loopback bytes from its network thread, not within the write, and 100 attempts back to back ended before
 // they came (the test printed 2 there).

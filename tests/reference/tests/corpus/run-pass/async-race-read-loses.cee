@@ -1,0 +1,81 @@
+// A read that loses, again and again, to something that ends after a real wait (here a 1 ms deadline; in an HTTP/2
+// connection, its streams' wake: cee-proxy's F28) still reads what comes later. With epoll, edge-triggered, the
+// loser's wait ends without its event and the descriptor stays known to block, so its next attempt parks without the
+// system call (on Linux, 2 failed reads in all here, against 71 with 0.79.1): bytes that come after are an event the
+// next wait collects. Then the same against another descriptor's read, whose bytes come from a task of the same scope
+// after a wait.
+
+async fn behind(stream: borrow AsyncTcpStream, buffer: borrow mut [u8; 64], ms: u64) -> Result<usize, AsyncError> {
+    return await Async.timeout(ms, AsyncError.TimedOut, async () => await stream.read(mut buffer[..]));
+}
+
+async fn later(stream: borrow AsyncTcpStream, text: StringView) -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    await stream.write(text.bytes())?;
+    return Ok();
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let ca = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    let sa = await listener.accept()?;
+    let cb = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    let sb = await listener.accept()?;
+    var x = [0u8; 64];
+    var y = [0u8; 64];
+    // a's read loses to a deadline 50 times.
+    var lost: u32 = 0;
+    for (k in 0u32..50) {
+        let _ = k;
+        match (await behind(borrow sa, mut x, 1)) {
+            Err(AsyncError.TimedOut) => { lost += 1; }
+            _ => {}
+        }
+    }
+    // Now its bytes: the read, known to block, must still see them.
+    await ca.write("hello".bytes())?;
+    let n = await behind(borrow sa, mut x, 2000)?;
+    var total = lost * 10000 + truncate<u32>(n);
+    // a's read loses to b's 20 times, b's bytes written after a wait; then a's bytes, the same way.
+    var bWins: u32 = 0;
+    for (k in 0u32..21) {
+        let last = k == 20;
+        var winner: u32 = 9;
+        var value: usize = 0;
+        await Async.timeout(2000, AsyncError.TimedOut, async () => await Async.all(
+            async () => {
+                let raced = await Async.race(
+                    async () => await sa.read(mut x[..]),
+                    async () => await sb.read(mut y[..]),
+                )?;
+                winner = raced.winner;
+                value = raced.value;
+                return Ok();
+            },
+            async () => await later(if (last) borrow ca else borrow cb, "ab"),
+        ))?;
+        if (winner == 1 && !last) {
+            bWins += 1;
+        }
+        if (last && winner == 0) {
+            total += 100 * truncate<u32>(value);
+        }
+    }
+    return Ok(total + bWins * 1000);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(AsyncError.TimedOut) => { Console.writeLine("timed out"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 520205

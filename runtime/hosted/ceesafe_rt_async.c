@@ -72,6 +72,7 @@
 #elif defined(__linux__)
 #define CEE_EPOLL 1
 #include <sys/epoll.h>
+#define CEE_POLL_EVERY 61u /* edge-triggered: a busy executor collects events every this many resumes (cee_exec_loop) */
 #if defined(__has_include)
 #if __has_include(<linux/io_uring.h>)
 #define CEE_URING 1
@@ -245,6 +246,9 @@ typedef struct {
     uint32_t chunk_count;
     struct cee_woken *woken;   /* the woken tasks one wait readies, sorted by wake (ADR 0062 §7); grown on need */
     uint32_t woken_capacity;
+    uint32_t resumes;          /* epoll, edge-triggered: tasks resumed since `stale` was set */
+    bool stale;                /* epoll, edge-triggered: a wait on a descriptor ended without its event since a wait
+                                  in epoll last collected every event (cee_exec_loop) */
     uint64_t wakes;            /* ceesafe_atomic_*: wakes since the last look at the wake list, from any thread; a wait
                                   with none skips the walk, which costs every task waiting to be woken */
 #if !defined(CEE_FREESTANDING)
@@ -939,12 +943,15 @@ static void cee_unpark(cee_task *t) {
             }
 #elif !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
 #if defined(CEE_EPOLL)
-            if (cee_exec.edge && (uint32_t)t->fd < cee_exec.slot_count) {
-                /* Edge-triggered: an event already set `ready`; anything else (a cancellation, a deadline) ends the
-                   wait with an event perhaps still uncollected in epoll, and its task may never try again. The
-                   descriptor is no longer known to block, so the next attempt makes the system call
-                   (cee_known_blocked): a read raced against a passed deadline, again and again, reads what came. */
-                cee_exec.slots[t->fd].ready |= (uint8_t)(1u << cee_direction(t));
+            /* Edge-triggered: an event already set `ready`. A wait that ends otherwise (cancelled, or due) leaves
+               the descriptor known to block, and an event since is still in epoll: the next wait in epoll
+               collects it, at most CEE_POLL_EVERY resumes away however busy the executor is (`stale`,
+               cee_exec_loop), and it sets `ready` or readies the task that waits again. Setting `ready` here
+               instead (0.78.0) made every read that loses a race, as an HTTP/2 connection's read loses to its
+               streams' work, cost a failed system call at its next attempt (cee-proxy's F28). */
+            if (cee_exec.edge && (uint32_t)t->fd < cee_exec.slot_count &&
+                (cee_exec.slots[t->fd].ready & (uint8_t)(1u << cee_direction(t))) == 0u) {
+                cee_exec.stale = true;
             }
 #endif
             cee_fd_detach(t);
@@ -2715,6 +2722,10 @@ static bool cee_wait_reactor(int timeout) {
 #elif defined(CEE_EPOLL)
     struct epoll_event events[64];
     int n = epoll_wait(cee_exec.reactor, events, 64, timeout);
+    if (n >= 0 && n < 64) {
+        cee_exec.stale = false; /* every event collected (cee_exec_loop) */
+        cee_exec.resumes = 0u;
+    }
     for (int k = 0; k < n; k++) {
         int32_t fd = events[k].data.fd;
         if (fd == cee_exec.wake_pipe[0]) {
@@ -3186,6 +3197,23 @@ static int cee_resume_isolated(cee_task *t) {
 /* Runs tasks until `root` returns, or, for a worker (root NULL), until the run is done. */
 static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
     for (;;) {
+#if defined(CEE_EPOLL)
+        /* Edge-triggered: a task whose wait on a descriptor ended without its event (cancelled, or due) parks
+           again without the system call, as the descriptor is still known to block, and only a collected event
+           says otherwise. A busy executor, which never runs out of ready tasks, never waits, so once such a wait
+           has ended (`stale`) it collects events CEE_POLL_EVERY resumes later, without blocking: a read raced
+           against a deadline already passed, again and again, as a loop running behind does, would otherwise never
+           see what came (ClayWind's browser host lost its input). Woken tasks are readied too, as the wake pipe's
+           byte may be drained. An executor with no such wait polls only when it runs out of tasks, as before. */
+        if (cee_exec.stale && cee_exec.ready_head != NULL) {
+            cee_exec.resumes += 1u;
+            if (cee_exec.resumes >= CEE_POLL_EVERY) {
+                cee_exec.resumes = 0u;
+                (void)cee_wait_reactor(0);
+                (void)cee_ready_woken();
+            }
+        }
+#endif
         cee_task *t = cee_take_ready();
         if (t == NULL) {
             t = cee_steal();

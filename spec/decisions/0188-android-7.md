@@ -1,7 +1,11 @@
 # ADR 0188 — Android from 7.1 (API level 25): the runtime's Java loaded from a file, processes started without posix_spawn
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"; the 0187 named there is now
-  ADR 0192, renumbered because main's ADR 0187, library package builds, was accepted first). Not implemented.
+  ADR 0192, renumbered because main's ADRs 0187 and 0191 went first). **Implemented** in 0.84.0. As built: the dex's
+  file name is `ceesafe-runtime-<FNV-1a 64 of the dex, 16 hex digits>.dex`, computed by the runtime from the embedded
+  bytes rather than a SHA-256 the generator records: the same guarantee (an updated app never loads an old file)
+  without a value to keep in step. IPos runs on an API level 25 emulator (arm64-v8a) and on the Sunmi V2 (API 25,
+  armeabi-v7a).
   Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
   Sunmi V2: a handheld till with a printer built in, on Android 7.1.1 (API level 25), 32-bit ARM. Its 32-bit half is
   ADR 0192; this one is the Android release.

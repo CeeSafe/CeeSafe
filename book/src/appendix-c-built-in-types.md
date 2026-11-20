@@ -67,7 +67,7 @@ A scalar type holds one value. Every scalar type is Copy.
 |---|---|---|---|
 | `i8`, `i16`, `i32`, `i64` | Signed integers of 8, 16, 32 and 64 bits. | A whole-number literal is an `i32` when nothing else decides its type. | [3.2](./ch03-02-data-types) |
 | `u8`, `u16`, `u32`, `u64` | Unsigned integers of 8, 16, 32 and 64 bits, from 0 up. | The bit operators and the shifts take unsigned integers only. A `u8` is a byte. | [3.2](./ch03-02-data-types) |
-| `isize`, `usize` | A signed and an unsigned integer as wide as an address of the target, 64 bits on every supported target. | `usize` is the type of every length and index. | [3.2](./ch03-02-data-types) |
+| `isize`, `usize` | A signed and an unsigned integer as wide as an address of the target: 64 bits, or 32 on a 32-bit target (`--arch armv7`, `x86`). | `usize` is the type of every length and index. | [3.2](./ch03-02-data-types) |
 | `f32`, `f64` | IEEE 754 floating-point numbers of 32 and 64 bits. | A literal with a point or an exponent is an `f64` when nothing else decides its type. | [3.2](./ch03-02-data-types) |
 | `bool` | `true` and `false`. | Its only methods are those of a key, `sameAs`, `hash` and `compareKey`. `b as u8` is 0 or 1. | [3.2](./ch03-02-data-types) |
 | a character literal, `'A'` | An integer, the character's Unicode number. There is no `char` type. | It takes the integer type that is expected, and is a `u32` otherwise. In a `u8` it must be ASCII. | [3.2](./ch03-02-data-types) |

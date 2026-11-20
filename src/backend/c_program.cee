@@ -6,7 +6,7 @@
 fn compilerBanner() -> StringView => "ceesafec 0.83.0";
 
 /// The version the servers report (a constant, for reproducible C).
-fn ceesafeVersion() -> StringView => "0.83.0";
+fn ceesafeVersion() -> StringView => "0.84.0";
 
 fn isLibraryFunction(c: borrow Checker, function: u32) -> bool => c.hir.functions[function as usize].library;
 

@@ -1,7 +1,14 @@
 # ADR 0192 — 32-bit targets: Android's armeabi-v7a, and 32-bit Linux to test them
 
-- Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"; this ADR was written as 0187 and renumbered 0192 because
-  main's ADR 0187, library package builds, was accepted first). Not implemented.
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"; this ADR was written as
+  0187, renumbered 0191 because main's ADR 0187, library package builds, was accepted first, and 0192 because main's
+  ADR 0191, a busy executor, was released first). **Implemented** in 0.84.0. As built: a narrowing `as` that does not
+  fit traps with its own runtime panic kind, `CEE_PANIC_NARROWING` (20; 19 is ADR 0186's `CEE_PANIC_OVERRAN`), which
+  the language reports as `PanicKind.Other`; the 32-bit Linux job (`.github/workflows/linux32.yml`, i386 with
+  `-msse2 -mfpmath=sse` so floats round as on the 64-bit targets) runs on release tags and by hand, the corpus without
+  its six 64-bit-only programs (`tools/run_corpus.py --exclude`); the runtime builds without `-Wshorten-64-to-32`
+  warnings, and `Process.capture`'s argument array has a `usize` length. IPos runs on the Sunmi V2 (Android 7.1.1,
+  armeabi-v7a): sign-in against the production API, invoice search, Bluetooth printing.
   Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
   Sunmi V2: a handheld till with a printer built in, whose processor runs 32-bit ARM code only (`armeabi-v7a`, checked
   over adb: `ro.product.cpu.abilist=armeabi-v7a,armeabi`) on Android 7.1.1. Its Android-release half is ADR 0188.

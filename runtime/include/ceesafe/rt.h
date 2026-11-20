@@ -22,7 +22,7 @@
 #include <TargetConditionals.h> /* TARGET_OS_IPHONE: target.ios and target.macos (ADR 0179) */
 #endif
 
-/* `usize`: a length, an index, a count (ADR 0187 §2.3). The same type as uint64_t on a 64-bit target, so its C is
+/* `usize`: a length, an index, a count (ADR 0191 §2.3). The same type as uint64_t on a 64-bit target, so its C is
    unchanged there; uint32_t on a 32-bit one. */
 #if UINTPTR_MAX == UINT64_MAX
 typedef uint64_t cee_usize;
@@ -135,7 +135,7 @@ typedef enum cee_panic_kind {
     CEE_PANIC_ALLOCATOR = 17, /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
     CEE_PANIC_POISONED = 18, /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
     CEE_PANIC_OVERRAN = 19,  /* a task ran past its bound without waiting (ADR 0186) */
-    CEE_PANIC_NARROWING = 20 /* an `as` to usize or isize whose value does not fit on this 32-bit target (ADR 0187) */
+    CEE_PANIC_NARROWING = 20 /* an `as` to usize or isize whose value does not fit on this 32-bit target (ADR 0191) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -797,14 +797,14 @@ static inline bool cee_target_is_aarch64(void) {
 #endif
 }
 
-/* The pointer width the generated C is compiled for, 64 or 32 (ADR 0187 §2.5); the file asserts it is the width the
+/* The pointer width the generated C is compiled for, 64 or 32 (ADR 0191 §2.5); the file asserts it is the width the
    compiler laid it out for. */
 static inline uint32_t cee_target_bits(void) { return (uint32_t)(sizeof(void *) * 8u); }
 
 /* A constant index that its preceding check rejects: hides the constant from -Warray-bounds (c-backend.md §5). */
 static inline uint64_t cee_opaque_index(uint64_t index) { return index; }
 
-/* `as` to usize or isize on a 32-bit target, from a type that fits it on a 64-bit one (ADR 0187 §2.4): the value as
+/* `as` to usize or isize on a 32-bit target, from a type that fits it on a 64-bit one (ADR 0191 §2.4): the value as
    it was, or a panic where it does not fit. */
 static inline uint64_t cee_narrow_u(uint64_t value, uint64_t max, const cee_loc *loc) {
     if (value > max) ceesafe_panic(CEE_PANIC_NARROWING, *loc);

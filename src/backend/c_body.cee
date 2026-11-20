@@ -2093,7 +2093,7 @@ fn appendCast(
     let from = n.operandTypes[o as usize];
     let operand = operandText(e, c, n, sources, f, o)?;
     if (c.types.narrowsOnTarget(from, t)) {
-        // Lossless as `as` judges it, but narrower on this 32-bit target (ADR 0187 §2.4): exact, or a panic.
+        // Lossless as `as` judges it, but narrower on this 32-bit target (ADR 0191 §2.4): exact, or a panic.
         let site = siteText(e, c, n, sources, f, at)?;
         let max = integerMax(c, t);
         appendText(out, "((")?;

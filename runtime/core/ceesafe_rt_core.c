@@ -168,7 +168,7 @@ void *ceesafe_vec_grow(void *ptr, uint64_t len, cee_usize *cap, uint64_t extra, 
     if (next < 4u) next = 4u;
     if (next < need) next = need;
     if (size == 0u) return NULL;
-    /* At most what the address space holds (a 32-bit target's 4 GiB, ADR 0187), but never less than is needed. */
+    /* At most what the address space holds (a 32-bit target's 4 GiB, ADR 0191), but never less than is needed. */
     uint64_t most = (uint64_t)SIZE_MAX / size;
     if (next > most) next = most;
     if (next < need) return NULL;
@@ -963,7 +963,7 @@ static uint64_t live_dead_reach(void) {
             while (top > 0u) {
                 const cee_live_block *b = &sorted[work[--top]];
                 found += 1u;
-                /* Pointer-aligned words: 8 bytes apart on a 64-bit target, 4 on a 32-bit one (ADR 0187 §2.5). */
+                /* Pointer-aligned words: 8 bytes apart on a 64-bit target, 4 on a 32-bit one (ADR 0191 §2.5). */
                 const uintptr_t step = (uintptr_t)sizeof(uintptr_t);
                 uintptr_t first = (b->at + step - 1u) & ~(step - 1u);
                 for (uintptr_t a = first; a + sizeof(uintptr_t) <= b->at + b->size; a += step) {

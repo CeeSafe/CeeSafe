@@ -200,7 +200,7 @@ fn emitProgram(
         e.emit()?;
     }
     e.line("")?;
-    // The pointer width the layouts are for (ADR 0187): a C compiler for another width stops here.
+    // The pointer width the layouts are for (ADR 0191): a C compiler for another width stops here.
     let bits = c.types.target.pointerBits as u64;
     e.t("_Static_assert(sizeof(void *) * 8 == ")?;
     e.d(bits)?;

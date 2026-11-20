@@ -272,7 +272,7 @@ static int64_t cee_bt_script_open(const char *path, uint32_t transport, const ch
     memcpy(link->address, address, length);
     link->lose_after = lose_after;
     cee_bt_dump("open", link->address, NULL, 0);
-    return (int64_t)(uintptr_t)link; /* zero-extended: a 32-bit address above 2 GiB is no error code (ADR 0187) */
+    return (int64_t)(uintptr_t)link; /* zero-extended: a 32-bit address above 2 GiB is no error code (ADR 0191) */
 }
 
 static int32_t cee_bt_script_write(struct cee_bt_link *link, const uint8_t *bytes, size_t length) {
@@ -1572,7 +1572,7 @@ int64_t ceesafe_bluetooth_open(uint32_t transport, const uint8_t *address, uint6
         ceesafe_platform_free(link);
         return -error;
     }
-    return (int64_t)(uintptr_t)link; /* zero-extended: a 32-bit address above 2 GiB is no error code (ADR 0187) */
+    return (int64_t)(uintptr_t)link; /* zero-extended: a 32-bit address above 2 GiB is no error code (ADR 0191) */
 }
 
 int32_t ceesafe_bluetooth_write(int64_t handle, const uint8_t *bytes, uint64_t length) {

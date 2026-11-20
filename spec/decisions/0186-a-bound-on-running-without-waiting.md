@@ -1,7 +1,7 @@
 # ADR 0186 — A bound on how long a task runs without waiting
 
-- Status: **Accepted** by the owner, 2026-11-20 ("I accept all nine §8 questions as recommended"). Proposed the
-  same day. Written at the owner's request ("Yes", to drafting the preemption ADR), from
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept all nine §8 questions as recommended"); implemented,
+  released in ceesafec 0.80.0 (§10). Proposed the same day. Written at the owner's request ("Yes", to drafting the preemption ADR), from
   the review of httpserver against Erlang's model that led to ADR 0175. ADR 0175 §3 left this open: "A task that
   computes without awaiting still holds its worker, isolated or not. A bound on a task's computing time (a check
   on loop back-edges that traps a task past its bound, which this ADR would then end alone) is its own ADR."
@@ -454,8 +454,8 @@ thread's word stays 0.
 
 ## 10. Implementation notes (2026-11-20)
 
-What is there is §2 with §2.2's rules, on the hosted runtime and in the interpreter; §9's steps 1 to 6. Step 7,
-httpserver's, waits for a release with this in it. It differs from what was accepted in these places.
+What is there is §2 with §2.2's rules, on the hosted runtime and in the interpreter; §9's steps 1 to 6, released in
+0.80.0. Step 7 is httpserver's own (below). It differs from what was accepted in these places.
 
 - **No `Poll` statement in NIR** (§9, step 2). The backend places the polls as it writes C
   (`src/backend/c_polls.cee`), from `controlFlowOf` and a call graph it builds once a program, so that no NIR pass
@@ -560,4 +560,10 @@ How it was tested (macOS arm64, Apple clang 21.0.0, this branch's compiler):
   ADR, as release 0.78.0 shows: `run-pass/slice-bulk` prints wrong values under `cl` (not under gcc),
   `run-pass/io-error-network-kinds` does not finish, and `emit-c/extern-array-parameter`'s snapshot assumes LP64.
   `tools/bound_check.py` runs in `.github/workflows/windows.yml` from now on.
-- **Not run:** httpserver's step 7.
+- **httpserver, step 7** (its branch `adr0186-run-bound`, built with this compiler): the benchmark server calls
+  `Async.runBound(CW_RUN_BOUND_MS, RunBound.Count)` and has `/spin/{ms}`. `supervisor_check.py --isolated --inherit
+  --budget-mb 16` (250 ms, three workers, macOS) passed three times: `/spin` and `/spin/2000` were ended alone after
+  0.27 to 0.33 s, where the stall watchdog takes 1.5 s; `/spin/50` was answered; the report counted no crash, stall or
+  kill. With one worker, a request on a second connection waited 0.27 to 0.28 s for each of three spins and was
+  answered by the same worker, started once. Built without `CEE_POLLS` the same check fails as it should: the spins
+  are caught by the watchdog after 1.4 to 1.5 s and the worker is replaced.

@@ -18,6 +18,11 @@ Checks the corpus cannot make, since they need the clock, the threads' interleav
    - `trap`: a unit paused several times then traps: it ends alone, its neighbour finishes, the process goes on;
    - `dies`: a unit's task is paused when another task of the unit traps: it never runs again;
    - `cancel`: a paused unit whose task set is cancelled by a timeout goes on to its next wait and ends;
+   - `handoff` (ADR 0191 §2.2): beside a unit that computes 300 ms under a 10 ms slice, two tasks pass a number to
+     and fro 20 times, each pass a wake: they finish in far less than the 300 ms, where a paused unit that went back
+     in the one queue made each pass wait a slice;
+   - `busy` (ADR 0191 §2.1): two tasks pass a number to and fro for 300 ms, which keeps the executor's queue full,
+     beside a task that waits on 1 ms timers: its longest wait stays far below the 300 ms, with or without a slice;
    - `workers`: under Async.runWorkers(4), units started by tasks on every worker compute and are paused, each on its
      own worker's stacks, and finish with the right numbers;
    - `none` cases: with no slice, nothing is paused.
@@ -297,6 +302,56 @@ async fn gaps(count: u32, longest: Arc<AtomicU64>) -> Result<void, Fail> {
     return Ok();
 }
 
+fn numbers() -> Result<Channel<u64>, Fail> {
+    match (Channel<u64>.create(1)) {
+        Ok(c) => { return Ok(c); }
+        Err(_) => { return Err(Fail.NoMemory); }
+    }
+}
+
+/// Sends back each number it is given, until it is given 0.
+async fn pong(from: Channel<u64>, to: Channel<u64>) -> Result<void, Fail> {
+    loop {
+        let n = match (await from.recvAsync()) {
+            Ok(v) => v ?? 0,
+            Err(_) => { return Err(Fail.Other); }
+        };
+        match (await to.sendAsync(n)) {
+            Ok() => {}
+            Err(_) => { return Err(Fail.Other); }
+        }
+        if (n == 0) {
+            return Ok();
+        }
+    }
+}
+
+/// Passes a number to `pong` and back: `rounds` times (`took` gets the ms they took), or with `rounds` 0 for `ms`
+/// milliseconds. Each pass is a wake of the other task, so one of the two is always ready.
+async fn ping(rounds: u64, ms: u64, to: Channel<u64>, from: Channel<u64>, took: Arc<AtomicU64>) -> Result<void, Fail> {
+    await nap(5)?;
+    let start = Timer.now();
+    var k: u64 = 0;
+    while (if (rounds > 0) k < rounds else Timer.now() - start < ms) {
+        k += 1;
+        match (await to.sendAsync(k)) {
+            Ok() => {}
+            Err(_) => { return Err(Fail.Other); }
+        }
+        match (await from.recvAsync()) {
+            Ok(_) => {}
+            Err(_) => { return Err(Fail.Other); }
+        }
+    }
+    took.get().store(Timer.now() - start);
+    match (await to.sendAsync(0)) {
+        Ok() => {}
+        Err(_) => { return Err(Fail.Other); }
+    }
+    let _ = await from.recvAsync();
+    return Ok();
+}
+
 /// A worker's share: a task set with two units of its own.
 async fn onWorker(n: u64, x: Arc<AtomicU64>, y: Arc<AtomicU64>) -> Result<void, Fail> {
     let r = await Async.tasks(4, Fail.NoMemory, async (set) => {
@@ -361,6 +416,21 @@ async fn one(
         } else if (how == 9) {
             await set.spawnIsolated(Fail.Crashed, async move () => await diesPaused(a))?;
             await set.spawn(async move () => await gaps(60, c))?;
+        } else if (how == 12 || how == 13) {
+            // handoff: twenty round trips beside a unit that computes 300 ms; busy: round trips for 300 ms, which
+            // keep the queue full, beside a task that waits on 1 ms timers.
+            let there = numbers()?;
+            let back = numbers()?;
+            let p1 = there.clone();
+            let p2 = back.clone();
+            await set.spawn(async move () => await pong(p1, p2))?;
+            if (how == 12) {
+                await set.spawnIsolated(Fail.Crashed, async move () => await computes(300, a))?;
+                await set.spawn(async move () => await ping(20, 0, there, back, c))?;
+            } else {
+                await set.spawn(async move () => await ping(0, 300, there, back, b))?;
+                await set.spawn(async move () => await gaps(100, c))?;
+            }
         } else if (how == 10) {
             let timed = await Async.timeout(30, Fail.Other, async () => await Async.tasks(
                 4,
@@ -410,7 +480,8 @@ fn main() {
     let which: u32 = if (how == "share") 0 else if (how == "result") 1 else if (how == "bound") 2
         else if (how == "mutex") 3 else if (how == "critical") 4 else if (how == "callback") 5
         else if (how == "endonly") 6 else if (how == "endbound") 7 else if (how == "trap") 8
-        else if (how == "dies") 9 else if (how == "cancel") 10 else if (how == "workers") 11 else 99;
+        else if (how == "dies") 9 else if (how == "cancel") 10 else if (how == "workers") 11
+        else if (how == "handoff") 12 else if (how == "busy") 13 else 99;
     let slice: u64 = if (none) 0 else if (which == 1) 1 else if (which == 8 || which == 9) 5 else 10;
     let sliced = Async.runSlice(slice);
     Console.writeLine(if (sliced) "sliced" else "no slice");
@@ -526,6 +597,19 @@ def main():
     n = case("share", ["none"])
     expect("share none: nothing paused", n.get("pauses") == 0, str(n))
     expect("share none: the neighbour waits for the computation", n.get("c", 0) >= 250, str(n))
+
+    # handoff: tasks that wake each other are not held a slice at each wake behind a paused unit (ADR 0191 §2.2).
+    v = case("handoff")
+    expect("handoff: the unit finished", v.get("a") == 1, str(v))
+    expect("handoff: pauses counted", v.get("pauses", 0) >= 4, str(v))
+    expect("handoff: twenty round trips beside it take far less than its 300 ms", v.get("c", 999) < 100, str(v))
+
+    # busy: a queue kept full still lets due timers run (ADR 0191 §2.1).
+    for extra in ([], ["none"]):
+        v = case("busy", extra)
+        label = "busy" + (" none" if extra else "")
+        expect(f"{label}: the round trips ran for their 300 ms", v.get("b", 0) >= 300, str(v))
+        expect(f"{label}: a 1 ms timer beside them waits far less than 300 ms", 0 < v.get("c", 999) < 50, str(v))
 
     # result: the same numbers paused hundreds of times, without a slice, and in the interpreter.
     v = case("result")

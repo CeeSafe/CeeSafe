@@ -72,7 +72,6 @@
 #elif defined(__linux__)
 #define CEE_EPOLL 1
 #include <sys/epoll.h>
-#define CEE_POLL_EVERY 61u /* edge-triggered: a busy executor collects events every this many resumes (cee_exec_loop) */
 #if defined(__has_include)
 #if __has_include(<linux/io_uring.h>)
 #define CEE_URING 1
@@ -190,9 +189,14 @@ typedef struct {
  * registered edge-triggered once (ADR 0136; one-shot with CEESAFE_REACTOR_ONESHOT=1); or in poll()
  * (CEESAFE_REACTOR_POLL=1, or a host with neither). Its arrays are the runtime's own bookkeeping, from the
  * platform's heap. */
+#define CEE_POLL_EVERY 61u /* a busy executor reads the clock every this many resumes, and collects a millisecond on (ADR 0191) */
+
 typedef struct {
     cee_task *ready_head;
     cee_task *ready_tail;
+    cee_task *paused_head;     /* tasks paused past their slice, in the order they paused (ADR 0191 §2.2) */
+    cee_task *paused_tail;
+    uint64_t paused_ran;       /* when the last resume of a paused task ended, in ms (ADR 0191 §2.2) */
     cee_task *parked;
     cee_task *current;
     int wake_pipe[2];    /* another thread's wake: a byte written here ends the wait (-1 until first needed) */
@@ -246,9 +250,8 @@ typedef struct {
     uint32_t chunk_count;
     struct cee_woken *woken;   /* the woken tasks one wait readies, sorted by wake (ADR 0062 §7); grown on need */
     uint32_t woken_capacity;
-    uint32_t resumes;          /* epoll, edge-triggered: tasks resumed since `stale` was set */
-    bool stale;                /* epoll, edge-triggered: a wait on a descriptor ended without its event since a wait
-                                  in epoll last collected every event (cee_exec_loop) */
+    uint32_t resumes;          /* tasks resumed since the clock was last read for a collection (ADR 0191 §2.1) */
+    uint64_t collected_at;     /* when events were last collected without blocking, in ms (ADR 0191 §2.1) */
     uint64_t wakes;            /* ceesafe_atomic_*: wakes since the last look at the wake list, from any thread; a wait
                                   with none skips the walk, which costs every task waiting to be woken */
 #if !defined(CEE_FREESTANDING)
@@ -955,14 +958,10 @@ static void cee_unpark(cee_task *t) {
 #if defined(CEE_EPOLL)
             /* Edge-triggered: an event already set `ready`. A wait that ends otherwise (cancelled, or due) leaves
                the descriptor known to block, and an event since is still in epoll: the next wait in epoll
-               collects it, at most CEE_POLL_EVERY resumes away however busy the executor is (`stale`,
-               cee_exec_loop), and it sets `ready` or readies the task that waits again. Setting `ready` here
+               collects it, at most CEE_POLL_EVERY resumes away however busy the executor is (ADR 0191 §2.1,
+               cee_exec_tasks), and it sets `ready` or readies the task that waits again. Setting `ready` here
                instead (0.78.0) made every read that loses a race, as an HTTP/2 connection's read loses to its
                streams' work, cost a failed system call at its next attempt (cee-proxy's F28). */
-            if (cee_exec.edge && (uint32_t)t->fd < cee_exec.slot_count &&
-                (cee_exec.slots[t->fd].ready & (uint8_t)(1u << cee_direction(t))) == 0u) {
-                cee_exec.stale = true;
-            }
 #endif
             cee_fd_detach(t);
 #endif
@@ -3568,8 +3567,7 @@ static bool cee_wait_reactor(int timeout) {
     struct epoll_event events[64];
     int n = epoll_wait(cee_exec.reactor, events, 64, timeout);
     if (n >= 0 && n < 64) {
-        cee_exec.stale = false; /* every event collected (cee_exec_loop) */
-        cee_exec.resumes = 0u;
+        cee_exec.resumes = 0u; /* every event collected (ADR 0191 §2.1) */
     }
     for (int k = 0; k < n; k++) {
         int32_t fd = events[k].data.fd;
@@ -3854,6 +3852,10 @@ static void cee_exec_end(void) {
 static void cee_exec_begin(cee_run *run) {
     cee_exec.ready_head = NULL;
     cee_exec.ready_tail = NULL;
+    cee_exec.paused_head = NULL;
+    cee_exec.paused_tail = NULL;
+    cee_exec.paused_ran = 0u;
+    cee_exec.collected_at = 0u;
     cee_exec.parked = NULL;
     cee_exec.current = NULL;
     cee_exec.wake_pipe[0] = -1;
@@ -4017,13 +4019,17 @@ static void cee_child_gone(cee_task *t, bool keep) {
     }
 }
 
-#if defined(CEE_SLICES)
-/* What has come while a task computed: descriptors, wakes and due timers, collected without blocking, so that a task
-   paused past its slice goes after the tasks they ready (ADR 0189 §2.3, step 3). The executor otherwise looks only
-   when nothing is ready, and two tasks that compute would keep the queue full. */
-static void cee_slice_collect(void) {
+#if !defined(CEE_FREESTANDING)
+/* What has come while tasks ran: descriptors, wakes and due timers, collected without blocking and readied behind the
+   tasks already ready. After a task paused past its slice (ADR 0189 §2.3, step 3), when a paused task is about to
+   run because nothing else is ready (ADR 0191 §2.2), and every CEE_POLL_EVERY resumes of a busy executor (§2.1):
+   otherwise it looks only when nothing is ready, and tasks that keep its queue full (an HTTP/2 connection's
+   streams, two tasks that compute) would leave a socket's data, a wake or a timer unseen, a heartbeat's among them. */
+static void cee_collect(void) {
 #if defined(_WIN32)
     (void)cee_wait_windows(0);
+#elif defined(CEE_COSMOOS)
+    (void)cee_wait_cosmoos(0);
 #else
     if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || cee_exec.op_count > 0u) {
         (void)(cee_reactor_open() ? cee_wait_reactor(0) : cee_wait_poll(0));
@@ -4034,6 +4040,7 @@ static void cee_slice_collect(void) {
 #endif
     (void)cee_ready_woken();
     uint64_t now = ceesafe_async_now();
+    cee_exec.collected_at = now;
     while (cee_exec.heap_count > 0u && cee_task_key(cee_exec.heap[0]) <= now) {
         cee_unpark(cee_exec.heap[0]);
     }
@@ -4065,24 +4072,53 @@ static int cee_resume_isolated(cee_task *t) {
 /* Runs tasks until `root` returns, or, for a worker (root NULL), until the run is done. */
 static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
     for (;;) {
-#if defined(CEE_EPOLL)
-        /* Edge-triggered: a task whose wait on a descriptor ended without its event (cancelled, or due) parks
-           again without the system call, as the descriptor is still known to block, and only a collected event
-           says otherwise. A busy executor, which never runs out of ready tasks, never waits, so once such a wait
-           has ended (`stale`) it collects events CEE_POLL_EVERY resumes later, without blocking: a read raced
-           against a deadline already passed, again and again, as a loop running behind does, would otherwise never
-           see what came (ClayWind's browser host lost its input). Woken tasks are readied too, as the wake pipe's
-           byte may be drained. An executor with no such wait polls only when it runs out of tasks, as before. */
-        if (cee_exec.stale && cee_exec.ready_head != NULL) {
+#if !defined(CEE_FREESTANDING)
+        /* A busy executor, which never runs out of ready tasks and so never waits, collects what has come without
+           blocking once a millisecond has passed since it last did, reading the clock every CEE_POLL_EVERY
+           resumes (ADR 0191 §2.1): descriptors, wakes and due timers. A collection every CEE_POLL_EVERY resumes
+           cost h2c 15 % of its rate, a system call every few requests. Otherwise a
+           queue kept full, by an HTTP/2 connection's streams or by tasks that compute, leaves them unseen for as
+           long as it stays full: a worker's heartbeat timer never fired under h2c load, and its supervisor killed
+           it. Under epoll it also finds what an edge-triggered wait that ended without its event (cancelled, or
+           due) left in epoll: a read raced against a deadline already passed, again and again, as a loop running
+           behind does, would otherwise never see what came (ClayWind's browser host lost its input). */
+        if (cee_exec.ready_head != NULL || cee_exec.paused_head != NULL) {
             cee_exec.resumes += 1u;
             if (cee_exec.resumes >= CEE_POLL_EVERY) {
                 cee_exec.resumes = 0u;
-                (void)cee_wait_reactor(0);
-                (void)cee_ready_woken();
+                if (ceesafe_async_now() - cee_exec.collected_at >= 1u) {
+                    cee_collect();
+                }
             }
         }
 #endif
-        cee_task *t = cee_take_ready();
+        cee_task *t = NULL;
+#if defined(CEE_SLICES)
+        /* A task paused past its slice waits in a queue of its own (ADR 0191 §2.2): it runs when no other task is
+           ready, once what has come is collected, or when a slice has passed since a paused task last ran, so that
+           the others have at least every other slice and it is never starved. Put back in the one queue, it went
+           behind the tasks ready at its pause but before every task they woke, and a request that hands work from
+           task to task (a connection and its isolated request) waited a whole slice at each hand-off. */
+        if (cee_exec.paused_head != NULL) {
+            if (cee_exec.ready_head == NULL) {
+                cee_collect();
+            }
+            if (cee_exec.ready_head == NULL ||
+                ceesafe_async_now() - cee_exec.paused_ran >= ceesafe_atomic_load_ord_u64(&cee_run_slice_ms, 0)) {
+                t = cee_exec.paused_head;
+                cee_exec.paused_head = t->next;
+                if (cee_exec.paused_head == NULL) {
+                    cee_exec.paused_tail = NULL;
+                }
+                t->next = NULL;
+            }
+        }
+        if (t == NULL) {
+            t = cee_take_ready();
+        }
+#else
+        t = cee_take_ready();
+#endif
         if (t == NULL) {
             t = cee_steal();
         }
@@ -4150,14 +4186,21 @@ static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
         }
 #if defined(CEE_SLICES)
         if (resumed == 2) {
-            /* Paused past its slice: at the back of the queue, on this thread (ADR 0189 §2.3). It registered no
-               wait, so a wake that comes meanwhile is stale and is dropped as one. */
+            /* Paused past its slice: at the back of the paused tasks' queue, on this thread (ADR 0189 §2.3, ADR 0191
+               §2.2). It registered no wait, so a wake that comes meanwhile is stale and is dropped as one. */
             cee_exec.current = NULL;
             cee_exec.jump = outer_jump;
             cee_exec.jump_depth = outer_depth;
             t->budget = ceesafe_budget_swap(outer);
-            cee_slice_collect();
-            cee_ready(t);
+            cee_collect();
+            t->next = NULL;
+            if (cee_exec.paused_tail != NULL) {
+                cee_exec.paused_tail->next = t;
+            } else {
+                cee_exec.paused_head = t;
+            }
+            cee_exec.paused_tail = t;
+            cee_exec.paused_ran = ceesafe_async_now();
             continue;
         }
 #endif
@@ -4907,6 +4950,9 @@ const char *ceesafe_async_tasks(void) {
     }
     for (const cee_task *t = cee_exec.ready_head; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
         shown[count++] = (cee_shown_task){t, "ready"};
+    }
+    for (const cee_task *t = cee_exec.paused_head; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
+        shown[count++] = (cee_shown_task){t, "paused past its slice"};
     }
     for (const cee_task *t = cee_exec.parked; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
         shown[count++] = (cee_shown_task){t, t->on_scope ? "waiting for its scope" : t->on_op ? "waiting for an operation" : t->on_wake ? "waiting to be woken" :

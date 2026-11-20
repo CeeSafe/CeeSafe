@@ -682,7 +682,9 @@ routine of `ceesafe_rt_async.c` written in assembly at file scope, for arm64 (x1
 System V (rbx, rbp, r12–r15, MXCSR and the x87 control word); a 32-bit target has no slice. The stack's own loop sets
 the jump point a trap returns to on that stack, so a trap's `longjmp` never crosses stacks. The slow path pauses by
 switching back to the executor's stack, which collects what came meanwhile without blocking and puts the task at the
-back of its queue. AddressSanitizer and ThreadSanitizer are told of every switch when they are on
+back of its queue of paused tasks (ADR 0191 §2.2). A paused task runs when no other task is ready, once what has
+come is collected, or when a slice has passed since a paused task last ran: the others have at least every other
+slice, and a task one of them wakes runs before the paused one, not a slice later. AddressSanitizer and ThreadSanitizer are told of every switch when they are on
 (`__sanitizer_start_switch_fiber`, `__tsan_switch_to_fiber`). On Linux x86-64 with the shadow stack on, `Async.runSlice`
 is `false`, since the switch keeps no shadow stack.
 
@@ -892,11 +894,13 @@ Heap (M3b):
       block: a park clears its direction (a task parks only after an attempt that would block), an event sets it, so an
       event with no task waiting is kept for the next attempt. A wait that ends without an event (its task cancelled,
       or due) leaves it as it is: an event since is still in epoll, for the next wait to collect. An executor that
-      always has a task ready never waits, so once such a wait has ended it collects events without blocking
-      (`epoll_wait` with a timeout of 0, then the woken tasks) 61 resumes later, and again every 61 until a wait
-      collects every event: a read raced against a deadline already passed, again and again, as a loop running
-      behind does, reads what came within that many resumes. An executor with no such wait waits in epoll only
-      when no task is ready, as before. (0.78.0 set the direction ready at such a wait's end instead, so every read that lost a race, as an
+      always has a task ready never waits, so on every reactor it collects what has come without blocking once a
+      millisecond has passed since it last did, reading the clock every 61 resumes (ADR 0191 §2.1): descriptors
+      (`epoll_wait` or `kevent` with a timeout of 0, or `poll`), the woken tasks and the due timers, readied behind
+      the tasks already ready. A read raced against a deadline already passed, again and again, as a loop running
+      behind does, reads what came within about a millisecond, and a timer is late by about as much however full the
+      queue is: before ADR 0191 a busy executor ran no timer at all until its queue was empty, and under h2c load a
+      worker's heartbeat stopped. It waits in the reactor, blocking, only when no task is ready. (0.78.0 set the direction ready at such a wait's end instead, so every read that lost a race, as an
       HTTP/2 connection's read loses to its streams' work, cost a failed system call at its next attempt.) While a direction is registered and not ready, lib/std's
       read, send and accept (`ceesafe_async_op_read`, `_send`, `_accept`) wait without the system call; on a stream
       socket (`SO_TYPE`, asked once at registration), a read that returns fewer bytes than asked took everything there

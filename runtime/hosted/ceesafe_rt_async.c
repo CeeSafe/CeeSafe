@@ -883,6 +883,15 @@ static void cee_wake_task(cee_executor *exec, cee_task *t) {
         cee_unpark(t);
         return;
     }
+    /* From its own thread, to a task that is neither running nor waiting for a wake: it is ready already (a
+       cancellation readied it, say, while its waiter is still on a channel's list until it runs), and it retries
+       what it was doing when it runs. The wake is stale. Marking it counted a wake, so the next wait walked every
+       task waiting to be woken, and found none: with HTTP/2 streams in isolated tasks, ~4,000 tasks a walk and
+       about 3 % of a proxy's time (cee-proxy's F29). A running task (current) is still marked: it may be between
+       its check and its park. */
+    if (exec == &cee_exec && t != cee_exec.current && !t->parked && !t->on_wake) {
+        return;
+    }
 #endif
 #if defined(CEE_FREESTANDING)
     uint64_t sequence = ceesafe_atomic_add_u64(&exec->wake_sequence, 1u) + 1u;

@@ -247,22 +247,51 @@ impl Key<PairKey> for PairKey {
 
 fn pairKey(a: u64, b: u64) -> PairKey => PairKey { a: a, b: b };
 
-/// Layout facts that depend on the target (TargetInfo): `isize`/`usize`, and C's `long` (CLong, ADR 0080 §3.5).
+/// Layout facts that depend on the target (TargetInfo): `isize`/`usize` and every pointer (ADR 0187), C's `long`
+/// (CLong, ADR 0080 §3.5), and how an 8-byte scalar is aligned inside a struct.
 struct TargetInfo {
     pointerBits: u32;
     longBits: u32;
+    /// The alignment of `i64`, `u64` and `f64` (and C's 8-byte fields): 8, but 4 on 32-bit x86 (the i386 ABI).
+    wideAlign: u32;
 }
 
-fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64, longBits: 64 };
+fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64, longBits: 64, wideAlign: 8 };
 
-/// The target a program is checked for (ADR 0080 §3.5). Every target is 64-bit. C's `long` is 32 bits on Windows
-/// (LLP64), the target of a hosted build when ceesafec runs there (ADR 0069), and 64 bits on every other target (LP64),
-/// the freestanding ones included; a generated C file that uses `CLong` asserts `sizeof(long)` against it. The width is
-/// the host's rule, decided where check or build runs (type-system.md §28.3): check runs no C compiler and there is no
-/// target option, so C for an LLP64 target generated elsewhere (or freestanding UEFI) stops at that assertion.
+/// The processor `--arch` names on the command line (ADR 0187 §2.1), or empty for the host's.
+fn commandArch() -> StringView {
+    var a: usize = 1;
+    while (a + 1 < Process.argumentCount()) {
+        match (Process.argument(a)) {
+            Some(arg) => {
+                if (arg == "--") {
+                    break; // what follows is the program's own (run)
+                }
+                if (arg == "--arch") {
+                    return Process.argument(a + 1) ?? "";
+                }
+            }
+            null => {}
+        }
+        a += 1;
+    }
+    return "";
+}
+
+/// Whether `arch` (an `--arch` name) is a 32-bit one.
+fn arch32(arch: StringView) -> bool => arch == "armv7" || arch == "x86";
+
+/// The target a program is checked for (ADR 0080 §3.5, ADR 0187). Its width is `--arch`'s (32 for `armv7` and `x86`,
+/// whose C `long` is 32 bits too), else 64. C's `long` is 32 bits on Windows (LLP64), the target of a hosted build when
+/// ceesafec runs there (ADR 0069), and 64 bits on every other 64-bit target (LP64), the freestanding ones included; a
+/// generated C file that uses `CLong` asserts `sizeof(long)` against it, and every file asserts the pointer width.
 fn targetFor(freestanding: bool) -> TargetInfo {
+    let arch = commandArch();
+    if (arch32(arch)) {
+        return TargetInfo { pointerBits: 32, longBits: 32, wideAlign: if (arch == "x86") 4 else 8 };
+    }
     if (!freestanding && hostIsWindows()) {
-        return TargetInfo { pointerBits: 64, longBits: 32 };
+        return TargetInfo { pointerBits: 64, longBits: 32, wideAlign: 8 };
     }
     return lp64();
 }
@@ -275,6 +304,8 @@ struct SizeAlign {
 fn sizeAlign(size: u32, align: u32) -> SizeAlign => SizeAlign { size: size as i64, align: align };
 
 struct TypeTable {
+    /// What the layouts are for (ADR 0187).
+    target: TargetInfo;
     types: Vector<TypeInfo>;
     names: Vector<u8>;
     lists: Vector<u32>;
@@ -584,6 +615,7 @@ struct TypeTable {
 
     fn create(target: TargetInfo) -> Result<TypeTable, AllocError> {
         var table = TypeTable {
+            target: target,
             types: Vector<TypeInfo>.create(),
             names: Vector<u8>.create(),
             lists: Vector<u32>.create(),
@@ -1479,41 +1511,79 @@ struct TypeTable {
         return this.addEnum(definition, bytes);
     }
 
-    // ---- Layout (TypeTable.LayoutOf, EnumLayout; LP64) ----
+    // ---- Layout (TypeTable.LayoutOf, EnumLayout; the target's, ADR 0187) ----
+
+    /// The target's pointer size in bytes (ADR 0187): 8, or 4 on a 32-bit target.
+    fn pointerBytes(borrow this) -> u32 => this.target.pointerBits / 8;
+
+    /// An integer's or a float's layout: its size, aligned to it, but an 8-byte one as the target aligns it.
+    fn scalarLayout(borrow this, bits: u32) -> SizeAlign {
+        let size = bits / 8;
+        return sizeAlign(size, if (size == 8) this.target.wideAlign else size);
+    }
+
+    /// A C struct of the runtime's (ceesafe/rt.h) laid out from its fields, for the target: 'p' a pointer or a
+    /// `size_t`/`cee_usize`, 'q' a `uint64_t`, 'w' a `uint32_t`, 'b' a byte.
+    fn recordLayout(borrow this, fields: StringView) -> SizeAlign {
+        var offset: u32 = 0;
+        var align: u32 = 1;
+        for (f in fields.bytes()) {
+            let l = match (f) {
+                'p' => sizeAlign(this.pointerBytes(), this.pointerBytes()),
+                'q' => sizeAlign(8, this.target.wideAlign),
+                'w' => sizeAlign(4, 4),
+                _ => sizeAlign(1, 1),
+            };
+            offset = (offset + l.align - 1) / l.align * l.align + truncate<u32>(l.size);
+            align = align.max(l.align);
+        }
+        return sizeAlign((offset + align - 1) / align * align, align);
+    }
+
+    /// The layout of a type whose layout is fixed by the target (not a struct, an enum or an array), or null: a
+    /// pointer of any kind is the target's pointer, a slice or a fat pointer two, a vector its runtime struct's.
+    fn fixedLayout(borrow this, id: u32) -> SizeAlign? {
+        let t = this.types[id as usize];
+        let p = this.pointerBytes();
+        return match (t.kind) {
+            TypeKind.Integer => this.scalarLayout(t.bits),
+            TypeKind.Float => this.scalarLayout(t.bits),
+            TypeKind.Bool => sizeAlign(1, 1),
+            TypeKind.Reference => if (this.isSlice(id) || this.isDynReference(id)) sizeAlign(
+                2 * p,
+                p,
+            ) else sizeAlign(p, p),
+            TypeKind.RawPointer => sizeAlign(p, p),
+            TypeKind.CChar => sizeAlign(1, 1),
+            TypeKind.FunctionPointer => sizeAlign(p, p),
+            TypeKind.Function => sizeAlign(p, p),
+            TypeKind.Closure => sizeAlign(p, p),
+            TypeKind.Box => if (this.isPoolBox(id) || this.isDynBox(id)) sizeAlign(2 * p, p) else sizeAlign(p, p),
+            TypeKind.Vector => this.recordLayout("ppp"),    // ptr, len, cap
+            TypeKind.StableVector => sizeAlign(33 * p, p),  // chunks[CEE_SVEC_CHUNKS = 32], len
+            TypeKind.SlotMap => this.recordLayout("ppppw"), // ptr, len, cap, count, free
+            TypeKind.Handle => sizeAlign(8, 4),
+            TypeKind.Thread => sizeAlign(p, p),
+            TypeKind.Resource => sizeAlign(4, 4),
+            TypeKind.Region => match (t.region) {
+                RegionKind.Arena => this.recordLayout("pppqq"),     // cee_arena
+                RegionKind.FixedBuffer => this.recordLayout("pqq"), // cee_fba
+                RegionKind.Pool => this.recordLayout("ppqqqq"),     // cee_pool
+                _ => this.recordLayout("pppq"),                     // cee_scratch
+            },
+            _ => null,
+        };
+    }
 
     /// Size and alignment by C's rules; field offsets are stored on the fields. An empty struct has one byte.
     /// Asking for a recursive struct's or an imported C type's layout is a checker bug: it panics, as the reference throws.
     fn layoutOf(borrow mut this, id: u32) -> SizeAlign {
+        match (this.fixedLayout(id)) {
+            Some(l) => { return l; }
+            null => {}
+        }
         let t = this.types[id as usize];
         match (t.kind) {
-            TypeKind.Integer => { return sizeAlign(t.bits / 8, t.bits / 8); }
-            TypeKind.Float => { return sizeAlign(t.bits / 8, t.bits / 8); }
-            TypeKind.Bool => { return sizeAlign(1, 1); }
-            TypeKind.Reference => {
-                return if (this.isSlice(id) || this.isDynReference(id)) sizeAlign(16, 8) else sizeAlign(8, 8);
-            }
-            TypeKind.RawPointer => { return sizeAlign(8, 8); }
-            TypeKind.CChar => { return sizeAlign(1, 1); }
-            TypeKind.FunctionPointer => { return sizeAlign(8, 8); }
-            TypeKind.Function => { return sizeAlign(8, 8); }
-            TypeKind.Closure => { return sizeAlign(8, 8); }
-            TypeKind.Box => {
-                return if (this.isPoolBox(id) || this.isDynBox(id)) sizeAlign(16, 8) else sizeAlign(8, 8);
-            }
-            TypeKind.Vector => { return sizeAlign(24, 8); }
-            TypeKind.StableVector => { return sizeAlign(264, 8); }
-            TypeKind.SlotMap => { return sizeAlign(40, 8); }
-            TypeKind.Handle => { return sizeAlign(8, 4); }
-            TypeKind.Thread => { return sizeAlign(8, 8); }
-            TypeKind.Resource => { return sizeAlign(4, 4); }
-            TypeKind.Region => {
-                return match (t.region) {
-                    RegionKind.Arena => sizeAlign(40, 8),
-                    RegionKind.FixedBuffer => sizeAlign(24, 8),
-                    RegionKind.Pool => sizeAlign(48, 8),
-                    _ => sizeAlign(32, 8),
-                };
-            }
             TypeKind.Array => {
                 let e = this.layoutOf(t.element);
                 return SizeAlign { size: e.size * t.arrayLength, align: e.align };

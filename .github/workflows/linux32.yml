@@ -8,7 +8,6 @@ name: linux32
 on:
   push:
     tags: ["v*"]
-    branches: ["adr/0187-0188-sunmi"] # TEMPORARY: to run it once before it is on main
   workflow_dispatch:
 
 permissions:

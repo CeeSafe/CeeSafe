@@ -228,7 +228,7 @@ httpserver's own.
 - **Documents**: tooling.md §4.1 (the example manifest and a **Polls** paragraph), §12.1's table; c-backend.md §3b;
   type-system.md §40.11's first item; `ceesafec --help`; the book's §14.1 table and appendix E (both option tables
   and the manifest table).
-- **Tests**: `tools/package_tests.py` check 43 (§9 step 4's list: the key, `false`, no key, `--polls`, `--no-polls`,
+- **Tests**: `tools/package_tests.py` check 45 (§9 step 4's list: the key, `false`, no key, `--polls`, `--no-polls`,
   `--split`; a dependency's key under a root without it; `test` with the key and with `--no-polls`; `--emit c`'s six
   files each starting with the line, and compiled by `cc` with no flag, the spinning child ended; the three N0321
   and the three usage errors). Against 0.80.0 it reports 11 problems. `tools/bound_check.py` builds `survive` with

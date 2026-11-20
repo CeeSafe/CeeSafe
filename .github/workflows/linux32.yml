@@ -47,7 +47,7 @@ jobs:
       - name: A program built for i386
         run: |
           printf 'fn main() {\n    Console.writeLine(Target.pointerBits());\n    let big: u64 = 5000000000;\n    Console.writeLine(big as usize);\n}\n' > bits.cee
-          out/ceesafec build --target linux --arch x86 --cflag -m32 bits.cee -o bits
+          out/ceesafec build --target linux --arch x86 --cflag -m32 --cflag -msse2 --cflag -mfpmath=sse bits.cee -o bits
           file bits | grep -F "32-bit"
           set +e
           ./bits > bits.out 2> bits.err
@@ -65,7 +65,13 @@ jobs:
             echo "== $*"
             if "$@" > step.log 2>&1; then tail -3 step.log; else grep -E '^ *FAIL' step.log | head -60; tail -25 step.log; status=1; fi
           }
+          # -msse2 -mfpmath=sse: i386's floats in SSE registers, as CeeSafe needs (rt.h refuses x87's extended
+          # precision, FLT_EVAL_METHOD != 0); ARMv7's VFP needs nothing. Left out: programs that assert 64-bit facts
+          # (sizes and pointer widths, literals beyond 2^32 as usize or isize, the 64-bit arch).
           step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus \
-            --family run-pass --family run-fail --cc gcc --cflag=-m32 \
-            --build-option=--target --build-option=linux --build-option=--arch --build-option=x86 --jobs 4
+            --family run-pass --family run-fail --cc gcc --cflag=-m32 --cflag=-msse2 --cflag=-mfpmath=sse \
+            --build-option=--target --build-option=linux --build-option=--arch --build-option=x86 \
+            --exclude run-pass/layout-of.cee --exclude run-pass/pointer-sized.cee --exclude run-pass/mmio.cee \
+            --exclude run-pass/int-conversions.cee --exclude run-pass/mul-high.cee \
+            --exclude run-fail/constant-index-past-end.cee --jobs 4
           exit $status

@@ -654,9 +654,10 @@ public struct Directory {
 }
 
 /// A program's argument as the runtime's `cee_str` (a struct is laid out by C's rules, type-system §12; not @repr(C), which would put it in every program's ceesafe_exports.h).
+/// Its length is `usize`, as `cee_str`'s is `cee_usize`: 4 bytes on a 32-bit target (ADR 0191 §2.3).
 struct HostServicesText {
     ptr: *u8;
-    len: u64;
+    len: usize;
 }
 
 /// The functions behind `Process.capture` and `File.kind`.
@@ -686,10 +687,10 @@ public struct HostServices {
         options: ChildOptions,
     ) -> Result<ChildProcess, IoError> {
         var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length as u64 } }))?;
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
         for (argument in arguments) {
             HostServices.pushed(
-                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length as u64 } }),
+                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
             )?;
         }
         let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
@@ -717,10 +718,10 @@ public struct HostServices {
         handover: borrow Handover,
     ) -> Result<ChildProcess, IoError> {
         var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length as u64 } }))?;
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
         for (argument in arguments) {
             HostServices.pushed(
-                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length as u64 } }),
+                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
             )?;
         }
         let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
@@ -897,10 +898,10 @@ public struct HostServices {
             null => {}
         }
         var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length as u64 } }))?;
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
         for (argument in arguments) {
             HostServices.pushed(
-                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length as u64 } }),
+                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
             )?;
         }
         let status = unsafe { ceesafe_host_spawn(

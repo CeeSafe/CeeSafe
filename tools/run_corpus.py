@@ -9,7 +9,7 @@ commands and reports every observable difference (status, stdout, stderr, emitte
 Normalisation is deliberately narrow and listed in NORMALISATIONS; it never removes a diagnostic, a check, a drop or a
 panic location.
 
-usage: tools/run_corpus.py --compiler PATH [--reference PATH] [--corpus DIR] [--family F]... [--filter TEXT]
+usage: tools/run_corpus.py --compiler PATH [--reference PATH] [--corpus DIR] [--family F]... [--filter TEXT] [--exclude PATH]...
                            [--jobs N] [--timeout S] [--cc CC] [--cflag=FLAG]... [--with FILE]... [--interp]
                            [--report FILE] [-v]
 
@@ -382,13 +382,13 @@ def run_test(runner, family, path, work):
     return problems, None, outcomes
 
 
-def corpus_files(corpus, families, text_filter):
+def corpus_files(corpus, families, text_filter, excluded=()):
     for family in families:
         directory = os.path.join(corpus, family)
         for name in sorted(os.listdir(directory)):
             if name.endswith(".cee"):
                 path = f"{family}/{name}"
-                if not text_filter or text_filter in path:
+                if (not text_filter or text_filter in path) and path not in excluded:
                     yield family, path
 
 
@@ -412,6 +412,9 @@ def main():
                                                          "reference", "tests", "corpus"))
     parser.add_argument("--family", action="append", choices=FAMILIES, help="repeatable; default: all")
     parser.add_argument("--filter", help="only files whose corpus path contains this text")
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="leave out this corpus path, e.g. run-pass/layout-of.cee (repeatable): for a target whose "
+                             "facts a file asserts otherwise (a 32-bit one, ADR 0191)")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     parser.add_argument("--timeout", type=float, default=60.0, help="seconds per command or program run")
     parser.add_argument("--cc", help="C compiler (sets $CC for the compiler)")
@@ -433,7 +436,7 @@ def main():
     compiler = resolve(args.compiler)
     reference = resolve(args.reference) if args.reference else None
     families = args.family or FAMILIES
-    tests = list(corpus_files(args.corpus, families, args.filter))
+    tests = list(corpus_files(args.corpus, families, args.filter, set(args.exclude)))
     print(f"{RUNNER}: {len(tests)} files; compiler {compiler} ({version_of(compiler)})"
           + (f"; reference {reference} ({version_of(reference)})" if reference else ""))
 

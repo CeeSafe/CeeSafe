@@ -1,0 +1,71 @@
+name: linux32
+
+# CeeSafe programs built for a 32-bit target (ADR 0191 §2.6): the test vehicle for Android's armeabi-v7a, which no
+# runner has. ceesafec is built from the tree (a 64-bit compiler, as on every host), and the corpus's run-pass and
+# run-fail programs are built with `--target linux --arch x86` and gcc's `-m32`, so they are i386 programs with 4-byte
+# pointers and 32-bit lengths, run natively on the x86_64 runner. Like freebsd.yml it runs on release tags and by
+# hand (Actions, "Run workflow"), and does not hold a release back.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["adr/0187-0188-sunmi"] # TEMPORARY: to run it once before it is on main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux32-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A released ceesafec that builds the tree (the tree's sources may use what the release stage 0, 0.78.1, accepts).
+  STAGE1_TAG: v0.82.0
+  STAGE1_ASSET: ceesafec-linux-x64.tar.gz
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: gcc for i386
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+          printf 'int main(void) { return sizeof(void *) == 4 ? 0 : 1; }\n' > p.c
+          gcc -m32 p.c -o p && ./p && echo "gcc -m32 builds and runs 32-bit programs"
+      - name: ceesafec from the tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$STAGE1_TAG" -R "$GITHUB_REPOSITORY" -p "$STAGE1_ASSET" -p SHA256SUMS -D stage1
+          (cd stage1 && grep -F " $STAGE1_ASSET" SHA256SUMS | sha256sum -c -)
+          tar -xzf "stage1/$STAGE1_ASSET" -C stage1
+          stage1/ceesafec build -o out/ceesafec
+          out/ceesafec --version
+      - name: A program built for i386
+        run: |
+          printf 'fn main() {\n    Console.writeLine(Target.pointerBits());\n    let big: u64 = 5000000000;\n    Console.writeLine(big as usize);\n}\n' > bits.cee
+          out/ceesafec build --target linux --arch x86 --cflag -m32 bits.cee -o bits
+          file bits | grep -F "32-bit"
+          set +e
+          ./bits > bits.out 2> bits.err
+          status=$?
+          set -e
+          cat bits.out bits.err
+          test "$(head -1 bits.out)" = 32
+          test "$status" -ne 0
+          grep -F "conversion loses information on this 32-bit target" bits.err
+          echo "pointerBits is 32, and a narrowing as stops the program"
+      - name: The corpus, built for i386
+        run: |
+          status=0
+          step() {
+            echo "== $*"
+            if "$@" > step.log 2>&1; then tail -3 step.log; else grep -E '^ *FAIL' step.log | head -60; tail -25 step.log; status=1; fi
+          }
+          step python3 tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus \
+            --family run-pass --family run-fail --cc gcc --cflag=-m32 \
+            --build-option=--target --build-option=linux --build-option=--arch --build-option=x86 --jobs 4
+          exit $status

@@ -943,7 +943,7 @@ static inline cee_str cee_format_u64(uint64_t value, uint8_t *buf) {
         *--p = (uint8_t)('0' + value % 10u);
         value /= 10u;
     } while (value != 0u);
-    return (cee_str){ .ptr = p, .len = (uint64_t)(buf + CEE_DIGITS - p) };
+    return (cee_str){ .ptr = p, .len = (cee_usize)(buf + CEE_DIGITS - p) };
 }
 static inline cee_str cee_format_i64(int64_t value, uint8_t *buf) {
     /* The magnitude in unsigned arithmetic, so INT64_MIN negates without overflow. */

@@ -50,7 +50,7 @@ cee_str ceesafe_io_message(uint32_t kind) {
         "Host not found", "No space left on device", "Too many open files",
     };
     const char *text = messages[kind <= CEE_IO_TOO_MANY_OPEN_FILES ? kind : CEE_IO_OTHER];
-    uint64_t length = 0;
+    cee_usize length = 0; /* a C string in memory: its length fits the address space */
     while (text[length] != 0) length++;
     return (cee_str){ .ptr = (const uint8_t *)text, .len = length };
 }

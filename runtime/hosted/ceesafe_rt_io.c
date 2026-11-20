@@ -248,7 +248,7 @@ uint64_t ceesafe_arg_count(void) {
 bool ceesafe_arg(uint64_t index, cee_str *out) {
     if (index >= ceesafe_arg_count()) return false;
     const uint8_t *text = ceesafe_argv[index];
-    uint64_t length = 0;
+    cee_usize length = 0; /* a C string in memory */
     while (text[length] != 0) length++;
     if (!ceesafe_utf8_valid(text, length)) return false;
     *out = (cee_str){ .ptr = text, .len = length };
@@ -949,7 +949,7 @@ static bool cee_ipv6(cee_str text, uint8_t out[16]) {
     uint16_t groups[8];
     int count = 0;
     int gap = -1; /* the group index "::" stands before */
-    uint64_t i = 0;
+    cee_usize i = 0;
     if (text.len >= 2u && text.ptr[0] == ':' && text.ptr[1] == ':') {
         gap = 0;
         i = 2;
@@ -957,7 +957,7 @@ static bool cee_ipv6(cee_str text, uint8_t out[16]) {
         return false;
     }
     while (i < text.len) {
-        uint64_t start = i;
+        cee_usize start = i;
         uint32_t value = 0;
         int digits = 0;
         while (i < text.len && cee_hex_value(text.ptr[i]) >= 0 && digits < 5) {
@@ -1834,7 +1834,7 @@ static bool cee_nonblocking(int fd) {
 }
 
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
-    cee_str text = {address, length};
+    cee_str text = {address, (cee_usize)length}; /* a CeeSafe view's length: it fits */
     ceesafe_endpoint e;
     if (!ceesafe_endpoint_parse(text, port, &e)) {
         return -(int64_t)EINVAL;
@@ -1879,7 +1879,7 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) {
 
 /* Starts a connection: the descriptor, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
-    cee_str text = {address, length};
+    cee_str text = {address, (cee_usize)length}; /* a CeeSafe view's length: it fits */
     ceesafe_endpoint e;
     if (!ceesafe_endpoint_parse(text, port, &e)) {
         return -(int64_t)EINVAL;
@@ -2029,7 +2029,7 @@ static int64_t cee_async_result(cee_io_result r) {
 }
 
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
-    cee_str text = {address, length};
+    cee_str text = {address, (cee_usize)length}; /* a CeeSafe view's length: it fits */
     return cee_async_result(cee_socket_open_text(text, port, true, true));
 }
 
@@ -2046,7 +2046,7 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) { return cee_async_result(cee_socke
 
 /* Starts a connection: the id, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
-    cee_str text = {address, length};
+    cee_str text = {address, (cee_usize)length}; /* a CeeSafe view's length: it fits */
     return cee_async_result(cee_socket_open_text(text, port, false, true));
 }
 
@@ -2226,7 +2226,7 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
 /* ---- Host services (type-system.md §26.7-§26.10; ADR 0028), for lib/std/host.cee ------------------------
  * Each returns a value >= 0, or a negated errno. Paths follow ceesafe_c_path: no zero byte, at most 4,095 bytes. */
 
-static cee_str ceesafe_host_text(uint8_t const *bytes, uint64_t length) { return (cee_str){ .ptr = bytes, .len = length }; }
+static cee_str ceesafe_host_text(uint8_t const *bytes, uint64_t length) { return (cee_str){ .ptr = bytes, .len = (cee_usize)length }; }
 
 int64_t ceesafe_host_env(uint8_t const *name, uint64_t length, uint8_t const **value, uint64_t *value_length) {
     char key[4096];

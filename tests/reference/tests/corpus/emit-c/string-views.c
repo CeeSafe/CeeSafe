@@ -12,7 +12,7 @@ static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 1u, 54u };
 
 typedef struct ceeSl_u8 ceeSl_u8;
 
-struct ceeSl_u8 { const uint8_t *ptr; uint64_t len; };
+struct ceeSl_u8 { const uint8_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u8) == 16, "ceesafec layout: sizeof(Slice<u8>)");
 _Static_assert(_Alignof(ceeSl_u8) == 8, "ceesafec layout: alignof(Slice<u8>)");
 

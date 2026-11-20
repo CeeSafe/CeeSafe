@@ -30,11 +30,11 @@ _Static_assert(_Alignof(ceeT_Point) == 4, "ceesafec layout: alignof(Point)");
 _Static_assert(offsetof(ceeT_Point, f_x) == 0, "ceesafec layout: Point.x");
 _Static_assert(offsetof(ceeT_Point, f_y) == 4, "ceesafec layout: Point.y");
 
-struct ceeSl_u8 { const uint8_t *ptr; uint64_t len; };
+struct ceeSl_u8 { const uint8_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u8) == 16, "ceesafec layout: sizeof(Slice<u8>)");
 _Static_assert(_Alignof(ceeSl_u8) == 8, "ceesafec layout: alignof(Slice<u8>)");
 
-struct ceeSm_u8 { uint8_t *ptr; uint64_t len; };
+struct ceeSm_u8 { uint8_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSm_u8) == 16, "ceesafec layout: sizeof(SliceMut<u8>)");
 _Static_assert(_Alignof(ceeSm_u8) == 8, "ceesafec layout: alignof(SliceMut<u8>)");
 
@@ -46,7 +46,7 @@ struct ceeA2_S5Point { ceeT_Point e[2]; };
 _Static_assert(sizeof(ceeA2_S5Point) == 16, "ceesafec layout: sizeof([Point; 2])");
 _Static_assert(_Alignof(ceeA2_S5Point) == 4, "ceesafec layout: alignof([Point; 2])");
 
-struct ceeSm_S5Point { ceeT_Point *ptr; uint64_t len; };
+struct ceeSm_S5Point { ceeT_Point *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSm_S5Point) == 16, "ceesafec layout: sizeof(SliceMut<Point>)");
 _Static_assert(_Alignof(ceeSm_S5Point) == 8, "ceesafec layout: alignof(SliceMut<Point>)");
 

@@ -1,6 +1,7 @@
 # ADR 0188 — Android from 7.1 (API level 25): the runtime's Java loaded from a file, processes started without posix_spawn
 
-- Status: **Proposed**, 2026-11-20. Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"). Not implemented.
+  Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
   Sunmi V2: a handheld till with a printer built in, on Android 7.1.1 (API level 25), 32-bit ARM. Its 32-bit half is
   ADR 0187; this one is the Android release.
 - Scope: the hosted runtime's Android window code (`runtime/hosted/ceesafe_rt_window.c`: how its Java classes are

@@ -65,7 +65,7 @@ _Static_assert(sizeof(ceeO_Qi32) == 8, "ceesafec layout: sizeof(borrow mut i32\?
 _Static_assert(_Alignof(ceeO_Qi32) == 8, "ceesafec layout: alignof(borrow mut i32\?)");
 
 typedef struct ceeKS_Ki32S10SystemHeap { uint32_t gen; uint32_t next; int32_t value; } ceeKS_Ki32S10SystemHeap;
-struct ceeK_i32S10SystemHeap { ceeKS_Ki32S10SystemHeap *ptr; uint64_t len; uint64_t cap; uint64_t count; uint32_t free; };
+struct ceeK_i32S10SystemHeap { ceeKS_Ki32S10SystemHeap *ptr; cee_usize len; cee_usize cap; cee_usize count; uint32_t free; };
 _Static_assert(sizeof(ceeK_i32S10SystemHeap) == 40, "ceesafec layout: sizeof(SlotMap<i32>)");
 _Static_assert(_Alignof(ceeK_i32S10SystemHeap) == 8, "ceesafec layout: alignof(SlotMap<i32>)");
 
@@ -80,7 +80,7 @@ _Static_assert(sizeof(ceeR_usizeE10AllocError) == 16, "ceesafec layout: sizeof(R
 _Static_assert(_Alignof(ceeR_usizeE10AllocError) == 8, "ceesafec layout: alignof(Result<usize, AllocError>)");
 _Static_assert(offsetof(ceeR_usizeE10AllocError, u) == 8, "ceesafec layout: Result<usize, AllocError> payload offset");
 
-struct ceeSV_i32S10SystemHeap { void *chunks[CEE_SVEC_CHUNKS]; uint64_t len; };
+struct ceeSV_i32S10SystemHeap { void *chunks[CEE_SVEC_CHUNKS]; cee_usize len; };
 _Static_assert(sizeof(ceeSV_i32S10SystemHeap) == 264, "ceesafec layout: sizeof(StableVector<i32>)");
 _Static_assert(_Alignof(ceeSV_i32S10SystemHeap) == 8, "ceesafec layout: alignof(StableVector<i32>)");
 

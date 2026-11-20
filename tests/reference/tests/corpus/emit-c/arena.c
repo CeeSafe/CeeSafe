@@ -53,7 +53,7 @@ static inline CEE_UNUSED ceeR_QS5PointE10AllocError ceeMk_ceeR_QS5PointE10AllocE
     return (ceeR_QS5PointE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
-struct ceeSm_u16 { uint16_t *ptr; uint64_t len; };
+struct ceeSm_u16 { uint16_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSm_u16) == 16, "ceesafec layout: sizeof(SliceMut<u16>)");
 _Static_assert(_Alignof(ceeSm_u16) == 8, "ceesafec layout: alignof(SliceMut<u16>)");
 

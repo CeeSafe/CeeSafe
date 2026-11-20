@@ -1,6 +1,7 @@
 # ADR 0187 — 32-bit targets: Android's armeabi-v7a, and 32-bit Linux to test them
 
-- Status: **Proposed**, 2026-11-20. Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"). Not implemented.
+  Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
   Sunmi V2: a handheld till with a printer built in, whose processor runs 32-bit ARM code only (`armeabi-v7a`, checked
   over adb: `ro.product.cpu.abilist=armeabi-v7a,armeabi`) on Android 7.1.1. Its Android-release half is ADR 0188.
 - Scope: the compiler's target (a new `--arch` option beside ADR 0171's `--target`), the type table's and the C

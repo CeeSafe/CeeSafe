@@ -30,11 +30,11 @@ _Static_assert(sizeof(ceeT_Pair) == 4, "ceesafec layout: sizeof(Pair)");
 _Static_assert(_Alignof(ceeT_Pair) == 2, "ceesafec layout: alignof(Pair)");
 _Static_assert(offsetof(ceeT_Pair, f_v) == 0, "ceesafec layout: Pair.v");
 
-struct ceeSl_i32 { const int32_t *ptr; uint64_t len; };
+struct ceeSl_i32 { const int32_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_i32) == 16, "ceesafec layout: sizeof(Slice<i32>)");
 _Static_assert(_Alignof(ceeSl_i32) == 8, "ceesafec layout: alignof(Slice<i32>)");
 
-struct ceeSm_i32 { int32_t *ptr; uint64_t len; };
+struct ceeSm_i32 { int32_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSm_i32) == 16, "ceesafec layout: sizeof(SliceMut<i32>)");
 _Static_assert(_Alignof(ceeSm_i32) == 8, "ceesafec layout: alignof(SliceMut<i32>)");
 

@@ -279,7 +279,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         out,
         "  --arch <name>      the processor the build is for: arm64, x86_64, or the 32-bit armv7 and x86 (with\n",
     )?;
-    appendText(out, "                    --target android, or linux for tests; ADR 0191); default: this machine's\n")?;
+    appendText(out, "                    --target android, or linux for tests; ADR 0192); default: this machine's\n")?;
     return Ok();
 }
 
@@ -656,7 +656,7 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 );
             }
         } else if (arg == "--arch") {
-            // The processor the build is for (ADR 0191 §2.1): its pointer width lays out every type (targetFor reads
+            // The processor the build is for (ADR 0192 §2.1): its pointer width lays out every type (targetFor reads
             // it from the command line). A 32-bit one is for Android, or 32-bit Linux to test it.
             let name = match (Process.argument(a)) {
                 Some(v) => v,

@@ -1,10 +1,10 @@
 # ADR 0188 — Android from 7.1 (API level 25): the runtime's Java loaded from a file, processes started without posix_spawn
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept ADR 0187 and ADR 0188 as written"; the 0187 named there is now
-  ADR 0191, renumbered because main's ADR 0187, library package builds, was accepted first). Not implemented.
+  ADR 0192, renumbered because main's ADR 0187, library package builds, was accepted first). Not implemented.
   Asked for by the owner ("Start the CeeSafe work for the V2"), to run IPos on a
   Sunmi V2: a handheld till with a printer built in, on Android 7.1.1 (API level 25), 32-bit ARM. Its 32-bit half is
-  ADR 0191; this one is the Android release.
+  ADR 0192; this one is the Android release.
 - Scope: the hosted runtime's Android window code (`runtime/hosted/ceesafe_rt_window.c`: how its Java classes are
   loaded) and its processes (`runtime/hosted/ceesafe_rt_io.c`: `Process.run` and the rest without `posix_spawn`); the
   dex's minimum API (`tools/gen_android_dex.py`); ADR 0154's floor, from 28 to 25; ClayWind's claywind-pack (the
@@ -67,7 +67,7 @@ process, or the error. (An app rarely starts a program on a phone; the calls mus
   emulator image (x86_64; the arm64 image where the host is ARM) besides the newest one, in the contract suite's
   Android job.
 - A check that the dex path writes, reuses and refuses a wrong-size file.
-- On the device, by the owner: IPos on the Sunmi V2 (with ADR 0191), a receipt printed on its own printer.
+- On the device, by the owner: IPos on the Sunmi V2 (with ADR 0192), a receipt printed on its own printer.
 
 ## 3. Options not taken
 
@@ -81,7 +81,7 @@ process, or the error. (An app rarely starts a program on a phone; the calls mus
 
 ## 4. Consequences
 
-- Programs built by ceesafec run from Android 7.1. With ADR 0191, IPos runs on the Sunmi V2 and prints on its own
+- Programs built by ceesafec run from Android 7.1. With ADR 0192, IPos runs on the Sunmi V2 and prints on its own
   printer.
 - ADR 0154's floor, the book's page on phones and ClayWind's README say API level 25.
 - The contract suite gains an API level 25 image to run.
@@ -91,4 +91,4 @@ process, or the error. (An app rarely starts a program on a phone; the calls mus
 1. The dex from a file (2.1), and d8's `--min-api 25`; checked on an API level 25 emulator.
 2. The process fallback (2.2); checked there too.
 3. The floor (2.3): the suite's image, the docs; claywind-pack's `minSdkVersion` and `…25-clang`.
-4. With ADR 0191: IPos on the Sunmi V2.
+4. With ADR 0192: IPos on the Sunmi V2.

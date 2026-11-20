@@ -1,6 +1,6 @@
 name: linux32
 
-# CeeSafe programs built for a 32-bit target (ADR 0191 §2.6): the test vehicle for Android's armeabi-v7a, which no
+# CeeSafe programs built for a 32-bit target (ADR 0192 §2.6): the test vehicle for Android's armeabi-v7a, which no
 # runner has. ceesafec is built from the tree (a 64-bit compiler, as on every host), and the corpus's run-pass and
 # run-fail programs are built with `--target linux --arch x86` and gcc's `-m32`, so they are i386 programs with 4-byte
 # pointers and 32-bit lengths, run natively on the x86_64 runner. Like freebsd.yml it runs on release tags and by

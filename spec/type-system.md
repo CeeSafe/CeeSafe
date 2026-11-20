@@ -9,7 +9,7 @@ section's heading or text names the milestone or ADR that added it. Error codes 
 |---|---|---|
 | `i8 i16 i32 i64` | two's complement, −2^(n−1) … 2^(n−1)−1 | |
 | `u8 u16 u32 u64` | 0 … 2^n−1 | |
-| `isize` / `usize` | pointer width of the **target**: 64, or 32 on a 32-bit target (`--arch armv7`, `--arch x86`; ADR 0191) | from `TargetInfo`, never the host |
+| `isize` / `usize` | pointer width of the **target**: 64, or 32 on a 32-bit target (`--arch armv7`, `--arch x86`; ADR 0192) | from `TargetInfo`, never the host |
 | `f32 f64` | IEEE 754 binary32 and binary64 | since M11 (§35) |
 | `bool` | `true`, `false` | |
 | `void` | no value | a function's return type, and the `T` of `Result<void, E>` (§17.1) |
@@ -247,7 +247,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - `uN → uM` and `iN → iM` for M ≥ N;
   - `uN → iM` for M > N;
   - `bool →` any integer type (`false`→0, `true`→1).
-  `isize`/`usize` are taken as 64 bits wide for this check on every target (ADR 0191 §2.4), so that a program that
+  `isize`/`usize` are taken as 64 bits wide for this check on every target (ADR 0192 §2.4), so that a program that
   checks on one target checks on all: `u64 as usize` and `i64 as isize` are accepted everywhere. On a 32-bit target
   such a conversion is emitted as a checked one: a value that does not fit
   panics ("conversion loses information on this 32-bit target", the runtime's `CEE_PANIC_NARROWING`), as an index
@@ -2390,7 +2390,7 @@ fn main() -> i32 {
   growth moves the elements.
 - No `==`, no `Copy`.
 - **Layout (v0):** `{ T *ptr; usize length; usize capacity }` (24 bytes on a 64-bit target, 12 on a 32-bit one;
-  ADR 0191 §2.3). An empty vector's
+  ADR 0192 §2.3). An empty vector's
   pointer is a valid, aligned, never-dereferenced address (not null), so views of it are valid.
   `v.viewMut().ptr` is the buffer's address, also for an empty vector that has capacity (§23.3).
 
@@ -4485,7 +4485,7 @@ value.
 ### 29.3 CPU and target queries
 - `Cpu.spinHint()`: a hint inside a busy-wait loop (`pause` on x86-64, `yield` on AArch64, nothing
   elsewhere). `void`, safe, allowed in both profiles.
-- `Target.pointerBits()`: `u32`, the target's pointer width: 64, or 32 for `--arch armv7` and `--arch x86` (ADR 0191).
+- `Target.pointerBits()`: `u32`, the target's pointer width: 64, or 32 for `--arch armv7` and `--arch x86` (ADR 0192).
   `Target.isX86_64()` and `Target.isAArch64()`: `bool`, the architecture the generated C is
   compiled for. They are decided by the C compiler, not by `ceesafec` (the generated C is the same for
   every LP64 target), so they are not constants: use them in ordinary conditions. The interpreter

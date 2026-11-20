@@ -247,7 +247,7 @@ impl Key<PairKey> for PairKey {
 
 fn pairKey(a: u64, b: u64) -> PairKey => PairKey { a: a, b: b };
 
-/// Layout facts that depend on the target (TargetInfo): `isize`/`usize` and every pointer (ADR 0191), C's `long`
+/// Layout facts that depend on the target (TargetInfo): `isize`/`usize` and every pointer (ADR 0192), C's `long`
 /// (CLong, ADR 0080 §3.5), and how an 8-byte scalar is aligned inside a struct.
 struct TargetInfo {
     pointerBits: u32;
@@ -258,7 +258,7 @@ struct TargetInfo {
 
 fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64, longBits: 64, wideAlign: 8 };
 
-/// The processor `--arch` names on the command line (ADR 0191 §2.1), or empty for the host's.
+/// The processor `--arch` names on the command line (ADR 0192 §2.1), or empty for the host's.
 fn commandArch() -> StringView {
     var a: usize = 1;
     while (a + 1 < Process.argumentCount()) {
@@ -281,7 +281,7 @@ fn commandArch() -> StringView {
 /// Whether `arch` (an `--arch` name) is a 32-bit one.
 fn arch32(arch: StringView) -> bool => arch == "armv7" || arch == "x86";
 
-/// The target a program is checked for (ADR 0080 §3.5, ADR 0191). Its width is `--arch`'s (32 for `armv7` and `x86`,
+/// The target a program is checked for (ADR 0080 §3.5, ADR 0192). Its width is `--arch`'s (32 for `armv7` and `x86`,
 /// whose C `long` is 32 bits too), else 64. C's `long` is 32 bits on Windows (LLP64), the target of a hosted build when
 /// ceesafec runs there (ADR 0069), and 64 bits on every other 64-bit target (LP64), the freestanding ones included; a
 /// generated C file that uses `CLong` asserts `sizeof(long)` against it, and every file asserts the pointer width.
@@ -304,7 +304,7 @@ struct SizeAlign {
 fn sizeAlign(size: u32, align: u32) -> SizeAlign => SizeAlign { size: size as i64, align: align };
 
 struct TypeTable {
-    /// What the layouts are for (ADR 0191).
+    /// What the layouts are for (ADR 0192).
     target: TargetInfo;
     types: Vector<TypeInfo>;
     names: Vector<u8>;
@@ -1511,9 +1511,9 @@ struct TypeTable {
         return this.addEnum(definition, bytes);
     }
 
-    // ---- Layout (TypeTable.LayoutOf, EnumLayout; the target's, ADR 0191) ----
+    // ---- Layout (TypeTable.LayoutOf, EnumLayout; the target's, ADR 0192) ----
 
-    /// The target's pointer size in bytes (ADR 0191): 8, or 4 on a 32-bit target.
+    /// The target's pointer size in bytes (ADR 0192): 8, or 4 on a 32-bit target.
     fn pointerBytes(borrow this) -> u32 => this.target.pointerBits / 8;
 
     /// An integer's or a float's layout: its size, aligned to it, but an 8-byte one as the target aligns it.
@@ -1825,12 +1825,12 @@ struct TypeTable {
     }
 
     /// Is every value of `from` representable in `to` (IsLosslessCast, §7)? `isize` and `usize` count as 64 bits
-    /// here on every target, so that a program that checks on one target checks on all (ADR 0191 §2.4); a cast that
+    /// here on every target, so that a program that checks on one target checks on all (ADR 0192 §2.4); a cast that
     /// is lossless so but narrows on a 32-bit target is checked where it runs (narrowsOnTarget).
     fn isLosslessCast(borrow this, from: u32, to: u32) -> bool => this.losslessWith(from, to, false);
 
     /// A cast `as` accepts that narrows on this target (a 32-bit one): `u64` to `usize`, `i64` or `u32` to `isize`.
-    /// The C checks the value fits, and stops the program if it does not (ADR 0191 §2.4).
+    /// The C checks the value fits, and stops the program if it does not (ADR 0192 §2.4).
     fn narrowsOnTarget(borrow this, from: u32, to: u32) -> bool =>
         this.target.pointerBits < 64 && this.losslessWith(from, to, false) && !this.losslessWith(from, to, true);
 

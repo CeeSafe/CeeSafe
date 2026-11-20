@@ -654,7 +654,7 @@ public struct Directory {
 }
 
 /// A program's argument as the runtime's `cee_str` (a struct is laid out by C's rules, type-system §12; not @repr(C), which would put it in every program's ceesafe_exports.h).
-/// Its length is `usize`, as `cee_str`'s is `cee_usize`: 4 bytes on a 32-bit target (ADR 0191 §2.3).
+/// Its length is `usize`, as `cee_str`'s is `cee_usize`: 4 bytes on a 32-bit target (ADR 0192 §2.3).
 struct HostServicesText {
     ptr: *u8;
     len: usize;

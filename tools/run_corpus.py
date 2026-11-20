@@ -414,7 +414,7 @@ def main():
     parser.add_argument("--filter", help="only files whose corpus path contains this text")
     parser.add_argument("--exclude", action="append", default=[],
                         help="leave out this corpus path, e.g. run-pass/layout-of.cee (repeatable): for a target whose "
-                             "facts a file asserts otherwise (a 32-bit one, ADR 0191)")
+                             "facts a file asserts otherwise (a 32-bit one, ADR 0192)")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     parser.add_argument("--timeout", type=float, default=60.0, help="seconds per command or program run")
     parser.add_argument("--cc", help="C compiler (sets $CC for the compiler)")

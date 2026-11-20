@@ -58,7 +58,8 @@ ended (`RunBound.Count`), or ending the process (`RunBound.Panic`); a `Critical`
 compute for longer than the bound, ended only after them; a unit's own longer bound; a child that computes 20 ms at
 a time under a 50 ms bound, never ended; and a waiting task's longest wait beside a spinning one, between the bound
 and three times it. A build without the macro answers `false` from `Async.runBound`; and each of CeeSafe's benchmarks
-compiles, without the macro, to the same assembly as its C with every poll taken out.
+compiles, without the macro, to the same assembly as its C with every poll taken out (with `--cc cl`, the same `/FA`
+listing). The Windows workflow runs it with MSVC.
 
 `tools/handover_check.py` (ADR 0173, in the contract suite) builds one program and runs it as several processes:
 three workers started with a listener and unnamed memory handed over answer 300 connections and count them

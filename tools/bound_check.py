@@ -623,6 +623,17 @@ def strip_polls(text):
 
 
 def assembly(cc, directory, source):
+    if os.path.basename(cc).lower() in ("cl", "cl.exe"):
+        # MSVC: the flags ceesafec gives cl (src/host/toolchain.cee), and a listing in place of -S.
+        stem = os.path.splitext(source)[0]
+        r = subprocess.run([cc, "/nologo", "/std:c11", "/bigobj", "/O2", "/I", directory, "/c", "/FA",
+                            "/Fa" + stem + ".asm", "/Fo" + stem + ".obj", source], capture_output=True, text=True)
+        if r.returncode != 0:
+            return None, (r.stdout + r.stderr).strip()[:500]
+        with open(stem + ".asm", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        # Comments and the TITLE line name the file; nothing else differs between two units of the same code.
+        return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith((";", "TITLE"))), ""
     r = subprocess.run([cc, *FLAGS, "-I", directory, "-S", "-o", "-", source], capture_output=True, text=True)
     if r.returncode != 0:
         return None, r.stderr.strip()[:500]

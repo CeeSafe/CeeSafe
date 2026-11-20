@@ -552,4 +552,12 @@ How it was tested (macOS arm64, Apple clang 21.0.0, this branch's compiler):
 - **Linux** (Ubuntu 24.04 in Docker, arm64, gcc 13.3; the C this compiler emits on macOS, built there with
   `-DCEE_POLLS=1`): `survive`'s seven lines, and `count`, `critical`, `callback`, `early`, `stale`, `registry`,
   `latency` and `panic` as on macOS.
-- **Not run:** Windows (its thread-locals, the monitor on `CreateThread` and SRW locks); httpserver's step 7.
+- **Windows** (Windows 11 x64, an i7-4700HQ; `ceesafec` built from the C it emits with `cl` 19.44 and CI's command
+  line, warning-free): `bound_check`'s 33 cases pass with `CC=cl`, and again with WinLibs gcc 16.2 (MinGW-w64, UCRT),
+  so the monitor's `CreateThread` and SRW lock, MSVC's volatile poll read and `_Thread_local` under both are exercised;
+  the same-code check compares `cl /O2 /FA` listings. The corpus's run-pass and run-fail give the same results with and
+  without polls, under `cl` (`/DCEE_POLLS=1`) and under gcc (`-DCEE_POLLS=1`). The failures they share predate this
+  ADR, as release 0.78.0 shows: `run-pass/slice-bulk` prints wrong values under `cl` (not under gcc),
+  `run-pass/io-error-network-kinds` does not finish, and `emit-c/extern-array-parameter`'s snapshot assumes LP64.
+  `tools/bound_check.py` runs in `.github/workflows/windows.yml` from now on.
+- **Not run:** httpserver's step 7.

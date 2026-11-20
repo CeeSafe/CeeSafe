@@ -52,31 +52,12 @@ fn computeLayouts(c: borrow mut Checker) {
 
 /// A computed layout (TypeTable.LayoutOf, after computeLayouts).
 fn cLayout(c: borrow Checker, t: u32) -> SizeAlign {
+    match (c.types.fixedLayout(t)) {
+        Some(l) => { return l; }
+        null => {}
+    }
     let info = c.types.info(t);
     match (info.kind) {
-        TypeKind.Integer => { return sizeAlign(info.bits / 8, info.bits / 8); }
-        TypeKind.Float => { return sizeAlign(info.bits / 8, info.bits / 8); }
-        TypeKind.Bool => { return sizeAlign(1, 1); }
-        TypeKind.Reference => {
-            return if (c.types.isSlice(t) || c.types.isDynReference(t)) sizeAlign(16, 8) else sizeAlign(8, 8);
-        }
-        TypeKind.Box => {
-            return if (c.types.isPoolBox(t) || c.types.isDynBox(t)) sizeAlign(16, 8) else sizeAlign(8, 8);
-        }
-        TypeKind.Vector => { return sizeAlign(24, 8); }
-        TypeKind.StableVector => { return sizeAlign(264, 8); }
-        TypeKind.SlotMap => { return sizeAlign(40, 8); }
-        TypeKind.Handle => { return sizeAlign(8, 4); }
-        TypeKind.Resource => { return sizeAlign(4, 4); }
-        TypeKind.CChar => { return sizeAlign(1, 1); }
-        TypeKind.Region => {
-            return match (info.region) {
-                RegionKind.Arena => sizeAlign(40, 8),
-                RegionKind.FixedBuffer => sizeAlign(24, 8),
-                RegionKind.Pool => sizeAlign(48, 8),
-                _ => sizeAlign(32, 8),
-            };
-        }
         TypeKind.Array => {
             let e = cLayout(c, info.element);
             return SizeAlign { size: e.size * info.arrayLength, align: e.align };
@@ -89,7 +70,10 @@ fn cLayout(c: borrow Checker, t: u32) -> SizeAlign {
             let s = borrow c.types.structs[info.structDef as usize];
             return sizeAlign(s.size, s.align);
         }
-        _ => { return sizeAlign(8, 8); } // pointers of every kind
+        _ => {
+            let p = c.types.pointerBytes();
+            return sizeAlign(p, p); // pointers of every kind
+        }
     }
 }
 
@@ -216,10 +200,12 @@ fn emitProgram(
         e.emit()?;
     }
     e.line("")?;
+    // The pointer width the layouts are for (ADR 0187): a C compiler for another width stops here.
+    let bits = c.types.target.pointerBits as u64;
     e.t("_Static_assert(sizeof(void *) * 8 == ")?;
-    e.d(64 as u64)?;
+    e.d(bits)?;
     e.t(", \"ceesafec: generated for a ")?;
-    e.d(64 as u64)?;
+    e.d(bits)?;
     e.t("-bit target\");")?;
     e.emit()?;
     e.line("")?;
@@ -1225,7 +1211,7 @@ fn emitStructType(
     return e.line("");
 }
 
-/// `[T; N]` is `struct { T e[N]; }`; a slice is `struct { T *ptr; uint64_t len; }` (EmitComposite, §16.1).
+/// `[T; N]` is `struct { T e[N]; }`; a slice is `struct { T *ptr; cee_usize len; }` (EmitComposite, §16.1).
 fn emitComposite(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -1258,12 +1244,12 @@ fn emitComposite(
         e.b(name.view())?;
         e.t(" { ")?;
         appendCTypeName(c, mut e.buf, c.types.info(info.pointee).element)?;
-        e.t(" *ptr; uint64_t len; uint64_t cap; };")?;
+        e.t(" *ptr; cee_usize len; cee_usize cap; };")?;
         e.emit()?;
     } else if (c.types.is(t, TypeKind.StableVector)) {
         e.t("struct ")?;
         e.b(name.view())?;
-        e.t(" { void *chunks[CEE_SVEC_CHUNKS]; uint64_t len; };")?;
+        e.t(" { void *chunks[CEE_SVEC_CHUNKS]; cee_usize len; };")?;
         e.emit()?;
     } else if (c.types.is(t, TypeKind.SlotMap)) {
         // Slots hold values by value: the element type is complete first.
@@ -1284,7 +1270,7 @@ fn emitComposite(
         e.b(name.view())?;
         e.t(" { ")?;
         e.b(slot.view())?;
-        e.t(" *ptr; uint64_t len; uint64_t cap; uint64_t count; uint32_t free; };")?;
+        e.t(" *ptr; cee_usize len; cee_usize cap; cee_usize count; uint32_t free; };")?;
         e.emit()?;
     } else {
         let element = cTypeName(c, c.types.info(info.pointee).element)?;
@@ -1301,7 +1287,7 @@ fn emitComposite(
             e.t("const ")?;
             e.b(element.view())?;
         }
-        e.t(" *ptr; uint64_t len; };")?;
+        e.t(" *ptr; cee_usize len; };")?;
         e.emit()?;
     }
     if (!c.types.isCLaidOut(t, 0)) {

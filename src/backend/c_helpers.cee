@@ -1789,7 +1789,7 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.t(" *s, cee_str text) {")?;
             e.emit()?;
             e.line("    if (text.len > s->cap - s->len) {")?;
-            e.line("        uint64_t cap = s->cap;")?;
+            e.line("        cee_usize cap = s->cap;")?;
             e.t("        void *p = ceesafe_vec_grow(s->ptr, s->len, &cap, text.len, 1u, ")?;
             e.b(allocator.view())?;
             e.t(");")?;
@@ -1834,7 +1834,7 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.t(" needs over-aligned memory\");")?;
             e.emit()?;
             e.line("    if (v->len == v->cap) {")?;
-            e.line("        uint64_t cap = v->cap;")?;
+            e.line("        cee_usize cap = v->cap;")?;
             e.t("        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, 1u, sizeof(")?;
             e.b(element.view())?;
             e.t("), ")?;
@@ -1986,7 +1986,7 @@ fn emitVectorBulkHelpers(
     e.t(" *v, uint64_t extra) {")?;
     e.emit()?;
     e.line("    if (extra > v->cap - v->len) {")?;
-    e.line("        uint64_t cap = v->cap;")?;
+    e.line("        cee_usize cap = v->cap;")?;
     e.t("        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(")?;
     e.b(element.view())?;
     e.t("), ")?;
@@ -2059,7 +2059,7 @@ fn emitVectorBulkHelpers(
     // A vector with no buffer and a fill of zero bytes: the zeroed allocation, which for a large buffer is memory
     // the operating system has not touched yet (ADR 0099). The same capacity, attempt and failure as the growth.
     e.line("    if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {")?;
-    e.line("        uint64_t cap = 0u;")?;
+    e.line("        cee_usize cap = 0u;")?;
     e.t("        void *p = ceesafe_vec_zeroed(&cap, n, sizeof(")?;
     e.b(element.view())?;
     e.t("), ")?;

@@ -35,6 +35,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_ALLOCATOR: return "the host's allocator broke its contract";
     case CEE_PANIC_POISONED: return "this lock was held by an isolated task that trapped: its data may be broken";
     case CEE_PANIC_OVERRAN: return "a task ran past its bound without waiting";
+    case CEE_PANIC_NARROWING: return "conversion loses information on this 32-bit target";
     default: return "unknown panic";
     }
 }
@@ -957,8 +958,10 @@ static uint64_t live_dead_reach(void) {
             while (top > 0u) {
                 const cee_live_block *b = &sorted[work[--top]];
                 found += 1u;
-                uintptr_t first = (b->at + 7u) & ~(uintptr_t)7u;
-                for (uintptr_t a = first; a + sizeof(uintptr_t) <= b->at + b->size; a += 8u) {
+                /* Pointer-aligned words: 8 bytes apart on a 64-bit target, 4 on a 32-bit one (ADR 0187 §2.5). */
+                const uintptr_t step = (uintptr_t)sizeof(uintptr_t);
+                uintptr_t first = (b->at + step - 1u) & ~(step - 1u);
+                for (uintptr_t a = first; a + sizeof(uintptr_t) <= b->at + b->size; a += step) {
                     uintptr_t word;
                     ceesafe_mem_copy(&word, (const void *)a, sizeof word);
                     size_t k = live_holder(sorted, m, word);

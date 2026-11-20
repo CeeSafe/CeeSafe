@@ -8595,6 +8595,8 @@ static void cee_win32_drop_close(struct cee_window *w) {
 #include <fcntl.h>
 #include <jni.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define CEE_HANDLE_ANDROID 5
@@ -8685,8 +8687,8 @@ static void cee_android_told(int kind) {
 /* BEGIN android dex: written by tools/gen_android_dex.py from runtime/android; do not edit */
 /* the Java sources' SHA-256: e006a5ef7bb1e3e41bd5cd7fc01b98d7fceaa4e3c81b7a4c0bcc732190fb0dca */
 static uint8_t cee_android_dex[35468] = {
-    100,101,120,10,48,51,57,0,76,122,58,173,139,169,163,204,182,249,238,166,108,70,140,194,
-    11,93,88,64,132,195,230,243,140,138,0,0,112,0,0,0,120,86,52,18,0,0,0,0,
+    100,101,120,10,48,51,55,0,118,119,130,237,95,100,54,121,241,83,255,172,50,255,250,85,
+    61,138,51,88,18,78,223,1,140,138,0,0,112,0,0,0,120,86,52,18,0,0,0,0,
     0,0,0,0,188,137,0,0,137,2,0,0,112,0,0,0,143,0,0,0,148,10,0,0,
     212,0,0,0,208,12,0,0,106,0,0,0,192,22,0,0,140,1,0,0,16,26,0,0,
     13,0,0,0,112,38,0,0,124,98,0,0,16,40,0,0,10,89,0,0,12,89,0,0,
@@ -9145,8 +9147,8 @@ static uint8_t cee_android_dex[35468] = {
     141,0,58,0,18,35,50,53,4,0,51,37,16,0,18,19,110,32,131,0,58,0,181,54,
     56,6,4,0,18,19,40,3,2,3,16,0,110,32,132,0,58,0,18,83,51,53,58,0,
     84,3,14,0,113,16,4,1,3,0,12,3,218,2,17,3,69,5,3,2,140,83,84,5,
-    14,0,113,16,4,1,5,0,12,5,216,6,2,1,69,5,5,6,140,85,84,6,14,0,
-    113,16,4,1,6,0,12,6,19,18,2,0,216,2,2,2,69,6,6,2,140,98,18,22,
+    14,0,113,16,4,1,5,0,12,5,216,6,2,1,69,6,5,6,140,101,84,6,14,0,
+    113,16,4,1,6,0,12,6,19,18,2,0,216,2,2,2,69,7,6,2,140,114,18,22,
     113,64,123,0,54,37,12,2,110,32,142,0,42,0,57,4,31,0,98,2,6,0,110,32,
     124,0,42,0,98,2,5,0,110,32,124,0,42,0,40,19,56,5,18,0,19,2,10,0,
     50,37,14,0,57,4,12,0,18,19,110,32,134,0,58,0,98,2,4,0,110,32,124,0,
@@ -9165,13 +9167,13 @@ static uint8_t cee_android_dex[35468] = {
     16,0,18,84,51,24,53,0,56,2,51,0,84,97,14,0,113,16,6,1,1,0,12,1,
     68,1,1,9,56,1,41,0,84,97,14,0,113,16,6,1,1,0,12,1,68,1,1,9,
     19,5,10,0,50,81,29,0,84,97,14,0,113,16,6,1,1,0,12,1,68,1,1,9,
-    50,65,19,0,84,104,14,0,113,16,1,1,8,0,12,8,69,8,8,9,113,48,13,1,
-    152,0,84,102,14,0,113,48,11,1,118,3,15,3,84,103,14,0,113,16,6,1,7,0,
+    50,65,19,0,84,104,14,0,113,16,1,1,8,0,12,8,69,1,8,9,113,48,13,1,
+    33,0,84,102,14,0,113,48,11,1,118,3,15,3,84,103,14,0,113,16,6,1,7,0,
     12,7,68,7,7,9,51,71,21,0,56,2,19,0,19,7,0,16,51,120,15,0,84,102,
-    14,0,113,16,1,1,6,0,12,6,69,6,6,9,18,40,113,48,13,1,118,8,15,3,
+    14,0,113,16,1,1,6,0,12,6,69,7,6,9,18,38,113,48,13,1,135,6,15,3,
     84,103,14,0,113,16,6,1,7,0,12,7,68,7,7,9,51,71,21,0,56,2,19,0,
-    19,7,0,32,51,120,15,0,84,102,14,0,113,16,1,1,6,0,12,6,69,6,6,9,
-    18,56,113,48,13,1,118,8,15,3,15,0,2,0,2,0,1,0,0,0,0,0,0,0,
+    19,7,0,32,51,120,15,0,84,102,14,0,113,16,1,1,6,0,12,6,69,7,6,9,
+    18,54,113,48,13,1,135,6,15,3,15,0,2,0,2,0,1,0,0,0,0,0,0,0,
     6,0,0,0,91,1,14,0,112,16,146,0,0,0,14,0,3,0,3,0,2,0,0,0,
     0,0,0,0,4,0,0,0,112,32,250,0,16,0,14,0,1,0,1,0,0,0,0,0,
     0,0,0,0,3,0,0,0,84,0,42,0,17,0,0,0,1,0,1,0,0,0,0,0,
@@ -10085,7 +10087,7 @@ static uint8_t cee_android_dex[35468] = {
     126,126,68,56,123,34,98,97,99,107,101,110,100,34,58,34,100,101,120,34,44,34,99,111,
     109,112,105,108,97,116,105,111,110,45,109,111,100,101,34,58,34,114,101,108,101,97,115,101,
     34,44,34,104,97,115,45,99,104,101,99,107,115,117,109,115,34,58,102,97,108,115,101,44,
-    34,109,105,110,45,97,112,105,34,58,50,56,44,34,115,104,97,45,49,34,58,34,48,56,
+    34,109,105,110,45,97,112,105,34,58,50,53,44,34,115,104,97,45,49,34,58,34,48,56,
     52,97,56,57,49,50,54,97,101,48,53,57,54,99,53,57,57,49,52,51,100,102,53,55,
     97,54,53,52,54,52,54,97,102,50,56,51,49,51,34,44,34,118,101,114,115,105,111,110,
     34,58,34,57,46,50,46,52,45,100,101,118,34,125,0,2,74,2,187,2,28,1,36,16,
@@ -10436,8 +10438,107 @@ static jclass cee_android_class(JNIEnv *env, jobject parent, jobject loader, con
     return found;
 }
 
+/* The class loader of the runtime's embedded dex (ADR 0157, ADR 0188 §2.1), made once for both its users (the window's
+   classes and Bluetooth's, on any thread) and kept as a global reference; NULL if it cannot be made. From API level 26
+   the dex stays in memory (InMemoryDexClassLoader). Below it that class is missing: the dex is written once to the
+   app's code cache, under a name that carries a hash of its bytes (an updated app never loads an old file), made
+   read-only, and loaded with DexClassLoader, which every release has. */
+static pthread_mutex_t cee_android_loader_lock = PTHREAD_MUTEX_INITIALIZER;
+static jobject cee_android_loader_ref;
+
+static jobject cee_android_file_loader(JNIEnv *env, jobject activity_object, jobject parent) {
+    jobject dir = cee_android_object(env, activity_object, "getCodeCacheDir", "()Ljava/io/File;");
+    jstring folder = (jstring)cee_android_object(env, dir, "getAbsolutePath", "()Ljava/lang/String;");
+    const char *where = folder != NULL ? (*env)->GetStringUTFChars(env, folder, NULL) : NULL;
+    if (where == NULL) {
+        (void)cee_android_failed(env);
+        return NULL;
+    }
+    uint64_t hash = 14695981039346656037ull; /* FNV-1a over the dex */
+    for (size_t i = 0; i < sizeof cee_android_dex; i++) {
+        hash = (hash ^ cee_android_dex[i]) * 1099511628211ull;
+    }
+    char path[1024];
+    char temporary[1040];
+    char compiled[1024];
+    int fits = snprintf(path, sizeof path, "%s/ceesafe-runtime-%016llx.dex", where, (unsigned long long)hash);
+    (void)snprintf(temporary, sizeof temporary, "%s.part", path);
+    /* Where ART puts the compiled dex: a folder of its own, as Android 7 names the .oat file after the dex in it, and
+       would write it over the dex in the dex's own folder. */
+    int fitsToo = snprintf(compiled, sizeof compiled, "%s/ceesafe-oat", where);
+    (*env)->ReleaseStringUTFChars(env, folder, where);
+    if (fits <= 0 || (size_t)fits >= sizeof path || fitsToo <= 0 || (size_t)fitsToo >= sizeof compiled) {
+        return NULL;
+    }
+    if (mkdir(compiled, 0700) != 0 && errno != EEXIST) {
+        return NULL;
+    }
+    struct stat known;
+    if (stat(path, &known) != 0 || known.st_size != (off_t)sizeof cee_android_dex) {
+        int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            return NULL;
+        }
+        size_t done = 0;
+        while (done < sizeof cee_android_dex) {
+            ssize_t n = write(fd, cee_android_dex + done, sizeof cee_android_dex - done);
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            if (n <= 0) {
+                break;
+            }
+            done += (size_t)n;
+        }
+        int closed = close(fd);
+        if (done != sizeof cee_android_dex || closed != 0 || chmod(temporary, 0400) != 0 || rename(temporary, path) != 0) {
+            (void)unlink(temporary);
+            return NULL;
+        }
+    }
+    jclass type = (*env)->FindClass(env, "dalvik/system/DexClassLoader");
+    jmethodID make = type != NULL ? (*env)->GetMethodID(env, type, "<init>",
+                                                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+                                                        "Ljava/lang/ClassLoader;)V")
+                                  : NULL;
+    jstring file = (*env)->NewStringUTF(env, path);
+    jstring output = (*env)->NewStringUTF(env, compiled);
+    jobject loader = make != NULL && file != NULL && output != NULL
+                         ? (*env)->NewObject(env, type, make, file, output, NULL, parent)
+                         : NULL;
+    if (cee_android_failed(env)) {
+        loader = NULL;
+    }
+    return loader;
+}
+
+static jobject cee_android_dex_loader(JNIEnv *env, jobject activity_object, jobject parent) {
+    (void)pthread_mutex_lock(&cee_android_loader_lock);
+    if (cee_android_loader_ref == NULL && parent != NULL) {
+        jobject loader = NULL;
+        jclass memory = (*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader");
+        if (memory == NULL) {
+            (void)cee_android_failed(env); /* below API level 26 */
+            loader = cee_android_file_loader(env, activity_object, parent);
+        } else {
+            jobject buffer = (*env)->NewDirectByteBuffer(env, cee_android_dex, (jlong)sizeof cee_android_dex);
+            jmethodID make = (*env)->GetMethodID(env, memory, "<init>", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V");
+            loader = make != NULL && buffer != NULL ? (*env)->NewObject(env, memory, make, buffer, parent) : NULL;
+            if (cee_android_failed(env)) {
+                loader = NULL;
+            }
+        }
+        if (loader != NULL) {
+            cee_android_loader_ref = (*env)->NewGlobalRef(env, loader);
+        }
+    }
+    jobject found = cee_android_loader_ref;
+    (void)pthread_mutex_unlock(&cee_android_loader_lock);
+    return found;
+}
+
 /* The runtime's two Java classes, loaded at the first use of either (ADR 0157, ADR 0158): from the embedded dex
-   (InMemoryDexClassLoader, with the activity's class loader as its parent) unless the app holds them, their natives
+   (cee_android_dex_loader, with the activity's class loader as its parent) unless the app holds them, their natives
    registered. A failure is final: text input and file dialogs then do nothing, and the window still works. */
 static int cee_android_classes(ANativeActivity *activity) {
     JNIEnv *env = activity->env;
@@ -10449,18 +10550,8 @@ static int cee_android_classes(ANativeActivity *activity) {
         (void)cee_android_failed(env);
         return 0;
     }
-    jobject buffer = (*env)->NewDirectByteBuffer(env, cee_android_dex, (jlong)sizeof cee_android_dex);
     jobject parent = cee_android_object(env, activity->clazz, "getClassLoader", "()Ljava/lang/ClassLoader;");
-    jclass loader_class = (*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader");
-    jmethodID make = loader_class != NULL ? (*env)->GetMethodID(env, loader_class, "<init>",
-                                                                "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V")
-                                          : NULL;
-    jobject loader = make != NULL && buffer != NULL && parent != NULL
-                         ? (*env)->NewObject(env, loader_class, make, buffer, parent)
-                         : NULL;
-    if (cee_android_failed(env)) {
-        loader = NULL;
-    }
+    jobject loader = cee_android_dex_loader(env, activity->clazz, parent);
     jclass view_class = cee_android_class(env, parent, loader, "org.ceesafe.window.InputView");
     jclass picker_class = cee_android_class(env, parent, loader, "org.ceesafe.window.Picker");
     jclass access_class = cee_android_class(env, parent, loader, "org.ceesafe.window.AccessView");
@@ -10525,18 +10616,8 @@ jclass ceesafe_android_bluetooth(JNIEnv *env, jobject *activity) {
         (void)cee_android_failed(env);
         return loaded;
     }
-    jobject buffer = (*env)->NewDirectByteBuffer(env, cee_android_dex, (jlong)sizeof cee_android_dex);
     jobject parent = cee_android_object(env, a->clazz, "getClassLoader", "()Ljava/lang/ClassLoader;");
-    jclass loader_class = (*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader");
-    jmethodID make = loader_class != NULL ? (*env)->GetMethodID(env, loader_class, "<init>",
-                                                                "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V")
-                                          : NULL;
-    jobject loader = make != NULL && buffer != NULL && parent != NULL
-                         ? (*env)->NewObject(env, loader_class, make, buffer, parent)
-                         : NULL;
-    if (cee_android_failed(env)) {
-        loader = NULL;
-    }
+    jobject loader = cee_android_dex_loader(env, a->clazz, parent);
     jclass found = cee_android_class(env, parent, loader, "org.ceesafe.window.Bluetooth");
     if (found != NULL) {
         loaded = (jclass)(*env)->NewGlobalRef(env, found);

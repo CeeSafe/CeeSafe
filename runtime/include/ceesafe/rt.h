@@ -22,6 +22,14 @@
 #include <TargetConditionals.h> /* TARGET_OS_IPHONE: target.ios and target.macos (ADR 0179) */
 #endif
 
+/* `usize`: a length, an index, a count (ADR 0187 §2.3). The same type as uint64_t on a 64-bit target, so its C is
+   unchanged there; uint32_t on a 32-bit one. */
+#if UINTPTR_MAX == UINT64_MAX
+typedef uint64_t cee_usize;
+#else
+typedef uint32_t cee_usize;
+#endif
+
 /* Floats (type-system.md §35.6): IEEE binary32/binary64, each operation rounded once to its type. Only programs
    that use floats define CEE_FLOATS (the generated main.c, and the float formatter); the others need not meet these
    checks, which a kernel built with -mgeneral-regs-only does not (x86-64 then has no SSE: FLT_EVAL_METHOD != 0). */
@@ -126,7 +134,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_EXPLICIT = 16, /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
     CEE_PANIC_ALLOCATOR = 17, /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
     CEE_PANIC_POISONED = 18, /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
-    CEE_PANIC_OVERRAN = 19   /* a task ran past its bound without waiting (ADR 0186) */
+    CEE_PANIC_OVERRAN = 19,  /* a task ran past its bound without waiting (ADR 0186) */
+    CEE_PANIC_NARROWING = 20 /* an `as` to usize or isize whose value does not fit on this 32-bit target (ADR 0187) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -771,7 +780,7 @@ static inline void cee_spin_hint(void) {
 #endif
 }
 
-/* The architecture the generated C is compiled for: one generated file serves every LP64 target. */
+/* The architecture the generated C is compiled for: one generated file serves every target of its width. */
 static inline bool cee_target_is_x86_64(void) {
 #if defined(__x86_64__) || defined(_M_X64)
     return true;
@@ -788,8 +797,23 @@ static inline bool cee_target_is_aarch64(void) {
 #endif
 }
 
+/* The pointer width the generated C is compiled for, 64 or 32 (ADR 0187 §2.5); the file asserts it is the width the
+   compiler laid it out for. */
+static inline uint32_t cee_target_bits(void) { return (uint32_t)(sizeof(void *) * 8u); }
+
 /* A constant index that its preceding check rejects: hides the constant from -Warray-bounds (c-backend.md §5). */
 static inline uint64_t cee_opaque_index(uint64_t index) { return index; }
+
+/* `as` to usize or isize on a 32-bit target, from a type that fits it on a 64-bit one (ADR 0187 §2.4): the value as
+   it was, or a panic where it does not fit. */
+static inline uint64_t cee_narrow_u(uint64_t value, uint64_t max, const cee_loc *loc) {
+    if (value > max) ceesafe_panic(CEE_PANIC_NARROWING, *loc);
+    return value;
+}
+static inline int64_t cee_narrow_i(int64_t value, int64_t min, int64_t max, const cee_loc *loc) {
+    if (value < min || value > max) ceesafe_panic(CEE_PANIC_NARROWING, *loc);
+    return value;
+}
 
 static inline void cee_check_range(uint64_t low, uint64_t high, uint64_t length, const cee_loc *loc) {
     if (low > high || high > length) ceesafe_panic(CEE_PANIC_SLICE, *loc);
@@ -849,7 +873,7 @@ static inline void cee_slice_fill_byte(void *destination, uint8_t value, uint64_
 /* ---- String views (type-system.md §22.2) ------------------------------------------------- */
 
 /* `StringView`: UTF-8 bytes, laid out like a `Slice<u8>`. */
-typedef struct cee_str { const uint8_t *ptr; uint64_t len; } cee_str;
+typedef struct cee_str { const uint8_t *ptr; cee_usize len; } cee_str;
 
 /* `panic(message)` and a failed `assert` (ADR 0075 §2.8): hosted, "ceesafe panic: <message> at <location>"; in a
    freestanding package, the environment's ceesafe_panic with CEE_PANIC_EXPLICIT (the message is not shown). */

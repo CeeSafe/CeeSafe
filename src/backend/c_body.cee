@@ -1857,7 +1857,7 @@ fn appendRvalue(
                 }
             }
         }
-        NirRvalue.Cast(o) => { return appendCast(e, c, n, sources, f, out, o, t); }
+        NirRvalue.Cast(o) => { return appendCast(e, c, n, sources, f, out, o, t, span.start); }
         NirRvalue.Truncate(o) => {
             // truncate<T>: to the unsigned type of T's width, then reinterpreted as signed if T is (§7).
             let bits = c.types.info(t).bits;
@@ -2088,9 +2088,34 @@ fn appendCast(
     out: borrow mut Vector<u8>,
     o: u32,
     t: u32,
+    at: u32,
 ) -> Result<void, AllocError> {
     let from = n.operandTypes[o as usize];
     let operand = operandText(e, c, n, sources, f, o)?;
+    if (c.types.narrowsOnTarget(from, t)) {
+        // Lossless as `as` judges it, but narrower on this 32-bit target (ADR 0187 §2.4): exact, or a panic.
+        let site = siteText(e, c, n, sources, f, at)?;
+        let max = integerMax(c, t);
+        appendText(out, "((")?;
+        appendCTypeName(c, out, t)?;
+        if (c.types.info(from).signed) {
+            appendText(out, ")cee_narrow_i((int64_t)")?;
+            appendBytes(out, operand.view())?;
+            appendText(out, ", -")?;
+            appendDecimal(out, max)?;
+            appendText(out, "LL - 1, ")?;
+            appendDecimal(out, max)?;
+            appendText(out, "LL, ")?;
+        } else {
+            appendText(out, ")cee_narrow_u((uint64_t)")?;
+            appendBytes(out, operand.view())?;
+            appendText(out, ", ")?;
+            appendDecimal(out, max)?;
+            appendText(out, "ULL, ")?;
+        }
+        appendBytes(out, site.view())?;
+        return appendText(out, "))");
+    }
     if (c.types.isClosure(t) || c.types.is(t, TypeKind.RawPointer) || c.types.is(t, TypeKind.FunctionPointer)) {
         // `borrow fn` to `borrow mut fn`, and pointers: through uintptr_t, no pointer-to-pointer cast (unsafe.md §4).
         appendText(out, "((")?;

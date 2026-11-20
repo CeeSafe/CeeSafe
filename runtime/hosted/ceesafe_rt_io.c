@@ -15,6 +15,10 @@
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#if defined(__ANDROID__) && !defined(__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
+/* Calls newer than the app's floor are weak and asked for at run time (ADR 0188 §2.2): posix_spawn from API level 28. */
+#define __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__ 1
+#endif
 #if defined(_WIN32) && !defined(_CRT_RAND_S)
 #define _CRT_RAND_S /* rand_s, for HashMap's key (ADR 0052) */
 #endif
@@ -61,6 +65,126 @@
 #include <netinet/in.h>
 #include <spawn.h>
 #include <sys/socket.h>
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+/* Android below API level 28 has no posix_spawn (ADR 0188 §2.2): these stand in for the calls the runtime makes, with
+   the same meaning. From API level 28 they hand the work to posix_spawnp; below it the child is made with vfork, does
+   the file actions, and runs execvpe; a failure of exec comes back through a close-on-exec pipe, as posix_spawn reports
+   it. Only what the child may do after vfork is done there: open, dup2, close, write, exec, _exit. */
+#define CEE_SPAWN_ACTIONS 16
+typedef struct cee_spawn_action {
+    int kind; /* 1 open, 2 dup2 */
+    int fd;
+    int from;
+    const char *path;
+    int flags;
+    mode_t mode;
+} cee_spawn_action;
+typedef struct cee_spawn_actions {
+    int count;
+    cee_spawn_action a[CEE_SPAWN_ACTIONS];
+} cee_spawn_actions;
+typedef struct cee_spawn_attr {
+    int unused;
+} cee_spawn_attr;
+static int cee_spawn_actions_init(cee_spawn_actions *s) { s->count = 0; return 0; }
+static int cee_spawn_actions_destroy(cee_spawn_actions *s) { (void)s; return 0; }
+static int cee_spawn_add(cee_spawn_actions *s, int kind, int fd, int from, const char *path, int flags, mode_t mode) {
+    if (s->count >= CEE_SPAWN_ACTIONS) return ENOMEM;
+    cee_spawn_action *x = &s->a[s->count++];
+    x->kind = kind;
+    x->fd = fd;
+    x->from = from;
+    x->path = path;
+    x->flags = flags;
+    x->mode = mode;
+    return 0;
+}
+static int cee_spawn_addopen(cee_spawn_actions *s, int fd, const char *path, int flags, mode_t mode) {
+    return cee_spawn_add(s, 1, fd, -1, path, flags, mode);
+}
+static int cee_spawn_adddup2(cee_spawn_actions *s, int from, int fd) { return cee_spawn_add(s, 2, fd, from, NULL, 0, 0); }
+static int cee_spawnattr_init(cee_spawn_attr *a) { a->unused = 0; return 0; }
+static int cee_spawnattr_destroy(cee_spawn_attr *a) { (void)a; return 0; }
+static int cee_spawnp(pid_t *pid, const char *file, const cee_spawn_actions *s, const cee_spawn_attr *attr,
+                      char *const argv[], char *const envp[]) {
+    (void)attr;
+    char *const *environment = envp != NULL ? envp : environ;
+    if (__builtin_available(android 28, *)) {
+        posix_spawn_file_actions_t real;
+        int failed = posix_spawn_file_actions_init(&real);
+        if (failed != 0) return failed;
+        for (int i = 0; s != NULL && failed == 0 && i < s->count; i++) {
+            const cee_spawn_action *x = &s->a[i];
+            failed = x->kind == 1 ? posix_spawn_file_actions_addopen(&real, x->fd, x->path, x->flags, x->mode)
+                                  : posix_spawn_file_actions_adddup2(&real, x->from, x->fd);
+        }
+        if (failed == 0) failed = posix_spawnp(pid, file, &real, NULL, argv, environment);
+        (void)posix_spawn_file_actions_destroy(&real);
+        return failed;
+    }
+    int report[2];
+    if (pipe2(report, O_CLOEXEC) != 0) return errno;
+    pid_t child = vfork();
+    if (child < 0) {
+        int failed = errno;
+        (void)close(report[0]);
+        (void)close(report[1]);
+        return failed;
+    }
+    if (child == 0) {
+        int failed = 0;
+        for (int i = 0; s != NULL && failed == 0 && i < s->count; i++) {
+            const cee_spawn_action *x = &s->a[i];
+            if (x->kind == 1) {
+                int fd = open(x->path, x->flags, x->mode);
+                if (fd < 0) {
+                    failed = errno;
+                } else if (fd != x->fd) {
+                    if (dup2(fd, x->fd) < 0) failed = errno;
+                    (void)close(fd);
+                }
+            } else if (dup2(x->from, x->fd) < 0) {
+                failed = errno;
+            }
+        }
+        if (failed == 0) {
+            (void)execvpe(file, argv, environment);
+            failed = errno;
+        }
+        (void)write(report[1], &failed, sizeof failed);
+        _exit(127);
+    }
+    (void)close(report[1]);
+    int failed = 0;
+    ssize_t got;
+    do {
+        got = read(report[0], &failed, sizeof failed);
+    } while (got < 0 && errno == EINTR);
+    (void)close(report[0]);
+    if (got == (ssize_t)sizeof failed && failed != 0) {
+        int status;
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+        }
+        return failed;
+    }
+    *pid = child;
+    return 0;
+}
+#define posix_spawn_file_actions_t cee_spawn_actions
+#define posix_spawnattr_t cee_spawn_attr
+#define posix_spawn_file_actions_init cee_spawn_actions_init
+#define posix_spawn_file_actions_destroy cee_spawn_actions_destroy
+#define posix_spawn_file_actions_addopen cee_spawn_addopen
+#define posix_spawn_file_actions_adddup2 cee_spawn_adddup2
+#define posix_spawnattr_init cee_spawnattr_init
+#define posix_spawnattr_destroy cee_spawnattr_destroy
+#define posix_spawnp cee_spawnp
+#endif
 #include <sys/stat.h>
 #include <sys/uio.h> /* struct iovec, for a datagram's receive (ADR 0050) */
 #include <sys/wait.h>
@@ -3849,15 +3973,22 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length) {
 #else
     uint64_t done = 0;
 #if defined(CEE_HAVE_GETRANDOM)
-    while (done < length) {
-        size_t want = length - done > (uint64_t)SSIZE_MAX ? (size_t)SSIZE_MAX : (size_t)(length - done);
-        ssize_t n = getrandom(out + done, want, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            if (errno == ENOSYS) break; /* before Linux 3.17: /dev/urandom below */
-            return -(int64_t)errno;
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+    /* getrandom is Android's from API level 28 (weak below it, ADR 0188 §2.2): /dev/urandom on an older one. */
+    if (__builtin_available(android 28, *)) {
+#else
+    {
+#endif
+        while (done < length) {
+            size_t want = length - done > (uint64_t)SSIZE_MAX ? (size_t)SSIZE_MAX : (size_t)(length - done);
+            ssize_t n = getrandom(out + done, want, 0);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                if (errno == ENOSYS) break; /* before Linux 3.17: /dev/urandom below */
+                return -(int64_t)errno;
+            }
+            done += (uint64_t)n;
         }
-        done += (uint64_t)n;
     }
 #endif
     if (done < length) {

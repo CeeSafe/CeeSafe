@@ -275,6 +275,11 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --target <system>  the system the build is for: linux, macos, windows, freebsd, ios or android. It chooses the\n",
     )?;
     appendText(out, "                    manifests' [target.<system>] tables; default: this machine's\n")?;
+    appendText(
+        out,
+        "  --arch <name>      the processor the build is for: arm64, x86_64, or the 32-bit armv7 and x86 (with\n",
+    )?;
+    appendText(out, "                    --target android, or linux for tests; ADR 0187); default: this machine's\n")?;
     return Ok();
 }
 
@@ -649,6 +654,27 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 return fail(
                     "--target ios and --target android are for 'build' and 'check': this machine cannot run what it builds for a phone",
                 );
+            }
+        } else if (arg == "--arch") {
+            // The processor the build is for (ADR 0187 §2.1): its pointer width lays out every type (targetFor reads
+            // it from the command line). A 32-bit one is for Android, or 32-bit Linux to test it.
+            let name = match (Process.argument(a)) {
+                Some(v) => v,
+                null => { return fail("option '--arch' needs a value"); }
+            };
+            a += 1;
+            if (name != "arm64" && name != "x86_64" && name != "armv7" && name != "x86") {
+                var message = String.create();
+                message.append("--arch must be 'arm64', 'x86_64', 'armv7' or 'x86', not '")!;
+                message.append(name)!;
+                message.append("'")!;
+                return fail(message.view());
+            }
+            if (arch32(name)) {
+                let target = manifestTarget();
+                if (target != "android" && target != "linux") {
+                    return fail("--arch armv7 and --arch x86 are for --target android, or --target linux for tests");
+                }
             }
         } else if (arg == "--offline") {
             options.offline = true;

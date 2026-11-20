@@ -2010,10 +2010,12 @@ fn layoutEnd(l: borrow LayoutBuilder) -> SizeAlign {
 
 fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
 
-/// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
-fn scopeLayout() -> SizeAlign => SizeAlign { size: 48, align: 8 };
+/// The runtime's structs (ceesafe/rt.h), laid out for the target (ADR 0187): ceesafe_scope (two u32, five bools,
+/// four pointers), ceesafe_task_slot (192 bytes aligned to 16 on every target), ceesafe_blocking (three pointers, a
+/// u32).
+fn scopeLayout(c: borrow Checker) -> SizeAlign => c.types.recordLayout("wwbbbbbpppp");
 fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 192, align: 16 };
-fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
+fn blockingLayout(c: borrow Checker) -> SizeAlign => c.types.recordLayout("pppw");
 
 /// What a frame is made of, for --explain-frames.
 struct FrameReport {
@@ -2090,7 +2092,7 @@ fn frameReportWith(
             var member = SizeAlign { size: -1, align: 1 };
             if (builtinOf(n, r) == bfAsyncBlocking()) {
                 var b = LayoutBuilder { size: 0, align: 1 };
-                addLayout(mut b, blockingLayout());
+                addLayout(mut b, blockingLayout(c));
                 addLayout(mut b, typeLayout(c, n.operandTypes[n.at(builtinArguments(n, r), 2) as usize]));
                 if (!c.types.is(n.rvalueTypes[r as usize], TypeKind.Void)) {
                     addLayout(mut b, typeLayout(c, n.rvalueTypes[r as usize]));
@@ -2101,7 +2103,7 @@ fn frameReportWith(
                 let first = constArgument(n, r, 2);
                 let second = constArgument(n, r, 4);
                 var j = LayoutBuilder { size: 0, align: 1 };
-                addLayout(mut j, scopeLayout());
+                addLayout(mut j, scopeLayout(c));
                 layoutAdd(mut j, 4, 4);
                 addLayout(mut j, typeLayout(c, c.hir.functions[first as usize].returnType));
                 addLayout(mut j, typeLayout(c, c.hir.functions[second as usize].returnType));
@@ -2113,21 +2115,20 @@ fn frameReportWith(
             }
             if (builtinOf(n, r) == bfAsyncScopeWait()) {
                 var sc = LayoutBuilder { size: 0, align: 1 };
-                addLayout(mut sc, scopeLayout());
+                addLayout(mut sc, scopeLayout(c));
                 addLayout(mut sc, typeLayout(c, n.rvalueTypes[r as usize]));
                 let part = layoutEnd(sc);
                 addLayout(mut l, part); // a scope's struct is its own field, in statement order
                 report.scopeBytes += truncate<u64>(part.size);
             }
             if (builtinOf(n, r) == bfAsyncBoxed()) {
-                member = SizeAlign { size: 8, align: 8 }; // a pointer to the boxed frame
+                let p = c.types.pointerBytes();
+                member = sizeAlign(p, p); // a pointer to the boxed frame
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
-                member = if (isStackedStatement(n, s)) SizeAlign {
-                    size: 8,
-                    align: 8,
-                } else calleeFrameLayoutWith(c, n, callee, memo)?;
+                let p = c.types.pointerBytes();
+                member = if (isStackedStatement(n, s)) sizeAlign(p, p) else calleeFrameLayoutWith(c, n, callee, memo)?;
             }
             if (member.size >= 0) {
                 report.unionMembers += 1;

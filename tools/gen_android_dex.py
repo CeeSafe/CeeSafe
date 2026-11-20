@@ -3,7 +3,7 @@
 
 runtime/android/org/ceesafe/window/InputView.java (ADR 0157), Picker.java (ADR 0158), AccessView.java (ADR 0164),
 Bluetooth.java (ADR 0177) and Printing.java (ADR 0178) are the sources. They are compiled with javac against the Android
-SDK's android.jar and turned into one classes.dex by the SDK's d8 (release mode, minimum API 28, ADR 0154's floor); the bytes
+SDK's android.jar and turned into one classes.dex by the SDK's d8 (release mode, minimum API 25, ADR 0188's floor); the bytes
 replace the array between the two marker lines of the runtime's window file. The array is committed, so building a
 program needs neither a JDK nor the SDK: run this only when the Java source changes, then tools/gen_runtime.py.
 
@@ -60,7 +60,7 @@ def dex():
         subprocess.run(["javac", "--release", "11", "-Xlint:-options", "-g:none", "-classpath", jar, "-d", classes,
                         ] + SOURCES, check=True)
         found = sorted(glob.glob(os.path.join(classes, "**", "*.class"), recursive=True))
-        subprocess.run([d8, "--release", "--min-api", "28", "--lib", jar, "--output", work] + found, check=True)
+        subprocess.run([d8, "--release", "--min-api", "25", "--lib", jar, "--output", work] + found, check=True)
         with open(os.path.join(work, "classes.dex"), "rb") as f:
             return f.read()
 

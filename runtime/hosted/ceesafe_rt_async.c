@@ -270,7 +270,7 @@ static _Thread_local cee_executor cee_exec;
 struct cee_unit;
 struct cee_task;
 static bool cee_unit_dead(const struct cee_unit *u);
-static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size);
+static void cee_unit_begin(struct cee_task *t, void *crashed, size_t crashed_size, uint64_t bound);
 static void cee_unit_crash(struct cee_task *t);
 static void cee_unit_end(struct cee_unit *u);
 static void cee_child_gone(struct cee_task *t, bool keep);
@@ -279,6 +279,7 @@ static _Thread_local struct {
     bool on;
     void *crashed; /* a copy of the Result<void, E>, the pending start's to keep or free */
     size_t size;
+    uint64_t bound; /* `set.spawnIsolatedBound`: the unit's own bound in ms (ADR 0186), or 0 */
 } cee_isolate_pending;
 static _Thread_local uint64_t cee_isolate_last;
 #endif
@@ -1254,8 +1255,10 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     bool isolated = cee_isolate_pending.on; /* `set.spawnIsolated` asked for it just before (ADR 0175) */
     void *crashed = cee_isolate_pending.crashed;
     size_t crashed_size = cee_isolate_pending.size;
+    uint64_t bound = cee_isolate_pending.bound; /* `set.spawnIsolatedBound` (ADR 0186) */
     cee_isolate_pending.on = false;
     cee_isolate_pending.crashed = NULL;
+    cee_isolate_pending.bound = 0u;
     cee_isolate_last = 0u;
     if (cee_exec.current != NULL && cee_exec.current->unit != NULL) {
         send = false; /* a unit's tasks stay on its worker: a trap ends them where they are (ADR 0175 §3) */
@@ -1300,7 +1303,7 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     t->block_size = block_size;
 #if !defined(CEE_FREESTANDING)
     if (isolated && scope->set) {
-        cee_unit_begin(t, crashed, crashed_size); /* without memory for it, the child is an ordinary one */
+        cee_unit_begin(t, crashed, crashed_size, bound); /* without memory for it, the child is an ordinary one */
     } else if (crashed != NULL) {
         ceesafe_platform_free(crashed);
     }
@@ -2015,6 +2018,7 @@ typedef struct cee_unit {
     cee_unit_lock *locks;   /* held by its tasks and by those of the units inside it */
     uint32_t lock_count;
     uint32_t lock_capacity;
+    uint64_t bound_ms;      /* `spawnIsolatedBound`: how long one resume of its tasks may run (ADR 0186), or 0 */
 } cee_unit;
 
 /* A set's isolated children: how many trapped, and where each is reported. */
@@ -2059,8 +2063,9 @@ static void cee_isolate_panic(const ceesafe_panic_info *info) {
     longjmp(*cee_exec.jump, 1);
 }
 
-/* Makes `t`, a set's new child, the root of a unit of its own. */
-static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
+/* Makes `t`, a set's new child, the root of a unit of its own, whose tasks may run `bound` ms between waits (ADR 0186;
+   0: the program's bound). */
+static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size, uint64_t bound) {
     cee_unit *u = (cee_unit *)ceesafe_platform_alloc_zeroed(sizeof *u);
     if (u == NULL) {
         if (crashed != NULL) ceesafe_platform_free(crashed);
@@ -2072,6 +2077,7 @@ static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size) {
     u->root = t;
     u->crashed = copy;
     u->crashed_size = crashed_size;
+    u->bound_ms = bound;
     void *own = ceesafe_budget_make(UINT64_MAX); /* inside its maker's, with no bound of its own */
     if (own != NULL) {
         ceesafe_budget_release(t->budget);
@@ -2196,6 +2202,263 @@ void ceesafe_async_isolate_next(void *set, const void *crashed, uint64_t size) {
 }
 
 uint64_t ceesafe_async_isolated_last(void) { return cee_isolate_last; }
+
+/* ---- A bound on running without waiting (ADR 0186; type-system.md §40.11) ----
+ * A build with -DCEE_POLLS=1 has polls (ceesafe/rt.h's CEE_POLL) at its loop headers and at the entry of the
+ * functions that may recurse. Each thread that runs an executor's loop is in the registry below, with a slot the
+ * monitor thread reads: the epoch of the resume it runs, raised at each, and that resume's bound. A monitor that
+ * sees the same epoch for longer than the bound sets the thread's poll word to it; the next poll ends the task, if it
+ * is an isolated unit's, or counts it. The slot is the thread's own, apart from the executor, which a nested
+ * Async.run saves and restores by value. Without CEE_POLLS only the bounds are recorded: Async.runBound answers
+ * false, and nothing is started. */
+static uint64_t cee_run_bound_ms;   /* atomic: Async.runBound's bound, 0 for none */
+static uint32_t cee_run_bound_mode; /* atomic: 0 RunBound.Count, 1 RunBound.Panic */
+static uint64_t cee_overruns;       /* atomic: Async.overruns() */
+
+uint64_t ceesafe_async_overruns(void) { return ceesafe_atomic_load_u64(&cee_overruns); }
+
+#if defined(CEE_POLLS)
+#if defined(CEE_COSMOOS)
+#error "CEE_POLLS: CosmoOS has no monitor thread (ADR 0186 §3)"
+#endif
+typedef struct cee_bound_slot {
+    uint32_t epoch;         /* atomic: the resume running, never 0 once one has run */
+    uint32_t excused;       /* atomic: the epoch whose overrun was counted and let go on (RunBound.Count) */
+    uint64_t running_bound; /* atomic: that resume's bound in ms, 0 while no bounded task runs */
+    uint64_t overdue_since; /* atomic: when the monitor first saw that resume, written with the word */
+    uint32_t seen_epoch;    /* the monitor's, under cee_bound_lock: the epoch it saw last, and when */
+    uint64_t seen_at;
+    uint32_t depth;         /* this thread's own: its executor loops running (a nested Async.run is one more) */
+    uint32_t *word;         /* this thread's ceesafe_poll_word, which the monitor sets */
+    struct cee_bound_slot *next; /* the registry, under cee_bound_lock */
+} cee_bound_slot;
+
+static _Thread_local cee_bound_slot cee_bound;
+static cee_bound_slot *cee_bound_slots;
+static uint64_t cee_bound_min;      /* atomic: the smallest bound in force, which paces the monitor */
+static uint32_t cee_bound_started;  /* atomic: the monitor thread runs */
+#if defined(_WIN32)
+static SRWLOCK cee_bound_lock = SRWLOCK_INIT;
+static void cee_bound_lock_take(void) { AcquireSRWLockExclusive(&cee_bound_lock); }
+static void cee_bound_lock_give(void) { ReleaseSRWLockExclusive(&cee_bound_lock); }
+#else
+static pthread_mutex_t cee_bound_lock = PTHREAD_MUTEX_INITIALIZER;
+static void cee_bound_lock_take(void) { (void)pthread_mutex_lock(&cee_bound_lock); }
+static void cee_bound_lock_give(void) { (void)pthread_mutex_unlock(&cee_bound_lock); }
+#endif
+
+/* The monitor (ADR 0186 §2.2, step 3): a platform thread of the runtime's own, as `ceesafec test`'s watchdog is, so the
+   allocation report does not count it. It wakes every quarter of the smallest bound in force and compares each
+   registered slot's epoch with the one it saw: a resume it has seen for longer than its bound has its thread's word
+   set. It can only be late, never early: the time is counted from the wake that first saw the resume. */
+static void cee_bound_sleep(uint64_t ms) {
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    struct timespec t = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
+    while (nanosleep(&t, &t) != 0) {
+    }
+#endif
+}
+
+static void cee_bound_watch(void) {
+    for (;;) {
+        uint64_t period = ceesafe_atomic_load_u64(&cee_bound_min) / 4u;
+        cee_bound_sleep(period == 0u ? 1u : period);
+        uint64_t now = ceesafe_async_now();
+        cee_bound_lock_take();
+        for (cee_bound_slot *s = cee_bound_slots; s != NULL; s = s->next) {
+            uint32_t epoch = ceesafe_atomic_load_ord_u32(&s->epoch, 0);
+            uint64_t bound = ceesafe_atomic_load_ord_u64(&s->running_bound, 0);
+            if (epoch != s->seen_epoch || bound == 0u) {
+                s->seen_epoch = epoch;
+                s->seen_at = now; /* a new resume, or none bounded: counted from here */
+                continue;
+            }
+            if (ceesafe_atomic_load_ord_u32(&s->excused, 0) != epoch && now - s->seen_at >= bound) {
+                ceesafe_atomic_store_ord_u64(&s->overdue_since, s->seen_at, 0);
+                ceesafe_poll_set(s->word, epoch);
+            }
+        }
+        cee_bound_lock_give();
+    }
+}
+
+#if defined(_WIN32)
+static DWORD WINAPI cee_bound_monitor(LPVOID unused) {
+    (void)unused;
+    cee_bound_watch();
+    return 0;
+}
+#else
+static void *cee_bound_monitor(void *unused) {
+    (void)unused;
+    cee_bound_watch();
+    return NULL;
+}
+#endif
+
+static void cee_bound_poll_slow(const cee_loc *loc);
+
+/* A bound of `ms` is in force: the monitor's pace follows the smallest, and the monitor starts with the first, after
+   the slow path is installed: no word is set before it is. */
+static void cee_bound_note(uint64_t ms) {
+    if (ms == 0u) {
+        return;
+    }
+    for (;;) {
+        uint64_t old = ceesafe_atomic_load_u64(&cee_bound_min);
+        if ((old != 0u && old <= ms) || ceesafe_atomic_cas_u64(&cee_bound_min, old, ms) == old) {
+            break;
+        }
+    }
+    if (ceesafe_atomic_cas_u32(&cee_bound_started, 0u, 1u) == 0u) {
+        ceesafe_poll_hook = cee_bound_poll_slow;
+#if defined(_WIN32)
+        HANDLE h = CreateThread(NULL, 0, cee_bound_monitor, NULL, 0, NULL);
+        if (h != NULL) {
+            (void)CloseHandle(h);
+        } else {
+            ceesafe_atomic_store_u32(&cee_bound_started, 0u);
+        }
+#else
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, cee_bound_monitor, NULL) == 0) {
+            (void)pthread_detach(thread);
+        } else {
+            ceesafe_atomic_store_u32(&cee_bound_started, 0u);
+        }
+#endif
+    }
+}
+
+/* The bound of a resume of `t`: its innermost unit's own, else the program's (ADR 0186 §2.1). */
+static uint64_t cee_bound_of(const cee_task *t) {
+    for (const cee_unit *u = t->unit; u != NULL; u = u->outer) {
+        if (u->bound_ms != 0u) {
+            return u->bound_ms;
+        }
+    }
+    return ceesafe_atomic_load_ord_u64(&cee_run_bound_ms, 0);
+}
+
+/* A new epoch on this thread, never 0, with its bound; and the word cleared, so that one set for the resume before
+   does not end this one (§2.2, step 5). */
+static void cee_bound_begin(uint64_t bound) {
+    uint32_t epoch = cee_bound.epoch + 1u;
+    if (epoch == 0u) {
+        epoch = 1u;
+    }
+    ceesafe_poll_clear();
+    ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, 0u, 0);
+    ceesafe_atomic_store_ord_u32(&cee_bound.epoch, epoch, 0);
+    ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, bound, 0);
+}
+
+static void cee_bound_resume(const cee_task *t) { cee_bound_begin(cee_bound_of(t)); }
+
+static void cee_bound_waited(void) {
+    ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, 0u, 0);
+    ceesafe_poll_clear();
+}
+
+/* An executor loop starts on this thread: the thread joins the registry with its first. Returns the bound of the
+   resume it runs inside, which goes on when this loop ends (a nested Async.run). */
+static uint64_t cee_bound_enter(void) {
+    uint64_t outer = ceesafe_atomic_load_ord_u64(&cee_bound.running_bound, 0);
+    if (cee_bound.depth++ == 0u) {
+        cee_bound.word = &ceesafe_poll_word;
+        cee_bound_lock_take();
+        cee_bound.next = cee_bound_slots;
+        cee_bound_slots = &cee_bound;
+        cee_bound_lock_give();
+    }
+    return outer;
+}
+
+static void cee_bound_leave(uint64_t outer) {
+    if (--cee_bound.depth == 0u) {
+        cee_bound_waited();
+        cee_bound_lock_take();
+        for (cee_bound_slot **at = &cee_bound_slots; *at != NULL; at = &(*at)->next) {
+            if (*at == &cee_bound) {
+                *at = cee_bound.next;
+                break;
+            }
+        }
+        cee_bound_lock_give();
+    } else {
+        cee_bound_begin(outer); /* the outer resume goes on, as a new one */
+    }
+}
+
+/* What every poll that finds its word set calls, through ceesafe_poll_slow (ADR 0186 §2.2, step 4). */
+static void cee_bound_poll_slow(const cee_loc *loc) {
+    uint32_t word = ceesafe_atomic_load_ord_u32(&ceesafe_poll_word, 0);
+    cee_task *t = cee_exec.current;
+    uint32_t epoch = ceesafe_atomic_load_ord_u32(&cee_bound.epoch, 0);
+    if (word == 0u) {
+        return;
+    }
+    if (t == NULL || word != epoch || cee_bound.depth == 0u) {
+        ceesafe_poll_clear(); /* set for a resume that has ended */
+        return;
+    }
+    uint64_t bound = ceesafe_atomic_load_ord_u64(&cee_bound.running_bound, 0);
+    uint64_t since = ceesafe_atomic_load_ord_u64(&cee_bound.overdue_since, 0);
+    uint64_t now = ceesafe_async_now();
+    char text[160];
+    int length = snprintf(text, sizeof text, "a task ran %llu ms without waiting, past its bound of %llu ms",
+                          (unsigned long long)(now > since ? now - since : 0u), (unsigned long long)bound);
+    if (length < 0) {
+        length = 0;
+    } else if ((size_t)length >= sizeof text) {
+        length = (int)sizeof text - 1;
+    }
+    if (t->unit != NULL) {
+        if (t->unit->critical != 0u || cee_exec.jump == NULL || ceesafe_entry_depth() != cee_exec.jump_depth) {
+            return; /* in a Critical, or under C's frames: the word stays, and a poll outside both ends the unit */
+        }
+        ceesafe_poll_clear();
+        (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
+        ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc); /* ADR 0175 ends it */
+    }
+    /* A task in no unit (§2.4): counted and reported once for this resume, or, with RunBound.Panic, the end. */
+    ceesafe_atomic_store_ord_u32(&cee_bound.excused, epoch, 0);
+    ceesafe_poll_clear();
+    (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
+    if (ceesafe_atomic_load_ord_u32(&cee_run_bound_mode, 0) == 1u) {
+        ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc);
+    }
+    char line[512];
+    int written = snprintf(line, sizeof line, "ceesafe overrun: %.*s, at %s:%u:%u; counted, not ended (a task in no "
+                                              "isolated unit, RunBound.Count)\n",
+                           length, text, loc->file != NULL ? loc->file : "?", (unsigned)loc->line,
+                           (unsigned)loc->column);
+    if (written > 0) {
+        ceesafe_platform_write_stderr((const uint8_t *)line,
+                                      (size_t)written < sizeof line ? (size_t)written : sizeof line - 1u);
+    }
+}
+#endif
+
+bool ceesafe_async_run_bound(uint64_t ms, uint32_t mode) {
+    ceesafe_atomic_store_u64(&cee_run_bound_ms, ms);
+    ceesafe_atomic_store_u32(&cee_run_bound_mode, mode == 1u ? 1u : 0u);
+#if defined(CEE_POLLS)
+    cee_bound_note(ms);
+    return true;
+#else
+    return false; /* no polls in this build: nothing would see the bound (ADR 0186 §2.1) */
+#endif
+}
+
+void ceesafe_async_isolate_bound(uint64_t ms) {
+    cee_isolate_pending.bound = ms;
+#if defined(CEE_POLLS)
+    cee_bound_note(ms);
+#endif
+}
 
 uint64_t ceesafe_async_set_crashes(void *set) {
     cee_set_isolation *told = (cee_set_isolation *)((ceesafe_task_set *)set)->isolation;
@@ -3195,7 +3458,7 @@ static int cee_resume_isolated(cee_task *t) {
 #endif
 
 /* Runs tasks until `root` returns, or, for a worker (root NULL), until the run is done. */
-static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
+static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
     for (;;) {
 #if defined(CEE_EPOLL)
         /* Edge-triggered: a task whose wait on a descriptor ended without its event (cancelled, or due) parks
@@ -3241,12 +3504,18 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         jmp_buf *outer_jump = cee_exec.jump;
         int32_t outer_depth = cee_exec.jump_depth;
         int resumed;
+#if defined(CEE_POLLS)
+        cee_bound_resume(t); /* a new epoch for the monitor, with this task's bound (ADR 0186 §2.2) */
+#endif
         if (t->unit != NULL) {
             resumed = cee_resume_isolated(t);
         } else {
             cee_exec.jump = NULL; /* a trap in a task of no unit ends the process, also under an outer executor's unit */
             resumed = cee_resume(t) ? 1 : 0;
         }
+#if defined(CEE_POLLS)
+        cee_bound_waited(); /* it waits, returned or trapped: its word is cleared (§2.2, step 5) */
+#endif
         if (resumed < 0) {
             cee_exec.jump = outer_jump;
             cee_exec.jump_depth = outer_depth;
@@ -3325,6 +3594,17 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         cee_child_done(t);
 #endif
     }
+}
+
+/* The executor's loop on this thread, in the monitor's registry while it runs (ADR 0186 §2.2, step 3). */
+static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
+#if defined(CEE_POLLS)
+    uint64_t outer = cee_bound_enter();
+    cee_exec_tasks(root, cancel_at);
+    cee_bound_leave(outer);
+#else
+    cee_exec_tasks(root, cancel_at);
+#endif
 }
 
 #if defined(CEE_FREESTANDING)

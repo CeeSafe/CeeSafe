@@ -220,6 +220,59 @@ connection in a task of a set can have one connection's trap end that task alone
   inside `Critical.enter()`, where a trap still ends the process.
 - `ceesafec test` reports a test whose isolated task trapped by the test's own outcome.
 
+### A task that computes too long: a bound
+
+A task runs until it waits, so one that computes for a long time (a loop that never ends, a parse that is quadratic
+on a hostile input) holds every task of its thread. A program built with `--cflag -DCEE_POLLS=1` can bound how long
+one resume of a task may run without waiting (ADR 0186):
+
+<!-- ceesafe: check -->
+```ceesafe
+enum ServeError {
+    NoMemory,
+    Crashed,
+}
+
+async fn serve(id: u64) -> Result<void, ServeError> {
+    var x: u64 = id;
+    while (x != 0) { // computes for ever
+        x = (x ^ (x >> 1)) | 1;
+    }
+    return Ok();
+}
+
+async fn server() -> Result<void, ServeError> {
+    return await Async.tasks(64, ServeError.NoMemory, async (set) => {
+        var id: u64 = 1;
+        while (id <= 3) {
+            let mine = id;
+            // A connection that sends files may compute for 2 s between waits; the rest, the program's 250 ms.
+            await set.spawnIsolatedBound(2000, ServeError.Crashed, async move () => await serve(mine))?;
+            id += 1;
+        }
+        return Ok();
+    });
+}
+
+fn main() {
+    if (!Async.runBound(250, RunBound.Count)) {
+        Console.writeLine("built without -DCEE_POLLS=1: no bound");
+    }
+    let _ = Async.run(server());
+    Console.writeLine(Async.overruns());
+}
+```
+
+- `Async.runBound(ms, mode)` is the program's bound. An isolated task past it traps with `PanicKind.Overran` at its
+  next loop or recursive call, and ends alone, as any trap of an isolated task does. `spawnIsolatedBound(ms, …)` gives
+  a task, and every task under it, a bound of its own.
+- A task in no isolated unit cannot end alone: `RunBound.Count` counts it (`Async.overruns()`) and lets it go on;
+  `RunBound.Panic` ends the process.
+- It is caught between the bound and a quarter of it later, never before. Computing in C, or blocking in a system
+  call, is not caught: a supervisor's watchdog is still the remedy for that.
+- A build without the macro has no polls and runs as fast as before; `Async.runBound` is then `false`. A hot loop
+  whose time the program bounds by other means can be marked `@noPoll`.
+
 ## Racing and joining two tasks
 
 `Async.race(a, b)` runs two async closures and keeps the first to finish; `Async.all(a, b)` runs both and fails with

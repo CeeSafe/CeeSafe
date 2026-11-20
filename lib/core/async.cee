@@ -32,6 +32,8 @@ extern "C" {
     @effects()
     fn ceesafe_async_isolated_last() -> u64;
     @effects()
+    fn ceesafe_async_isolate_bound(ms: u64);
+    @effects()
     fn ceesafe_async_set_crashes(set: *mut void) -> u64;
     @effects()
     fn ceesafe_async_set_missed(set: *mut void) -> u64;
@@ -223,7 +225,9 @@ struct TaskSetRecord<E> {
 /// The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
 /// children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
 /// `set.trySpawn(async move () => …)`, which is false instead. `await set.spawnIsolated(crashed, async move () => …)`
-/// and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175). A child owns what it captures: no loans, so it cannot
+/// and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175);
+/// `set.spawnIsolatedBound(ms, crashed, …)` and `set.trySpawnIsolatedBound(ms, crashed, …)` one whose tasks may run
+/// `ms` milliseconds without waiting (ADR 0186). A child owns what it captures: no loans, so it cannot
 /// capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
 @noncopy // the one handle of its record
 public struct TaskSet<E: Copy> {
@@ -275,6 +279,17 @@ public struct TaskSet<E: Copy> {
             }
         }
         return admitted;
+    }
+
+    /// `spawnIsolatedBound`'s step (ADR 0186 §2.1): `isolating`'s, and the unit's own bound of `ms` milliseconds a
+    /// resume of its tasks may run without waiting, in place of the program's (`Async.runBound`).
+    /// Safety: as isolating; the runtime records the number for the start that follows.
+    fn isolatingBound(borrow this, ms: u64, crashed: E, admitted: u32) -> u32 {
+        let marked = this.isolating(crashed, admitted);
+        if (marked == 0) {
+            unsafe { ceesafe_async_isolate_bound(ms); }
+        }
+        return marked;
     }
 
     /// `spawnIsolated`'s result for the start's code: the child's number; else `Err(oom)`. The number is 0 if there

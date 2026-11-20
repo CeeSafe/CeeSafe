@@ -125,7 +125,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_FRAME_STACK = 15, /* a task's frame stack could not grow (ADR 0056 §3.3) */
     CEE_PANIC_EXPLICIT = 16, /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
     CEE_PANIC_ALLOCATOR = 17, /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
-    CEE_PANIC_POISONED = 18 /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
+    CEE_PANIC_POISONED = 18, /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
+    CEE_PANIC_OVERRAN = 19   /* a task ran past its bound without waiting (ADR 0186) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -146,6 +147,42 @@ CEE_COLD _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc);
 
 /* The text of a panic kind ("integer overflow", ...), for any ceesafe_panic; in the freestanding core too. */
 const char *ceesafe_panic_reason(cee_panic_kind kind);
+
+/* ---- Polls (ADR 0186; type-system.md §40.11) ----
+ * The backend writes CEE_POLL(&ceeL_<n>) at every loop header and at the entry of every function that may recurse,
+ * and runs an innermost counted loop in chunks of 1 024 iterations under `#if defined(CEE_POLLS)`: an outer loop that
+ * polls and sets the chunk's end (CEE_CHUNK_END), around the loop, which tests against that end. Without CEE_POLLS
+ * the poll is empty and the chunks are not compiled, so the program is what it was. With it, a poll
+ * is one relaxed load of ceesafe_poll_any, a global, and a branch: no thread-local access, which on Mach-O and Windows
+ * costs a call or a lookup in each function. The monitor sets the overdue thread's own ceesafe_poll_word to the epoch
+ * of the resume that ran past its bound and counts it in ceesafe_poll_any; ceesafe_poll_slow reads this thread's word,
+ * returns if it is 0 (another thread's), and otherwise ends the task, or counts it (ADR 0186 §2.2). */
+#if defined(CEE_POLLS)
+#if defined(CEE_FREESTANDING) || defined(CEESAFE_EMBED_FREESTANDING)
+#error "CEE_POLLS: a freestanding build has no monitor thread (ADR 0186 §3)"
+#endif
+extern _Thread_local uint32_t ceesafe_poll_word;
+extern uint32_t ceesafe_poll_any; /* how many threads' words are set, by ceesafe_poll_set and ceesafe_poll_clear */
+/* The core runtime's: the async runtime's slow path through ceesafe_poll_hook once a bound is in force (a program
+ * without tasks has no executor, and its word stays 0). */
+CEE_COLD void ceesafe_poll_slow(const cee_loc *loc);
+extern void (*ceesafe_poll_hook)(const cee_loc *loc);
+/* Sets a thread's word (the monitor's), and clears this thread's (the executor's), keeping ceesafe_poll_any. */
+void ceesafe_poll_set(uint32_t *word, uint32_t epoch);
+void ceesafe_poll_clear(void);
+#if defined(_MSC_VER) && !defined(__clang__)
+#define CEE_POLL_PENDING() (*(volatile uint32_t *)&ceesafe_poll_any != 0u)
+#else
+#define CEE_POLL_PENDING() __builtin_expect(__atomic_load_n(&ceesafe_poll_any, __ATOMIC_RELAXED) != 0u, 0)
+#endif
+#define CEE_POLL(loc) do { if (CEE_POLL_PENDING()) ceesafe_poll_slow(loc); } while (0)
+/* The end of an innermost counted loop's next chunk (ADR 0186 §2.2): `i` 1 024 on, or `end` if that is nearer, or `i`
+ * if the loop is done. The difference is taken as unsigned, which is right for a signed counter below its end too,
+ * and `i + 1024` is below `end` where it is taken, so it does not overflow. */
+#define CEE_CHUNK_END(i, end) ((i) < (end) ? ((uint64_t)(end) - (uint64_t)(i) > 1024u ? (i) + 1024 : (end)) : (i))
+#else
+#define CEE_POLL(loc) ((void)0)
+#endif
 
 /* ---- Checked arithmetic: + - * ---------------------------------------------------------- */
 
@@ -1664,6 +1701,12 @@ typedef struct ceesafe_task_set {
 /* Isolated tasks (ADR 0175; runtime/hosted/ceesafe_rt_async.c says what each does). Hosted only. */
 void ceesafe_async_isolate_next(void *set, const void *crashed, uint64_t size);
 uint64_t ceesafe_async_isolated_last(void);
+/* A bound on running without waiting (ADR 0186): Async.runBound's (mode 0 RunBound.Count, 1 RunBound.Panic; false in
+ * a build without CEE_POLLS, which has no polls to see it), the next isolated start's own bound, and
+ * Async.overruns(). Hosted only. */
+bool ceesafe_async_run_bound(uint64_t ms, uint32_t mode);
+void ceesafe_async_isolate_bound(uint64_t ms);
+uint64_t ceesafe_async_overruns(void);
 uint64_t ceesafe_async_set_crashes(void *set);
 uint64_t ceesafe_async_set_missed(void *set);
 bool ceesafe_async_set_watch(void *set, void *channel);
@@ -1675,6 +1718,9 @@ void ceesafe_async_lock_released(void *lock);
 void ceesafe_async_isolation_report(uint64_t *out);
 /* lib/std's Mutex.lock and AsyncMutex.lock, for a poisoned lock: the panic of kind CEE_PANIC_POISONED. */
 _Noreturn void ceesafe_panic_poisoned(void);
+/* A panic of `kind` with the runtime's own text and the program's place (ADR 0186's overrun), which ends an isolated
+ * task alone as a trap of that kind would. */
+CEE_COLD _Noreturn void ceesafe_panic_with(cee_panic_kind kind, const uint8_t *message, size_t length, cee_loc loc);
 void ceesafe_async_set_init(void *set, uint32_t limit, void *error);
 uint32_t ceesafe_async_set_admit(void *set, bool wait);
 void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),

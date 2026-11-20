@@ -181,7 +181,8 @@ fn checkAsyncCall(
 ) -> Result<u32, AllocError> {
     let memberIdent = c.front.ast.idents[member as usize];
     if (c.freestanding && (sameText(c.name(memberIdent.symbol), "scope") ||
-        sameText(c.name(memberIdent.symbol), "blocking") || sameText(c.name(memberIdent.symbol), "runWorkers"))) {
+        sameText(c.name(memberIdent.symbol), "blocking") || sameText(c.name(memberIdent.symbol), "runWorkers") ||
+        sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns"))) {
         // The freestanding executor (ADR 0039): no system heap for a scope's children, no threads.
         var what = Vector<u8>.create();
         appendText(mut what, "'Async.")?;
@@ -236,6 +237,9 @@ fn checkAsyncCall(
     }
     if (sameText(c.name(memberIdent.symbol), "runWorkers")) {
         return checkRunWorkers(c, arguments, expected, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns")) {
+        return checkBoundCall(c, memberIdent.symbol, arguments, span); // ADR 0186
     }
     if (!sameText(c.name(memberIdent.symbol), "run")) {
         var message = Vector<u8>.create();
@@ -580,7 +584,9 @@ fn setArgument(c: borrow mut Checker, target: u32, setType: u32, span: Span) -> 
 
 /// `await set.spawn(async move () => …)` and `set.trySpawn(async move () => …)` on a TaskSet (ADR 0053 §3.2), and
 /// their isolated forms `await set.spawnIsolated(crashed, …)` and `set.trySpawnIsolated(crashed, …)` (ADR 0175 and its
-/// amendment 1, with `isolating` between the room and the start): lib/core's
+/// amendment 1, with `isolating` between the room and the start), and their bounded forms
+/// `await set.spawnIsolatedBound(ms, crashed, …)` and `set.trySpawnIsolatedBound(ms, crashed, …)` (ADR 0186, with
+/// `isolatingBound`): lib/core's
 /// steps around the start, `TaskSet.spawned(set, SetSpawn(record, await set.room(), child))` (`tryRoom` and `started`
 /// for trySpawn). The child is an `async move` literal of result `Result<void, E>` whose captures hold no loan (N0349).
 fn checkSetSpawn(
@@ -591,6 +597,7 @@ fn checkSetSpawn(
     trying: bool,
     send: bool,
     isolated: bool,
+    bounded: bool,
     targetSpan: Span,
     span: Span,
 ) -> Result<u32, AllocError> {
@@ -603,14 +610,18 @@ fn checkSetSpawn(
         hostedOnly(
             c,
             span,
-            (if (trying) "'trySpawnIsolated' (a trap ends a freestanding program)"
+            (if (bounded && trying) "'trySpawnIsolatedBound' (a trap ends a freestanding program)"
+                else if (bounded) "'spawnIsolatedBound' (a trap ends a freestanding program)"
+                else if (trying) "'trySpawnIsolated' (a trap ends a freestanding program)"
                 else "'spawnIsolated' (a trap ends a freestanding program)").bytes(),
         )?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    // `set.spawnIsolated(crashed, child)` (ADR 0175): the child is the second argument.
-    let childAt: u32 = if (isolated) 1 else 0;
+    // `set.spawnIsolated(crashed, child)` (ADR 0175): the child is the second argument; the third after the bound in
+    // `set.spawnIsolatedBound(ms, crashed, child)` (ADR 0186).
+    let crashedAt: u32 = if (bounded) 1 else 0;
+    let childAt: u32 = if (bounded) 2 else if (isolated) 1 else 0;
     let awaited = c.taskStart == span.start && c.taskEnd == span.end;
     if (awaited && !trying) {
         c.taskStart = none();
@@ -636,8 +647,11 @@ fn checkSetSpawn(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (isolated &&
-                trying) "an isolated child is the error it stands for if it traps, then an async move closure literal with no parameters: 'set.trySpawnIsolated(crashed, async move () => …)' (ADR 0175 amendment 1)"
+            if (bounded &&
+                trying) "a bounded isolated child is its bound in milliseconds, the error it stands for if it traps, then an async move closure literal with no parameters: 'set.trySpawnIsolatedBound(ms, crashed, async move () => …)' (ADR 0186)"
+                else if (bounded) "a bounded isolated child is its bound in milliseconds, the error it stands for if it traps, then an async move closure literal with no parameters: 'set.spawnIsolatedBound(ms, crashed, async move () => …)' (ADR 0186 §2.1)"
+                else if (isolated &&
+                    trying) "an isolated child is the error it stands for if it traps, then an async move closure literal with no parameters: 'set.trySpawnIsolated(crashed, async move () => …)' (ADR 0175 amendment 1)"
                 else if (isolated) "an isolated child is the error it stands for if it traps, then an async move closure literal with no parameters: 'set.spawnIsolated(crashed, async move () => …)' (ADR 0175 §2.1)"
                 else "a task set's child is an async move closure literal with no parameters: 'set.spawn(async move () => …)' (ADR 0053 §3.2)",
         )?;
@@ -661,9 +675,18 @@ fn checkSetSpawn(
     // What the set is given for a child that traps: an `E`.
     var crashed = none();
     if (isolated) {
-        let crashedAt = c.front.ast.at(arguments, 0);
-        crashed = checkArgument(c, crashedAt, errorType)?;
+        let crashedExpr = c.front.ast.at(arguments, crashedAt);
+        crashed = checkArgument(c, crashedExpr, errorType)?;
         if (c.isBottom(crashed)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    // The unit's own bound, in milliseconds (ADR 0186 §2.1).
+    var bound = none();
+    if (bounded) {
+        let u64Type = c.types.lookup("u64".bytes());
+        bound = checkArgument(c, c.front.ast.at(arguments, 0), u64Type)?;
+        if (c.isBottom(bound)) {
             return c.errorResult(span.start, span.end);
         }
     }
@@ -759,8 +782,9 @@ fn checkSetSpawn(
         admitted = c.expr(HirExpr.Await(admitted), u32Type, span.start, span.end)?;
     }
     if (isolated) {
-        // `TaskSet.isolating(set, crashed, admitted)`: between the wait for room and the start, with no await.
-        let isolatingName = c.intern("isolating")?;
+        // `TaskSet.isolating(set, crashed, admitted)`: between the wait for room and the start, with no await;
+        // `TaskSet.isolatingBound(set, ms, crashed, admitted)` for a bounded child (ADR 0186).
+        let isolatingName = c.intern(if (bounded) "isolatingBound" else "isolating")?;
         let isolating = libraryFunction(c, "TaskSet", setTypeArguments.view(), isolatingName, span)?;
         if (isolating == none()) {
             return c.errorResult(span.start, span.end);
@@ -768,6 +792,9 @@ fn checkSetSpawn(
         let marked = setArgument(c, target, setType, targetSpan)?;
         var isolatingArguments = Vector<u32>.create();
         isolatingArguments.push(marked)?;
+        if (bounded) {
+            isolatingArguments.push(bound)?;
+        }
         isolatingArguments.push(crashed)?;
         isolatingArguments.push(admitted)?;
         admitted = c.expr(
@@ -1058,6 +1085,40 @@ fn checkCancellationCall(c: borrow mut Checker, member: u32, arguments: Range, s
     let list = c.hir.list(values.view())?;
     let returnType = c.hir.functions[function as usize].returnType;
     return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
+}
+
+/// `Async.runBound(ms, mode)` and `Async.overruns()` (§40.11, ADR 0186): lib/core's AsyncBound, its arguments checked
+/// against its parameters.
+fn checkBoundCall(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "AsyncBound", none0.view(), member, span)?;
+    if (function == none()) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let count = c.hir.functions[function as usize].parameters.length;
+    if (arguments.count as usize != count) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            if (count == 0) "'Async.overruns' takes no arguments"
+                else "'Async.runBound' takes the bound in milliseconds and a RunBound: 'Async.runBound(250, RunBound.Count)' (ADR 0186 §2.1)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var values = Vector<u32>.create();
+    for (k in 0..arguments.count) {
+        let typ = c.hir.locals[c.hir.functions[function as usize].parameters[k as usize] as usize].typ;
+        let value = checkArgument(c, c.front.ast.at(arguments, k), typ)?;
+        if (c.isBottom(value)) {
+            return c.errorResult(span.start, span.end);
+        }
+        values.push(value)?;
+    }
+    let returnType = c.hir.functions[function as usize].returnType;
+    return c.expr(HirExpr.Call(function, c.hir.list(values.view())?), returnType, span.start, span.end);
 }
 
 /// `await Async.shield(ms, async () => …)` (§40.7): the body awaited inline between lib/std's AsyncControl.enterShield

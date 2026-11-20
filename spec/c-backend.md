@@ -627,6 +627,44 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
 `ceesafe_async_*` (§6).
 
+## 3b. Polls (ADR 0186, type-system.md §40.11)
+
+`src/backend/c_polls.cee` writes where a task could run without end a poll, `CEE_POLL(&ceeL_<n>)`, with the place
+of its loop or function:
+
+- at the head of every block that a retreating edge of the function's graph targets, in the reverse postorder of
+  `controlFlowOf` (`src/nir/control_flow.cee`): in a reducible graph, every natural loop's header; in an irreducible
+  one, written flat, the target of each edge that goes back. It is the block's first line, after its label, so it is
+  inside the `for (;;)` of a structured loop and after the label of a flat one, an async resume function's too;
+- at the entry of every function on a cycle of the program's call graph, after its locals (an async fn's resume
+  function, before its state's dispatch). A call through a function value, a closure or a `dyn` table is an edge to
+  one more node, which has an edge to every function whose address is taken (`FunctionAddress`) and every method of
+  a `dyn` table: Tarjan's components with that node, and a function in one of two or more, or with an edge to
+  itself, polls.
+
+An innermost counted loop of a structured function (its header's one statement `c = i < end` and a branch out of the
+loop on `c`; `i` raised by one in the loop and written nowhere else in it, `end` never; no loop inside it; one way
+in, a block that ends by going to the header; neither borrowed) is treated by its bounds:
+
+- **constants at most 1 024 apart** (set in the block that goes to the header): no poll. It ends by itself, and its
+  test stays the one the C compiler unrolls;
+- **constants further apart:** the header's poll, as any loop: its test, and so the counter's range the C compiler
+  sees, stays as it was;
+- **an end known only when it starts:** chunks. Under `#if defined(CEE_POLLS)`, an outer `for (;;)` around the
+  structurer's loop polls and sets `cee_chunk_<k> = CEE_CHUNK_END(i, end)`, at most 1 024 on; the loop's test is
+  `c = (i < cee_chunk_<k>)`, an end that does not change while it runs; and after it, `if (i != cee_chunk_<k> ||
+  !(i < end)) break;` leaves the outer loop unless the chunk ran out before the loop did (a `break` leaves `i` below
+  the chunk's end). Under `#else` the test is the one it always was. `cee_chunk_<k>` is declared with the locals,
+  of the counter's type, under the same `#if`.
+
+A function marked `@noPoll` has no poll and no chunks.
+
+Without `CEE_POLLS`, `CEE_POLL(…)` is `((void)0)` and the `#if` blocks keep their `#else`: the C compiles to the code
+it compiles to with every poll taken out (`tools/bound_check.py` checks the assembly of CeeSafe's benchmarks). With
+it, a poll is a relaxed load of `ceesafe_poll_any`, a global, and a branch to `ceesafe_poll_slow`, which is cold and
+reads the thread's own `ceesafe_poll_word`: the global counts the threads whose word the monitor set, so a poll
+touches no thread-local storage, which costs a call in every function that does on Mach-O.
+
 ## 4. Evaluation order and temporaries
 
 NIR has already sequenced every side effect into separate statements, so the C

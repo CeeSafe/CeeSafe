@@ -1,6 +1,7 @@
 # ADR 0186 — A bound on how long a task runs without waiting
 
-- Status: **Proposed**, 2026-11-20. Written at the owner's request ("Yes", to drafting the preemption ADR), from
+- Status: **Accepted** by the owner, 2026-11-20 ("I accept all nine §8 questions as recommended"). Proposed the
+  same day. Written at the owner's request ("Yes", to drafting the preemption ADR), from
   the review of httpserver against Erlang's model that led to ADR 0175. ADR 0175 §3 left this open: "A task that
   computes without awaiting still holds its worker, isolated or not. A bound on a task's computing time (a check
   on loop back-edges that traps a task past its bound, which this ADR would then end alone) is its own ADR."
@@ -8,8 +9,8 @@
   CeeUsb's findings (0.79.0) meanwhile. Its claims about the compiler and the runtime were then checked against
   `main` at 0.79.0 (`0056e9d0`) and corrected where they were wrong (§1), and its design revised where the owner
   left that open ("Feel free to modify the given for best implementation to reach our goal"): where polls go
-  (§2.2), the poll word, the monitor's registry, the interpreter's rule and the unit's name. **Not implemented.** A
-  probe with polls added by hand to generated C (§5.1) gave the first costs; the measurements of §9 replace it.
+  (§2.2), the poll word, the monitor's registry, the interpreter's rule and the unit's name. A probe with polls
+  added by hand to generated C (§5.1) gave the first costs; the measurements of §9 replace it.
 - Scope: NIR and the C backend (polls at loops and at the entry of functions that may recurse, §2.2), the hosted
   runtime (a monitor thread and the executors it watches; the executor's resume count and poll word,
   `runtime/hosted/ceesafe_rt_async.c`; the poll macro in `ceesafe/rt.h`; the panic path's new kind), lib/core
@@ -450,3 +451,105 @@ thread's word stays 0.
 7. httpserver: `CW_RUN_BOUND_MS`, the bench built with `-DCEE_POLLS=1`, a `/spin/{ms}` route, and a check in
    `supervisor_check.py --isolated` that a spinning request ends alone while every worker stays up and other
    requests are answered within the bound. `CEESAFE_FINDINGS.md`: the spin moves from the supervisor to the unit.
+
+## 10. Implementation notes (2026-11-20)
+
+What is there is §2 with §2.2's rules, on the hosted runtime and in the interpreter; §9's steps 1 to 6. Step 7,
+httpserver's, waits for a release with this in it. It differs from what was accepted in these places.
+
+- **No `Poll` statement in NIR** (§9, step 2). The backend places the polls as it writes C
+  (`src/backend/c_polls.cee`), from `controlFlowOf` and a call graph it builds once a program, so that no NIR pass
+  (the borrow, move and effect checks, the printer, the interpreter) has a statement to learn. The rules are §2.2's.
+- **The counted-loop rule depends on the loop's bounds** (§2.2). A loop counts by its shape in NIR, wherever it came
+  from: a header whose one statement is `c = i < end`, `i` raised by one and written nowhere else in the loop, `end`
+  never, neither borrowed, no loop inside, one way in; and only in a structured function (an async fn's resume
+  function, and every function under `--flat-c`, poll at each header). Then, measured on CeeSafe's benchmarks
+  (below):
+  - **an end known only when it starts** runs in chunks, as §2.2 has it: an outer loop around it polls and sets the
+    chunk's end, the loop tests against that, an end that does not change while it runs, and the outer loop goes
+    on only if the chunk ran out first (c-backend.md §3b). A first form, which rewrote the test as
+    `i < chunk || helper(…)` with no outer loop, hid the trip count from the C compiler, which stopped unrolling
+    and vectorising;
+  - **constant bounds at most 1 024 apart** need no poll at all: the loop ends by itself (`stack-alloc` and
+    `heap-alloc` +135% with the first form, +1% now);
+  - **constant bounds further apart** keep the header's poll: chunked, the C compiler no longer knew the counter's
+    range, and checks and divisions it had taken out of the loop came back (`arena` +36% chunked, +2% polled).
+- **Not done:** "a loop whose every iteration passes another poll needs none" (§2.2), which only saves code; and the
+  debug check that a counted loop's end has not changed (§9, step 2), since a loop counts only once the backend has
+  seen that nothing in it writes or borrows its end.
+- **A poll reads a process-wide count, not a thread-local word** (§2.2, step 1; §4 had weighed one process-wide
+  word and set it aside as no cheaper, which held in loops). On Mach-O a function that touches a thread-local fetches
+  its address with a call once each time it runs, so a poll at a recursive function's entry cost a call a call:
+  `recursion` +48%. `ceesafe_poll_any` counts the threads whose own word the monitor set; the poll loads it, and the
+  slow path reads the thread's word and returns at once if it is 0. While a task is overdue in a `Critical`, or under
+  C's frames, every thread's polls take the slow path, which is a call and a load.
+- **A counted loop whose bounds are constants at most 1 024 apart has no poll** (§2.2): with the test rewritten,
+  the C compiler no longer knew how often `for (j in 0..32)` ran and stopped unrolling it (`stack-alloc` and
+  `heap-alloc` +135%). A loop of so few iterations of a body with no loop ends by itself.
+- **The poll word holds the epoch of the resume it ends** (§2.2, step 5, made exact). The monitor writes the
+  resume's epoch, never 0; the slow path ends the task only if it is the running resume's, and clears it otherwise.
+  A write that lands after the task waited, and after the executor cleared the word, so ends nothing.
+- **The registry is a slot of each thread's, not a field of the executor** (§2.2, step 3), since a nested
+  `Async.run` saves and restores the executor by value. A thread joins it when its first executor loop starts and
+  leaves it when that loop ends; a nested run starts a new epoch for the resume around it when it ends.
+- **The poll word and `ceesafe_poll_slow` are the core runtime's** (`runtime/core/ceesafe_rt_core.c`), which every
+  hosted program links, so that a program with loops and no tasks links too; the async runtime installs its slow
+  path (`ceesafe_poll_hook`) before its monitor can set a word.
+- **`Async.runBound` is `false` by the runtime's answer** (§2.1, §9 step 4), not by `cfg("CEE_POLLS")` in lib/core:
+  the runtime is compiled with the program's flags, and the interpreter, whose `cfg` cannot see the macro, takes the
+  call and answers `true`. lib/core has `RunBound` and `AsyncBound` (`lib/core/isolation.cee`); the checker makes
+  `Async.runBound` and `Async.overruns` calls of `AsyncBound`'s, as it makes `Async.isCancelled` one of
+  `AsyncControl`'s.
+- **A task in no unit is reported on standard error, not to the panic hook** (§2.4): the hook must end the process
+  or never return (ADR 0088), and this report does neither.
+- **The interpreter's fuel** is 10 000 steps a millisecond of the bound (§2.5, question 9), a step being a block
+  transition or a call outside a `@noPoll` function. It ends a task at its first step past the fuel, which may be a
+  little before the first poll the compiled program would reach (in a `Critical`'s drop, say): `bound_check`'s
+  programs are written so that both give the same lines.
+- **The panic's text** names the time from the monitor's first sight of the resume, which may be up to a quarter of
+  the bound after its start: it is never more than the time the task ran.
+- **Tests that are not as §9 listed them.** An irreducible graph: CeeSafe's structured source makes none that I
+  found (an async resume function's dispatch is C's, not NIR's), so the rule for it has no test that exercises it.
+  "The same C as before, byte for byte" (§9, step 6) cannot be: a poll's place is in the C either way, as
+  `CEE_POLL(&ceeL_<n>)` and its location constant. What is checked is the claim behind it, that the code is the
+  same: each benchmark's C, compiled without `CEE_POLLS`, gives the same assembly as that C with every poll taken
+  out (`tools/bound_check.py`). Seven emit-c snapshots changed, by their new poll lines and the location constants
+  numbered after them, nothing else (`arrays`, `async-frame`, `control-flow`, `flat`, `gcd`, `line-directives`,
+  `placed-boxes`).
+
+How it was tested (macOS arm64, Apple clang 21.0.0, this branch's compiler):
+
+- `tools/bound_check.py`, new, in the contract suite: 33 cases, 0 problems, three runs.
+- The corpus: every family as before (parse-pass 54, parse-fail 45, check-pass 48, check-fail 383, run-pass 418,
+  run-fail 55, emit-c 31, ffi 22, frames 4, and the rest), with two new check-fail programs and one emit-c; run-pass
+  418 and run-fail 55 again built with `--cflag=-DCEE_POLLS=1` and leak checks; run-pass 418 interpreted.
+- **The cost**, built with `--cflag -DCEE_POLLS=1` against the same build without it (§9, step 6). The machine was
+  loaded by other programs (load averages from 5 to 117) and `benchmarks/run.py`'s wall times moved by up to 90%
+  between runs of the same binaries, so what is recorded is the instructions retired and the cycles of each
+  benchmark's process (`/usr/bin/time -l`, the run of the fewest cycles of three), which the load moves much less.
+  Geometric means: instructions **+10.2%**, cycles **+5.3%**. The rest is the poll's own load and branch in `while`
+  loops (`parsing`'s byte scans, `hash-map`'s probes) and at the entry of recursive functions (`const-flags`'s
+  scanner). Built without the macro, the code is the same (`bound_check`).
+
+| Workload | Instructions | Cycles | | Workload | Instructions | Cycles |
+|---|---:|---:|---|---|---:|---:|
+| `arena` | +13.9% | +2.2% | | `memory-copy` | +10.8% | +10.7% |
+| `binary-trees` | +2.5% | +0.6% | | `nbody` | +8.2% | +1.1% |
+| `const-flags` | +20.7% | +26.9% | | `numeric` | +1.1% | −8.5% |
+| `data-oriented` | +27.0% | +4.2% | | `parsing` | +23.7% | +24.3% |
+| `hash-map` | +24.7% | +11.2% | | `recursion` | +34.6% | −0.1% |
+| `heap-alloc` | +1.0% | +0.8% | | `small-objects` | +1.3% | +1.4% |
+| `large-objects` | +0.6% | +3.3% | | `stack-alloc` | +1.0% | +0.8% |
+| `linked-list` | +1.7% | +2.4% | | `string-building` | +5.2% | +15.4% |
+| | | | | `vector-growth` | +4.6% | −0.6% |
+
+  httpserver's benchmark server (CeeSafe.Web at `79ae138`, one process, `h2load --h1 -c 64 -t 4 -D 8`, 5 rounds, the
+  median of requests a second), with and without polls: `/small` −1.6%, `/json` −1.5% (within the runs' range),
+  `/gz/16384` with gzip −6.3% (§5.1's probe, a poll at every loop: −12%).
+- **Sanitizers** (macOS): `bound_check`'s `survive` and its `count`, `critical`, `callback`, `stale` and `registry`
+  cases built with AddressSanitizer and UndefinedBehaviorSanitizer, and `survive`, `registry` and `latency` with
+  ThreadSanitizer: the same lines, no report.
+- **Linux** (Ubuntu 24.04 in Docker, arm64, gcc 13.3; the C this compiler emits on macOS, built there with
+  `-DCEE_POLLS=1`): `survive`'s seven lines, and `count`, `critical`, `callback`, `early`, `stale`, `registry`,
+  `latency` and `panic` as on macOS.
+- **Not run:** Windows (its thread-locals, the monitor on `CreateThread` and SRW locks); httpserver's step 7.

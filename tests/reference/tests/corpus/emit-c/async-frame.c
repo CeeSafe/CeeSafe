@@ -9,7 +9,8 @@ _Static_assert(sizeof(void *) * 8 == 64, "ceesafec: generated for a 64-bit targe
 static CEE_UNUSED const char cee_file_0[] = "emit-c/async-frame.cee";
 
 static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 4u, 40u };
-static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 9u, 9u };
+static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 8u, 5u };
+static CEE_UNUSED const cee_loc ceeL_2 = { cee_file_0, 9u, 9u };
 
 struct ceeAF_ceeF_add {
     uint32_t cee_state;
@@ -89,6 +90,7 @@ static bool ceeAR_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame) {
     t_4 = ((int32_t)2);
     goto bb1;
 bb1:
+    CEE_POLL(&ceeL_1);
     t_5 = (t_3 < t_4);
     if (t_5) goto bb2; else goto bb4;
 bb2:
@@ -98,7 +100,7 @@ bb2:
 cee_resume_1:
     if (!ceeAR_ceeF_add(&cee_frame->cee_u.cee_a1)) return false;
     t_6 = cee_frame->cee_u.cee_a1.cee_result;
-    v_total_1 = cee_add_i32(v_total_1, t_6, &ceeL_1);
+    v_total_1 = cee_add_i32(v_total_1, t_6, &ceeL_2);
     goto bb3;
 bb3:
     t_3 = ((int32_t)(t_3 + ((int32_t)1)));

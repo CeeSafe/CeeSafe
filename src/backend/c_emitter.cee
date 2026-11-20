@@ -79,6 +79,8 @@ struct CEmitter {
     windowed: bool;        // the C `main` calls ceesafe_rt_windowed first (ADR 0151)
     capturing: bool;       // structured form: statement lines are collected for the tree
     capture: Vector<Vector<u8>>;
+    pollEntries: Vector<bool>; // by NIR function: a poll at its entry, on a cycle of the call graph (ADR 0186)
+    polls: FunctionPolls;      // the function being emitted's (ADR 0186)
 
     fn create(trial: bool) -> CEmitter => CEmitter {
         split: false,
@@ -138,6 +140,8 @@ struct CEmitter {
         windowed: false,
         capturing: false,
         capture: Vector<Vector<u8>>.create(),
+        pollEntries: Vector<bool>.create(),
+        polls: noPolls(),
     };
 
     /// Starts writing the named file (Into, split mode); a file named twice is continued.

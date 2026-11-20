@@ -1,0 +1,7 @@
+// profile: freestanding
+// ADR 0186 §3: a freestanding program has no monitor thread, so no bound: Async.runBound and Async.overruns are
+// refused, as spawnIsolatedBound is with every isolated start.
+fn bounded() -> u64 {
+    let a = Async.runBound(250, RunBound.Count); // error[N0293]
+    return Async.overruns();                     // error[N0293]
+}

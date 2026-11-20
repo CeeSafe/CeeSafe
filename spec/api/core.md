@@ -41,6 +41,8 @@
 - [enum PanicKind](#enum-panickind)
 - [struct TaskCrash](#struct-taskcrash)
 - [struct Critical](#struct-critical)
+- [enum RunBound](#enum-runbound)
+- [struct AsyncBound](#struct-asyncbound)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -274,7 +276,9 @@ public struct TaskSet<E: Copy>
 The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
 children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
 `set.trySpawn(async move () => …)`, which is false instead. `await set.spawnIsolated(crashed, async move () => …)`
-and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175). A child owns what it captures: no loans, so it cannot
+and `set.trySpawnIsolated(crashed, …)` start a child that ends alone if it traps (ADR 0175);
+`set.spawnIsolatedBound(ms, crashed, …)` and `set.trySpawnIsolatedBound(ms, crashed, …)` one whose tasks may run
+`ms` milliseconds without waiting (ADR 0186). A child owns what it captures: no loans, so it cannot
 capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
 
 ### TaskSet.crashes
@@ -2291,6 +2295,7 @@ public enum PanicKind {
     FloatRange,
     Explicit,
     Poisoned,
+    Overran,
     Other,
 }
 ```
@@ -2350,6 +2355,45 @@ public fn enter() -> Critical
 
 Enters a critical section, left when the value is dropped.
 Safety: the runtime only counts.
+
+## enum RunBound
+
+```ceesafe
+public enum RunBound {
+    Count,
+    Panic,
+}
+```
+
+What `Async.runBound(ms, mode)` does to a task in no isolated unit that runs past the bound (ADR 0186 §2.4). A task
+of an isolated unit is always ended, with `PanicKind.Overran`, as a trap would end it.
+
+## struct AsyncBound
+
+```ceesafe
+public struct AsyncBound
+```
+
+What `Async.runBound` and `Async.overruns` call (type-system.md §40.11, ADR 0186).
+
+### AsyncBound.runBound
+
+```ceesafe
+public fn runBound(ms: u64, mode: RunBound) -> bool
+```
+
+The program's bound: how long one resume of a task may run without waiting, in milliseconds; 0 is none. False
+in a build without polls (one not built with `--cflag -DCEE_POLLS=1`), where nothing would see the bound.
+Safety: the runtime records the numbers and starts its monitor thread.
+
+### AsyncBound.overruns
+
+```ceesafe
+public fn overruns() -> u64
+```
+
+How many tasks ran past their bound, ended or not.
+Safety: the runtime only reads its count.
 
 ## interface Iterator
 

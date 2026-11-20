@@ -241,10 +241,21 @@ fn statementNodes(
     let list = newList(s)?;
     let f = s.function;
     let count = n.functions[f as usize].blocks[block as usize].statements.length;
+    // A loop's header polls first (ADR 0186 §2.2).
+    e.capturing = true;
+    emitBlockPoll(e, c, n, sources, f, block)?;
+    e.capturing = false;
+    if (e.capture.length > 0) {
+        let first =
+            if (count > 0) n.statementSpans[n.functions[f as usize].blocks[block as usize].statements[0] as usize]
+                else n.terminatorSpans[n.functions[f as usize].blocks[block as usize].terminator as usize];
+        let node = capturedNode(e, s, first.start, first.start, true)?;
+        pushNode(s, list, node)?;
+    }
     for (k in 0..count) {
         let statement = n.functions[f as usize].blocks[block as usize].statements[k];
         e.capturing = true;
-        emitStatement(e, c, n, sources, f, statement)?;
+        emitStatementPolled(e, c, n, sources, f, statement)?;
         e.capturing = false;
         if (e.capture.length > 0) {
             let span = n.statementSpans[statement as usize];
@@ -893,6 +904,11 @@ fn printTree(
             e.t("}")?;
             e.emitNoCode()?;
         } else if (node.kind == nodeLoop()) {
+            // An innermost counted loop runs in chunks with polls (ADR 0186 §2.2, c-backend.md §3b).
+            let chunked = countedWithHeader(e, n, s.function, node.block);
+            if (chunked != none()) {
+                emitChunkOpen(e, c, n, sources, s.function, chunked, depth)?;
+            }
             appendIndent(mut e.buf, depth)?;
             e.t("for (;;) {")?;
             e.emitNoCode()?;
@@ -900,6 +916,9 @@ fn printTree(
             appendIndent(mut e.buf, depth)?;
             e.t("}")?;
             e.emitNoCode()?;
+            if (chunked != none()) {
+                emitChunkClose(e, c, n, s.function, chunked, depth)?;
+            }
         } else if (node.kind == nodeSwitch()) {
             mapTo(e, c, n, sources, node.start, node.end);
             appendIndent(mut e.buf, depth)?;

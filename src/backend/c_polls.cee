@@ -1,0 +1,725 @@
+// Polls (ADR 0186; c-backend.md §3b): where the C backend writes `CEE_POLL(&ceeL_<n>)`, so that every cycle a task can
+// run passes one. A poll at the head of every block that a retreating edge of the function's graph targets (in a
+// reducible graph, the natural loops' headers), but for an innermost counted loop whose end is known only when it
+// starts, which runs in chunks of 1 024 iterations inside an outer loop that polls once a chunk, and one whose
+// bounds are constants at most 1 024 apart, which has no poll;
+// and a poll at the entry of every function on a cycle of the call graph. A function marked `@noPoll` has none.
+// Without CEE_POLLS (ceesafe/rt.h) a poll is empty and the chunks are not compiled, so the program does not change.
+
+/// An innermost counted loop (ADR 0186 §2.2): a `for` over a range or a sequence, `counter < end` in its header's one
+/// statement, the counter raised by one in the loop and changed nowhere else in it, the end changed nowhere in it, no
+/// loop inside it, and one way in, a block that ends by going to the header.
+struct CountedLoop {
+    header: u32;    // block index
+    condition: u32; // the header's statement: `condition = counter < end`
+    counter: u32;   // locals
+    end: u32;
+    target: u32;    // the condition's local
+    preheader: u32; // block index
+    signed: bool;
+    typ: u32;       // the counter's type
+    chunk: u32;     // its `cee_chunk_<n>`
+    bounded: bool;  // its preheader sets the counter and the end to constants at most 1 024 apart: no poll at all
+    constant: bool; // to constants further apart: a poll at its header, which leaves the loop as it is
+}
+
+/// The polls of the function being emitted.
+struct FunctionPolls {
+    blocks: Vector<bool>; // by block index: a poll at its head
+    counted: Vector<CountedLoop>;
+    entry: bool; // a poll at its entry
+}
+
+fn noPolls() -> FunctionPolls => FunctionPolls {
+    blocks: Vector<bool>.create(),
+    counted: Vector<CountedLoop>.create(),
+    entry: false,
+};
+
+/// Whether HIR function `h` is marked `@noPoll` (ADR 0186 §2.3).
+fn isNoPoll(c: borrow Checker, h: u32) -> bool {
+    let syntax = c.hir.functions[h as usize].syntax;
+    if (syntax == none()) {
+        return false;
+    }
+    return hasAttributeNamed(c, c.front.ast.functions[syntax as usize].attributes, "noPoll");
+}
+
+/// The NIR function of HIR function `h`'s variant, or none (a C function, or one with no body).
+fn nirFunctionOfVariant(n: borrow NirProgram, byHir: borrow Vector<u32>, h: u32, variant: u32) -> u32 {
+    if (variant == 0) {
+        return if ((h as usize) < byHir.length) byHir[h as usize] else none();
+    }
+    for (k in 0..n.functions.length) {
+        if (n.functions[k].source == h && n.functions[k].variant == variant) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+fn addCallEdge(edges: borrow mut Vector<Vector<u32>>, from: u32, to: u32) -> Result<void, AllocError> {
+    for (t in edges[from as usize].view()) {
+        if (t == to) {
+            return Ok();
+        }
+    }
+    return edges[from as usize].push(to);
+}
+
+/// The rvalue a statement evaluates, or none.
+fn statementRvalueOf(n: borrow NirProgram, s: u32) -> u32 => match (n.statements[s as usize]) {
+    NirStatement.Assign(_, r) => r,
+    NirStatement.Eval(r) => r,
+    _ => none(),
+};
+
+/// By NIR function: whether it is on a cycle of the call graph, so a poll at its entry (ADR 0186 §2.2). A call through
+/// a function pointer, a closure or a `dyn` table is an edge to one more node, which has an edge to every function
+/// whose address is taken and every method of a `dyn` table.
+fn recursiveFunctions(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    out: borrow mut Vector<bool>,
+) -> Result<void, AllocError> {
+    let count = n.functions.length;
+    let indirect = truncate<u32>(count);
+    var byHir = Vector<u32>.create();
+    for (k in 0..c.hir.functions.length) {
+        byHir.push(none())?;
+    }
+    for (k in 0..count) {
+        if (n.functions[k].variant == 0) {
+            byHir[n.functions[k].source as usize] = truncate<u32>(k);
+        }
+    }
+    var edges = Vector<Vector<u32>>.create();
+    for (k in 0..count + 1) {
+        edges.push(Vector<u32>.create())?;
+    }
+    for (f in 0..count) {
+        let from = truncate<u32>(f);
+        for (block in n.functions[f].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalueOf(n, s);
+                if (r == none()) {
+                    continue;
+                }
+                match (n.rvalues[r as usize]) {
+                    NirRvalue.Call(callee, _) => {
+                        if (c.hir.functions[callee as usize].isDynMethod) {
+                            addCallEdge(mut edges, from, indirect)?;
+                        } else {
+                            let to = nirFunctionOfVariant(n, byHir, callee, n.rvalueVariants[r as usize]);
+                            if (to != none()) {
+                                addCallEdge(mut edges, from, to)?;
+                            }
+                        }
+                    }
+                    NirRvalue.Builtin(b, arguments) => {
+                        if (b == bfCallFunction() || b == bfCallClosure() || b == bfCallPointer()) {
+                            addCallEdge(mut edges, from, indirect)?;
+                        } else if (b == bfAsyncBoxed() && arguments.count >= 2) {
+                            // Async.boxed(alloc, g(…)): g's call (its callee is the second operand).
+                            match (n.operands[n.at(arguments, 1) as usize]) {
+                                NirOperand.Const(v) => {
+                                    let to = nirFunctionOfVariant(n, byHir, truncate<u32>(v.magnitude), 0);
+                                    if (to != none()) {
+                                        addCallEdge(mut edges, from, to)?;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    NirRvalue.FunctionAddress(h) => {
+                        let to = nirFunctionOfVariant(n, byHir, h, 0);
+                        if (to != none()) {
+                            addCallEdge(mut edges, indirect, to)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for (table in c.dynTables.view()) {
+        for (slot in 0..table.methods.count) {
+            let to = nirFunctionOfVariant(n, byHir, c.hir.at(table.methods, slot), 0);
+            if (to != none()) {
+                addCallEdge(mut edges, indirect, to)?;
+            }
+        }
+    }
+    // Tarjan's strongly connected components, with an explicit stack of (node, next edge).
+    let nodes = count + 1;
+    var index = Vector<u32>.create();
+    var low = Vector<u32>.create();
+    var onStack = Vector<bool>.create();
+    for (k in 0..nodes) {
+        index.push(none())?;
+        low.push(0)?;
+        onStack.push(false)?;
+        if (k < count) {
+            out.push(false)?;
+        }
+    }
+    var next: u32 = 0;
+    var stack = Vector<u32>.create();
+    var callNodes = Vector<u32>.create();
+    var callEdges = Vector<usize>.create();
+    for (root in 0..nodes) {
+        if (index[root] != none()) {
+            continue;
+        }
+        index[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(truncate<u32>(root))?;
+        onStack[root] = true;
+        callNodes.push(truncate<u32>(root))?;
+        callEdges.push(0)?;
+        while (callNodes.length > 0) {
+            let top = callNodes.length - 1;
+            let u = callNodes[top] as usize;
+            let i = callEdges[top];
+            if (i < edges[u].length) {
+                callEdges[top] = i + 1;
+                let w = edges[u][i] as usize;
+                if (index[w] == none()) {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(truncate<u32>(w))?;
+                    onStack[w] = true;
+                    callNodes.push(truncate<u32>(w))?;
+                    callEdges.push(0)?;
+                } else if (onStack[w] && index[w] < low[u]) {
+                    low[u] = index[w];
+                }
+                continue;
+            }
+            callNodes.pop();
+            callEdges.pop();
+            if (callNodes.length > 0) {
+                let parent = callNodes[callNodes.length - 1] as usize;
+                if (low[u] < low[parent]) {
+                    low[parent] = low[u];
+                }
+            }
+            if (low[u] != index[u]) {
+                continue;
+            }
+            // u is its component's root: the component is the stack down to u.
+            var members = Vector<u32>.create();
+            loop {
+                let w = stack.pop()!;
+                onStack[w as usize] = false;
+                members.push(w)?;
+                if (w as usize == u) {
+                    break;
+                }
+            }
+            var cycle = members.length > 1;
+            if (!cycle) {
+                for (t in edges[u].view()) {
+                    if (t as usize == u) {
+                        cycle = true;
+                    }
+                }
+            }
+            if (cycle) {
+                for (w in members.view()) {
+                    if ((w as usize) < count) {
+                        out[w as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    return Ok();
+}
+
+/// The place `p` as a bare local (no projections), or none.
+fn bareLocal(n: borrow NirProgram, p: u32) -> u32 {
+    let place = n.places[p as usize];
+    return if (place.projections.count == 0) place.local else none();
+}
+
+/// The operand as a bare local's place, or none.
+fn operandLocal(n: borrow NirProgram, o: u32) -> u32 => match (n.operands[o as usize]) {
+    NirOperand.Place(p, _) => bareLocal(n, p),
+    _ => none(),
+};
+
+/// The locals a statement writes, with any projection (a field, an element) counting as a write of its local.
+fn writesLocal(n: borrow NirProgram, s: u32, local: u32) -> bool => match (n.statements[s as usize]) {
+    NirStatement.Assign(target, _) => n.places[target as usize].local == local,
+    NirStatement.Unpack(_, _, targets) => {
+        var found = false;
+        for (k in 0..targets.count) {
+            if (n.at(targets, k) == local) {
+                found = true;
+            }
+        }
+        found
+    }
+    _ => false,
+};
+
+/// Whether some statement of the function takes a loan of `local` (a `Ref` of a place on it).
+fn borrowsLocal(n: borrow NirProgram, function: borrow NirFunction, local: u32) -> bool {
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            let r = statementRvalueOf(n, s);
+            if (r != none()) {
+                match (n.rvalues[r as usize]) {
+                    NirRvalue.Ref(_, place) => {
+                        if (n.places[place as usize].local == local) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/// The constant that the last statement of block `block` assigning `local` gives it, as a signed value, or none.
+fn constantAssigned(n: borrow NirProgram, function: borrow NirFunction, block: u32, local: u32) -> IntValue? {
+    var found: IntValue? = null;
+    for (s in function.blocks[block as usize].statements.view()) {
+        if (!writesLocal(n, s, local)) {
+            continue;
+        }
+        found = null;
+        match (n.statements[s as usize]) {
+            NirStatement.Assign(place, r) => {
+                if (bareLocal(n, place) == local) {
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.Use(o) => {
+                            match (n.operands[o as usize]) {
+                                NirOperand.Const(v) => { found = Some(v); }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    return found;
+}
+
+/// Whether `first..end` has at most 1 024 values.
+fn fewTrips(first: IntValue, end: IntValue) -> bool {
+    if (!first.negative && !end.negative) {
+        return end.magnitude <= first.magnitude || end.magnitude - first.magnitude <= 1024;
+    }
+    if (first.negative && !end.negative) {
+        return end.magnitude <= 1024 && first.magnitude <= 1024 - end.magnitude;
+    }
+    if (first.negative && end.negative) {
+        return first.magnitude <= end.magnitude || first.magnitude - end.magnitude <= 1024;
+    }
+    return true; // a negative end after a first that is not: no iteration
+}
+
+/// Header `h` (loop `l` of `flow`) as an innermost counted loop, or none.
+fn countedLoopOf(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    function: borrow NirFunction,
+    flow: borrow ControlFlow,
+    l: usize,
+    chunk: u32,
+) -> CountedLoop? {
+    let h = flow.loopHeaders[l];
+    let members = borrow flow.loopMembers[l];
+    // Innermost: no other loop's header inside it.
+    for (other in flow.loopHeaders.view()) {
+        if (other != h && members[other as usize]) {
+            return null;
+        }
+    }
+    let header = borrow function.blocks[h as usize];
+    if (header.statements.length != 1 || header.cfg.length > 0 || header.branchCfg.length > 0) {
+        return null;
+    }
+    let condition = header.statements[0];
+    var target = none();
+    var counter = none();
+    var end = none();
+    match (n.statements[condition as usize]) {
+        NirStatement.Assign(place, r) => {
+            target = bareLocal(n, place);
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Binary(BinaryOp.Less, left, right) => {
+                    counter = operandLocal(n, left);
+                    end = operandLocal(n, right);
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    if (target == none() || counter == none() || end == none() || counter == end) {
+        return null;
+    }
+    let typ = function.locals[counter as usize].typ;
+    if (!c.types.is(typ, TypeKind.Integer) || c.types.info(typ).bits > 64 ||
+        function.locals[end as usize].typ != typ) {
+        return null;
+    }
+    match (n.terminators[header.terminator as usize]) {
+        NirTerminator.Branch(test, then, otherwise) => {
+            if (operandLocal(n, test) != target) {
+                return null;
+            }
+            let thenAt = blockIndexIn(flow, then);
+            let otherwiseAt = blockIndexIn(flow, otherwise);
+            if (!members[thenAt as usize] || members[otherwiseAt as usize]) {
+                return null;
+            }
+        }
+        _ => { return null; }
+    }
+    // In the loop: the counter raised by one in one statement and written nowhere else; the end never written.
+    var steps: u32 = 0;
+    for (k in 0..function.blocks.length) {
+        if (!members[k]) {
+            continue;
+        }
+        for (s in function.blocks[k].statements.view()) {
+            if (writesLocal(n, s, end)) {
+                return null;
+            }
+            if (!writesLocal(n, s, counter)) {
+                continue;
+            }
+            var isStep = false;
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(place, r) => {
+                    if (bareLocal(n, place) == counter) {
+                        match (n.rvalues[r as usize]) {
+                            NirRvalue.Binary(BinaryOp.Add, left, right) => {
+                                if (operandLocal(n, left) == counter) {
+                                    isStep = match (n.operands[right as usize]) {
+                                        NirOperand.Const(v) => !v.negative && v.magnitude == 1,
+                                        _ => false,
+                                    };
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if (!isStep) {
+                return null;
+            }
+            steps += 1;
+        }
+    }
+    if (steps != 1 || borrowsLocal(n, function, counter) || borrowsLocal(n, function, end)) {
+        return null;
+    }
+    // One way in, from a block that ends by going to the header.
+    var preheader = none();
+    for (p in flow.predecessors[h as usize].view()) {
+        if (members[p as usize]) {
+            continue;
+        }
+        if (preheader != none()) {
+            return null;
+        }
+        preheader = p;
+    }
+    if (preheader == none()) {
+        return null;
+    }
+    match (n.terminators[function.blocks[preheader as usize].terminator as usize]) {
+        NirTerminator.Goto(_) => {}
+        _ => { return null; }
+    }
+    // A loop of at most 1 024 iterations of a body with no loop ends by itself: its enclosing loop, or the function's
+    // entry, is where it is caught. Its test stays as it is, so the C compiler still sees how many times it runs.
+    // One of constant bounds further apart polls at its header: in chunks the C compiler no longer knows the
+    // counter's range, and checks and divisions it had taken out of the loop come back (`arena`: +36%, against +2%).
+    var bounded = false;
+    var constant = false;
+    match (constantAssigned(n, function, preheader, counter)) {
+        Some(first) => {
+            match (constantAssigned(n, function, preheader, end)) {
+                Some(last) => {
+                    bounded = fewTrips(first, last);
+                    constant = !bounded;
+                }
+                null => {}
+            }
+        }
+        null => {}
+    }
+    return Some(
+        CountedLoop {
+            header: h,
+            condition: condition,
+            counter: counter,
+            end: end,
+            target: target,
+            preheader: preheader,
+            signed: c.types.info(typ).signed,
+            typ: typ,
+            chunk: chunk,
+            bounded: bounded,
+            constant: constant,
+        },
+    );
+}
+
+/// The polls of NIR function `f` (ADR 0186 §2.2). `structured`: its body is written as a statement tree, the only
+/// form in which a counted loop's test is rewritten.
+fn functionPolls(
+    e: borrow CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    structured: bool,
+) -> Result<FunctionPolls, AllocError> {
+    var polls = noPolls();
+    let function = borrow n.functions[f as usize];
+    if (isNoPoll(c, function.source)) {
+        return Ok(polls);
+    }
+    polls.entry = (f as usize) < e.pollEntries.length && e.pollEntries[f as usize];
+    let flow = controlFlowOf(function)?;
+    for (k in 0..function.blocks.length) {
+        polls.blocks.push(false)?;
+    }
+    for (i in 0..flow.reversePostorder.length) {
+        let block = flow.reversePostorder[i];
+        var successors = Vector<u32>.create();
+        successorIndices(flow, function, block, mut successors)?;
+        for (s in successors.view()) {
+            if (flow.order[s as usize] <= flow.order[block as usize]) {
+                polls.blocks[s as usize] = true; // a retreating edge's target: a loop's header
+            }
+        }
+    }
+    if (structured && flow.isReducible) {
+        for (l in 0..flow.loopHeaders.length) {
+            match (countedLoopOf(c, n, function, flow, l, truncate<u32>(polls.counted.length))) {
+                Some(counted) => {
+                    if (counted.bounded) {
+                        polls.blocks[counted.header as usize] = false; // it ends by itself
+                    } else if (!counted.constant) {
+                        polls.blocks[counted.header as usize] = false; // its chunks poll instead
+                        polls.counted.push(counted)?;
+                    }
+                }
+                null => {}
+            }
+        }
+    }
+    return Ok(polls);
+}
+
+/// The counted loop whose test is statement `s`, or none.
+fn countedAt(polls: borrow FunctionPolls, s: u32) -> u32 {
+    for (k in 0..polls.counted.length) {
+        if (polls.counted[k].condition == s) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// `#if defined(CEE_POLLS)` … `#endif` lines (no code of their own). A label waiting for the next line (with #line
+/// directives) is written first, with an empty statement: a directive cannot follow it on its line.
+fn pollDirective(e: borrow mut CEmitter, text: StringView) -> Result<void, AllocError> {
+    if (e.hasPendingLabel && !e.capturing) {
+        e.writeLine(";".bytes(), false)?;
+    }
+    return e.writeLine(text.bytes(), false);
+}
+
+/// The declarations of the counted loops' chunk ends, compiled only with polls.
+fn emitChunkDeclarations(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
+    if (e.polls.counted.length == 0) {
+        return Ok();
+    }
+    pollDirective(e, "#if defined(CEE_POLLS)")?;
+    for (k in 0..e.polls.counted.length) {
+        let typ = e.polls.counted[k].typ;
+        e.t("    CEE_UNUSED ")?;
+        appendCTypeName(c, mut e.buf, typ)?;
+        e.t(" cee_chunk_")?;
+        e.d(k as u64)?;
+        e.t(" = 0;")?;
+        e.emit()?;
+    }
+    return pollDirective(e, "#endif");
+}
+
+/// A poll at `start` (a source offset of function `f`).
+fn emitPollAt(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    start: u32,
+) -> Result<void, AllocError> {
+    var line = copyBytes("    CEE_POLL(".bytes())?;
+    appendSite(e, c, n, sources, f, mut line, start)?;
+    appendText(mut line, ");")?;
+    return e.writeLine(line.view(), true);
+}
+
+/// The head of block `block` (an index): its poll, if it is a loop's header.
+fn emitBlockPoll(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    block: u32,
+) -> Result<void, AllocError> {
+    if ((block as usize) >= e.polls.blocks.length || !e.polls.blocks[block as usize]) {
+        return Ok();
+    }
+    let b = borrow n.functions[f as usize].blocks[block as usize];
+    let start = if (b.statements.length > 0) n.statementSpans[b.statements[0] as usize].start
+        else n.terminatorSpans[b.terminator as usize].start;
+    return emitPollAt(e, c, n, sources, f, start);
+}
+
+/// A counted loop's test (ADR 0186 §2.2): with polls, against the chunk's end, which stays the same while the loop
+/// runs, so the C compiler still knows how often it runs; without, the statement as it always was.
+fn emitCountedTest(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    s: u32,
+    k: u32,
+) -> Result<void, AllocError> {
+    let counted = e.polls.counted[k as usize];
+    let function = borrow n.functions[f as usize];
+    pollDirective(e, "#if defined(CEE_POLLS)")?;
+    var line = copyBytes("    ".bytes())?;
+    appendLocalName(c, mut line, function, counted.target)?;
+    appendText(mut line, " = (")?;
+    appendLocalName(c, mut line, function, counted.counter)?;
+    appendText(mut line, " < cee_chunk_")?;
+    appendDecimal(mut line, k as u64)?;
+    appendText(mut line, ");")?;
+    e.writeLine(line.view(), true)?;
+    pollDirective(e, "#else")?;
+    emitStatement(e, c, n, sources, f, s)?;
+    return pollDirective(e, "#endif");
+}
+
+/// The counted loop whose header is the block with id `id`, or none.
+fn countedWithHeader(e: borrow CEmitter, n: borrow NirProgram, f: u32, id: u32) -> u32 {
+    for (k in 0..e.polls.counted.length) {
+        if (n.functions[f as usize].blocks[e.polls.counted[k].header as usize].id == id) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// Before a counted loop (the structurer's loop node, at `depth`): with polls, the chunks' loop, which polls and sets
+/// the chunk's end.
+fn emitChunkOpen(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    k: u32,
+    depth: u32,
+) -> Result<void, AllocError> {
+    let counted = e.polls.counted[k as usize];
+    let function = borrow n.functions[f as usize];
+    let header = borrow function.blocks[counted.header as usize];
+    pollDirective(e, "#if defined(CEE_POLLS)")?;
+    appendIndent(mut e.buf, depth)?;
+    e.t("for (;;) {")?;
+    e.emitNoCode()?;
+    var poll = Vector<u8>.create();
+    appendIndent(mut poll, depth + 1)?;
+    appendText(mut poll, "CEE_POLL(")?;
+    appendSite(e, c, n, sources, f, mut poll, n.statementSpans[header.statements[0] as usize].start)?;
+    appendText(mut poll, ");")?;
+    e.writeLine(poll.view(), true)?;
+    appendIndent(mut e.buf, depth + 1)?;
+    e.t("cee_chunk_")?;
+    e.d(k as u64)?;
+    e.t(" = CEE_CHUNK_END(")?;
+    appendLocalName(c, mut e.buf, function, counted.counter)?;
+    e.t(", ")?;
+    appendLocalName(c, mut e.buf, function, counted.end)?;
+    e.t(");")?;
+    e.emit()?;
+    return pollDirective(e, "#endif");
+}
+
+/// After it: the next chunk if the loop ran to its chunk's end and not to its own (a `break` leaves the counter
+/// below the chunk's end, since only the loop's step raises it).
+fn emitChunkClose(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    k: u32,
+    depth: u32,
+) -> Result<void, AllocError> {
+    let counted = e.polls.counted[k as usize];
+    let function = borrow n.functions[f as usize];
+    pollDirective(e, "#if defined(CEE_POLLS)")?;
+    appendIndent(mut e.buf, depth + 1)?;
+    e.t("if (")?;
+    appendLocalName(c, mut e.buf, function, counted.counter)?;
+    e.t(" != cee_chunk_")?;
+    e.d(k as u64)?;
+    e.t(" || !(")?;
+    appendLocalName(c, mut e.buf, function, counted.counter)?;
+    e.t(" < ")?;
+    appendLocalName(c, mut e.buf, function, counted.end)?;
+    e.t(")) {")?;
+    e.emit()?;
+    appendIndent(mut e.buf, depth + 2)?;
+    e.t("break;")?;
+    e.emit()?;
+    appendIndent(mut e.buf, depth + 1)?;
+    e.t("}")?;
+    e.emitNoCode()?;
+    appendIndent(mut e.buf, depth)?;
+    e.t("}")?;
+    e.emitNoCode()?;
+    return pollDirective(e, "#endif");
+}
+
+/// Statement `s` of function `f`: a counted loop's test, or as emitStatement writes it.
+fn emitStatementPolled(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    s: u32,
+) -> Result<void, AllocError> {
+    let k = countedAt(e.polls, s);
+    if (k != none()) {
+        return emitCountedTest(e, c, n, sources, f, s, k);
+    }
+    return emitStatement(e, c, n, sources, f, s);
+}

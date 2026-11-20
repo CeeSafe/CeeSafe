@@ -34,6 +34,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_EXPLICIT: return "explicit panic";
     case CEE_PANIC_ALLOCATOR: return "the host's allocator broke its contract";
     case CEE_PANIC_POISONED: return "this lock was held by an isolated task that trapped: its data may be broken";
+    case CEE_PANIC_OVERRAN: return "a task ran past its bound without waiting";
     default: return "unknown panic";
     }
 }
@@ -354,6 +355,49 @@ static _Noreturn void panic_report(const ceesafe_panic_info *info) {
 
 _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
     ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), NULL, 0u, loc.file, loc.line, loc.column, 0u};
+    panic_report(&info);
+}
+
+#if defined(CEE_POLLS)
+/* Polls (ADR 0186): each thread's poll word, which only the async runtime's monitor sets, and the slow path it
+   installs before it sets one. */
+_Thread_local uint32_t ceesafe_poll_word;
+uint32_t ceesafe_poll_any;
+void (*ceesafe_poll_hook)(const cee_loc *loc);
+
+/* A word set while it was 0 counts one more in ceesafe_poll_any; one cleared while it was set, one fewer. A clear that
+   comes between the monitor's set and its count leaves the count a moment above 0 (or wrapped below it), which sends
+   polls to the slow path for nothing, never past a task that is overdue. */
+void ceesafe_poll_set(uint32_t *word, uint32_t epoch) {
+    if (ceesafe_atomic_swap_u32(word, epoch) == 0u) {
+        (void)ceesafe_atomic_add_u32(&ceesafe_poll_any, 1u);
+    }
+}
+
+void ceesafe_poll_clear(void) {
+    if (ceesafe_atomic_load_ord_u32(&ceesafe_poll_word, 0) != 0u && ceesafe_atomic_swap_u32(&ceesafe_poll_word, 0u) != 0u) {
+        (void)ceesafe_atomic_add_u32(&ceesafe_poll_any, 0xFFFFFFFFu);
+    }
+}
+
+void ceesafe_poll_slow(const cee_loc *loc) {
+    if (ceesafe_atomic_load_ord_u32(&ceesafe_poll_word, 0) == 0u) {
+        return; /* another thread's task is overdue */
+    }
+    void (*hook)(const cee_loc *loc) = ceesafe_poll_hook;
+    if (hook != NULL) {
+        hook(loc);
+    } else {
+        ceesafe_poll_clear();
+    }
+}
+#endif
+
+/* A runtime panic of the program's kind, with its own text and place: an isolated task's ends that task (ADR 0186's
+   overrun). */
+_Noreturn void ceesafe_panic_with(cee_panic_kind kind, const uint8_t *message, size_t length, cee_loc loc) {
+    ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), message, length, loc.file, loc.line,
+                               loc.column, 0u};
     panic_report(&info);
 }
 

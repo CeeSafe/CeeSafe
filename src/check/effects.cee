@@ -357,12 +357,27 @@ fn processFunctionAttributes(c: borrow mut Checker) -> Result<void, AllocError> 
     return Ok();
 }
 
+/// `@noPoll` on a function or method (ADR 0186 §2.3): its loops and its entry have no poll. It takes no arguments; the
+/// C backend reads it from the syntax.
+fn checkNoPollAttribute(c: borrow mut Checker, known: Slice<u32>) -> Result<void, AllocError> {
+    for (attribute in known) {
+        let a = c.front.ast.attributes[attribute as usize];
+        if (sameText(attributeName(c, attribute), "noPoll") && a.hasParentheses) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'@noPoll' takes no arguments (type-system.md §40.11)")?;
+            c.error(invalidAttribute(), a.start, a.end, message)?;
+        }
+    }
+    return Ok();
+}
+
 fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, AllocError> {
-    let words = "export effects effectsOf context callback constant cfg test";
+    let words = "export effects effectsOf context callback constant cfg test noPoll";
     var known = Vector<u32>.create();
     let attributes = c.front.ast.functions[f as usize].attributes;
     knownAttributes(c, attributes, "a function", words, mut known)?;
     readEffectAttributes(c, f, known.view())?;
+    checkNoPollAttribute(c, known.view())?;
     var hasExport = false;
     for (attribute in known.view()) {
         if (sameText(attributeName(c, attribute), "export")) {
@@ -578,10 +593,11 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
             let fileToSet = methodFileOf(c, member, savedFile);
             c.setFile(fileToSet);
         }
-        let words = "effects effectsOf context placed constant test into";
+        let words = "effects effectsOf context placed constant test into noPoll";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[member as usize].attributes;
         knownAttributes(c, attributes, "a method", words, mut known)?;
+        checkNoPollAttribute(c, known.view())?;
         if (readIntoAttribute(c, member, known.view(), intoCount)?) {
             intoCount += 1; // ADR 0128
         }

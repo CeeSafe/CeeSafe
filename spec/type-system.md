@@ -686,7 +686,8 @@ The analysis runs on NIR move paths (`intermediate-representation.md`):
   **drop flag**. A partially moved struct destroys only the fields it still has.
 - **`Process.exit` and panics do not run destructors or deferred statements** (panic = abort,
   OD-5). A panic in an isolated task (§40.10, ADR 0175) ends that task's unit and not the process; it runs no
-  destructor either, and what the unit held stays.
+  destructor either, and what the unit held stays. A task of such a unit that runs past its bound (§40.11, ADR 0186)
+  panics so, with the kind `Overran`.
 
 ### 14.6 `using`
 `using x = e;` declares a local that cannot be moved out of (N0253) and is destroyed at the end
@@ -6109,6 +6110,8 @@ after `await`; `checkpoint` and `isCancelled` are plain calls that never suspend
 | `Async.timeout(ms, timedOut, body)`, `Async.deadline(at, timedOut, body)` | `Result<T, E>` | ADR 0046. Runs `body`, an async closure of result `Result<T, E>`, beside a deadline `ms: u64` milliseconds from the call (`timeout`) or at `at: u64` on `Timer.now()`'s clock (`deadline`). If the body returns first, its result is the result. Once the deadline passes first, the body is cancelled and awaited: a late `Ok` is kept, and any `Err` becomes `timedOut: E`, which is evaluated before the body starts and dropped if unused. A cancellation from outside gives the body's own result, never `timedOut`; a tie is decided by which task runs first, as in `race`. The body's type comes from an expected `Result<T, E>`, else from its expression body, or from the first `return` of its block if it is `async move` (as a thread's block, §38.2) |
 | `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`: a cancellation point for long computations. A call of lib/std's `AsyncControl<E>.checkpoint` |
 | `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
+| `Async.runBound(ms, mode)` | `bool` | The program's bound on one resume of a task, `ms: u64` (0: none), and what a task in no isolated unit past it does, `mode: RunBound`; `false` in a build without polls (§40.11, ADR 0186). Hosted only |
+| `Async.overruns()` | `u64` | How many tasks ran past their bound, ended or not (§40.11). Hosted only |
 | `Async.blocking(closure)` | `T` | Runs a sync closure literal with no parameters on a worker thread and waits for it without blocking other tasks. Its captures follow §38.6's rule and `T` must be `Send` (N0334). If no worker can be started, it runs on the calling thread: the result is the same. The body's effects are the worker's (the task has `suspend`), and the wait is not cancelled: a cancelled task still waits for its worker |
 | `Async.park()`, `Async.waker()` | `void`, `u64` | Library-only primitives (**N0345** elsewhere): suspend the current task until its waker is woken; the current task's waker id |
 | `AsyncSignal.create()`, `s.raise()`, `await s.wait()` | `AsyncSignal`, `void`, `Result<void, AsyncError>` | lib/core (ADR 0039): `raise` is `@effects()`, so another thread or an `@context(irq)` handler may call it; `wait` parks the task until a raise, which a raise before the wait satisfies. One task waits at a time; a cancelled wait returns `Err(Cancelled)` |
@@ -6420,6 +6423,40 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
 - **Under `ceesafec test`** a crash is the child's, not the test's: its panic line does not make the test panicked,
   and the blocks the crashed units still reach at the end, what they captured included (`ceesafe alloc: isolated
   leaked=<k>`, memory-model.md), are not its leak (tooling.md, the test outcomes; amendments 1 and 2).
+
+### 40.11 A bound on running without waiting (ADR 0186)
+- **`Async.runBound(ms, mode)`** sets the program's bound: one resume of a task, from the executor taking it to the
+  task waiting or returning, may last at most `ms` milliseconds (`u64`; 0, the default, is none). `mode` is a
+  `RunBound` (lib/core): `RunBound.Count` or `RunBound.Panic` (below). The result is `bool`: `false` in a build
+  without polls, where nothing sees the bound. It may be called again; the latest bound is the program's. Hosted
+  only (N0293).
+- **`await set.spawnIsolatedBound(ms, crashed, async move () => …)`** and **`set.trySpawnIsolatedBound(ms, crashed,
+  …)`** are §40.10's isolated starts with the unit's own bound, `ms: u64`, in place of the program's: every task of
+  the unit has its innermost unit's bound, else the program's. Their results and rules are `spawnIsolated`'s and
+  `trySpawnIsolated`'s (N0209 for a child that is not a literal, N0205 for a bound that is not a `u64`).
+- **Polls.** A build with `--cflag -DCEE_POLLS=1` has a poll wherever a task could run without end: at the head of
+  every block a retreating edge of a function's graph targets (a loop's header), and at the entry of every function
+  on a cycle of the call graph, a call through a function value, a closure or a `dyn` method counting as a call to
+  every function that may be its target. An innermost counted loop (a `for` over a range or a sequence, with no
+  loop in its body) whose end is known only when it starts polls once on entry and then once every 1 024
+  iterations; one whose bounds are constants at most 1 024 apart has no poll, since it ends by itself. A function or method marked
+  **`@noPoll`** has none (it takes no arguments: N0290). A build without the macro has the polls' places in its C,
+  but they compile to nothing, and the program's code is what it would be without them (c-backend.md §3b). The
+  freestanding profile has none (`CEE_POLLS` there is the C compiler's error).
+- **A task past its bound** is caught at its next poll, between its bound and about a quarter of it later, never
+  before it:
+  - **in an isolated unit**, it panics with `PanicKind.Overran` (§14.5), and §40.10 ends its unit alone: `ceesafe
+    panic: a task ran 312 ms without waiting, past its bound of 250 ms at parse.cee:88:9 (isolated task 17: ended
+    alone)`. Holding a `Critical`, or under C's frames, it is ended at the first poll outside them;
+  - **in no unit**, with `RunBound.Count`, it is counted and a line says so on standard error (`ceesafe overrun:
+    …; counted, not ended`), once a resume, and it goes on; with `RunBound.Panic` it panics, which ends the process.
+- **`Async.overruns()`** (`u64`) is how many tasks ran past their bound, ended or not.
+- **Not caught:** a task blocked or computing in C, or in a system call (its next poll after the call sees it);
+  `Async.blocking`'s closures, which run on other threads; the runtime's own operations. Nothing is suspended: a
+  task past its bound is ended, not paused (ADR 0186 §3).
+- **The interpreter** has the same rule with fuel, since its clock (§40.8) does not move while a task computes: a
+  resume may take 10 000 steps (block transitions and calls, outside `@noPoll` functions) for each millisecond of
+  its bound. `Async.runBound` is `true` there.
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

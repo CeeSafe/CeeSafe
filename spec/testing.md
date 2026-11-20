@@ -48,6 +48,18 @@ goes on), and in a `Critical`, under a `@callback` that C's `qsort` calls, on `A
 connection handed to a child that traps, shut by its owner's `closer`. They are not corpus tests: the corpus
 counts leaks, and a trapped task leaks what it held.
 
+`tools/bound_check.py` (ADR 0186, in the contract suite) builds its programs with `--cflag -DCEE_POLLS=1`. One runs
+natively and in the interpreter, with the same seven lines: a unit's own bound ends its spinning child; seven ways to
+spin (a `while` and a `for` in an async body, a `loop`, a recursion with no loop, a sync helper's `while` and
+counted `for`, a recursion through a function value) each end their isolated child alone with `Overran`, beside a
+task that waits on a timer; a child that waits often is never ended; a `Critical` held past the bound is ended
+after it, not in it. The other needs the clock and runs natively, a case at a time: a task in no unit counted, not
+ended (`RunBound.Count`), or ending the process (`RunBound.Panic`); a `Critical` and a `qsort` callback that each
+compute for longer than the bound, ended only after them; a unit's own longer bound; a child that computes 20 ms at
+a time under a 50 ms bound, never ended; and a waiting task's longest wait beside a spinning one, between the bound
+and three times it. A build without the macro answers `false` from `Async.runBound`; and each of CeeSafe's benchmarks
+compiles, without the macro, to the same assembly as its C with every poll taken out.
+
 `tools/handover_check.py` (ADR 0173, in the contract suite) builds one program and runs it as several processes:
 three workers started with a listener and unnamed memory handed over answer 300 connections and count them
 together, after the parent has dropped its own listener, and the port is free once they have ended; a UDP socket

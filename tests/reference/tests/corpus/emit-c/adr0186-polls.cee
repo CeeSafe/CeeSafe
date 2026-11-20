@@ -1,0 +1,89 @@
+// ADR 0186 §2.2: where the polls are. An innermost counted loop's test polls once every 1 024 iterations (`sum`,
+// `each`); a loop that is not counted (`scan`, the outer loop of `table`) polls at its header; a function on a cycle of
+// the call graph polls at its entry (`depth`, `even` and `odd`, `hop` through a function value), one on none does
+// not (`twice`); a `@noPoll` function has no poll (`quiet`).
+fn sum(v: Slice<u64>) -> u64 {
+    var total: u64 = 0;
+    for (i in 0..v.length) {
+        total += v[i];
+    }
+    return total;
+}
+
+fn each(v: Slice<u32>) -> u32 {
+    var most: u32 = 0;
+    for (x in v) {
+        if (x > most) {
+            most = x;
+        }
+    }
+    return most;
+}
+
+fn scan(b: Slice<u8>) -> usize {
+    var i: usize = 0;
+    while (i < b.length && b[i] != 61) {
+        i += 1;
+    }
+    return i;
+}
+
+fn table(n: u32) -> u32 {
+    var cells: u32 = 0;
+    for (row in 0..n) {
+        for (column in 0..row) {
+            cells += 1;
+        }
+    }
+    return cells;
+}
+
+fn depth(n: u32) -> u32 {
+    if (n == 0) {
+        return 0;
+    }
+    return depth(n - 1) + 1;
+}
+
+fn even(n: u32) -> bool {
+    if (n == 0) {
+        return true;
+    }
+    return odd(n - 1);
+}
+
+fn odd(n: u32) -> bool {
+    if (n == 0) {
+        return false;
+    }
+    return even(n - 1);
+}
+
+fn hop(n: u32, next: fn(u32) -> u32) -> u32 {
+    if (n == 0) {
+        return 0;
+    }
+    return next(n - 1) + 1;
+}
+
+fn hopped(n: u32) -> u32 => hop(n, hopped);
+
+fn twice(n: u32) -> u32 => truncate<u32>(scan("ab=c".bytes())) + n * 2;
+
+@noPoll
+fn quiet(n: u64) -> u64 {
+    var k: u64 = 0;
+    while (k < n) {
+        k += 1;
+    }
+    return k;
+}
+
+fn main() -> i32 {
+    let data = [1u64, 2, 3];
+    let small = [4u32, 9, 2];
+    let parity: u32 = if (even(4)) 1 else 0;
+    let total = sum(data[..]) + each(small[..]) as u64 + table(4) as u64 + depth(3) as u64 + parity as u64 +
+        hopped(2) as u64 + twice(1) as u64 + quiet(5);
+    return truncate<i32>(total);
+}

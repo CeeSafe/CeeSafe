@@ -117,6 +117,11 @@ fn emitFunction(
     e.function = f;
     e.inPlace.clear();
     inPlaceSites(c, n, f, mut e.inPlace)?;
+    if (e.pollEntries.length == 0) {
+        recursiveFunctions(c, n, mut e.pollEntries)?; // ADR 0186 §2.2
+    }
+    let polls = functionPolls(e, c, n, f, e.structured)?;
+    e.polls = polls;
     let source = nirFunctionSource(n, f);
     let nameStart = functionNameStart(c, source);
     let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
@@ -199,6 +204,10 @@ fn emitFunction(
             e.emit()?;
         }
     }
+    emitChunkDeclarations(e, c)?;
+    if (e.polls.entry) {
+        emitPollAt(e, c, n, sources, f, nameStart)?; // it may recurse (ADR 0186 §2.2)
+    }
     var tree: Structurer? = null;
     if (e.structured) {
         tree = structureFunction(e, c, n, sources, f)?;
@@ -216,6 +225,7 @@ fn emitFunction(
     e.line("}")?;
     endMapping(e)?;
     e.function = none();
+    e.polls = noPolls();
     return Ok();
 }
 
@@ -529,7 +539,8 @@ fn emitFlatBody(
             }
         }
     }
-    for (block in function.blocks.view()) {
+    for (blockIndex in 0..function.blocks.length) {
+        let block = borrow function.blocks[blockIndex];
         if (inSet(targeted, block.id)) {
             var label = copyBytes("bb".bytes())?;
             appendDecimal(mut label, block.id as u64)?;
@@ -553,10 +564,11 @@ fn emitFlatBody(
             appendCfgTest(mut e.buf, block.cfg.view())?;
             e.emit()?;
         }
+        emitBlockPoll(e, c, n, sources, f, truncate<u32>(blockIndex))?; // a loop's header (ADR 0186)
         for (s in block.statements.view()) {
             let span = n.statementSpans[s as usize];
             mapTo(e, c, n, sources, span.start, span.end);
-            emitStatement(e, c, n, sources, f, s)?;
+            emitStatementPolled(e, c, n, sources, f, s)?;
         }
         let span = n.terminatorSpans[block.terminator as usize];
         mapTo(e, c, n, sources, span.start, span.end);

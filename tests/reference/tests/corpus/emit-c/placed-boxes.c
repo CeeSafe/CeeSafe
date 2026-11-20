@@ -10,6 +10,7 @@ static CEE_UNUSED const char cee_file_0[] = "emit-c/placed-boxes.cee";
 
 static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 9u, 18u };
 static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 9u, 9u };
+static CEE_UNUSED const cee_loc ceeL_2 = { cee_file_0, 7u, 5u };
 
 typedef struct ceeT_SystemHeap ceeT_SystemHeap;
 typedef struct ceeT_Pair ceeT_Pair;
@@ -70,11 +71,23 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
     CEE_TEMP uint64_t t_11 = 0;
     CEE_TEMP uint64_t t_12 = 0;
     CEE_UNUSED ceeT_Pair cee_box_0 = {0};
+#if defined(CEE_POLLS)
+    CEE_UNUSED uint64_t cee_chunk_0 = 0;
+#endif
     v_total_1 = ((uint64_t)0);
     t_4 = ((uint64_t)0);
     t_5 = v_n_0;
+#if defined(CEE_POLLS)
     for (;;) {
+        CEE_POLL(&ceeL_2);
+        cee_chunk_0 = CEE_CHUNK_END(t_4, t_5);
+#endif
+    for (;;) {
+        #if defined(CEE_POLLS)
+        t_6 = (t_4 < cee_chunk_0);
+        #else
         t_6 = (t_4 < t_5);
+        #endif
         if (!t_6) {
             break;
         }
@@ -94,6 +107,12 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
             ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 8u, 17u));
         }
     }
+#if defined(CEE_POLLS)
+        if (t_4 != cee_chunk_0 || !(t_4 < t_5)) {
+            break;
+        }
+    }
+#endif
     t_12 = v_total_1;
     return t_12;
 }

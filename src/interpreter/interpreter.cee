@@ -80,6 +80,13 @@ struct Interp {
     asyncIsolateAt: u64;                // where its crashed value is kept, and how long it is
     asyncIsolateSize: usize;
     asyncIsolatedLast: u64;        // the unit the last start made, plus one; 0 for none
+    asyncIsolateBound: u64;        // `set.spawnIsolatedBound`: the next unit's own bound in ms (ADR 0186), or 0
+    boundMs: u64;                  // Async.runBound's bound (ADR 0186), 0 for none
+    boundMode: u32;                // 0 RunBound.Count, 1 RunBound.Panic
+    boundFuel: u64;                // the running resume's steps before it is past its bound (§2.5), 0 for none
+    boundSteps: u64;               // the steps it has taken: block transitions and calls
+    overruns: u64;                 // Async.overruns()
+    noPollFunctions: Vector<u8>;   // by NIR function: 0 not yet asked, 1 polls, 2 `@noPoll`
     asyncCrashes: u64;             // the isolated tasks that trapped
     asyncWatchScopes: Vector<u32>; // the sets with a watcher (Isolation.watch), and its channel's handle
     asyncWatchChannels: Vector<u64>;
@@ -731,6 +738,52 @@ fn step(it: borrow mut Interp) -> Result<void, Stop> {
     return Ok();
 }
 
+/// How many steps (block transitions and calls) one millisecond of a bound is in the interpreter, whose clock does not
+/// move while a task computes (ADR 0186 §2.5; type-system.md §40.11).
+fn boundStepsPerMs() -> u64 => 10000;
+
+/// A step of the running resume (ADR 0186 §2.5): past its fuel, a task of an isolated unit panics with the overrun's
+/// reason (ADR 0175 ends it alone), unless it is in a Critical, where it is ended at its first step outside one; a task
+/// in no unit is counted and reported once, or panics with RunBound.Panic. Steps in a `@noPoll` function do not count.
+fn boundStep(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<void, Stop> {
+    if (it.boundFuel == 0) {
+        return Ok();
+    }
+    while (it.noPollFunctions.length <= f as usize) {
+        it.noPollFunctions.push(0)!;
+    }
+    if (it.noPollFunctions[f as usize] == 0) {
+        it.noPollFunctions[f as usize] = if (isNoPoll(c, n.functions[f as usize].source)) 2 else 1;
+    }
+    if (it.noPollFunctions[f as usize] == 2) {
+        return Ok();
+    }
+    it.boundSteps += 1;
+    if (it.boundSteps <= it.boundFuel) {
+        return Ok();
+    }
+    let unit = unitOfTask(it, it.asyncCurrent);
+    let location = locationOf(it, it.positionFile, it.positionStart);
+    if (unit != none()) {
+        if (it.asyncUnits[unit as usize].critical != 0) {
+            return Ok(); // in a Critical: still past its bound, ended at its first step outside it
+        }
+        it.boundFuel = 0;
+        it.overruns += 1;
+        return Err(panicAt("a task ran past its bound without waiting", location));
+    }
+    it.boundFuel = 0;
+    it.overruns += 1;
+    if (it.boundMode == 1) {
+        return Err(panicAt("a task ran past its bound without waiting", location));
+    }
+    var m = copyBytes("ceesafe overrun: a task ran past its bound without waiting, at ".bytes())!;
+    appendBytes(mut m, location.view())!;
+    appendText(mut m, "; counted, not ended (a task in no isolated unit, RunBound.Count)\n")!;
+    writeError(it, m.view());
+    return Ok();
+}
+
 /// One call in progress: its frame, where it is, the caller's place awaiting the result (none for a call whose result
 /// is not stored), and the position to restore when it returns.
 struct Activation {
@@ -946,6 +999,9 @@ fn runActivations(
                 NirStatement.Assign(place, _) => place,
                 _ => none(),
             };
+            if (it.boundFuel != 0) {
+                boundStep(it, c, n, f)?; // a call is a step of the bound's count (ADR 0186 §2.5)
+            }
             let prepared = prepareCall(it, c, n, mut stack[top].frame, r, callee, arguments)?;
             // Async.boxed with a user allocator: its frame's block from it, as in C (frameReport's size).
             var release = none();
@@ -1031,6 +1087,9 @@ fn runActivations(
         it.positionFile = file;
         it.positionStart = n.terminatorSpans[t as usize].start;
         step(it)?;
+        if (it.boundFuel != 0) {
+            boundStep(it, c, n, f)?; // ADR 0186 §2.5
+        }
         var returned = false;
         var result: Value? = null;
         match (n.terminators[t as usize]) {
@@ -2146,6 +2205,13 @@ fn newInterp(
         asyncUnits: Vector<InterpUnit>.create(),
         asyncUnitOf: Vector<u32>.create(),
         asyncIsolatePending: false,
+        asyncIsolateBound: 0,
+        boundMs: 0,
+        boundMode: 0,
+        boundFuel: 0,
+        boundSteps: 0,
+        overruns: 0,
+        noPollFunctions: Vector<u8>.create(),
         asyncIsolateAt: 0,
         asyncIsolateSize: 0,
         asyncIsolatedLast: 0,

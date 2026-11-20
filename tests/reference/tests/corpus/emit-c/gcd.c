@@ -8,7 +8,8 @@ _Static_assert(sizeof(void *) * 8 == 64, "ceesafec: generated for a 64-bit targe
 
 static CEE_UNUSED const char cee_file_0[] = "emit-c/gcd.cee";
 
-static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 5u, 17u };
+static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 4u, 12u };
+static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 5u, 17u };
 
 static CEE_UNUSED uint64_t ceeF_gcd(uint64_t, uint64_t);
 static CEE_UNUSED int32_t ceeF_main(void);
@@ -22,11 +23,12 @@ static uint64_t ceeF_gcd(CEE_UNUSED uint64_t v_a_0, CEE_UNUSED uint64_t v_b_1) {
     v_x_2 = v_a_0;
     v_y_3 = v_b_1;
     for (;;) {
+        CEE_POLL(&ceeL_0);
         t_5 = (v_y_3 != ((uint64_t)0));
         if (!t_5) {
             break;
         }
-        v_t_4 = cee_rem_u64(v_x_2, v_y_3, &ceeL_0);
+        v_t_4 = cee_rem_u64(v_x_2, v_y_3, &ceeL_1);
         v_x_2 = v_y_3;
         v_y_3 = v_t_4;
     }

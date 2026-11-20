@@ -1,11 +1,15 @@
 // Isolated tasks (ADR 0175; type-system.md §40.10): what a task set says of a child that trapped, and the critical
-// section a task declares.
+// section a task declares. The bound on running without waiting (ADR 0186; type-system.md §40.11).
 
 extern "C" {
     @effects()
     fn ceesafe_async_critical_enter() -> *mut void;
     @effects()
     fn ceesafe_async_critical_leave(unit: *mut void);
+    @effects()
+    fn ceesafe_async_run_bound(ms: u64, mode: u32) -> bool;
+    @effects()
+    fn ceesafe_async_overruns() -> u64;
 }
 
 /// What kind of panic it was: the runtime's kinds (type-system.md §14.5).
@@ -27,6 +31,8 @@ public enum PanicKind {
     Explicit,
     /// A lock that an isolated task held when it trapped was taken (`Mutex.lock`, `AsyncMutex.lock`).
     Poisoned,
+    /// A task ran past its bound without waiting (`Async.runBound`, `spawnIsolatedBound`; ADR 0186).
+    Overran,
     /// One this enum has no name for.
     Other,
 }
@@ -58,6 +64,7 @@ public struct TaskCrash {
         13 => PanicKind.FloatRange,
         16 => PanicKind.Explicit,
         18 => PanicKind.Poisoned,
+        19 => PanicKind.Overran,
         _ => PanicKind.Other,
     };
 }
@@ -89,4 +96,31 @@ public struct Critical {
     drop {
         unsafe { ceesafe_async_critical_leave(this.unit as *mut void); }
     }
+}
+
+/// What `Async.runBound(ms, mode)` does to a task in no isolated unit that runs past the bound (ADR 0186 §2.4). A task
+/// of an isolated unit is always ended, with `PanicKind.Overran`, as a trap would end it.
+public enum RunBound {
+    /// It is counted (`Async.overruns()`), a line says so on standard error, and it goes on.
+    Count,
+    /// It panics with `PanicKind.Overran`, which ends the process.
+    Panic,
+}
+
+/// What `Async.runBound` and `Async.overruns` call (type-system.md §40.11, ADR 0186).
+public struct AsyncBound {
+    /// The program's bound: how long one resume of a task may run without waiting, in milliseconds; 0 is none. False
+    /// in a build without polls (one not built with `--cflag -DCEE_POLLS=1`), where nothing would see the bound.
+    /// Safety: the runtime records the numbers and starts its monitor thread.
+    public fn runBound(ms: u64, mode: RunBound) -> bool {
+        let code: u32 = match (mode) {
+            RunBound.Count => 0,
+            RunBound.Panic => 1,
+        };
+        return unsafe { ceesafe_async_run_bound(ms, code) };
+    }
+
+    /// How many tasks ran past their bound, ended or not.
+    /// Safety: the runtime only reads its count.
+    public fn overruns() -> u64 => unsafe { ceesafe_async_overruns() };
 }

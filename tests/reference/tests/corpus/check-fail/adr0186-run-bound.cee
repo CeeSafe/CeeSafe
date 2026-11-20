@@ -1,0 +1,29 @@
+// ADR 0186: what the bound refuses: `@noPoll` with arguments, `Async.runBound` and `Async.overruns` with the wrong
+// arguments, and `spawnIsolatedBound` whose bound is not a number of milliseconds or whose child is not a literal.
+enum Fail {
+    NoMemory,
+    Crashed,
+}
+
+@noPoll(1) // error[N0290]
+fn quiet() {}
+
+async fn work() -> Result<void, Fail> {
+    return Ok();
+}
+
+async fn sets() -> Result<void, Fail> {
+    return await Async.tasks(4, Fail.NoMemory, async (set) => {
+        await set.spawnIsolatedBound("250", Fail.Crashed, async move () => await work())?; // error[N0205]
+        await set.spawnIsolatedBound(250, Fail.Crashed, work)?;                            // error[N0209] // error[N0298]
+        return Ok();
+    });
+}
+
+fn main() {
+    quiet();
+    let a = Async.runBound(250);                   // error[N0209]
+    let b = Async.runBound("250", RunBound.Count); // error[N0205]
+    let c = Async.overruns(1);                     // error[N0209]
+    let _ = Async.run(sets());
+}

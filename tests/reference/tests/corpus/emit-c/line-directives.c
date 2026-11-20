@@ -9,6 +9,7 @@ _Static_assert(sizeof(void *) * 8 == 64, "ceesafec: generated for a 64-bit targe
 static CEE_UNUSED const char cee_file_0[] = "emit-c/line-directives.cee";
 
 static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 16u, 5u };
+static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 23u, 12u };
 
 typedef struct ceeT_Counter ceeT_Counter;
 typedef struct ceeT_Resource ceeT_Resource;
@@ -38,7 +39,7 @@ static void ceeF_step(CEE_UNUSED ceeT_Counter * v_c_0, CEE_UNUSED int32_t v_by_1
     return;
 #line 17 "emit-c/line-directives.cee"
 }
-#line 42 "main.c"
+#line 43 "main.c"
 
 #line 19 "emit-c/line-directives.cee"
 static int32_t ceeF_main(void) {
@@ -48,6 +49,8 @@ static int32_t ceeF_main(void) {
     v_r_1 = ((ceeT_Resource){ .f_id = ((int32_t)7) });
     v_i_2 = ((int32_t)0);
     for (;;) {
+#line 23 "emit-c/line-directives.cee"
+        CEE_POLL(&ceeL_1);
 #line 23 "emit-c/line-directives.cee"
         t_3 = (v_i_2 < ((int32_t)3));
 #line 23 "emit-c/line-directives.cee"
@@ -71,7 +74,7 @@ static int32_t ceeF_main(void) {
     return t_5;
 #line 28 "emit-c/line-directives.cee"
 }
-#line 75 "main.c"
+#line 78 "main.c"
 
 #line 10 "emit-c/line-directives.cee"
 static void ceeM_8Resource_drop(CEE_UNUSED ceeT_Resource * v_this_0) {
@@ -81,7 +84,7 @@ static void ceeM_8Resource_drop(CEE_UNUSED ceeT_Resource * v_this_0) {
     return;
 #line 12 "emit-c/line-directives.cee"
 }
-#line 85 "main.c"
+#line 88 "main.c"
 
 static void ceeD_8Resource(ceeT_Resource *p) {
     ceeM_8Resource_drop(p);

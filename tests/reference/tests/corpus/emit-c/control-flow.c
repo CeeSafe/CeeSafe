@@ -63,6 +63,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP int32_t t_13 = 0;
     v_i_0 = ((int32_t)0);
     for (;;) {
+        CEE_POLL(&ceeL_1);
         v_i_0 = cee_add_i32(v_i_0, ((int32_t)1), &ceeL_1);
         t_1 = cee_rem_i32(v_i_0, ((int32_t)2), &ceeL_2);
         t_2 = (t_1 == ((int32_t)0));

@@ -601,12 +601,17 @@ fn checkMethodCall(
         (sameText(c.name(memberIdent.symbol), "spawn") || sameText(c.name(memberIdent.symbol), "trySpawn") ||
             sameText(c.name(memberIdent.symbol), "spawnSend") ||
             sameText(c.name(memberIdent.symbol), "spawnIsolated") ||
-            sameText(c.name(memberIdent.symbol), "trySpawnIsolated"))) {
-        let tryIsolated = sameText(c.name(memberIdent.symbol), "trySpawnIsolated"); // ADR 0175 amendment 1
+            sameText(c.name(memberIdent.symbol), "trySpawnIsolated") ||
+            sameText(c.name(memberIdent.symbol), "spawnIsolatedBound") ||
+            sameText(c.name(memberIdent.symbol), "trySpawnIsolatedBound"))) {
+        let bounded = sameText(c.name(memberIdent.symbol), "spawnIsolatedBound") ||
+            sameText(c.name(memberIdent.symbol), "trySpawnIsolatedBound"); // ADR 0186
+        let tryIsolated = sameText(c.name(memberIdent.symbol), "trySpawnIsolated") ||
+            sameText(c.name(memberIdent.symbol), "trySpawnIsolatedBound"); // ADR 0175 amendment 1
         let trying = sameText(c.name(memberIdent.symbol), "trySpawn") || tryIsolated;
         let send = sameText(c.name(memberIdent.symbol), "spawnSend");
-        let isolated = sameText(c.name(memberIdent.symbol), "spawnIsolated") || tryIsolated;              // ADR 0175
-        return checkSetSpawn(c, target, structType, arguments, trying, send, isolated, targetSpan, span); // ADR 0053
+        let isolated = sameText(c.name(memberIdent.symbol), "spawnIsolated") || tryIsolated || bounded; // ADR 0175
+        return checkSetSpawn(c, target, structType, arguments, trying, send, isolated, bounded, targetSpan, span);
     }
     // Own methods, impl methods, or a type parameter's bound methods (§21).
     let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };

@@ -9,8 +9,9 @@ _Static_assert(sizeof(void *) * 8 == 64, "ceesafec: generated for a 64-bit targe
 static CEE_UNUSED const char cee_file_0[] = "emit-c/arrays.cee";
 
 static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 5u, 21u };
-static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 10u, 8u };
-static CEE_UNUSED const cee_loc ceeL_2 = { cee_file_0, 19u, 12u };
+static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 5u, 5u };
+static CEE_UNUSED const cee_loc ceeL_2 = { cee_file_0, 10u, 8u };
+static CEE_UNUSED const cee_loc ceeL_3 = { cee_file_0, 19u, 12u };
 
 typedef struct ceeT_Pair ceeT_Pair;
 typedef struct ceeSl_i32 ceeSl_i32;
@@ -52,11 +53,23 @@ static int32_t ceeF_total(CEE_UNUSED ceeSl_i32 v_xs_0) {
     CEE_TEMP uint64_t t_4 = 0;
     CEE_TEMP bool t_5 = false;
     CEE_TEMP int32_t t_6 = 0;
+#if defined(CEE_POLLS)
+    CEE_UNUSED uint64_t cee_chunk_0 = 0;
+#endif
     v_t_1 = ((int32_t)0);
     t_3 = ((uint64_t)0);
     t_4 = v_xs_0.len;
+#if defined(CEE_POLLS)
     for (;;) {
+        CEE_POLL(&ceeL_1);
+        cee_chunk_0 = CEE_CHUNK_END(t_3, t_4);
+#endif
+    for (;;) {
+        #if defined(CEE_POLLS)
+        t_5 = (t_3 < cee_chunk_0);
+        #else
         t_5 = (t_3 < t_4);
+        #endif
         if (!t_5) {
             break;
         }
@@ -64,6 +77,12 @@ static int32_t ceeF_total(CEE_UNUSED ceeSl_i32 v_xs_0) {
         v_t_1 = cee_add_i32(v_t_1, v_x_2, &ceeL_0);
         t_3 = ((uint64_t)(t_3 + ((uint64_t)1)));
     }
+#if defined(CEE_POLLS)
+        if (t_3 != cee_chunk_0 || !(t_3 < t_4)) {
+            break;
+        }
+    }
+#endif
     t_6 = v_t_1;
     return t_6;
 }
@@ -71,7 +90,7 @@ static int32_t ceeF_total(CEE_UNUSED ceeSl_i32 v_xs_0) {
 static void ceeF_zero(CEE_UNUSED ceeSm_i32 v_xs_0) {
     CEE_TEMP uint64_t t_1 = 0;
     t_1 = v_xs_0.len;
-    cee_check_index(((uint64_t)0), t_1, &ceeL_1);
+    cee_check_index(((uint64_t)0), t_1, &ceeL_2);
     v_xs_0.ptr[((uint64_t)0)] = ((int32_t)0);
     return;
 }
@@ -97,7 +116,7 @@ static int32_t ceeF_main(void) {
     v_a_0.e[t_5] = (int32_t)v_p_1.f_v.e[((uint64_t)1)];
     t_6 = ((ceeSl_i32){ .ptr = v_a_0.e + ((uint64_t)0), .len = ((uint64_t)3) - ((uint64_t)0) });
     t_7 = ceeF_total(t_6);
-    t_8 = cee_add_i32(t_7, v_a_0.e[((uint64_t)0)], &ceeL_2);
+    t_8 = cee_add_i32(t_7, v_a_0.e[((uint64_t)0)], &ceeL_3);
     t_9 = t_8;
     return t_9;
 }

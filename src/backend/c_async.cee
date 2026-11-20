@@ -925,6 +925,11 @@ fn emitAsyncFunction(
     e.function = f;
     e.inPlace.clear();
     inPlaceSites(c, n, f, mut e.inPlace)?;
+    if (e.pollEntries.length == 0) {
+        recursiveFunctions(c, n, mut e.pollEntries)?; // ADR 0186 §2.2
+    }
+    let polls = functionPolls(e, c, n, f, false)?; // flat: a counted loop's test is not rewritten
+    e.polls = polls;
     let source = nirFunctionSource(n, f);
     let nameStart = functionNameStart(c, source);
     let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
@@ -1022,6 +1027,9 @@ fn emitAsyncFunction(
     }
     // One case per suspension point, numbered as emitFlatBody numbers them (block order). A point in a block of
     // `if (cfg("X"))` (ADR 0080 §3.3, ADR 0179) has its label inside that block's `#if`, so its case is under it too.
+    if (e.polls.entry) {
+        emitPollAt(e, c, n, sources, f, nameStart)?; // each resume of a function that may recurse (ADR 0186 §2.2)
+    }
     e.line("    switch (cee_frame->cee_state) {")?;
     var state: u64 = 0;
     for (block in function.blocks.view()) {
@@ -1066,6 +1074,7 @@ fn emitAsyncFunction(
     endMapping(e)?;
     emitFrameInfo(e, c, n, sources, f)?;
     e.function = none();
+    e.polls = noPolls();
     return Ok();
 }
 

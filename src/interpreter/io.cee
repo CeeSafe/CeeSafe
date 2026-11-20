@@ -1545,6 +1545,16 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_isolated_last")) {
         return ":s";
     }
+    // A bound on running without waiting (ADR 0186).
+    if (sameText(name, "ceesafe_async_run_bound")) {
+        return "su:b";
+    }
+    if (sameText(name, "ceesafe_async_isolate_bound")) {
+        return "s:-";
+    }
+    if (sameText(name, "ceesafe_async_overruns")) {
+        return ":s";
+    }
     if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
         return "P:s";
     }
@@ -2150,6 +2160,8 @@ fn callC(
         return signalService(it, n0, arguments); // ADR 0125
     }
     if (sameText(n0, "ceesafe_async_isolate_next") || sameText(n0, "ceesafe_async_isolated_last") ||
+        sameText(n0, "ceesafe_async_run_bound") || sameText(n0, "ceesafe_async_isolate_bound") ||
+        sameText(n0, "ceesafe_async_overruns") ||
         sameText(n0, "ceesafe_async_set_crashes") || sameText(n0, "ceesafe_async_set_missed") ||
         sameText(n0, "ceesafe_async_set_watch") || sameText(n0, "ceesafe_async_set_end") ||
         sameText(n0, "ceesafe_async_critical_enter") || sameText(n0, "ceesafe_async_critical_leave") ||
@@ -2771,6 +2783,7 @@ fn asyncSetSpawn(
                 critical: 0,
                 crashedAt: it.asyncIsolateAt,
                 crashedSize: it.asyncIsolateSize,
+                bound: it.asyncIsolateBound,
                 allocated: Vector<u64>.create(),
                 lockKinds: Vector<u32>.create(),
                 locks: Vector<u64>.create(),
@@ -2779,6 +2792,7 @@ fn asyncSetSpawn(
         )!;
         unit = truncate<u32>(it.asyncUnits.length - 1);
         it.asyncIsolatedLast = it.asyncUnits.length as u64;
+        it.asyncIsolateBound = 0;
     }
     it.asyncSpawns.push(
         InterpSpawn {
@@ -2928,6 +2942,7 @@ struct InterpUnit {
     critical: u32;  // Critical guards its tasks hold
     crashedAt: u64; // the Result<void, E> its set is given, in a block of its own
     crashedSize: usize;
+    bound: u64;             // `spawnIsolatedBound`'s bound in ms for its tasks (ADR 0186), or 0
     allocated: Vector<u64>; // the heap blocks its tasks and those of the units inside it allocated (ADR 0175 amendment 2)
     lockKinds: Vector<u32>; // the locks its tasks hold: 1 a Mutex, 2 an AsyncMutex's token channel
     locks: Vector<u64>;
@@ -2944,6 +2959,18 @@ fn unitAllocated(it: borrow mut Interp, address: u64) {
 }
 
 /// The unit of task `task`, or none.
+/// The bound in ms of a resume of task `task` (ADR 0186 §2.1): its innermost unit's own, else the program's.
+fn boundOfTask(it: borrow Interp, task: u32) -> u64 {
+    var unit = unitOfTask(it, task);
+    while (unit != none()) {
+        if (it.asyncUnits[unit as usize].bound != 0) {
+            return it.asyncUnits[unit as usize].bound;
+        }
+        unit = it.asyncUnits[unit as usize].outer;
+    }
+    return it.boundMs;
+}
+
 fn unitOfTask(it: borrow Interp, task: u32) -> u32 {
     if (task == none() || (task as usize) >= it.asyncUnitOf.length) {
         return none();
@@ -2994,6 +3021,9 @@ fn panicCode(message: Slice<u8>) -> u32 {
     }
     if (sameText(message, "slice lengths differ")) {
         return 12;
+    }
+    if (sameText(message, "a task ran past its bound without waiting")) {
+        return 19; // ADR 0186
     }
     if (sameText(message, "float out of range")) {
         return 13;
@@ -3142,6 +3172,19 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
     }
     if (sameText(name, "ceesafe_async_isolated_last")) {
         return Ok(valueOf(it.asyncIsolatedLast, 8));
+    }
+    if (sameText(name, "ceesafe_async_run_bound")) {
+        // The interpreter always has its rule (ADR 0186 §2.5): the bound is fuel, so the answer is true.
+        it.boundMs = arguments[0].bits(0, 8)?;
+        it.boundMode = if (arguments[1].bits(0, 4)? == 1) 1 else 0;
+        return Ok(valueOf(1, 1));
+    }
+    if (sameText(name, "ceesafe_async_isolate_bound")) {
+        it.asyncIsolateBound = arguments[0].bits(0, 8)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_overruns")) {
+        return Ok(valueOf(it.overruns, 8));
     }
     if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
         let missed = sameText(name, "ceesafe_async_set_missed");
@@ -3672,7 +3715,17 @@ fn runTasks(
         it.asyncRetry = false;
         it.asyncOnWake = false;
         it.asyncFd = -1;
+        // The resume's fuel (ADR 0186 §2.5): its innermost unit's bound, else the program's. A nested Async.run's
+        // resumes have their own; the resume around it goes on with what it had left.
+        let savedFuel = it.boundFuel;
+        let savedSteps = it.boundSteps;
+        let bound = boundOfTask(it, first + k);
+        it.boundFuel = if (bound > 0xFFFFFFFFFFFFFFFF / boundStepsPerMs()) 0xFFFFFFFFFFFFFFFF
+            else bound * boundStepsPerMs();
+        it.boundSteps = 0;
         let outcome = runActivations(it, c, n, mut stacks[k as usize]);
+        it.boundFuel = savedFuel;
+        it.boundSteps = savedSteps;
         // The children this task spawned start after it, in order.
         var spawned = Vector<InterpSpawn>.create();
         loop {

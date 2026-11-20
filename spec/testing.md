@@ -61,6 +61,19 @@ and three times it. A build without the macro answers `false` from `Async.runBou
 compiles, without the macro, to the same assembly as its C with every poll taken out (with `--cc cl`, the same `/FA`
 listing). The Windows workflow runs it with MSVC.
 
+`tools/slice_check.py` (ADR 0189, in the contract suite natively and under ASan with UBSan and under TSan) builds one
+program with `--cflag -DCEE_POLLS=1` and one without, and runs a case at a time with the allocation report: two
+isolated units computing 300 ms under a 10 ms slice both finish while a task on a 1 ms timer beside them waits far
+less than 300 ms (without a slice, the whole 300); units under a 1 ms slice keeping twelve integers and six floats
+live across their polls, and a recursion through Fibonacci's tree, paused hundreds of times, print what the build
+without a slice prints; a unit that never ends, under a 100 ms bound, is paused and then ended with `Overran`; a unit
+holding a `Mutex`, a `Critical`, under a `qsort` callback, or in a function that calls C is not paused there (its
+neighbour waits) and is paused once out of it; under a 50 ms bound, a unit that never leaves a function that calls C
+is ended, never paused; a unit paused and then trapped ends alone; a task paused when another task of its unit traps
+never runs again; a unit paused when its task set is cancelled goes on to its next wait; units on every worker of
+`Async.runWorkers(4, …)` are paused and right. Without the macro `Async.runSlice` is `false`, and in the interpreter it
+is `true`, nothing is paused and the numbers are the native ones. The Windows workflow runs it with MSVC.
+
 `tools/handover_check.py` (ADR 0173, in the contract suite) builds one program and runs it as several processes:
 three workers started with a listener and unnamed memory handed over answer 300 connections and count them
 together, after the parent has dropped its own listener, and the port is free once they have ended; a UDP socket

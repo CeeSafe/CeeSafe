@@ -28,13 +28,48 @@ struct FunctionPolls {
     blocks: Vector<bool>; // by block index: a poll at its head
     counted: Vector<CountedLoop>;
     entry: bool; // a poll at its entry
+    /// It calls a C function itself (ADR 0189 §2.3, question 3): its polls are `CEE_POLL_END`, which may end its task
+    /// but never pause it, so no other task of the thread sees a C library's thread-local state half used.
+    endOnly: bool;
 }
 
 fn noPolls() -> FunctionPolls => FunctionPolls {
     blocks: Vector<bool>.create(),
     counted: Vector<CountedLoop>.create(),
     entry: false,
+    endOnly: false,
 };
+
+/// Whether `function` calls a C function itself: one with no body (an `extern "C"` function), or one through a C
+/// function pointer (ADR 0189 §2.3).
+fn callsForeign(c: borrow Checker, n: borrow NirProgram, function: borrow NirFunction) -> bool {
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            let r = statementRvalueOf(n, s);
+            if (r == none()) {
+                continue;
+            }
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Call(callee, _) => {
+                    let h = borrow c.hir.functions[callee as usize];
+                    if (!h.isDynMethod && !h.isClosure && h.body == none()) {
+                        return true;
+                    }
+                }
+                NirRvalue.Builtin(b, _) => {
+                    if (b == bfCallPointer()) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return false;
+}
+
+/// The poll macro of the function being emitted.
+fn pollMacro(e: borrow CEmitter) -> StringView => if (e.polls.endOnly) "CEE_POLL_END(" else "CEE_POLL(";
 
 /// Whether HIR function `h` is marked `@noPoll` (ADR 0186 §2.3).
 fn isNoPoll(c: borrow Checker, h: u32) -> bool {
@@ -497,6 +532,7 @@ fn functionPolls(
         return Ok(polls);
     }
     polls.entry = (f as usize) < e.pollEntries.length && e.pollEntries[f as usize];
+    polls.endOnly = callsForeign(c, n, function);
     let flow = controlFlowOf(function)?;
     for (k in 0..function.blocks.length) {
         polls.blocks.push(false)?;
@@ -575,7 +611,8 @@ fn emitPollAt(
     f: u32,
     start: u32,
 ) -> Result<void, AllocError> {
-    var line = copyBytes("    CEE_POLL(".bytes())?;
+    var line = copyBytes("    ".bytes())?;
+    appendText(mut line, pollMacro(e))?;
     appendSite(e, c, n, sources, f, mut line, start)?;
     appendText(mut line, ");")?;
     return e.writeLine(line.view(), true);
@@ -656,7 +693,7 @@ fn emitChunkOpen(
     e.emitNoCode()?;
     var poll = Vector<u8>.create();
     appendIndent(mut poll, depth + 1)?;
-    appendText(mut poll, "CEE_POLL(")?;
+    appendText(mut poll, pollMacro(e))?;
     appendSite(e, c, n, sources, f, mut poll, n.statementSpans[header.statements[0] as usize].start)?;
     appendText(mut poll, ");")?;
     e.writeLine(poll.view(), true)?;

@@ -182,7 +182,8 @@ fn checkAsyncCall(
     let memberIdent = c.front.ast.idents[member as usize];
     if (c.freestanding && (sameText(c.name(memberIdent.symbol), "scope") ||
         sameText(c.name(memberIdent.symbol), "blocking") || sameText(c.name(memberIdent.symbol), "runWorkers") ||
-        sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns"))) {
+        sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns") ||
+        sameText(c.name(memberIdent.symbol), "runSlice") || sameText(c.name(memberIdent.symbol), "pauses"))) {
         // The freestanding executor (ADR 0039): no system heap for a scope's children, no threads.
         var what = Vector<u8>.create();
         appendText(mut what, "'Async.")?;
@@ -238,8 +239,9 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "runWorkers")) {
         return checkRunWorkers(c, arguments, expected, span);
     }
-    if (sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns")) {
-        return checkBoundCall(c, memberIdent.symbol, arguments, span); // ADR 0186
+    if (sameText(c.name(memberIdent.symbol), "runBound") || sameText(c.name(memberIdent.symbol), "overruns") ||
+        sameText(c.name(memberIdent.symbol), "runSlice") || sameText(c.name(memberIdent.symbol), "pauses")) {
+        return checkBoundCall(c, memberIdent.symbol, arguments, span); // ADR 0186, ADR 0189
     }
     if (!sameText(c.name(memberIdent.symbol), "run")) {
         var message = Vector<u8>.create();
@@ -1087,8 +1089,8 @@ fn checkCancellationCall(c: borrow mut Checker, member: u32, arguments: Range, s
     return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
 }
 
-/// `Async.runBound(ms, mode)` and `Async.overruns()` (§40.11, ADR 0186): lib/core's AsyncBound, its arguments checked
-/// against its parameters.
+/// `Async.runBound(ms, mode)`, `Async.overruns()`, `Async.runSlice(ms)` and `Async.pauses()` (§40.11, ADRs 0186 and
+/// 0189): lib/core's AsyncBound, its arguments checked against its parameters.
 fn checkBoundCall(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
     let none0 = Vector<u32>.create();
     let function = libraryFunction(c, "AsyncBound", none0.view(), member, span)?;
@@ -1101,7 +1103,11 @@ fn checkBoundCall(c: borrow mut Checker, member: u32, arguments: Range, span: Sp
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (count == 0) "'Async.overruns' takes no arguments"
+            if (count == 0) {
+                if (sameText(c.name(member), "pauses")) "'Async.pauses' takes no arguments"
+                    else "'Async.overruns' takes no arguments"
+            } else if (count ==
+                1) "'Async.runSlice' takes the slice in milliseconds: 'Async.runSlice(10)' (ADR 0189 §2.1)"
                 else "'Async.runBound' takes the bound in milliseconds and a RunBound: 'Async.runBound(250, RunBound.Count)' (ADR 0186 §2.1)",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;

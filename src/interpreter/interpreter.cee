@@ -86,6 +86,7 @@ struct Interp {
     boundFuel: u64;                // the running resume's steps before it is past its bound (§2.5), 0 for none
     boundSteps: u64;               // the steps it has taken: block transitions and calls
     overruns: u64;                 // Async.overruns()
+    sliceMs: u64;                  // Async.runSlice's slice (ADR 0189), recorded; the interpreter pauses nothing
     noPollFunctions: Vector<u8>;   // by NIR function: 0 not yet asked, 1 polls, 2 `@noPoll`
     asyncCrashes: u64;             // the isolated tasks that trapped
     asyncWatchScopes: Vector<u32>; // the sets with a watcher (Isolation.watch), and its channel's handle
@@ -2211,6 +2212,7 @@ fn newInterp(
         boundFuel: 0,
         boundSteps: 0,
         overruns: 0,
+        sliceMs: 0,
         noPollFunctions: Vector<u8>.create(),
         asyncIsolateAt: 0,
         asyncIsolateSize: 0,

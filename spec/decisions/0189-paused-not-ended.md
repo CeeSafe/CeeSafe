@@ -1,11 +1,11 @@
 # ADR 0189 — Paused, not ended: an isolated unit past its slice yields on a stack of its own
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept all the above ADRs as written": §8's nine questions as
-  recommended). Proposed the same day. Asked for by the owner ("We need to tackle where Elixir is ahead", then "Draft
-  ADRs for all gaps"), after httpserver's step 7 of ADR 0186 compared httpserver's isolation with Elixir's. This
-  is the first gap: Erlang's scheduler takes the CPU from a process and gives it back later; ADR 0186 can only end
-  the task. The other gaps are other documents (a CeeSafe.Web ADR for a request's own unit and a 500, ADR 0190 for
-  polls from the manifest, httpserver's plan for supervision and recycling).
+  recommended); implemented, not released (§10). Proposed the same day. Asked for by the owner ("We need to tackle where
+  Elixir is ahead", then "Draft ADRs for all gaps"), after httpserver's step 7 of ADR 0186 compared httpserver's
+  isolation with Elixir's. This is the first gap: Erlang's scheduler takes the CPU from a process and gives it back
+  later; ADR 0186 can only end the task. The other gaps are other documents (a CeeSafe.Web ADR for a request's own unit
+  and a 500, ADR 0190 for polls from the manifest, httpserver's plan for supervision and recycling).
 - Scope: the hosted runtime's executor (`runtime/hosted/ceesafe_rt_async.c`), a small stack-switching layer with
   one routine per architecture, lib/core's `Async` (one call and one counter), the checker's list of async calls,
   the C backend's polls (a second kind, question 3), the interpreter (one call, no pauses), the specification and
@@ -325,3 +325,67 @@ next resume's work absorbs. Not measured: x86-64, Windows fibers, the sanitizers
    and the switch), testing.md, and the book's async chapter.
 8. **httpserver** (its own step): `CW_RUN_SLICE_MS`, and `supervisor_check.py --isolated` measuring the neighbour's
    wait against the slice instead of the bound.
+
+## 10. Implementation notes (2026-11-20)
+
+Implemented on `adr/0189-preemption` from `main` at `33e43bda` (0.80.0), §9's steps 1 to 7; step 8 is httpserver's.
+
+- **What it is.** `Async.runSlice(ms)` and `Async.pauses()` (lib/core's `AsyncBound`, the checker's async calls,
+  `spec/api/core.md`); the runtime's slices in `ceesafe_rt_async.c` (the stack pool, the switch, the pause in the
+  slow path, the requeue); `CEE_POLL_END` and `ceesafe_poll_slow_end` (`rt.h`, the core runtime), which the backend
+  writes in a function that calls an `extern "C"` function or a C function pointer itself (`c_polls.cee`'s
+  `callsForeign`); the interpreter's two calls (a slice recorded, nothing paused); type-system.md §40.12, c-backend.md
+  §3b, testing.md, the guide's async page; `tools/slice_check.py`, in the contract suite natively, under ASan with
+  UBSan and under TSan, and in the Windows workflow with `cl`; the emit-c snapshot `adr0189-poll-end`.
+- **Deviations from §2, each for a reason found while building it:**
+  1. **The switch is file-scope assembly in `ceesafe_rt_async.c`, not a `.S` file** (§2.6, §9 step 1). The compiler
+     writes and compiles C files only; an assembler step would be new machinery for every C compiler, and `cl` takes
+     no `.S`. It is compiled only under `CEE_POLLS`, so a build without polls has no assembly at all.
+  2. **A paused task's stack is kept with its unit, not on the task** (`cee_unit.paused`). The task's record is full
+     (192 bytes, the size `ceesafe_task_slot` and the interpreter's `CEE_TASK_HEAD` both assume); a unit has a list of
+     its paused tasks' stacks, which the executor looks in only when it is not empty.
+  3. **A pause collects what came meanwhile** before the task is requeued (`cee_slice_collect`: descriptors, wakes
+     and due timers, without blocking). The executor otherwise looks only when nothing is ready, and two units that
+     compute keep its queue full: in the first build the neighbour on a 1 ms timer still waited the whole 300 ms.
+  4. **No release of a deep stack's pages when it is given back** (§2.5's `madvise` past 64 KiB): telling a deep resume
+     from a shallow one costs a system call at every give-back. The pool keeps at most 16 stacks, so what deep
+     resumes touched is bounded by that.
+  5. **A nested `Async.run`** cannot be reached from a unit's code: a sync function that runs one may not be called
+     from async code (N0295). It is reached only through a C callback, under C's frames, where §2.3 already forbids a
+     pause; the depth condition stays as a second guard, and there is no case for it in the check.
+  6. **A `Mutex`** can be held by a unit only through `tryLock` (`lock` may block: N0295); the check takes it so.
+  7. **Linux x86-64 with the shadow stack on:** `Async.runSlice` is `false` there (`arch_prctl(ARCH_SHSTK_STATUS)`),
+     since the switch keeps no shadow stack. Not run: no machine here has it on.
+  8. **Windows:** the monitor sleeps on a high-resolution waitable timer, not `Sleep`, whose 15.6 ms tick made every
+     slice at least that long (a 1 ms slice paused 12 times in 444 ms of computing). It shortens ADR 0186's lateness
+     there too.
+  9. **Found on the way, not this ADR's:** `cee_unit_begin` wrote `ceesafe_panic_isolate` at every unit's start, a
+     data race between units begun on two workers of `Async.runWorkers` (ThreadSanitizer, in `slice_check`'s
+     `workers` case with or without a slice). It is written once now, under an atomic flag, and the other threads wait
+     until it is.
+- **The debugger** (§2.6's lldb listing of paused tasks) is not done: `tools/debugger_check.py` is unchanged.
+- **Checked** with the compiler built by itself (`out/ceesafec`, fixed point):
+  - **macOS arm64** (Apple clang 21): every corpus family (run-pass 419, run-fail 55, check-fail 383, emit-c 32 with
+    the new snapshot, ffi 22, the rest); run-pass and run-fail with `-DCEE_POLLS=1` and leak checks, 419 and 55; the
+    async run-pass programs with polls under ASan with UBSan and leak checks, 60, and under TSan, 60; run-pass and
+    run-fail in the interpreter with leak checks, 418 and 55, the one failure `run-pass/async-race-read-loses`, 0.79.2's
+    test that times out in the interpreter on `main` too (fixed on `fix/interp-socket-deadline`); `bound_check` 33 of
+    33, `isolated_check` 14 of 14, `slice_check` 15 of 15 natively, built for x86-64 under Rosetta, under ASan with
+    UBSan, and under TSan; `guide_check` 190 examples, 0 problems.
+  - **Linux** (Ubuntu 24.04 in Docker, gcc 13.3 and clang 18, the compiler built there from this compiler's C):
+    arm64, `slice_check` 15 of 15 with gcc, with gcc at `-O2 -D_FORTIFY_SOURCE=2 -Wall -Werror` (glibc's checked
+    `longjmp`), under ASan with UBSan (LeakSanitizer on) and under TSan; x86-64 (emulated), 15 of 15 with gcc, with
+    fortify and under ASan with UBSan. TSan does not run under that emulation (an empty program built with it exits
+    66): not run on x86-64 Linux.
+  - **Windows 11** (`cl` 19.44, the compiler built from this compiler's C with the workflow's command, no warning):
+    `slice_check` 15 of 15 on fibers and `bound_check` 33 of 33, both with `--cc cl`.
+- **What it costs** (httpserver's benchmark server, CeeSafe.Web at `79ae138`, built with `-DCEE_POLLS=1`, one process,
+  `CW_ISOLATED=1`, `h2load --h1 -c 64 -t 4 -D 6`, 3 rounds with the settings in turn, the machine's load about 6, no
+  failed request; the median and its range): `/small` 80 756 (79 806–82 518) requests a second with no slice, 78 934
+  (78 018–79 302) with a 10 ms slice, −2.3%; `/gz/16384` with gzip 4 393 (4 221–4 421) and 4 325 (4 303–4 351), −1.5%.
+  Each isolated resume runs on a pooled stack there; the difference is near the runs' spread.
+- **What a neighbour waits** beside `/spin/300` (a request computing 300 ms) on the same server, its `/small` timed by
+  curl: 247 ms with no slice; 87 to 149 ms with a 10 ms slice, 39 to 42 ms with 2 ms, 29 to 30 ms with 1 ms. A
+  request is several resumes (accepted, read, handled, written), and each comes after a slice of the one that
+  computes, so its wait is a few slices, not one: a server that wants short waits sets a short slice. Throughput was
+  measured with a 10 ms slice only; a 1 ms slice pauses ten times as often, and is not measured.

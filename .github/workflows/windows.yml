@@ -119,3 +119,7 @@ jobs:
         if: always()
         shell: bash
         run: python tools/bound_check.py --compiler seed/ceesafec.exe --cc cl
+      - name: Slices, a unit paused on a fiber of its own (ADR 0189)
+        if: always()
+        shell: bash
+        run: python tools/slice_check.py --compiler seed/ceesafec.exe --cc cl

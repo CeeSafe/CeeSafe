@@ -1555,6 +1555,13 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_overruns")) {
         return ":s";
     }
+    // Slices (ADR 0189).
+    if (sameText(name, "ceesafe_async_run_slice")) {
+        return "s:b";
+    }
+    if (sameText(name, "ceesafe_async_pauses")) {
+        return ":s";
+    }
     if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
         return "P:s";
     }
@@ -2161,7 +2168,8 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_async_isolate_next") || sameText(n0, "ceesafe_async_isolated_last") ||
         sameText(n0, "ceesafe_async_run_bound") || sameText(n0, "ceesafe_async_isolate_bound") ||
-        sameText(n0, "ceesafe_async_overruns") ||
+        sameText(n0, "ceesafe_async_overruns") || sameText(n0, "ceesafe_async_run_slice") ||
+        sameText(n0, "ceesafe_async_pauses") ||
         sameText(n0, "ceesafe_async_set_crashes") || sameText(n0, "ceesafe_async_set_missed") ||
         sameText(n0, "ceesafe_async_set_watch") || sameText(n0, "ceesafe_async_set_end") ||
         sameText(n0, "ceesafe_async_critical_enter") || sameText(n0, "ceesafe_async_critical_leave") ||
@@ -3188,6 +3196,15 @@ fn isolationService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Ve
     }
     if (sameText(name, "ceesafe_async_overruns")) {
         return Ok(valueOf(it.overruns, 8));
+    }
+    if (sameText(name, "ceesafe_async_run_slice")) {
+        // The interpreter takes a slice and pauses nothing (ADR 0189 §2.7): its clock does not move while a task
+        // computes, so a pause would change nothing a program can see.
+        it.sliceMs = arguments[0].bits(0, 8)?;
+        return Ok(valueOf(1, 1));
+    }
+    if (sameText(name, "ceesafe_async_pauses")) {
+        return Ok(valueOf(0, 8));
     }
     if (sameText(name, "ceesafe_async_set_crashes") || sameText(name, "ceesafe_async_set_missed")) {
         let missed = sameText(name, "ceesafe_async_set_missed");

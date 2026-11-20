@@ -2395,6 +2395,27 @@ public fn overruns() -> u64
 How many tasks ran past their bound, ended or not.
 Safety: the runtime only reads its count.
 
+### AsyncBound.runSlice
+
+```ceesafe
+public fn runSlice(ms: u64) -> bool
+```
+
+The slice (ADR 0189): how long one resume of a task of an isolated unit may run before it is paused at its next
+poll and the executor's other tasks run, in milliseconds; 0 (the default) is none. With a bound as well, the
+bound counts the slices one resume used. False, and nothing changes, in a build without polls or on a target
+without stack switching (32-bit, freestanding); the interpreter takes it and pauses nothing.
+Safety: the runtime records the number and starts its monitor thread.
+
+### AsyncBound.pauses
+
+```ceesafe
+public fn pauses() -> u64
+```
+
+How many times a task has been paused past its slice.
+Safety: the runtime only reads its count.
+
 ## interface Iterator
 
 ```ceesafe

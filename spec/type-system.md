@@ -6455,11 +6455,34 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
     …; counted, not ended`), once a resume, and it goes on; with `RunBound.Panic` it panics, which ends the process.
 - **`Async.overruns()`** (`u64`) is how many tasks ran past their bound, ended or not.
 - **Not caught:** a task blocked or computing in C, or in a system call (its next poll after the call sees it);
-  `Async.blocking`'s closures, which run on other threads; the runtime's own operations. Nothing is suspended: a
-  task past its bound is ended, not paused (ADR 0186 §3).
+  `Async.blocking`'s closures, which run on other threads; the runtime's own operations. A task past its bound is
+  ended, not paused; under a slice (§40.12) a task of an isolated unit is paused first, and the bound counts its
+  slices.
 - **The interpreter** has the same rule with fuel, since its clock (§40.8) does not move while a task computes: a
   resume may take 10 000 steps (block transitions and calls, outside `@noPoll` functions) for each millisecond of
   its bound. `Async.runBound` is `true` there.
+
+### 40.12 Slices: an isolated unit paused, not ended (ADR 0189)
+- **`Async.runSlice(ms)`** sets the program's slice: one resume of a task of an isolated unit (§40.10) may run `ms`
+  milliseconds (`u64`; 0, the default, is none) before it is **paused** at its next poll that may pause, and the
+  executor runs its other tasks. The result is `bool`: `false`, and nothing changes, in a build without polls
+  (§40.11) and on a target with no stack switching (32-bit targets; freestanding builds have no polls). It may be
+  called again; the latest slice is the program's. Hosted only (N0293).
+- **A paused task** goes on from its poll when its turn comes again: it is put at the back of its executor's ready
+  queue, after the tasks that what came meanwhile readied (descriptors, wakes, timers), and it resumes on the thread
+  that paused it. Its frames stay where they are: a resume under a slice runs on a stack of its own, 8 MiB of address
+  space with a guard page, whose overflow ends the process as the thread's would. A task in no unit is never paused.
+- **Where it is not paused.** A poll pauses only where all of these hold, else it lets the task go on and a later poll
+  asks again: the unit holds no `Critical` and no `Mutex` (lib/std's blocking lock; an `AsyncMutex` may be held), no
+  C frames are between the executor and the poll, the poll is not inside a nested `Async.run`, and its function calls
+  no C function itself. A poll in a function that does (an `extern "C"` function or a C function pointer) is
+  `CEE_POLL_END`: it may end its task past the bound, never pause it (c-backend.md §3b).
+- **With a bound** (§40.11), the bound counts the slices one resume has used, times the slice: a unit past it is ended
+  with `PanicKind.Overran` as before, at most about a slice late. A slice alone lets a unit compute without end,
+  sharing its thread.
+- **`Async.pauses()`** (`u64`) is how many times a task has been paused. A pause writes nothing to standard error.
+- **The interpreter** takes a slice and pauses nothing: its clock does not move while a task computes (§40.8), so a
+  pause would change nothing a program can see. `Async.runSlice` is `true` there, and `Async.pauses()` is 0.
 
 ## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 

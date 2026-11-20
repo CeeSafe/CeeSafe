@@ -1,0 +1,40 @@
+// ADR 0189 §2.3, question 3: a function that calls a C function itself polls with CEE_POLL_END, which may end its task
+// but never pause it (`spins`, an extern call in its loop; `through`, a call through a C function pointer); one that
+// calls only CeeSafe functions, even one that calls C, polls with CEE_POLL (`outer`).
+@header("stdlib.h")
+extern "C" {
+    @effects()
+    fn abs(x: i32) -> i32;
+}
+
+/// Safety: abs reads its argument only.
+fn spins(n: i32) -> i32 {
+    var x: i32 = n;
+    while (x > 1) {
+        x = unsafe { abs(x - 2) };
+    }
+    return x;
+}
+
+/// Safety: `f` is abs.
+fn through(f: extern "C" fn(i32) -> i32, n: i32) -> i32 {
+    var x: i32 = n;
+    while (x > 1) {
+        x = unsafe { f(x - 2) };
+    }
+    return x;
+}
+
+fn outer(n: i32) -> i32 {
+    var total: i32 = 0;
+    var k: i32 = n;
+    while (k > 0) {
+        total = spins(k) + total;
+        k -= 1;
+    }
+    return total;
+}
+
+fn main() {
+    Console.writeLine(outer(5) + through(abs, 7));
+}

@@ -15,6 +15,7 @@
   ADR 0169), allocation budgets (tools/budget_check.py, ADR 0170), named shared memory
   (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
   (tools/isolated_check.py, ADR 0175), the bound on running without waiting (tools/bound_check.py, ADR 0186),
+  slices, natively and under the sanitizers (tools/slice_check.py, ADR 0189),
   Bluetooth printers (tools/bluetooth_check.py, ADR 0177), printing a PDF
   (tools/print_check.py, ADR 0178), C's allocations (tools/foreign_alloc_check.py), task frame
   stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
@@ -182,6 +183,13 @@ def main():
             ("handover", py + [f"{HERE}/handover_check.py", "--compiler", cee]),  # ADR 0173
             ("isolated", py + [f"{HERE}/isolated_check.py", "--compiler", cee]),  # ADR 0175
             ("bound", py + [f"{HERE}/bound_check.py", "--compiler", cee]),  # ADR 0186
+            ("slices", py + [f"{HERE}/slice_check.py", "--compiler", cee]),  # ADR 0189
+            # The stack switch, told to the sanitizers (ADR 0189 §2.6).
+            ("slices asan", py + [f"{HERE}/slice_check.py", "--compiler", cee, "--cc", SANITIZER_CC, "--cflag=-O1",
+                                  "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
+                                  "--cflag=-fno-sanitize-recover=all"]),
+            ("slices tsan", py + [f"{HERE}/slice_check.py", "--compiler", cee, "--cc", SANITIZER_CC, "--cflag=-O1",
+                                  "--cflag=-g", "--cflag=-fsanitize=thread"]),
             ("bluetooth", py + [f"{HERE}/bluetooth_check.py", "--compiler", cee]),  # ADR 0177
             ("print", py + [f"{HERE}/print_check.py", "--compiler", cee]),  # ADR 0178
             ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),

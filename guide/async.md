@@ -273,6 +273,19 @@ fn main() {
 - A build without the macro has no polls and runs as fast as before; `Async.runBound` is then `false`. A hot loop
   whose time the program bounds by other means can be marked `@noPoll`.
 
+A bound ends a task; a **slice** shares the thread instead (ADR 0189). `Async.runSlice(10)` lets one resume of an
+isolated task run 10 ms, then pauses it at its next poll: the executor runs the tasks that were waiting, and the paused
+task goes on later from where it stopped. A request that computes for a second no longer holds its neighbours for that
+second, only for a slice at a time:
+
+- With both, `Async.runSlice(10)` and `Async.runBound(2000, RunBound.Count)`, a task computes for up to two seconds,
+  ten milliseconds at a time, and is ended past that: Erlang's behaviour with a runaway's end.
+- Only isolated tasks are paused; their captures are `Send` and hold no loan, so another task cannot see them half way
+  through a change. A task is not paused inside a `Critical`, holding a `Mutex`, under a C callback, or in a function
+  that calls C itself; it is paused at the next poll outside them.
+- `Async.pauses()` counts the pauses. `Async.runSlice` is `false` without polls and on 32-bit targets; the
+  interpreter takes it and pauses nothing.
+
 ## Racing and joining two tasks
 
 `Async.race(a, b)` runs two async closures and keeps the first to finish; `Async.all(a, b)` runs both and fails with

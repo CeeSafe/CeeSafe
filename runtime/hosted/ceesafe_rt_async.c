@@ -2028,6 +2028,7 @@ typedef struct cee_unit {
     uint32_t lock_count;
     uint32_t lock_capacity;
     uint64_t bound_ms;      /* `spawnIsolatedBound`: how long one resume of its tasks may run (ADR 0186), or 0 */
+    struct cee_stack *paused; /* the stacks of its tasks that are paused (ADR 0189 §2.3), linked by `next` */
 } cee_unit;
 
 /* A set's isolated children: how many trapped, and where each is reported. */
@@ -2045,6 +2046,7 @@ typedef struct cee_task_crash {
 } cee_task_crash;
 
 static uint64_t cee_unit_ids;     /* ceesafe_atomic_* */
+static uint32_t cee_isolate_installed; /* ceesafe_atomic_*: 0, 1 while ceesafe_panic_isolate is written, 2 once it is */
 static uint64_t cee_crashes;      /* the process's, ceesafe_atomic_* */
 static uint64_t cee_leaked;
 
@@ -2095,7 +2097,16 @@ static void cee_unit_begin(cee_task *t, void *crashed, size_t crashed_size, uint
     }
     u->budget = t->budget;
     t->unit = u;
-    ceesafe_panic_isolate = cee_isolate_panic;
+    /* The panic path's hook, written once: units begun on two workers at once would race on it otherwise (a
+       ThreadSanitizer report with ADR 0189's check under Async.runWorkers). The first writes it; the others wait
+       until it is written, so every thread with a unit sees it. */
+    if (ceesafe_atomic_cas_u32(&cee_isolate_installed, 0u, 1u) == 0u) {
+        ceesafe_panic_isolate = cee_isolate_panic;
+        ceesafe_atomic_store_u32(&cee_isolate_installed, 2u);
+    } else {
+        while (ceesafe_atomic_load_u32(&cee_isolate_installed) != 2u) {
+        }
+    }
     (void)ceesafe_atomic_add_u32(&ceesafe_units_live, 1u);
     cee_isolate_last = u->id;
 }
@@ -2226,6 +2237,12 @@ static uint64_t cee_overruns;       /* atomic: Async.overruns() */
 
 uint64_t ceesafe_async_overruns(void) { return ceesafe_atomic_load_u64(&cee_overruns); }
 
+/* Slices (ADR 0189; type-system.md §40.11): Async.runSlice's slice, and Async.pauses(). */
+static uint64_t cee_run_slice_ms;   /* atomic: 0 for none */
+static uint64_t cee_pauses;         /* atomic */
+
+uint64_t ceesafe_async_pauses(void) { return ceesafe_atomic_load_u64(&cee_pauses); }
+
 #if defined(CEE_POLLS)
 #if defined(CEE_COSMOOS)
 #error "CEE_POLLS: CosmoOS has no monitor thread (ADR 0186 §3)"
@@ -2238,6 +2255,7 @@ typedef struct cee_bound_slot {
     uint32_t seen_epoch;    /* the monitor's, under cee_bound_lock: the epoch it saw last, and when */
     uint64_t seen_at;
     uint32_t depth;         /* this thread's own: its executor loops running (a nested Async.run is one more) */
+    uint64_t slice;         /* this thread's own: the slice of the resume it runs (ADR 0189), 0 for none */
     uint32_t *word;         /* this thread's ceesafe_poll_word, which the monitor sets */
     struct cee_bound_slot *next; /* the registry, under cee_bound_lock */
 } cee_bound_slot;
@@ -2256,13 +2274,468 @@ static void cee_bound_lock_take(void) { (void)pthread_mutex_lock(&cee_bound_lock
 static void cee_bound_lock_give(void) { (void)pthread_mutex_unlock(&cee_bound_lock); }
 #endif
 
+/* ---- Slices: a resume of an isolated task on a stack of its own, paused past its slice (ADR 0189) ----
+ * With Async.runSlice in force, the executor's outermost loop runs each resume of a task of an isolated unit on a stack
+ * from its pool: the stack's own loop (cee_slice_main) resumes the task over the jump point a trap returns to, on that
+ * stack, and switches back with the result. A poll past the slice that may pause (cee_bound_poll_slow) switches back
+ * with the task's frames left where they are; the task is put at the back of the ready queue and, when its turn comes,
+ * the executor switches to its stack again and the poll returns. The switch is a routine per architecture below, or
+ * Windows' fibers. A target with neither has no slice: Async.runSlice answers false. */
+#if defined(_WIN64)
+#define CEE_SLICE_FIBERS 1
+#elif !defined(_WIN32) && (defined(__aarch64__) || defined(__x86_64__)) && (defined(__GNUC__) || defined(__clang__))
+#define CEE_SLICE_SWITCH 1
+#endif
+
+#if defined(CEE_SLICE_FIBERS) || defined(CEE_SLICE_SWITCH)
+#define CEE_SLICES 1
+static int cee_resume_isolated(cee_task *t);
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define CEE_SLICE_ASAN 1
+#endif
+#if __has_feature(thread_sanitizer)
+#define CEE_SLICE_TSAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(CEE_SLICE_ASAN)
+#define CEE_SLICE_ASAN 1
+#endif
+#if defined(__SANITIZE_THREAD__) && !defined(CEE_SLICE_TSAN)
+#define CEE_SLICE_TSAN 1
+#endif
+#if defined(CEE_SLICE_ASAN)
+/* AddressSanitizer is told of each switch, or it takes the other stack's frames for errors (ADR 0189 §2.6). */
+void __sanitizer_start_switch_fiber(void **fake_stack_save, const void *bottom, size_t size);
+void __sanitizer_finish_switch_fiber(void *fake_stack_save, const void **bottom_old, size_t *size_old);
+#endif
+#if defined(CEE_SLICE_TSAN)
+/* ThreadSanitizer is too, or a switch looks like a race with itself. */
+void *__tsan_get_current_fiber(void);
+void *__tsan_create_fiber(unsigned flags);
+void __tsan_destroy_fiber(void *fiber);
+void __tsan_switch_to_fiber(void *fiber, unsigned flags);
+#endif
+#if defined(CEE_SLICE_SWITCH)
+#include <sys/mman.h>
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/syscall.h>
+#endif
+#endif
+
+#define CEE_SLICE_STACK ((size_t)8u << 20) /* each stack's address space, as the C backend's thread stack (§2.5) */
+#define CEE_SLICE_KEPT 16u                 /* free stacks an executor keeps */
+
+typedef struct cee_stack {
+    struct cee_stack *next; /* the executor's free stacks, or its unit's paused ones */
+    cee_task *task;         /* the task whose resume it runs */
+    int result;             /* that resume's end: 1 returned, 0 waits, -1 trapped, 2 paused */
+    uint32_t slices;        /* the slices this resume has used (§2.3, step 2) */
+#if defined(CEE_SLICE_FIBERS)
+    void *fiber;
+#else
+    void *sp;               /* its saved stack pointer while it does not run */
+    unsigned char *map;     /* its mapping: a guard page below the stack */
+    size_t map_size;
+#endif
+    const void *bottom;     /* the stack's lowest usable address and its size, for AddressSanitizer */
+    size_t size;
+#if defined(CEE_SLICE_ASAN)
+    void *fake;             /* ASan's fake frames of this side while it does not run */
+#endif
+#if defined(CEE_SLICE_TSAN)
+    void *tsan;
+#endif
+} cee_stack;
+
+/* The executor's side, for its outermost loop on this thread (a nested Async.run never slices: §2.3). */
+static _Thread_local struct {
+    cee_stack *free;        /* stacks no task holds */
+    uint32_t free_count;
+    cee_stack *running;     /* the stack the running resume is on, or NULL */
+#if defined(CEE_SLICE_FIBERS)
+    void *fiber;            /* the executor's own fiber */
+    bool converted;         /* made a fiber by the runtime, which makes it a thread again when its loop ends */
+#else
+    void *sp;               /* the executor's saved stack pointer while a stack runs */
+#endif
+#if defined(CEE_SLICE_ASAN)
+    void *fake;
+    const void *bottom;     /* the executor's own stack, learnt at the first switch */
+    size_t size;
+#endif
+#if defined(CEE_SLICE_TSAN)
+    void *tsan;
+#endif
+} cee_slice;
+
+#if defined(CEE_SLICE_SWITCH)
+/* The switch (§2.6): saves the callee-saved registers on the current stack, stores its stack pointer through `save`,
+ * loads `load` and restores the registers saved there. A new stack starts with a frame of the same shape whose return
+ * goes to cee_slice_boot, which calls cee_slice_main with the stack's record, kept in a callee-saved register. */
+void cee_slice_switch(void **save, void *load);
+void cee_slice_boot(void);
+__attribute__((visibility("hidden"), used)) void cee_slice_main(cee_stack *s);
+#if defined(__APPLE__)
+#define CEE_SLICE_SYM(name) "_" #name
+#define CEE_SLICE_HIDE(name) ".private_extern _" #name "\n"
+#define CEE_SLICE_TYPE(name) ""
+#else
+#define CEE_SLICE_SYM(name) #name
+#define CEE_SLICE_HIDE(name) ".hidden " #name "\n"
+#define CEE_SLICE_TYPE(name) ".type " #name ", %function\n"
+#endif
+#if defined(__aarch64__)
+/* x19-x28, x29 (fp), x30 (lr), d8-d15: AAPCS64's callee-saved registers; on Apple x18 is the platform's, untouched. */
+__asm__(".text\n"
+        ".p2align 2\n"
+        ".globl " CEE_SLICE_SYM(cee_slice_switch) "\n" CEE_SLICE_HIDE(cee_slice_switch) CEE_SLICE_TYPE(cee_slice_switch)
+        CEE_SLICE_SYM(cee_slice_switch) ":\n"
+        "    sub sp, sp, #176\n"
+        "    stp x19, x20, [sp, #0]\n"
+        "    stp x21, x22, [sp, #16]\n"
+        "    stp x23, x24, [sp, #32]\n"
+        "    stp x25, x26, [sp, #48]\n"
+        "    stp x27, x28, [sp, #64]\n"
+        "    stp x29, x30, [sp, #80]\n"
+        "    stp d8, d9, [sp, #96]\n"
+        "    stp d10, d11, [sp, #112]\n"
+        "    stp d12, d13, [sp, #128]\n"
+        "    stp d14, d15, [sp, #144]\n"
+        "    mov x9, sp\n"
+        "    str x9, [x0]\n"
+        "    mov sp, x1\n"
+        "    ldp x19, x20, [sp, #0]\n"
+        "    ldp x21, x22, [sp, #16]\n"
+        "    ldp x23, x24, [sp, #32]\n"
+        "    ldp x25, x26, [sp, #48]\n"
+        "    ldp x27, x28, [sp, #64]\n"
+        "    ldp x29, x30, [sp, #80]\n"
+        "    ldp d8, d9, [sp, #96]\n"
+        "    ldp d10, d11, [sp, #112]\n"
+        "    ldp d12, d13, [sp, #128]\n"
+        "    ldp d14, d15, [sp, #144]\n"
+        "    add sp, sp, #176\n"
+        "    ret\n"
+        ".p2align 2\n"
+        ".globl " CEE_SLICE_SYM(cee_slice_boot) "\n" CEE_SLICE_HIDE(cee_slice_boot) CEE_SLICE_TYPE(cee_slice_boot)
+        CEE_SLICE_SYM(cee_slice_boot) ":\n"
+        "    mov x0, x19\n"
+        "    bl " CEE_SLICE_SYM(cee_slice_main) "\n"
+        "    brk #0\n");
+#define CEE_SLICE_FRAME 176u
+#else
+/* rbx, rbp, r12-r15, and the SSE and x87 control words: System V's callee-saved state. */
+__asm__(".text\n"
+        ".p2align 4\n"
+        ".globl " CEE_SLICE_SYM(cee_slice_switch) "\n" CEE_SLICE_HIDE(cee_slice_switch) CEE_SLICE_TYPE(cee_slice_switch)
+        CEE_SLICE_SYM(cee_slice_switch) ":\n"
+        "    pushq %rbp\n"
+        "    pushq %rbx\n"
+        "    pushq %r12\n"
+        "    pushq %r13\n"
+        "    pushq %r14\n"
+        "    pushq %r15\n"
+        "    subq $8, %rsp\n"
+        "    stmxcsr (%rsp)\n"
+        "    fnstcw 4(%rsp)\n"
+        "    movq %rsp, (%rdi)\n"
+        "    movq %rsi, %rsp\n"
+        "    ldmxcsr (%rsp)\n"
+        "    fldcw 4(%rsp)\n"
+        "    addq $8, %rsp\n"
+        "    popq %r15\n"
+        "    popq %r14\n"
+        "    popq %r13\n"
+        "    popq %r12\n"
+        "    popq %rbx\n"
+        "    popq %rbp\n"
+        "    ret\n"
+        ".p2align 4\n"
+        ".globl " CEE_SLICE_SYM(cee_slice_boot) "\n" CEE_SLICE_HIDE(cee_slice_boot) CEE_SLICE_TYPE(cee_slice_boot)
+        CEE_SLICE_SYM(cee_slice_boot) ":\n"
+        "    movq %rbx, %rdi\n"
+        "    call " CEE_SLICE_SYM(cee_slice_main) "\n"
+        "    ud2\n");
+#define CEE_SLICE_FRAME 64u
+#endif
+#endif
+
+/* Whether this thread can switch stacks. Linux on x86-64 with Intel's shadow stack on cannot: the switch keeps no
+   shadow stack (§2.6). */
+static bool cee_slice_possible(void) {
+#if defined(CEE_SLICE_SWITCH) && defined(__linux__) && defined(__x86_64__)
+    unsigned long features = 0;
+    if (syscall(SYS_arch_prctl, 0x5005 /* ARCH_SHSTK_STATUS */, &features) == 0 && (features & 1u) != 0u) {
+        return false;
+    }
+#endif
+    return true;
+}
+
+static void cee_slice_main_loop(cee_stack *s);
+
+#if defined(CEE_SLICE_FIBERS)
+static VOID CALLBACK cee_slice_fiber(LPVOID record) { cee_slice_main_loop((cee_stack *)record); }
+#else
+void cee_slice_main(cee_stack *s) { cee_slice_main_loop(s); }
+#endif
+
+/* A new stack, or NULL if none can be had (the resume then runs on the executor's stack and is never paused). */
+static cee_stack *cee_slice_make(void) {
+    cee_stack *s = (cee_stack *)ceesafe_platform_alloc_zeroed(sizeof *s);
+    if (s == NULL) {
+        return NULL;
+    }
+#if defined(CEE_SLICE_FIBERS)
+    if (cee_slice.fiber == NULL) {
+        if (IsThreadAFiber()) {
+            cee_slice.fiber = GetCurrentFiber();
+        } else {
+            cee_slice.fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+            cee_slice.converted = cee_slice.fiber != NULL;
+        }
+        if (cee_slice.fiber == NULL) {
+            ceesafe_platform_free(s);
+            return NULL;
+        }
+    }
+    s->fiber = CreateFiberEx(64u * 1024u, CEE_SLICE_STACK, FIBER_FLAG_FLOAT_SWITCH, cee_slice_fiber, s);
+    if (s->fiber == NULL) {
+        ceesafe_platform_free(s);
+        return NULL;
+    }
+    s->bottom = NULL; /* fibers: AddressSanitizer on Windows is not run */
+    s->size = 0u;
+#else
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    if (page == 0u || page > 65536u) {
+        page = 65536u;
+    }
+    int flags = MAP_PRIVATE | MAP_ANON;
+#if defined(MAP_NORESERVE)
+    flags |= MAP_NORESERVE;
+#endif
+    void *map = mmap(NULL, CEE_SLICE_STACK + page, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if (map == MAP_FAILED) {
+        ceesafe_platform_free(s);
+        return NULL;
+    }
+    if (mprotect(map, page, PROT_NONE) != 0) { /* the guard: an overflow ends the process, as on the thread's stack */
+        (void)munmap(map, CEE_SLICE_STACK + page);
+        ceesafe_platform_free(s);
+        return NULL;
+    }
+    s->map = (unsigned char *)map;
+    s->map_size = CEE_SLICE_STACK + page;
+    s->bottom = s->map + page;
+    s->size = CEE_SLICE_STACK;
+    uintptr_t top = ((uintptr_t)s->map + s->map_size) & ~(uintptr_t)15u;
+    uint64_t *frame = (uint64_t *)(top - CEE_SLICE_FRAME);
+    ceesafe_mem_set(frame, 0, CEE_SLICE_FRAME);
+#if defined(__aarch64__)
+    frame[0] = (uint64_t)(uintptr_t)s;                     /* x19 */
+    frame[11] = (uint64_t)(uintptr_t)&cee_slice_boot;      /* x30: the switch returns there */
+#else
+    ((uint32_t *)(void *)frame)[0] = 0x1F80u;              /* MXCSR: every exception masked, round to nearest */
+    ((uint16_t *)(void *)frame)[2] = 0x037Fu;              /* the x87 control word's default */
+    frame[5] = (uint64_t)(uintptr_t)s;                     /* rbx */
+    frame[7] = (uint64_t)(uintptr_t)&cee_slice_boot;       /* the switch's return */
+#endif
+    s->sp = frame;
+#endif
+#if defined(CEE_SLICE_TSAN)
+    if (cee_slice.tsan == NULL) {
+        cee_slice.tsan = __tsan_get_current_fiber();
+    }
+    s->tsan = __tsan_create_fiber(0u);
+#endif
+    return s;
+}
+
+static void cee_slice_destroy(cee_stack *s) {
+#if defined(CEE_SLICE_TSAN)
+    __tsan_destroy_fiber(s->tsan);
+#endif
+#if defined(CEE_SLICE_FIBERS)
+    DeleteFiber(s->fiber);
+#else
+    (void)munmap(s->map, s->map_size);
+#endif
+    ceesafe_platform_free(s);
+}
+
+/* From the executor to stack `s`, until it switches back. */
+static void cee_slice_go(cee_stack *s) {
+    cee_slice.running = s;
+#if defined(CEE_SLICE_ASAN)
+    __sanitizer_start_switch_fiber(&cee_slice.fake, s->bottom, s->size);
+#endif
+#if defined(CEE_SLICE_TSAN)
+    __tsan_switch_to_fiber(s->tsan, 0u);
+#endif
+#if defined(CEE_SLICE_FIBERS)
+    SwitchToFiber(s->fiber);
+#else
+    cee_slice_switch(&cee_slice.sp, s->sp);
+#endif
+#if defined(CEE_SLICE_ASAN)
+    __sanitizer_finish_switch_fiber(cee_slice.fake, NULL, NULL);
+#endif
+    cee_slice.running = NULL;
+}
+
+/* From stack `s` back to the executor; it returns when the executor switches to `s` again. */
+static void cee_slice_back(cee_stack *s) {
+#if defined(CEE_SLICE_ASAN)
+    __sanitizer_start_switch_fiber(&s->fake, cee_slice.bottom, cee_slice.size);
+#endif
+#if defined(CEE_SLICE_TSAN)
+    __tsan_switch_to_fiber(cee_slice.tsan, 0u);
+#endif
+#if defined(CEE_SLICE_FIBERS)
+    SwitchToFiber(cee_slice.fiber);
+#else
+    cee_slice_switch(&s->sp, cee_slice.sp);
+#endif
+#if defined(CEE_SLICE_ASAN)
+    __sanitizer_finish_switch_fiber(s->fake, &cee_slice.bottom, &cee_slice.size);
+#endif
+}
+
+/* A stack's own loop: each time the executor switches to it, it resumes its task over a jump point on this stack, so
+   that a trap's jump never leaves it (§2.2), and switches back with the result. */
+static void cee_slice_main_loop(cee_stack *s) {
+#if defined(CEE_SLICE_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, &cee_slice.bottom, &cee_slice.size); /* the first arrival */
+#endif
+    for (;;) {
+        s->result = cee_resume_isolated(s->task);
+        cee_slice_back(s);
+    }
+}
+
+/* Stack `s` is paused in its task's poll: back to the executor, which puts the task at the back of its queue. The
+   jump point is this stack's own, set again when the task goes on, since other tasks have set theirs meanwhile. */
+static void cee_slice_pause(cee_stack *s) {
+    jmp_buf *jump = cee_exec.jump;
+    int32_t depth = cee_exec.jump_depth;
+    s->result = 2;
+    cee_slice_back(s);
+    cee_exec.jump = jump;
+    cee_exec.jump_depth = depth;
+}
+
+/* The stack `t`, a task of a unit, is resumed on: its own if it is paused, else one from the pool while a slice is in
+   force in the executor's outermost loop; NULL to resume it on the executor's stack. */
+static cee_stack *cee_slice_stack_for(cee_task *t) {
+    for (cee_stack **at = &t->unit->paused; *at != NULL; at = &(*at)->next) {
+        if ((*at)->task == t) {
+            cee_stack *s = *at;
+            *at = s->next;
+            s->next = NULL;
+            return s;
+        }
+    }
+    if (ceesafe_atomic_load_ord_u64(&cee_run_slice_ms, 0) == 0u || cee_bound.depth != 1u) {
+        return NULL;
+    }
+    cee_stack *s = cee_slice.free;
+    if (s != NULL) {
+        cee_slice.free = s->next;
+        cee_slice.free_count -= 1u;
+        s->next = NULL;
+    } else {
+        s = cee_slice_make();
+        if (s == NULL) {
+            return NULL;
+        }
+    }
+    s->task = t;
+    s->slices = 0u;
+    return s;
+}
+
+static void cee_slice_give(cee_stack *s) {
+    s->task = NULL;
+    if (cee_slice.free_count >= CEE_SLICE_KEPT) {
+        cee_slice_destroy(s);
+        return;
+    }
+    s->next = cee_slice.free;
+    cee_slice.free = s;
+    cee_slice.free_count += 1u;
+}
+
+/* Resumes `t` on `s`: 1 returned, 0 waits, -1 trapped, 2 paused (its stack kept with its unit). */
+static int cee_slice_resume(cee_task *t, cee_stack *s) {
+    cee_slice_go(s);
+    int result = s->result;
+    if (result == 2) {
+        s->next = t->unit->paused;
+        t->unit->paused = s;
+    } else {
+        cee_slice_give(s);
+    }
+    return result;
+}
+
+/* A task of a dead unit is dropped: a stack it was paused on goes, since nothing outside the task points into its
+   frames (§6). */
+static void cee_slice_drop(cee_task *t) {
+    for (cee_stack **at = &t->unit->paused; *at != NULL; at = &(*at)->next) {
+        if ((*at)->task == t) {
+            cee_stack *s = *at;
+            *at = s->next;
+            cee_slice_destroy(s);
+            return;
+        }
+    }
+}
+
+/* The outermost loop on this thread ends: its free stacks go. */
+static void cee_slice_end(void) {
+    while (cee_slice.free != NULL) {
+        cee_stack *s = cee_slice.free;
+        cee_slice.free = s->next;
+        cee_slice_destroy(s);
+    }
+    cee_slice.free_count = 0u;
+#if defined(CEE_SLICE_FIBERS)
+    if (cee_slice.converted) {
+        (void)ConvertFiberToThread();
+    }
+    cee_slice.fiber = NULL;
+    cee_slice.converted = false;
+#endif
+}
+#endif
+
 /* The monitor (ADR 0186 §2.2, step 3): a platform thread of the runtime's own, as `ceesafec test`'s watchdog is, so the
    allocation report does not count it. It wakes every quarter of the smallest bound in force and compares each
    registered slot's epoch with the one it saw: a resume it has seen for longer than its bound has its thread's word
    set. It can only be late, never early: the time is counted from the wake that first saw the resume. */
 static void cee_bound_sleep(uint64_t ms) {
 #if defined(_WIN32)
-    Sleep((DWORD)ms);
+    /* Sleep rounds up to the system's tick, 15.6 ms by default, which would make every slice (ADR 0189) and the bound's
+       lateness that long: a high-resolution waitable timer (Windows 10 1803 on), as the executor's own waits use, is
+       signalled within a millisecond. Sleep where there is none. Only the monitor thread sleeps here. */
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+    static HANDLE timer;
+    static bool tried;
+    if (!tried) {
+        tried = true;
+        timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    }
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)(ms * 10000u); /* relative, in 100 ns */
+    if (timer != NULL && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+        (void)WaitForSingleObject(timer, INFINITE);
+    } else {
+        Sleep((DWORD)ms);
+    }
 #else
     struct timespec t = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
     while (nanosleep(&t, &t) != 0) {
@@ -2307,7 +2780,7 @@ static void *cee_bound_monitor(void *unused) {
 }
 #endif
 
-static void cee_bound_poll_slow(const cee_loc *loc);
+static void cee_bound_poll_slow(const cee_loc *loc, bool may_pause);
 
 /* A bound of `ms` is in force: the monitor's pace follows the smallest, and the monitor starts with the first, after
    the slow path is installed: no word is set before it is. */
@@ -2364,7 +2837,16 @@ static void cee_bound_begin(uint64_t bound) {
     ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, bound, 0);
 }
 
-static void cee_bound_resume(const cee_task *t) { cee_bound_begin(cee_bound_of(t)); }
+/* What the monitor watches a resume of `t` for: its slice when it runs on a stack of its own (ADR 0189 §2.3), else, or
+   if the bound is nearer, its bound. */
+static uint64_t cee_bound_threshold(uint64_t slice, uint64_t bound) {
+    return slice != 0u && (bound == 0u || slice < bound) ? slice : bound;
+}
+
+static void cee_bound_resume(const cee_task *t, uint64_t slice) {
+    cee_bound.slice = slice;
+    cee_bound_begin(cee_bound_threshold(slice, cee_bound_of(t)));
+}
 
 static void cee_bound_waited(void) {
     ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, 0u, 0);
@@ -2373,8 +2855,10 @@ static void cee_bound_waited(void) {
 
 /* An executor loop starts on this thread: the thread joins the registry with its first. Returns the bound of the
    resume it runs inside, which goes on when this loop ends (a nested Async.run). */
-static uint64_t cee_bound_enter(void) {
+static uint64_t cee_bound_enter(uint64_t *outer_slice) {
     uint64_t outer = ceesafe_atomic_load_ord_u64(&cee_bound.running_bound, 0);
+    *outer_slice = cee_bound.slice;
+    cee_bound.slice = 0u;
     if (cee_bound.depth++ == 0u) {
         cee_bound.word = &ceesafe_poll_word;
         cee_bound_lock_take();
@@ -2385,9 +2869,13 @@ static uint64_t cee_bound_enter(void) {
     return outer;
 }
 
-static void cee_bound_leave(uint64_t outer) {
+static void cee_bound_leave(uint64_t outer, uint64_t outer_slice) {
+    cee_bound.slice = outer_slice;
     if (--cee_bound.depth == 0u) {
         cee_bound_waited();
+#if defined(CEE_SLICES)
+        cee_slice_end();
+#endif
         cee_bound_lock_take();
         for (cee_bound_slot **at = &cee_bound_slots; *at != NULL; at = &(*at)->next) {
             if (*at == &cee_bound) {
@@ -2401,8 +2889,76 @@ static void cee_bound_leave(uint64_t outer) {
     }
 }
 
-/* What every poll that finds its word set calls, through ceesafe_poll_slow (ADR 0186 §2.2, step 4). */
-static void cee_bound_poll_slow(const cee_loc *loc) {
+/* The message of an overrun: how long the resume ran and its bound. */
+static int cee_bound_text(char *text, size_t size, uint64_t ran, uint64_t bound) {
+    int length = snprintf(text, size, "a task ran %llu ms without waiting, past its bound of %llu ms",
+                          (unsigned long long)ran, (unsigned long long)bound);
+    if (length < 0) {
+        length = 0;
+    } else if ((size_t)length >= size) {
+        length = (int)size - 1;
+    }
+    return length;
+}
+
+#if defined(CEE_SLICES)
+/* Whether the unit holds a Mutex, a blocking lock: a task paused with one would block the thread's next task that asks
+   for it, on the thread that would resume the holder (ADR 0189 §2.3). */
+static bool cee_unit_holds_mutex(const cee_unit *u) {
+    for (uint32_t i = 0u; i < u->lock_count; i++) {
+        if (u->locks[i].kind == 1u) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A task of a unit past its slice (ADR 0189 §2.3): paused where it may be, ended past its bound, or let go on for one
+   more slice. Returns whether it acted; false leaves the poll to ADR 0186's rule. */
+static bool cee_slice_poll(cee_task *t, const cee_loc *loc, bool may_pause) {
+    uint64_t slice = cee_bound.slice;
+    cee_stack *s = cee_slice.running;
+    if (slice == 0u || s == NULL || s->task != t) {
+        return false; /* not a resume on a stack of its own */
+    }
+    if (t->unit->critical != 0u || cee_exec.jump == NULL || ceesafe_entry_depth() != cee_exec.jump_depth) {
+        return true; /* in a Critical, or under C's frames: the word stays, and a later poll outside both acts */
+    }
+    uint64_t bound = cee_bound_of(t);
+    char text[160];
+    if (may_pause && cee_bound.depth == 1u && !cee_unit_holds_mutex(t->unit)) {
+        s->slices += 1u;
+        if (bound != 0u && (uint64_t)s->slices * slice >= bound) {
+            ceesafe_poll_clear();
+            (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
+            int length = cee_bound_text(text, sizeof text, (uint64_t)s->slices * slice, bound);
+            ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc);
+        }
+        ceesafe_poll_clear();
+        (void)ceesafe_atomic_add_u64(&cee_pauses, 1u);
+        cee_slice_pause(s); /* the executor runs the others; this returns when the task's turn comes again */
+        return true;
+    }
+    /* A poll that may only end the task (it calls C, it holds a Mutex): ended past its bound, else watched again for
+       one more slice, which counts as used. */
+    uint64_t since = ceesafe_atomic_load_ord_u64(&cee_bound.overdue_since, 0);
+    uint64_t now = ceesafe_async_now();
+    uint64_t ran = (uint64_t)s->slices * slice + (now > since ? now - since : 0u);
+    if (bound != 0u && ran >= bound) {
+        ceesafe_poll_clear();
+        (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
+        int length = cee_bound_text(text, sizeof text, ran, bound);
+        ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc);
+    }
+    s->slices += 1u;
+    cee_bound_begin(cee_bound_threshold(slice, bound)); /* a new epoch: the word cleared, the monitor counts anew */
+    return true;
+}
+#endif
+
+/* What every poll that finds its word set calls, through ceesafe_poll_slow (ADR 0186 §2.2, step 4), and
+   ceesafe_poll_slow_end for a poll whose task may not be paused (ADR 0189 §2.3). */
+static void cee_bound_poll_slow(const cee_loc *loc, bool may_pause) {
     uint32_t word = ceesafe_atomic_load_ord_u32(&ceesafe_poll_word, 0);
     cee_task *t = cee_exec.current;
     uint32_t epoch = ceesafe_atomic_load_ord_u32(&cee_bound.epoch, 0);
@@ -2413,17 +2969,18 @@ static void cee_bound_poll_slow(const cee_loc *loc) {
         ceesafe_poll_clear(); /* set for a resume that has ended */
         return;
     }
+#if defined(CEE_SLICES)
+    if (t->unit != NULL && cee_slice_poll(t, loc, may_pause)) {
+        return;
+    }
+#else
+    (void)may_pause;
+#endif
     uint64_t bound = ceesafe_atomic_load_ord_u64(&cee_bound.running_bound, 0);
     uint64_t since = ceesafe_atomic_load_ord_u64(&cee_bound.overdue_since, 0);
     uint64_t now = ceesafe_async_now();
     char text[160];
-    int length = snprintf(text, sizeof text, "a task ran %llu ms without waiting, past its bound of %llu ms",
-                          (unsigned long long)(now > since ? now - since : 0u), (unsigned long long)bound);
-    if (length < 0) {
-        length = 0;
-    } else if ((size_t)length >= sizeof text) {
-        length = (int)sizeof text - 1;
-    }
+    int length = cee_bound_text(text, sizeof text, now > since ? now - since : 0u, bound);
     if (t->unit != NULL) {
         if (t->unit->critical != 0u || cee_exec.jump == NULL || ceesafe_entry_depth() != cee_exec.jump_depth) {
             return; /* in a Critical, or under C's frames: the word stays, and a poll outside both ends the unit */
@@ -2459,6 +3016,22 @@ bool ceesafe_async_run_bound(uint64_t ms, uint32_t mode) {
     return true;
 #else
     return false; /* no polls in this build: nothing would see the bound (ADR 0186 §2.1) */
+#endif
+}
+
+/* Async.runSlice (ADR 0189 §2.1): the slice of a resume of an isolated unit's task, 0 for none. */
+bool ceesafe_async_run_slice(uint64_t ms) {
+#if defined(CEE_POLLS) && defined(CEE_SLICES)
+    if (ms != 0u && !cee_slice_possible()) {
+        return false;
+    }
+    ceesafe_atomic_store_u64(&cee_run_slice_ms, ms);
+    cee_bound_note(ms);
+    return true;
+#else
+    (void)ms;
+    (void)cee_run_slice_ms;
+    return false; /* no polls in this build, or no stack switching on this target (§2.6) */
 #endif
 }
 
@@ -3444,6 +4017,29 @@ static void cee_child_gone(cee_task *t, bool keep) {
     }
 }
 
+#if defined(CEE_SLICES)
+/* What has come while a task computed: descriptors, wakes and due timers, collected without blocking, so that a task
+   paused past its slice goes after the tasks they ready (ADR 0189 §2.3, step 3). The executor otherwise looks only
+   when nothing is ready, and two tasks that compute would keep the queue full. */
+static void cee_slice_collect(void) {
+#if defined(_WIN32)
+    (void)cee_wait_windows(0);
+#else
+    if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || cee_exec.op_count > 0u) {
+        (void)(cee_reactor_open() ? cee_wait_reactor(0) : cee_wait_poll(0));
+    }
+#if defined(CEE_KQUEUE)
+    cee_exec.pipe_drained = false; /* the scan below sees every wake so far */
+#endif
+#endif
+    (void)cee_ready_woken();
+    uint64_t now = ceesafe_async_now();
+    while (cee_exec.heap_count > 0u && cee_task_key(cee_exec.heap[0]) <= now) {
+        cee_unpark(cee_exec.heap[0]);
+    }
+}
+#endif
+
 /* Resumes `t`: whether it returned. */
 static bool cee_resume(cee_task *t) {
     return t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
@@ -3499,6 +4095,11 @@ static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
         }
 #if !defined(CEE_FREESTANDING)
         if (t->unit != NULL && cee_unit_dead(t->unit)) {
+#if defined(CEE_SLICES)
+            if (t->unit->paused != NULL) {
+                cee_slice_drop(t); /* paused when its unit died: its stack goes (ADR 0189 §2.3) */
+            }
+#endif
             continue; /* a task of a unit that trapped never runs again, whatever woke it (ADR 0175 §2.2) */
         }
 #endif
@@ -3513,11 +4114,20 @@ static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
         jmp_buf *outer_jump = cee_exec.jump;
         int32_t outer_depth = cee_exec.jump_depth;
         int resumed;
-#if defined(CEE_POLLS)
-        cee_bound_resume(t); /* a new epoch for the monitor, with this task's bound (ADR 0186 §2.2) */
+#if defined(CEE_SLICES)
+        /* A task of a unit, under a slice, runs on a stack of its own, or goes on on the one it was paused on (ADR
+           0189 §2.2). */
+        cee_stack *stack = t->unit != NULL ? cee_slice_stack_for(t) : NULL;
+        cee_bound_resume(t, stack != NULL ? ceesafe_atomic_load_ord_u64(&cee_run_slice_ms, 0) : 0u);
+#elif defined(CEE_POLLS)
+        cee_bound_resume(t, 0u); /* a new epoch for the monitor, with this task's bound (ADR 0186 §2.2) */
 #endif
         if (t->unit != NULL) {
+#if defined(CEE_SLICES)
+            resumed = stack != NULL ? cee_slice_resume(t, stack) : cee_resume_isolated(t);
+#else
             resumed = cee_resume_isolated(t);
+#endif
         } else {
             cee_exec.jump = NULL; /* a trap in a task of no unit ends the process, also under an outer executor's unit */
             resumed = cee_resume(t) ? 1 : 0;
@@ -3538,6 +4148,19 @@ static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
             }
             continue;
         }
+#if defined(CEE_SLICES)
+        if (resumed == 2) {
+            /* Paused past its slice: at the back of the queue, on this thread (ADR 0189 §2.3). It registered no
+               wait, so a wake that comes meanwhile is stale and is dropped as one. */
+            cee_exec.current = NULL;
+            cee_exec.jump = outer_jump;
+            cee_exec.jump_depth = outer_depth;
+            t->budget = ceesafe_budget_swap(outer);
+            cee_slice_collect();
+            cee_ready(t);
+            continue;
+        }
+#endif
         bool done = resumed > 0;
 #else
         bool done = cee_resume(t);
@@ -3608,9 +4231,10 @@ static void cee_exec_tasks(cee_task *root, uint64_t cancel_at) {
 /* The executor's loop on this thread, in the monitor's registry while it runs (ADR 0186 §2.2, step 3). */
 static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
 #if defined(CEE_POLLS)
-    uint64_t outer = cee_bound_enter();
+    uint64_t outer_slice;
+    uint64_t outer = cee_bound_enter(&outer_slice);
     cee_exec_tasks(root, cancel_at);
-    cee_bound_leave(outer);
+    cee_bound_leave(outer, outer_slice);
 #else
     cee_exec_tasks(root, cancel_at);
 #endif

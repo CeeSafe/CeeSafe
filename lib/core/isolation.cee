@@ -10,6 +10,10 @@ extern "C" {
     fn ceesafe_async_run_bound(ms: u64, mode: u32) -> bool;
     @effects()
     fn ceesafe_async_overruns() -> u64;
+    @effects()
+    fn ceesafe_async_run_slice(ms: u64) -> bool;
+    @effects()
+    fn ceesafe_async_pauses() -> u64;
 }
 
 /// What kind of panic it was: the runtime's kinds (type-system.md §14.5).
@@ -123,4 +127,15 @@ public struct AsyncBound {
     /// How many tasks ran past their bound, ended or not.
     /// Safety: the runtime only reads its count.
     public fn overruns() -> u64 => unsafe { ceesafe_async_overruns() };
+
+    /// The slice (ADR 0189): how long one resume of a task of an isolated unit may run before it is paused at its next
+    /// poll and the executor's other tasks run, in milliseconds; 0 (the default) is none. With a bound as well, the
+    /// bound counts the slices one resume used. False, and nothing changes, in a build without polls or on a target
+    /// without stack switching (32-bit, freestanding); the interpreter takes it and pauses nothing.
+    /// Safety: the runtime records the number and starts its monitor thread.
+    public fn runSlice(ms: u64) -> bool => unsafe { ceesafe_async_run_slice(ms) };
+
+    /// How many times a task has been paused past its slice.
+    /// Safety: the runtime only reads its count.
+    public fn pauses() -> u64 => unsafe { ceesafe_async_pauses() };
 }

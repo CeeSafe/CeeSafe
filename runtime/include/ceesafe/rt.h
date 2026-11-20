@@ -156,7 +156,9 @@ const char *ceesafe_panic_reason(cee_panic_kind kind);
  * is one relaxed load of ceesafe_poll_any, a global, and a branch: no thread-local access, which on Mach-O and Windows
  * costs a call or a lookup in each function. The monitor sets the overdue thread's own ceesafe_poll_word to the epoch
  * of the resume that ran past its bound and counts it in ceesafe_poll_any; ceesafe_poll_slow reads this thread's word,
- * returns if it is 0 (another thread's), and otherwise ends the task, or counts it (ADR 0186 §2.2). */
+ * returns if it is 0 (another thread's), and otherwise ends the task, or counts it (ADR 0186 §2.2), or, under a
+ * slice, pauses it (ADR 0189 §2.3). A function that calls a C function itself has CEE_POLL_END in place of CEE_POLL:
+ * the same poll, whose task may be ended but never paused there. */
 #if defined(CEE_POLLS)
 #if defined(CEE_FREESTANDING) || defined(CEESAFE_EMBED_FREESTANDING)
 #error "CEE_POLLS: a freestanding build has no monitor thread (ADR 0186 §3)"
@@ -166,7 +168,10 @@ extern uint32_t ceesafe_poll_any; /* how many threads' words are set, by ceesafe
 /* The core runtime's: the async runtime's slow path through ceesafe_poll_hook once a bound is in force (a program
  * without tasks has no executor, and its word stays 0). */
 CEE_COLD void ceesafe_poll_slow(const cee_loc *loc);
-extern void (*ceesafe_poll_hook)(const cee_loc *loc);
+/* The same for a poll in a function that calls a C function itself (CEE_POLL_END): its task may be ended there, never
+ * paused (ADR 0189 §2.3, question 3). */
+CEE_COLD void ceesafe_poll_slow_end(const cee_loc *loc);
+extern void (*ceesafe_poll_hook)(const cee_loc *loc, bool may_pause);
 /* Sets a thread's word (the monitor's), and clears this thread's (the executor's), keeping ceesafe_poll_any. */
 void ceesafe_poll_set(uint32_t *word, uint32_t epoch);
 void ceesafe_poll_clear(void);
@@ -176,12 +181,14 @@ void ceesafe_poll_clear(void);
 #define CEE_POLL_PENDING() __builtin_expect(__atomic_load_n(&ceesafe_poll_any, __ATOMIC_RELAXED) != 0u, 0)
 #endif
 #define CEE_POLL(loc) do { if (CEE_POLL_PENDING()) ceesafe_poll_slow(loc); } while (0)
+#define CEE_POLL_END(loc) do { if (CEE_POLL_PENDING()) ceesafe_poll_slow_end(loc); } while (0)
 /* The end of an innermost counted loop's next chunk (ADR 0186 §2.2): `i` 1 024 on, or `end` if that is nearer, or `i`
  * if the loop is done. The difference is taken as unsigned, which is right for a signed counter below its end too,
  * and `i + 1024` is below `end` where it is taken, so it does not overflow. */
 #define CEE_CHUNK_END(i, end) ((i) < (end) ? ((uint64_t)(end) - (uint64_t)(i) > 1024u ? (i) + 1024 : (end)) : (i))
 #else
 #define CEE_POLL(loc) ((void)0)
+#define CEE_POLL_END(loc) ((void)0)
 #endif
 
 /* ---- Checked arithmetic: + - * ---------------------------------------------------------- */
@@ -1707,6 +1714,10 @@ uint64_t ceesafe_async_isolated_last(void);
 bool ceesafe_async_run_bound(uint64_t ms, uint32_t mode);
 void ceesafe_async_isolate_bound(uint64_t ms);
 uint64_t ceesafe_async_overruns(void);
+/* Slices (ADR 0189): Async.runSlice's slice in ms (false, and nothing recorded, in a build without CEE_POLLS or on a
+ * target without stack switching), and Async.pauses(). Hosted only. */
+bool ceesafe_async_run_slice(uint64_t ms);
+uint64_t ceesafe_async_pauses(void);
 uint64_t ceesafe_async_set_crashes(void *set);
 uint64_t ceesafe_async_set_missed(void *set);
 bool ceesafe_async_set_watch(void *set, void *channel);

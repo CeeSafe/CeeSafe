@@ -363,7 +363,7 @@ _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
    installs before it sets one. */
 _Thread_local uint32_t ceesafe_poll_word;
 uint32_t ceesafe_poll_any;
-void (*ceesafe_poll_hook)(const cee_loc *loc);
+void (*ceesafe_poll_hook)(const cee_loc *loc, bool may_pause);
 
 /* A word set while it was 0 counts one more in ceesafe_poll_any; one cleared while it was set, one fewer. A clear that
    comes between the monitor's set and its count leaves the count a moment above 0 (or wrapped below it), which sends
@@ -380,17 +380,22 @@ void ceesafe_poll_clear(void) {
     }
 }
 
-void ceesafe_poll_slow(const cee_loc *loc) {
+static void cee_poll_slow(const cee_loc *loc, bool may_pause) {
     if (ceesafe_atomic_load_ord_u32(&ceesafe_poll_word, 0) == 0u) {
         return; /* another thread's task is overdue */
     }
-    void (*hook)(const cee_loc *loc) = ceesafe_poll_hook;
+    void (*hook)(const cee_loc *loc, bool may_pause) = ceesafe_poll_hook;
     if (hook != NULL) {
-        hook(loc);
+        hook(loc, may_pause);
     } else {
         ceesafe_poll_clear();
     }
 }
+
+void ceesafe_poll_slow(const cee_loc *loc) { cee_poll_slow(loc, true); }
+
+/* A poll in a function that calls a C function itself: its task may be ended, never paused (ADR 0189 §2.3). */
+void ceesafe_poll_slow_end(const cee_loc *loc) { cee_poll_slow(loc, false); }
 #endif
 
 /* A runtime panic of the program's kind, with its own text and place: an isolated task's ends that task (ADR 0186's

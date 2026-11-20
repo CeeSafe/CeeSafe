@@ -657,7 +657,10 @@ in, a block that ends by going to the header; neither borrowed) is treated by it
   the chunk's end). Under `#else` the test is the one it always was. `cee_chunk_<k>` is declared with the locals,
   of the counter's type, under the same `#if`.
 
-A function marked `@noPoll` has no poll and no chunks.
+A function marked `@noPoll` has no poll and no chunks. A function that calls a C function itself (an `extern "C"`
+function, or one through a C function pointer) has `CEE_POLL_END(&ceeL_<n>)` in place of each `CEE_POLL(…)`: the same
+poll, whose task may be ended there but never paused (ADR 0189 §2.3, question 3), so no other task of the thread runs
+while a C library's thread-local state is half used.
 
 Without `CEE_POLLS`, `CEE_POLL(…)` is `((void)0)` and the `#if` blocks keep their `#else`: the C compiles to the code
 it compiles to with every poll taken out (`tools/bound_check.py` checks the assembly of CeeSafe's benchmarks). With
@@ -670,6 +673,18 @@ touches no thread-local storage, which costs a call in every function that does 
 `#define CEE_POLLS 1 /* polls: the root manifest's polls = true, or --polls (ADR 0190) */`, before its first
 `#include`, so the files of `--emit c`, `--split`, `--emit obj` and `--emit lib` each carry it. `--cflag
 -DCEE_POLLS=1` defines it too, as before.
+
+**Slices** (ADR 0189, type-system.md §40.12). Under `Async.runSlice`, the executor's outermost loop on a thread runs
+each resume of a task of an isolated unit on a stack of its own, from a pool of the thread's (at most 16 kept free):
+8 MiB of address space each with a guard page below it, `mmap`ped, or a fiber of that reserve on 64-bit Windows
+(`CreateFiberEx`, the thread made a fiber with `ConvertThreadToFiberEx` for the loop's length). The switch is a
+routine of `ceesafe_rt_async.c` written in assembly at file scope, for arm64 (x19–x28, fp, lr, d8–d15) and x86-64
+System V (rbx, rbp, r12–r15, MXCSR and the x87 control word); a 32-bit target has no slice. The stack's own loop sets
+the jump point a trap returns to on that stack, so a trap's `longjmp` never crosses stacks. The slow path pauses by
+switching back to the executor's stack, which collects what came meanwhile without blocking and puts the task at the
+back of its queue. AddressSanitizer and ThreadSanitizer are told of every switch when they are on
+(`__sanitizer_start_switch_fiber`, `__tsan_switch_to_fiber`). On Linux x86-64 with the shadow stack on, `Async.runSlice`
+is `false`, since the switch keeps no shadow stack.
 
 ## 4. Evaluation order and temporaries
 

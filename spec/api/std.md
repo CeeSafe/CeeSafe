@@ -74,6 +74,7 @@
 - [struct Arc](#struct-arc)
 - [enum SpawnError](#enum-spawnerror)
 - [struct OnceLock](#struct-oncelock)
+- [struct Testing](#struct-testing)
 - [struct TestFailure](#struct-testfailure)
 - [struct Check](#struct-check)
 - [struct CheckResult](#struct-checkresult)
@@ -3359,6 +3360,26 @@ public fn intoInner(this) -> T?
 
 The value, the cell consumed.
 
+## struct Testing
+
+```ceesafe
+public struct Testing
+```
+
+The freed-block scan (ADR 0197 §4.3, type-system.md §42.4): with `ceesafec test --scan-freed`, or
+`CEESAFE_SCAN_FREED=1` for a built program, every freed block of every CeeSafe allocator is kept as it was at its
+free. A test then asks whether a secret was left behind.
+
+### Testing.freedHolds
+
+```ceesafe
+public fn freedHolds(pattern: Slice<u8>) -> bool
+```
+
+Whether a block freed since the scan began holds the bytes of `pattern`, anywhere in it; `false` while the scan
+is off. An empty pattern is found in any kept block.
+Safety: the runtime reads the pattern's length of bytes, during the call only.
+
 ## struct TestFailure
 
 ```ceesafe
@@ -3483,7 +3504,8 @@ public fn begin()
 ```
 
 Before the test: the arguments after the test's name, `<fail-alloc-at> <cancel-at> <timeout-ms>` (0: none),
-turn the runtime's reports and hooks on and arm the timeout.
+and `1` after them for `--scan-freed` (ADR 0197 §4.3), turn the runtime's reports and hooks on and arm the
+timeout.
 Safety: the runtime only records the numbers, and the watchdog only waits and ends the process.
 
 ### TestRun.passed

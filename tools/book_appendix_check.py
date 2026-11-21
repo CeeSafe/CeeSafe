@@ -548,7 +548,8 @@ def _appendix_c(root, ceesafec, where):
     core = api_entries(root, "spec/api/core.md")
     std = api_entries(root, "spec/api/std.md")
     for struct in C_WHOLE:
-        members = [m for s, m, _ in core + std if s == struct and m and not m.endswith("Failing")]
+        # An allocator's variant of a member (`…Failing`, and ADR 0197's `…Secret`) is the member's row's.
+        members = [m for s, m, _ in core + std if s == struct and m and not m.endswith(("Failing", "Secret"))]
         need(members, f"{struct} (spec/api)")
     formatted = [signature for struct, member, signature in core if struct == "AppendFormatted" and member is None]
     need([n for signature in formatted for n in re.findall(r"fn ([A-Za-z]+)\(", signature)],

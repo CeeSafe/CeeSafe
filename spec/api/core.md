@@ -1367,7 +1367,8 @@ public struct VectorBytes
 
 Appending integers to a byte vector in a byte order: `v.pushBE(x)` and `v.pushLE(x)` (ADR 0071 §2.2). Each is one
 `extend` of the bytes, so it grows the vector at most once and leaves it unchanged if that fails. A vector's
-allocator is `SystemHeap` or `FailingAllocator` (type-system.md §23.1); the `…Failing` functions are the latter's.
+allocator is `SystemHeap`, `FailingAllocator` or `SecretHeap` (type-system.md §23.1); the `…Failing` and
+`…Secret` functions are the latter two's.
 
 ### VectorBytes.pushU8BE
 
@@ -1505,10 +1506,26 @@ public fn pushU8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> 
 
 Appends `x` as 1 byte, big-endian.
 
+### VectorBytes.pushU8BESecret
+
+```ceesafe
+public fn pushU8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian.
+
 ### VectorBytes.pushI8BEFailing
 
 ```ceesafe
 public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian, in two's complement.
+
+### VectorBytes.pushI8BESecret
+
+```ceesafe
+public fn pushI8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError>
 ```
 
 Appends `x` as 1 byte, big-endian, in two's complement.
@@ -1521,10 +1538,26 @@ public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> 
 
 Appends `x` as 1 byte, little-endian.
 
+### VectorBytes.pushU8LESecret
+
+```ceesafe
+public fn pushU8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian.
+
 ### VectorBytes.pushI8LEFailing
 
 ```ceesafe
 public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian, in two's complement.
+
+### VectorBytes.pushI8LESecret
+
+```ceesafe
+public fn pushI8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError>
 ```
 
 Appends `x` as 1 byte, little-endian, in two's complement.
@@ -1537,10 +1570,26 @@ public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -
 
 Appends `x` as 2 bytes, big-endian.
 
+### VectorBytes.pushU16BESecret
+
+```ceesafe
+public fn pushU16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian.
+
 ### VectorBytes.pushI16BEFailing
 
 ```ceesafe
 public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushI16BESecret
+
+```ceesafe
+public fn pushI16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError>
 ```
 
 Appends `x` as 2 bytes, big-endian, in two's complement.
@@ -1553,10 +1602,26 @@ public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -
 
 Appends `x` as 2 bytes, little-endian.
 
+### VectorBytes.pushU16LESecret
+
+```ceesafe
+public fn pushU16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian.
+
 ### VectorBytes.pushI16LEFailing
 
 ```ceesafe
 public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushI16LESecret
+
+```ceesafe
+public fn pushI16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError>
 ```
 
 Appends `x` as 2 bytes, little-endian, in two's complement.
@@ -1569,10 +1634,26 @@ public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -
 
 Appends `x` as 4 bytes, big-endian.
 
+### VectorBytes.pushU32BESecret
+
+```ceesafe
+public fn pushU32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian.
+
 ### VectorBytes.pushI32BEFailing
 
 ```ceesafe
 public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushI32BESecret
+
+```ceesafe
+public fn pushI32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError>
 ```
 
 Appends `x` as 4 bytes, big-endian, in two's complement.
@@ -1585,10 +1666,26 @@ public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -
 
 Appends `x` as 4 bytes, little-endian.
 
+### VectorBytes.pushU32LESecret
+
+```ceesafe
+public fn pushU32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian.
+
 ### VectorBytes.pushI32LEFailing
 
 ```ceesafe
 public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushI32LESecret
+
+```ceesafe
+public fn pushI32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError>
 ```
 
 Appends `x` as 4 bytes, little-endian, in two's complement.
@@ -1601,10 +1698,26 @@ public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -
 
 Appends `x` as 8 bytes, big-endian.
 
+### VectorBytes.pushU64BESecret
+
+```ceesafe
+public fn pushU64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian.
+
 ### VectorBytes.pushI64BEFailing
 
 ```ceesafe
 public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushI64BESecret
+
+```ceesafe
+public fn pushI64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError>
 ```
 
 Appends `x` as 8 bytes, big-endian, in two's complement.
@@ -1617,10 +1730,26 @@ public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -
 
 Appends `x` as 8 bytes, little-endian.
 
+### VectorBytes.pushU64LESecret
+
+```ceesafe
+public fn pushU64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian.
+
 ### VectorBytes.pushI64LEFailing
 
 ```ceesafe
 public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushI64LESecret
+
+```ceesafe
+public fn pushI64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError>
 ```
 
 Appends `x` as 8 bytes, little-endian, in two's complement.
@@ -2886,8 +3015,9 @@ public struct VectorEditing<T>
 
 `v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12). The index is checked at the call, so a
 panic names the program's line: `at <= length` for `insert`, `at < length` for the others. The elements move by
-`swap`, so they may be of any type. A vector's allocator is `SystemHeap` or `FailingAllocator` (type-system.md
-§23.1); the `…Failing` functions are the latter's.
+`swap`, so they may be of any type. A vector's allocator is `SystemHeap`, `FailingAllocator` or `SecretHeap`
+(type-system.md §23.1, §42.2); the `…Failing` and `…Secret` functions are the latter two's. A `SecretHeap` vector's
+`pop` wipes the slot it gives up, so `remove` and `swapRemove` leave none behind.
 
 ### VectorEditing.insert
 
@@ -2922,6 +3052,14 @@ public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x:
 
 `insert` for a vector of `FailingAllocator`.
 
+### VectorEditing.insertSecret
+
+```ceesafe
+public fn insertSecret(v: borrow mut Vector<T, SecretHeap>, at: usize, x: T) -> Result<void, AllocError>
+```
+
+`insert` for a vector of `SecretHeap`.
+
 ### VectorEditing.removeFailing
 
 ```ceesafe
@@ -2929,6 +3067,14 @@ public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) ->
 ```
 
 `remove` for a vector of `FailingAllocator`.
+
+### VectorEditing.removeSecret
+
+```ceesafe
+public fn removeSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T
+```
+
+`remove` for a vector of `SecretHeap`.
 
 ### VectorEditing.swapRemoveFailing
 
@@ -2938,6 +3084,14 @@ public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize
 
 `swapRemove` for a vector of `FailingAllocator`.
 
+### VectorEditing.swapRemoveSecret
+
+```ceesafe
+public fn swapRemoveSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T
+```
+
+`swapRemove` for a vector of `SecretHeap`.
+
 ## struct VectorCopying
 
 ```ceesafe
@@ -2946,7 +3100,7 @@ public struct VectorCopying<T: Copy>
 
 `v.clone()` (ADR 0108, type-system.md §23.1): a new vector holding a copy of the elements, so the element type is
 Copy. One allocation, sized as `withCapacity` of the length sizes it, none for an empty slice. The `…Failing`
-function makes a vector of `FailingAllocator`.
+function makes a vector of `FailingAllocator`, the `…Secret` one of `SecretHeap`.
 
 ### VectorCopying.clone
 
@@ -2963,6 +3117,14 @@ public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, Alloc
 ```
 
 `clone` for a vector of `FailingAllocator`.
+
+### VectorCopying.cloneSecret
+
+```ceesafe
+public fn cloneSecret(s: Slice<T>) -> Result<Vector<T, SecretHeap>, AllocError>
+```
+
+`clone` for a vector of `SecretHeap`.
 
 ## struct VectorParts
 
@@ -2985,7 +3147,8 @@ public struct VectorRaw<T>
 `Vector.intoRaw` and `Vector.fromRaw` (ADR 0090, type-system.md §23.3). `releaseBuffer` and `adoptBuffer` are the
 compiler's, for the libraries alone: the first makes a vector the empty one without freeing its buffer or dropping
 its elements, the second gives an empty vector a buffer; their last argument moves the block out of, or into, the
-allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`.
+allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`, the `…Secret` ones for
+`SecretHeap` (whose vectors have no Foreign pair: C would free the block unwiped, ADR 0197 §2.3).
 
 ### VectorRaw.intoRaw
 
@@ -3012,6 +3175,14 @@ public fn intoRawFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>
 
 `Vector.intoRaw(v)` for a vector of `FailingAllocator`: the caller owns the buffer and its elements.
 
+### VectorRaw.intoRawSecret
+
+```ceesafe
+public fn intoRawSecret(v: Vector<T, SecretHeap>) -> VectorParts<T>
+```
+
+`Vector.intoRaw(v)` for a vector of `SecretHeap`: the caller owns the buffer and its elements.
+
 ### VectorRaw.fromRawFailing
 
 ```ceesafe
@@ -3019,6 +3190,15 @@ public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize)
 ```
 
 `Vector.fromRaw(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
+Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+
+### VectorRaw.fromRawSecret
+
+```ceesafe
+public unsafe fn fromRawSecret(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, SecretHeap>
+```
+
+`Vector.fromRaw(pointer, length, capacity)` for a vector of `SecretHeap`. A capacity of 0 gives the empty vector.
 Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
 
 ## struct VectorForeign
@@ -3286,7 +3466,7 @@ public struct StringCopying
 
 `String.from(text)` and `s.clone()` (ADR 0108, type-system.md §23.2): a new string holding a copy of a text. One
 allocation, sized as `withCapacity` of the length in bytes sizes it, none for an empty text. The `…Failing`
-function makes a string of `FailingAllocator`.
+function makes a string of `FailingAllocator`, the `…Secret` one of `SecretHeap`.
 
 ### StringCopying.from
 
@@ -3303,3 +3483,11 @@ public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, Allo
 ```
 
 `from` for a string of `FailingAllocator`.
+
+### StringCopying.fromSecret
+
+```ceesafe
+public fn fromSecret(text: StringView) -> Result<String<SecretHeap>, AllocError>
+```
+
+`from` for a string of `SecretHeap`.

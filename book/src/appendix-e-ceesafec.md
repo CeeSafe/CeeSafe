@@ -168,6 +168,7 @@ test program, and runs each test whose name matches, in the order of their names
 |---|---|---|---|
 | `--filter` | `<text>` | Runs only the tests whose name contains the text. If no name contains it, that is an error with status 1. | every test |
 | `--list` | none | Prints the tests' names, one on a line, and runs none. | off |
+| `--scan-freed` | none | Keeps every block the tests free as it was, out of reuse, so a test can search them with `Testing.freedHolds` (ADR 0197); slower, for tests of what a program wipes. | off |
 | `--interp` | none | Runs each test in the interpreter. A test that calls C is skipped. It cannot be combined with `--sweep`. | off: the tests run as a built program |
 | `--jobs` | `<n>`, a number above 0 | Runs `n` tests at once. | 1 |
 | `--timeout` | `<seconds>`, a number above 0 | Ends a test that runs longer and reports it as timed out. | 60 |
@@ -372,6 +373,7 @@ those of their own tables. Those commands, `publish` and `explain` also accept `
 | `--polls` | `build`, `test` |
 | `--program` | `build`, `test` |
 | `--record` | `check` |
+| `--scan-freed` | `test` |
 | `--split` | `build`, `test` |
 | `--sweep` | `test` |
 | `--sweep-strict` | `test` |

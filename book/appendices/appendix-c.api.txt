@@ -122,6 +122,7 @@ SliceSplitting.splitAtMut	public fn splitAtMut(s: SliceMut<r, T>, mid: usize) ->
 StringCopying	public struct StringCopying
 StringCopying.from	public fn from(text: StringView) -> Result<String, AllocError>
 StringCopying.fromFailing	public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, AllocError>
+StringCopying.fromSecret	public fn fromSecret(text: StringView) -> Result<String<SecretHeap>, AllocError>
 TextSearch	public struct TextSearch<region r>
 TextSearch.contains	public fn contains(s: StringView<r>, needle: StringView) -> bool
 TextSearch.endsWith	public fn endsWith(s: StringView<r>, suffix: StringView) -> bool
@@ -142,46 +143,66 @@ VectorBytes.appendOctal	public fn appendOctal(v: borrow mut Vector<u8>, value: u
 VectorBytes.appendPadded	public fn appendPadded( v: borrow mut Vector<u8>, text: StringView, width: usize, align: TextAlign, fill: u32, ) -> Result<void, AllocError>
 VectorBytes.pushI16BE	public fn pushI16BE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
 VectorBytes.pushI16BEFailing	public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI16BESecret	public fn pushI16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError>
 VectorBytes.pushI16LE	public fn pushI16LE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
 VectorBytes.pushI16LEFailing	public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI16LESecret	public fn pushI16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError>
 VectorBytes.pushI32BE	public fn pushI32BE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
 VectorBytes.pushI32BEFailing	public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI32BESecret	public fn pushI32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError>
 VectorBytes.pushI32LE	public fn pushI32LE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
 VectorBytes.pushI32LEFailing	public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI32LESecret	public fn pushI32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError>
 VectorBytes.pushI64BE	public fn pushI64BE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
 VectorBytes.pushI64BEFailing	public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI64BESecret	public fn pushI64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError>
 VectorBytes.pushI64LE	public fn pushI64LE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
 VectorBytes.pushI64LEFailing	public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI64LESecret	public fn pushI64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError>
 VectorBytes.pushI8BE	public fn pushI8BE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
 VectorBytes.pushI8BEFailing	public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushI8BESecret	public fn pushI8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError>
 VectorBytes.pushI8LE	public fn pushI8LE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
 VectorBytes.pushI8LEFailing	public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushI8LESecret	public fn pushI8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError>
 VectorBytes.pushU16BE	public fn pushU16BE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
 VectorBytes.pushU16BEFailing	public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU16BESecret	public fn pushU16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError>
 VectorBytes.pushU16LE	public fn pushU16LE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
 VectorBytes.pushU16LEFailing	public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU16LESecret	public fn pushU16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError>
 VectorBytes.pushU32BE	public fn pushU32BE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
 VectorBytes.pushU32BEFailing	public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU32BESecret	public fn pushU32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError>
 VectorBytes.pushU32LE	public fn pushU32LE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
 VectorBytes.pushU32LEFailing	public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU32LESecret	public fn pushU32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError>
 VectorBytes.pushU64BE	public fn pushU64BE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
 VectorBytes.pushU64BEFailing	public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU64BESecret	public fn pushU64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError>
 VectorBytes.pushU64LE	public fn pushU64LE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
 VectorBytes.pushU64LEFailing	public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU64LESecret	public fn pushU64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError>
 VectorBytes.pushU8BE	public fn pushU8BE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
 VectorBytes.pushU8BEFailing	public fn pushU8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+VectorBytes.pushU8BESecret	public fn pushU8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError>
 VectorBytes.pushU8LE	public fn pushU8LE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
 VectorBytes.pushU8LEFailing	public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+VectorBytes.pushU8LESecret	public fn pushU8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError>
 VectorCopying	public struct VectorCopying<T: Copy>
 VectorCopying.clone	public fn clone(s: Slice<T>) -> Result<Vector<T>, AllocError>
 VectorCopying.cloneFailing	public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, AllocError>
+VectorCopying.cloneSecret	public fn cloneSecret(s: Slice<T>) -> Result<Vector<T, SecretHeap>, AllocError>
 VectorEditing	public struct VectorEditing<T>
 VectorEditing.insert	public fn insert(v: borrow mut Vector<T>, at: usize, x: T) -> Result<void, AllocError>
 VectorEditing.insertFailing	public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x: T) -> Result<void, AllocError>
+VectorEditing.insertSecret	public fn insertSecret(v: borrow mut Vector<T, SecretHeap>, at: usize, x: T) -> Result<void, AllocError>
 VectorEditing.remove	public fn remove(v: borrow mut Vector<T>, at: usize) -> T
 VectorEditing.removeFailing	public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+VectorEditing.removeSecret	public fn removeSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T
 VectorEditing.swapRemove	public fn swapRemove(v: borrow mut Vector<T>, at: usize) -> T
 VectorEditing.swapRemoveFailing	public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+VectorEditing.swapRemoveSecret	public fn swapRemoveSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T
 VectorForeign	public struct VectorForeign<T: Copy>
 VectorForeign.fromForeign	public unsafe fn fromForeign(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
 VectorForeign.fromForeignFailing	public unsafe fn fromForeignFailing( pointer: *mut T, length: usize, capacity: usize, ) -> Vector<T, FailingAllocator>
@@ -190,5 +211,7 @@ VectorForeign.intoForeignFailing	public unsafe fn intoForeignFailing(v: Vector<T
 VectorRaw	public struct VectorRaw<T>
 VectorRaw.fromRaw	public unsafe fn fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
 VectorRaw.fromRawFailing	public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, FailingAllocator>
+VectorRaw.fromRawSecret	public unsafe fn fromRawSecret(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, SecretHeap>
 VectorRaw.intoRaw	public fn intoRaw(v: Vector<T>) -> VectorParts<T>
 VectorRaw.intoRawFailing	public fn intoRawFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>
+VectorRaw.intoRawSecret	public fn intoRawSecret(v: Vector<T, SecretHeap>) -> VectorParts<T>

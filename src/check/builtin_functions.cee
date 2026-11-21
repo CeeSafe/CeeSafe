@@ -129,6 +129,69 @@ fn checkReplaceOrSwap(c: borrow mut Checker, builtin: u32, arguments: Range, spa
     return c.expr(HirExpr.BuiltinCall(if (isReplace) bfReplace() else bfSwap(), list), result, span.start, span.end);
 }
 
+/// `arrayFrom(f)` (ADR 0198 §2.2): `arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]`, `f(0)` to `f(N - 1)` in
+/// order, each result moved into its element. `T` and `N` come from the explicit list or the expected type.
+fn checkArrayFrom(
+    c: borrow mut Checker,
+    typeArguments: Range,
+    arguments: Range,
+    expected: u32,
+    nameSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var arrayType = none();
+    if (typeArguments.count == 2) {
+        let elementSyntax = c.front.ast.at(typeArguments, 0);
+        let lengthSyntax = c.front.ast.at(typeArguments, 1);
+        let lengthExpr = match (c.front.ast.types[lengthSyntax as usize]) {
+            TypeNode.Constant(e) => e,
+            TypeNode.Named(q) => if (q.parts.count == 1) nameAsExpression(c, q)? else none(),
+            _ => none(),
+        };
+        if (lengthExpr == none()) {
+            let lengthSpan = c.front.ast.typeSpans[lengthSyntax as usize];
+            arrayLengthError(c, lengthSpan)?;
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        arrayType = resolveArrayType(c, elementSyntax, lengthExpr, false)?;
+    } else if (typeArguments.count == 0 && expected != none() && c.types.is(expected, TypeKind.Array) &&
+        !c.types.isUnsized(expected)) {
+        arrayType = expected;
+    } else {
+        let inferred = typeArguments.count == 0;
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            if (inferred) "'arrayFrom' needs the array's type: give it where the value goes ('let a: [T; N] = arrayFrom(f)') or write 'arrayFrom<T, N>(f)' (type-system.md §16.2)"
+                else "'arrayFrom' takes two type arguments, the element type and the length: 'arrayFrom<T, N>(f)' (type-system.md §16.2)",
+        )?;
+        c.error(cannotInferTypeArguments(), nameSpan.start, nameSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (c.types.isBottom(arrayType)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 1) {
+        return builtinArity(c, arguments, span, "write 'arrayFrom(f)', where 'f' is a 'borrow mut fn(usize) -> T'");
+    }
+    let element = c.types.info(arrayType).element;
+    let usize = c.types.usize;
+    let parameters = [usize];
+    let callable = c.types.closureTo(parameters[..], element, allEffects())?;
+    let closureType = c.types.referenceTo(callable, true)?;
+    let functionSyntax = c.front.ast.at(arguments, 0);
+    let function = checkExpr(c, functionSyntax, closureType)?;
+    if (c.isBottom(function)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [function];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(bfArrayFrom(), list), arrayType, span.start, span.end);
+}
+
 /// `mut p` as an argument of `replace` or `swap`: a mutable borrow of the place `p` (N0247 if it is not one, N0249
 /// without `mut`).
 fn mutablePlaceArgument(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocError> {

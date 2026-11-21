@@ -501,9 +501,15 @@ fn checkUse(
         let localType = locals[local as usize].typ;
         let firstIsDeref = isDerefProjectionN(n.projections[p.projections.start as usize]);
         var anyDeref = false;
+        var anyIndex = false;
         for (k in 0..p.projections.count) {
-            if (isDerefProjectionN(n.projections[(p.projections.start + k) as usize])) {
+            let projection = n.projections[(p.projections.start + k) as usize];
+            if (isDerefProjectionN(projection)) {
                 anyDeref = true;
+            }
+            match (projection.kind) {
+                ProjectionKind.Index => { anyIndex = true; }
+                _ => {}
             }
         }
         var message = Vector<u8>.create();
@@ -546,6 +552,18 @@ fn checkUse(
             appendText(mut message, " out of the value '")?;
             appendBytes(mut message, name.view())?;
             appendText(mut message, "' refers to; only Copy values can be read through a reference")?;
+        } else if (anyIndex) {
+            // An array is never left with a hole (ADR 0198 §2.1).
+            let whole = c.types.is(localType, TypeKind.Array);
+            appendText(
+                mut message,
+                if (whole) " out of an element of the array '" else " out of an element of an array in '",
+            )?;
+            appendBytes(mut message, name.view())?;
+            appendText(
+                mut message,
+                "'; only Copy values can be read from there (use 'replace(mut a[i], …)' or 'a[..].swap(i, j)')",
+            )?;
         } else {
             appendText(mut message, " out of an element or enum payload of '")?;
             appendBytes(mut message, name.view())?;

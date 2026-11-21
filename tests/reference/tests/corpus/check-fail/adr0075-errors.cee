@@ -1,5 +1,6 @@
 // ADR 0075's diagnostics: `*` on a non-Copy referent or a non-reference, `[]` without an expected slice, `swap` of two
-// types, `@from` misuse, `?` without one, and an array of atomics outside a static.
+// types, `@from` misuse, `?` without one, and a repeat of an atomic that is not a static initialiser (ADR 0198 §2.2:
+// `[AtomicU64.constant(0); 2]` is accepted outside a static since then).
 enum A {
     X,
 }
@@ -31,5 +32,5 @@ fn main() {
     var a: u32 = 1;
     var b: u64 = 2;
     swap(mut a, mut b);                     // error[N0205]
-    let table = [AtomicU64.constant(0); 2]; // error[N0259]
+    let table = [AtomicU64.create(0); 2]; // error[N0259]
 }

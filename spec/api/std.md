@@ -21,6 +21,7 @@
 - [struct Crc32](#struct-crc32)
 - [struct Crc32c](#struct-crc32c)
 - [struct Crc64Nvme](#struct-crc64nvme)
+- [struct Adler32](#struct-adler32)
 - [struct Md5](#struct-md5)
 - [struct Sha1](#struct-sha1)
 - [struct Sha256](#struct-sha256)
@@ -31,6 +32,14 @@
 - [struct Hasher](#struct-hasher)
 - [fn deriveHash](#fn-derivehash)
 - [struct HashMap](#struct-hashmap)
+- [enum DecodeError](#enum-decodeerror)
+- [enum DeflateFormat](#enum-deflateformat)
+- [struct Progress](#struct-progress)
+- [struct Inflater](#struct-inflater)
+- [struct Deflater](#struct-deflater)
+- [struct Deflate](#struct-deflate)
+- [struct Zlib](#struct-zlib)
+- [struct Gzip](#struct-gzip)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
@@ -1369,6 +1378,50 @@ public fn of(bytes: Slice<u8>) -> u64
 
 The checksum of `bytes`, in one call.
 
+## struct Adler32
+
+```ceesafe
+public struct Adler32
+```
+
+Adler-32 (RFC 1950 §8.2), zlib's checksum: two sums modulo 65521, the second of the first's running values, as
+`(b << 16) | a`. `Adler32.of("123456789".bytes())` is 0x091E01DE. It is weak for short inputs and no hash: it is
+here for the zlib format (ADR 0196).
+
+### Adler32.create
+
+```ceesafe
+public fn create() -> Adler32
+```
+
+A checksum of no bytes yet (1).
+
+### Adler32.update
+
+```ceesafe
+@effects()
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`: in runs of 5,552, the most for which neither sum can pass 2^32 before it is reduced, eight
+bytes at a time and then the rest one at a time.
+
+### Adler32.finish
+
+```ceesafe
+public fn finish(borrow this) -> u32
+```
+
+The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Adler32.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> u32
+```
+
+The checksum of `bytes`, in one call.
+
 ## struct Md5
 
 ```ceesafe
@@ -1778,6 +1831,230 @@ public fn clear(borrow mut this)
 ```
 
 Takes every entry out; the table keeps its size.
+
+## enum DecodeError
+
+```ceesafe
+public enum DecodeError {
+    Malformed,
+    TooLarge,
+    Unsupported,
+    ChecksumMismatch,
+    @from OutOfMemory(AllocError),
+}
+```
+
+Why compressed bytes did not decode.
+
+## enum DeflateFormat
+
+```ceesafe
+public enum DeflateFormat {
+    Raw,
+    Zlib,
+    Gzip,
+}
+```
+
+The framing of a deflate stream: none (RFC 1951, Avro's `deflate`), zlib's (RFC 1950: a 2-byte header and an
+Adler-32) or gzip's (RFC 1952: a header with optional fields, a CRC-32 and the length).
+
+## struct Progress
+
+```ceesafe
+public struct Progress {
+    public read: usize;
+    public written: usize;
+    public done: bool;
+}
+```
+
+What one `Inflater.step` did: how many input bytes it read, how many it wrote, and whether the stream ended. When
+`done`, the stream's last byte (its trailer's, with a framing) was the `read`th: the next data begins there.
+
+## struct Inflater
+
+```ceesafe
+public struct Inflater
+```
+
+A deflate decoder that streams: each `step` reads what it can of the input and writes what it can into the
+caller's slice, and returns where it stopped. It allocates its tables and a 32 KiB window at `create` and nothing
+after, so `step` has no effect (`@effects()`): async code and a `drop` block may call it. Its work is in
+proportion to the slices it is given, so async code decodes some 64 KiB at a time, or hands a whole buffer to
+`Async.blocking`.
+
+The limit applies to everything a decoder writes, over all steps: output past it is `TooLarge`, found before it is
+written. No input panics a decoder: every refusal is a `DecodeError`, and after one, each later step returns it
+again. Where RFC 1951 leaves room, zlib decides: incomplete codes are refused except a single one-bit code,
+distance codes 30 and 31 and length codes 286 and 287 are `Malformed`, and so is a distance before the stream's
+start (or the window `setWindow` gave).
+
+With gzip, a step after `done` that is given input decodes the next member, as `gunzip` does; with the other
+formats it reads nothing and is `done` again.
+
+Decoding is not constant time.
+
+### Inflater.create
+
+```ceesafe
+public fn create(format: DeflateFormat, limit: u64) -> Result<Inflater, AllocError>
+```
+
+A decoder of `format` that writes at most `limit` bytes in all. Allocates its tables and its window, about
+58 KiB.
+
+### Inflater.setWindow
+
+```ceesafe
+@effects()
+public fn setWindow(borrow mut this, history: Slice<u8>)
+```
+
+Gives the decoder `history` as the bytes before the stream, which back-references may reach: a preset
+dictionary (RFC 1950's FDICT, RFC 7692's context). Call it before the first step; only its last 32 KiB count.
+A zlib stream that names a dictionary then needs this one's Adler-32.
+
+### Inflater.step
+
+```ceesafe
+@effects()
+public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError>
+```
+
+Decodes from `input` into `out` until the input is used up, `out` is full, or the stream ends (`done`). Input
+it reads but cannot use yet (part of a code) it keeps, so the next step continues with the bytes after `read`.
+
+## struct Deflater
+
+```ceesafe
+public struct Deflater
+```
+
+A deflate encoder that streams: `update` appends what it can encode of its input and keeps the rest of a block,
+`flush` ends the block where the input ends and appends an empty stored block (a sync flush: everything given so
+far can be decoded, and later blocks may still refer back to it), and `finish` ends the stream with its trailer.
+After `finish` the encoder starts a new stream (with gzip, a new member). It allocates about 400 KiB at `create`
+(260 KiB at levels 0 to 3); its output is bounded by its input plus 5 bytes for each 64 KiB and the framing.
+
+Levels are zlib's in meaning: 0 stores, 1 to 3 match greedily with a single hash probe, 4 to 9 search hash chains
+and match lazily, longer at each level; 6 is the usual default, and a level above 9 is 9. The output is not
+zlib's byte for byte, and any deflate decoder reads it.
+
+Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with bytes an
+attacker chooses.
+
+### Deflater.create
+
+```ceesafe
+public fn create(format: DeflateFormat, level: u32) -> Result<Deflater, AllocError>
+```
+
+An encoder of `format` at `level` (0 to 9).
+
+### Deflater.update
+
+```ceesafe
+public fn update(borrow mut this, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input`, appending to `out` whatever blocks it completes.
+
+### Deflater.flush
+
+```ceesafe
+public fn flush(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes everything given so far and ends it on a byte with an empty stored block (zlib's Z_SYNC_FLUSH), so a
+decoder given the output so far decodes all of the input so far.
+
+### Deflater.finish
+
+```ceesafe
+public fn finish(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes the rest, ends the stream with its final block and trailer, and starts a new stream.
+
+## struct Deflate
+
+```ceesafe
+public struct Deflate
+```
+
+Raw deflate (RFC 1951) in whole buffers: Avro's `deflate` codec, and the body of zlib and gzip.
+
+### Deflate.decompress
+
+```ceesafe
+public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError>
+```
+
+Decodes all of `input`, one raw deflate stream, onto the end of `out`, at most `limit` bytes. Bytes after the
+stream's final block are `Malformed` (an `Inflater` reports where a stream ends, for data after one). On an
+error, `out` is as it was.
+
+### Deflate.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input` at `level` (0 to 9; see `Deflater`) onto the end of `out`.
+
+## struct Zlib
+
+```ceesafe
+public struct Zlib
+```
+
+The zlib format (RFC 1950) in whole buffers: a 2-byte header, deflate, and the Adler-32 of the data.
+
+### Zlib.decompress
+
+```ceesafe
+public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError>
+```
+
+Decodes all of `input`, one zlib stream, onto the end of `out`, at most `limit` bytes. A stream that needs a
+preset dictionary is `Unsupported` (an `Inflater` takes one, `setWindow`); bytes after the stream are
+`Malformed`. On an error, `out` is as it was.
+
+### Zlib.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input` at `level` (0 to 9; see `Deflater`) onto the end of `out`.
+
+## struct Gzip
+
+```ceesafe
+public struct Gzip
+```
+
+The gzip format (RFC 1952) in whole buffers: members of a header, deflate, the CRC-32 and the length.
+
+### Gzip.decompress
+
+```ceesafe
+public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError>
+```
+
+Decodes all of `input`, one or more gzip members in turn, onto the end of `out`, at most `limit` bytes in all.
+The header's optional fields are read and skipped, its CRC checked if it has one. Bytes after a member that do
+not begin another are `Malformed`, and so is an empty input. On an error, `out` is as it was.
+
+### Gzip.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input` at `level` (0 to 9; see `Deflater`) onto the end of `out`, as one member with no name and a
+modification time of 0.
 
 ## enum PathKind
 

@@ -2,9 +2,9 @@
 
 The types and functions below are part of the compiler, not of a library, so they have no page in the library
 reference. The libraries' own types, such as `TextWriter`, `Timer`, `Environment`, `HashMap` and the async
-sockets, are in [lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md). Every example here is compiled
-and run by the guide's checks, so the names and signatures are the compiler's. With the MCP server,
-`ceesafe_api` looks any of these names up.
+sockets, are in [lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md); one of lib/std's, its
+compression codecs, is summarised here too. Every example here is compiled and run by the guide's checks, so the
+names and signatures are the compiler's. With the MCP server, `ceesafe_api` looks any of these names up.
 
 ## `Console`
 
@@ -377,6 +377,71 @@ fn main() {
 
 ```text
 42
+```
+
+## Compression: `Deflate`, `Zlib` and `Gzip`
+
+lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, both ways, in pure CeeSafe
+([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
+signature):
+
+| Function or type | Type |
+|---|---|
+| `Deflate.decompress(input, limit, mut out)`, and `Zlib.…`, `Gzip.…` | `Result<void, DecodeError>`: all of `input` onto the end of `out`, at most `limit` bytes; on an error `out` is as it was |
+| `Deflate.compress(input, level, mut out)`, and `Zlib.…`, `Gzip.…` | `Result<void, AllocError>`; `level` 0 (stored) to 9, 6 the usual default |
+| `DecodeError` | `Malformed` (not a stream, cut short, or bytes after it), `TooLarge` (past the limit), `Unsupported` (a zlib preset dictionary), `ChecksumMismatch`, `OutOfMemory(AllocError)` |
+| `Inflater.create(format, limit)`, `i.step(input, mut out)` | a decoder that streams into the caller's `SliceMut<u8>`: `Result<Progress, DecodeError>`, with `read`, `written` and `done`; `format` is a `DeflateFormat` (`Raw`, `Zlib`, `Gzip`) |
+| `i.setWindow(history)` | a preset dictionary, before the first step |
+| `Deflater.create(format, level)`, `d.update(input, mut out)`, `d.flush(mut out)`, `d.finish(mut out)` | an encoder that appends to a `Vector<u8>`; `flush` is a sync flush (all so far decodes) |
+| `Adler32` | zlib's checksum, with `create`, `update`, `finish` and `of`, as `Crc32` (gzip's) |
+
+Every decoder takes a limit, so a decompression bomb costs at most `limit` bytes, and no input panics one: every
+refusal is a `DecodeError`. `Inflater.step` allocates nothing after `create` and has no effect (`@effects()`), so
+async code may call it, but its CPU time is in proportion to the slices it is given: async code decodes some 64 KiB
+at a time, or hands a whole buffer to `Async.blocking`. Compression leaks content through the output's length (CRIME,
+BREACH): do not compress a secret together with bytes an attacker chooses.
+
+```ceesafe
+fn main() {
+    let text = "to be, or not to be, that is the question: to be, or not to be".bytes();
+    var packed = Vector<u8>.create();
+    Gzip.compress(text, 6, mut packed)!;
+    var back = Vector<u8>.create();
+    match (Gzip.decompress(packed.view(), 1 << 20, mut back)) {
+        Ok() => { Console.writeLine(StringView.fromUtf8(back.view()) ?? ""); }
+        Err(_) => { Console.writeLine("refused"); }
+    }
+    var inflater = Inflater.create(DeflateFormat.Gzip, 1 << 20)!;
+    var buffer = [0u8; 16];
+    var at: usize = 0;
+    var total: usize = 0;
+    while (true) {
+        let rest = packed[at..];
+        let p = inflater.step(rest, mut buffer[..])!;
+        at += p.read;
+        total += p.written;
+        if (p.done) { break; }
+    }
+    Console.writeLine(total);
+    let cut = packed[0..packed.length - 1];
+    match (Gzip.decompress(cut, 1 << 20, mut back)) {
+        Ok() => { Console.writeLine("decoded"); }
+        Err(e) => {
+            match (e) {
+                DecodeError.Malformed => { Console.writeLine("cut short"); }
+                _ => { Console.writeLine("refused"); }
+            }
+        }
+    }
+    Console.writeLine(Adler32.of("123456789".bytes()));
+}
+```
+
+```text
+to be, or not to be, that is the question: to be, or not to be
+62
+cut short
+152961502
 ```
 
 ## Every signature above

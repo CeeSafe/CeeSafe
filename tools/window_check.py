@@ -8,7 +8,8 @@ that opened a window would open one on the developer's screen:
    only when it changes something, delivery at the frame after the n-th present), and CEESAFE_WINDOW_DUMP must hold
    the last frame, byte for byte;
 2. the errors: a malformed script and a missing one are Resources, a zero size is Unsupported, an open on a thread
-   other than the first is NotMainThread, and the interpreter answers Unsupported;
+   other than the window thread is NotMainThread (on macOS the first thread; elsewhere the first that opened one,
+   ADR 0201), and the interpreter answers Unsupported;
 3. the surfaces (ADR 0137): a scripted window's nativeHandle is Scripted, a Frames window presents, an External
    one answers Unsupported to present and presentChanged and dumps no frame, and the interpreter answers Unsupported
    to openWith; the script's `scale` item gives Resized only when it changes the scale (in the trace of 1);
@@ -201,6 +202,12 @@ fn main() {
     if (mode == "thread") {
         let t = Thread.spawn(move () => openCode(20))!;
         Console.writeLine(t.join());
+    } else if (mode == "thread-after") {
+        // ADR 0201: once a thread has opened a window, another thread's open is refused on every system.
+        let first = Window.open("window_check", 20, 20);
+        let t = Thread.spawn(move () => openCode(20))!;
+        Console.writeLine(t.join());
+        let _ = first;
     } else if (mode == "zero") {
         Console.writeLine(openCode(0));
     } else {
@@ -3246,7 +3253,10 @@ def main():
             ("a malformed script", [errors], {"CEESAFE_WINDOW_SCRIPT": bad}, "4"),
             ("a missing script", [errors], {"CEESAFE_WINDOW_SCRIPT": os.path.join(work, "none.txt")}, "4"),
             ("a zero size", [errors, "zero"], {"CEESAFE_WINDOW_SCRIPT": script}, "1"),
-            ("another thread", [errors, "thread"], {"CEESAFE_WINDOW_SCRIPT": script}, "3"),
+            # ADR 0201: on macOS (and iOS) the main thread is the window thread; elsewhere the first that opens one.
+            ("another thread first", [errors, "thread"], {"CEESAFE_WINDOW_SCRIPT": script},
+             "3" if sys.platform == "darwin" else "0"),
+            ("another thread after the first", [errors, "thread-after"], {"CEESAFE_WINDOW_SCRIPT": script}, "3"),
             ("a scripted open", [errors], {"CEESAFE_WINDOW_SCRIPT": script}, "0"),
             ("the interpreter", [compiler, "run", "--interp", source], {"CEESAFE_WINDOW_SCRIPT": script}, "1"),
         ]

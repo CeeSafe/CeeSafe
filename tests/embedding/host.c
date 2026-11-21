@@ -1,4 +1,6 @@
 /* ADR 0088's stage A contract tests: a C host of the embed package's archive (tools/embed_check.py). */
+#define _POSIX_C_SOURCE 200809L /* strdup under -std=c11 on glibc */
+#define _DEFAULT_SOURCE /* and usleep, which POSIX 2008 left out */
 #include "ceesafe/android.h" /* empty off Android (ADR 0200) */
 #include "ceesafe/embed.h"
 #include "ceesafe_exports.h"

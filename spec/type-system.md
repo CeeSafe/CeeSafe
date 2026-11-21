@@ -3250,8 +3250,11 @@ Diagnostics: none new.
       or `presentChanged` to an external window, or a menu or file dialog that this system or the call cannot have
       (below);
     - `NoDisplay`: no window server, such as no `DISPLAY` or no X11 library;
-    - `NotMainThread`: called on any thread but the program's first, on every system, so that programs stay
-      portable to macOS, which allows windows only there;
+    - `NotMainThread`: called on any thread but the window thread. On macOS and iOS that is the program's first
+      thread, which the system requires; on Android the thread the runtime starts `main` on; on Linux, FreeBSD and
+      Windows the first thread that opened a window, recorded by that open (ADR 0201), so a host whose own runtime
+      keeps the first thread (a JVM) opens windows from its own. A program with a `main` opens them on its first
+      thread everywhere and stays portable;
     - `Resources`: the system refused.
   - **Ownership.** `Window` is a move type, neither `Send` nor `Share`. Its drop closes the window. A `WindowWaker`
     (below) is the one part of a window that other threads may hold.

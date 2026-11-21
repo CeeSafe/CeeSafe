@@ -1,6 +1,7 @@
 # ADR 0202 — `--emit lib` compiles position-independent code on ELF systems
 
-- Status: **Proposed**, 2026-11-21, for the owner's acceptance. Found by ClayWind (CEESAFE-FINDINGS.md Q3).
+- Status: **Accepted** by the owner, 2026-11-21 ("I accept ADRs 0201 and 0202"); implemented (§5). Found by
+  ClayWind (CEESAFE-FINDINGS.md Q3).
 - Scope: `ceesafec build --emit lib`'s C flags (`src/host`), tooling.md, embed_check. No language, library or runtime
   change.
 
@@ -44,3 +45,14 @@ The remedy today is `--cflag -fPIC` on every such build, which a host has to kno
   build is for: `--target android`, or the host).
 - tooling.md (`--emit lib`); embed_check: the archive linked into a shared library and into a PIE on Linux.
 - ClayWind: CI's Kotlin step and its scripts without `--cflag -fPIC`; the Rust and Kotlin bindings on the Fedora PC.
+
+## 5. As built
+
+- `src/host/build.cee` (`compileIn`): `-fPIC` for an archive build with clang or gcc when `manifestTarget()` is
+  `linux`, `freebsd` or `android`, before the user's `--cflag`s. tooling.md §8 (`--emit lib`).
+- embed_check on Linux: the archive linked into a PIE (`-fPIE -pie`) and into a shared library (`-shared`, the whole
+  archive): 86 passed on Fedora 45 with clang 23. Its host fixture asks glibc for `strdup` and `usleep`
+  (`_POSIX_C_SOURCE`, `_DEFAULT_SOURCE`), which `-std=c11` hid there.
+- ClayWind's bindings on Fedora 45 without `--cflag -fPIC`: the Rust example (a PIE) and the Kotlin JNI library link.
+- Not measured yet: benchmarks/run.py with a position-independent archive (the ADR's §3); none of its programs is
+  an archive build, so their numbers do not change.

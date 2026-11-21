@@ -259,6 +259,14 @@ def main():
 
         host, p = link("host", lib, "-std=c11", "-O2")
         check.expect("a C host links the archive", host is not None, p.stderr[-500:])
+        if sys.platform.startswith("linux") or sys.platform.startswith("freebsd"):
+            # ADR 0202: an ELF system's archive is position-independent: it goes into a PIE and a shared library.
+            pie, p = link("host_pie", lib, "-std=c11", "-fPIE", "-pie")
+            check.expect("the archive links into a PIE (ADR 0202)", pie is not None, p.stderr[-500:])
+            so = os.path.join(work, "libhost.so")
+            q = run([cc, "-shared", "-o", so, "-Wl,--whole-archive", lib, "-Wl,--no-whole-archive", "-lpthread"],
+                    timeout=600)
+            check.expect("the archive links into a shared library (ADR 0202)", q.returncode == 0, q.stderr[-500:])
         if host is None:
             return report(check)
         hsplit, p = link("host_split", split, "-std=c11")

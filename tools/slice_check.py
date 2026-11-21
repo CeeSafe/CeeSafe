@@ -23,6 +23,8 @@ Checks the corpus cannot make, since they need the clock, the threads' interleav
      in the one queue made each pass wait a slice;
    - `busy` (ADR 0191 §2.1): two tasks pass a number to and fro for 300 ms, which keeps the executor's queue full,
      beside a task that waits on 1 ms timers: its longest wait stays far below the 300 ms, with or without a slice;
+   - `measured` (ADR 0193): under a 1 ms slice and a 200 ms bound, a unit alone that never ends is ended after about
+     200 ms, the time it ran measured at each pause, where counting its pauses times the slice let it run twice that;
    - `workers`: under Async.runWorkers(4), units started by tasks on every worker compute and are paused, each on its
      own worker's stacks, and finish with the right numbers;
    - `none` cases: with no slice, nothing is paused.
@@ -407,6 +409,8 @@ async fn one(
             let m = shared.clone();
             await set.spawnIsolated(Fail.Crashed, async move () => await heldThenFree(how - 3, m, a, b))?;
             await set.spawn(async move () => await gaps(100, c))?;
+        } else if (how == 14) {
+            await set.spawnIsolated(Fail.Crashed, async move () => await forever(a))?;
         } else if (how == 7) {
             await set.spawnIsolated(Fail.Crashed, async move () => await foreverC(a))?;
             await set.spawn(async move () => await gaps(60, c))?;
@@ -481,14 +485,16 @@ fn main() {
         else if (how == "mutex") 3 else if (how == "critical") 4 else if (how == "callback") 5
         else if (how == "endonly") 6 else if (how == "endbound") 7 else if (how == "trap") 8
         else if (how == "dies") 9 else if (how == "cancel") 10 else if (how == "workers") 11
-        else if (how == "handoff") 12 else if (how == "busy") 13 else 99;
-    let slice: u64 = if (none) 0 else if (which == 1) 1 else if (which == 8 || which == 9) 5 else 10;
+        else if (how == "handoff") 12 else if (how == "busy") 13 else if (how == "measured") 14 else 99;
+    let slice: u64 = if (none) 0 else if (which == 1 || which == 14) 1 else if (which == 8 || which == 9) 5 else 10;
     let sliced = Async.runSlice(slice);
     Console.writeLine(if (sliced) "sliced" else "no slice");
     if (which == 2) {
         let _ = Async.runBound(100, RunBound.Count);
     } else if (which == 7) {
         let _ = Async.runBound(50, RunBound.Count);
+    } else if (which == 14) {
+        let _ = Async.runBound(200, RunBound.Count);
     }
     let a = cell()!;
     let b = cell()!;
@@ -627,6 +633,14 @@ def main():
     expect("bound: its neighbour's waits stay short", 0 < v.get("c", 999) < 90, str(v))
     told = v.get("stderr", "")
     expect("bound: the panic line", "past its bound of 100 ms" in told and "ended alone" in told, told[:300])
+
+    # measured (ADR 0193): alone under a 1 ms slice and a 200 ms bound, a unit that never ends is ended once it has run
+    # 200 ms. The monitor sees each slice late, so counting the pauses times the slice let it run 400 ms and more.
+    v = case("measured")
+    expect("measured: ended with Overran", v.get("crashes") == 1001, str(v))
+    expect("measured: paused before it was ended", v.get("pauses", 0) >= 20, str(v))
+    expect("measured: ended near its bound of 200 ms, not past it by its slices' lateness",
+           200 <= v.get("ms", 0) < 300, str(v))
 
     # Where a task is not paused: a Mutex, a Critical, C's frames, a function that calls C.
     for name in ("mutex", "critical", "callback", "endonly"):

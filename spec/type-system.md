@@ -6485,8 +6485,9 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   C frames are between the executor and the poll, the poll is not inside a nested `Async.run`, and its function calls
   no C function itself. A poll in a function that does (an `extern "C"` function or a C function pointer) is
   `CEE_POLL_END`: it may end its task past the bound, never pause it (c-backend.md §3b).
-- **With a bound** (§40.11), the bound counts the slices one resume has used, times the slice: a unit past it is ended
-  with `PanicKind.Overran` as before, at most about a slice late. A slice alone lets a unit compute without end,
+- **With a bound** (§40.11), the bound counts the time one resume has run, measured over its slices at each pause,
+  not the time it waited paused (ADR 0193): a unit past it is ended with `PanicKind.Overran` as before, at most about
+  a slice late. A slice alone lets a unit compute without end,
   sharing its thread.
 - **`Async.pauses()`** (`u64`) is how many times a task has been paused. A pause writes nothing to standard error.
 - **The interpreter** takes a slice and pauses nothing: its clock does not move while a task computes (§40.8), so a

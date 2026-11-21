@@ -2330,6 +2330,8 @@ typedef struct cee_stack {
     cee_task *task;         /* the task whose resume it runs */
     int result;             /* that resume's end: 1 returned, 0 waits, -1 trapped, 2 paused */
     uint32_t slices;        /* the slices this resume has used (§2.3, step 2) */
+    uint64_t ran;           /* the ms this resume has run over its slices, measured at each pause (ADR 0193) */
+    uint64_t since;         /* when its current slice began: the clock read as it was resumed */
 #if defined(CEE_SLICE_FIBERS)
     void *fiber;
 #else
@@ -2652,6 +2654,7 @@ static cee_stack *cee_slice_stack_for(cee_task *t) {
     }
     s->task = t;
     s->slices = 0u;
+    s->ran = 0u;
     return s;
 }
 
@@ -2668,6 +2671,7 @@ static void cee_slice_give(cee_stack *s) {
 
 /* Resumes `t` on `s`: 1 returned, 0 waits, -1 trapped, 2 paused (its stack kept with its unit). */
 static int cee_slice_resume(cee_task *t, cee_stack *s) {
+    s->since = ceesafe_async_now(); /* a slice's time is what it ran, not the slice it was given (ADR 0193) */
     cee_slice_go(s);
     int result = s->result;
     if (result == 2) {
@@ -2925,12 +2929,17 @@ static bool cee_slice_poll(cee_task *t, const cee_loc *loc, bool may_pause) {
     }
     uint64_t bound = cee_bound_of(t);
     char text[160];
+    /* The time this resume has run: its slices as each was measured, and this one so far (ADR 0193). The monitor sees
+       a slice late, by up to its period and more on a loaded machine, so slices times the slice would undercount. */
+    uint64_t now = ceesafe_async_now();
+    uint64_t ran = s->ran + (now > s->since ? now - s->since : 0u);
     if (may_pause && cee_bound.depth == 1u && !cee_unit_holds_mutex(t->unit)) {
         s->slices += 1u;
-        if (bound != 0u && (uint64_t)s->slices * slice >= bound) {
+        s->ran = ran;
+        if (bound != 0u && ran >= bound) {
             ceesafe_poll_clear();
             (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
-            int length = cee_bound_text(text, sizeof text, (uint64_t)s->slices * slice, bound);
+            int length = cee_bound_text(text, sizeof text, ran, bound);
             ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc);
         }
         ceesafe_poll_clear();
@@ -2940,9 +2949,6 @@ static bool cee_slice_poll(cee_task *t, const cee_loc *loc, bool may_pause) {
     }
     /* A poll that may only end the task (it calls C, it holds a Mutex): ended past its bound, else watched again for
        one more slice, which counts as used. */
-    uint64_t since = ceesafe_atomic_load_ord_u64(&cee_bound.overdue_since, 0);
-    uint64_t now = ceesafe_async_now();
-    uint64_t ran = (uint64_t)s->slices * slice + (now > since ? now - since : 0u);
     if (bound != 0u && ran >= bound) {
         ceesafe_poll_clear();
         (void)ceesafe_atomic_add_u64(&cee_overruns, 1u);
@@ -2950,6 +2956,8 @@ static bool cee_slice_poll(cee_task *t, const cee_loc *loc, bool may_pause) {
         ceesafe_panic_with(CEE_PANIC_OVERRAN, (const uint8_t *)text, (size_t)length, *loc);
     }
     s->slices += 1u;
+    s->ran = ran;
+    s->since = now;
     cee_bound_begin(cee_bound_threshold(slice, bound)); /* a new epoch: the word cleared, the monitor counts anew */
     return true;
 }

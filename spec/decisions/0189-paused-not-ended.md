@@ -297,7 +297,8 @@ next resume's work absorbs. Not measured: x86-64, Windows fibers, the sanitizers
    fibers; `Async.runSlice` false on 32-bit targets and freestanding builds (§2.6)? Recommended: yes.
 6. With a slice, the bound counts the slices one resume used, times the slice, rather than reading the clock at each
    pause and resume (§2.3, step 2)? Recommended: yes: the slow path stays the only place that does anything, and
-   the bound is late by at most a slice.
+   the bound is late by at most a slice. *Reversed by ADR 0193: the monitor's lateness is added once a slice, so the
+   time is now measured at each pause.*
 7. The interpreter accepts a slice and pauses nothing (§2.7)? Recommended: yes.
 8. A paused task is pinned to its thread and never stolen (§3)? Recommended: yes.
 9. No slice by default; httpserver sets its own (`CW_RUN_SLICE_MS`, 10 ms in the benchmark server, with

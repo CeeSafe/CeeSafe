@@ -684,7 +684,8 @@ the jump point a trap returns to on that stack, so a trap's `longjmp` never cros
 switching back to the executor's stack, which collects what came meanwhile without blocking and puts the task at the
 back of its queue of paused tasks (ADR 0191 §2.2). A paused task runs when no other task is ready, once what has
 come is collected, or when a slice has passed since a paused task last ran: the others have at least every other
-slice, and a task one of them wakes runs before the paused one, not a slice later. AddressSanitizer and ThreadSanitizer are told of every switch when they are on
+slice, and a task one of them wakes runs before the paused one, not a slice later. The clock is read as the task's
+stack is switched to and at each pause, and the bound compares what the resume has run over its slices (ADR 0193). AddressSanitizer and ThreadSanitizer are told of every switch when they are on
 (`__sanitizer_start_switch_fiber`, `__tsan_switch_to_fiber`). On Linux x86-64 with the shadow stack on, `Async.runSlice`
 is `false`, since the switch keeps no shadow stack.
 

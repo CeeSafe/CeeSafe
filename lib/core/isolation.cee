@@ -130,7 +130,7 @@ public struct AsyncBound {
 
     /// The slice (ADR 0189): how long one resume of a task of an isolated unit may run before it is paused at its next
     /// poll and the executor's other tasks run, in milliseconds; 0 (the default) is none. With a bound as well, the
-    /// bound counts the slices one resume used. False, and nothing changes, in a build without polls or on a target
+    /// bound counts the time one resume ran over its slices (ADR 0193). False, and nothing changes, in a build without polls or on a target
     /// without stack switching (32-bit, freestanding); the interpreter takes it and pauses nothing.
     /// Safety: the runtime records the number and starts its monitor thread.
     public fn runSlice(ms: u64) -> bool => unsafe { ceesafe_async_run_slice(ms) };

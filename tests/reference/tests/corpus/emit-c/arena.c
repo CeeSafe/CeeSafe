@@ -14,8 +14,8 @@ static CEE_UNUSED const cee_loc ceeL_1 = { cee_file_0, 7u, 13u };
 typedef struct ceeT_SystemHeap ceeT_SystemHeap;
 typedef struct ceeT_Point ceeT_Point;
 typedef struct ceeE_AllocError ceeE_AllocError;
-typedef struct ceeR_QS5PointE10AllocError ceeR_QS5PointE10AllocError;
 typedef struct ceeSm_u16 ceeSm_u16;
+typedef struct ceeR_QS5PointE10AllocError ceeR_QS5PointE10AllocError;
 typedef struct ceeR_QUu16E10AllocError ceeR_QUu16E10AllocError;
 
 struct ceeT_SystemHeap {
@@ -39,6 +39,10 @@ struct ceeE_AllocError {
 _Static_assert(sizeof(ceeE_AllocError) == 1, "ceesafec layout: sizeof(AllocError)");
 _Static_assert(_Alignof(ceeE_AllocError) == 1, "ceesafec layout: alignof(AllocError)");
 
+struct ceeSm_u16 { uint16_t *ptr; cee_usize len; };
+_Static_assert(sizeof(ceeSm_u16) == 16, "ceesafec layout: sizeof(SliceMut<u16>)");
+_Static_assert(_Alignof(ceeSm_u16) == 8, "ceesafec layout: alignof(SliceMut<u16>)");
+
 struct ceeR_QS5PointE10AllocError {
     uint8_t tag;
     union {
@@ -52,10 +56,6 @@ _Static_assert(offsetof(ceeR_QS5PointE10AllocError, u) == 8, "ceesafec layout: R
 static inline CEE_UNUSED ceeR_QS5PointE10AllocError ceeMk_ceeR_QS5PointE10AllocError_v_Ok(ceeT_Point * a0) {
     return (ceeR_QS5PointE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
-
-struct ceeSm_u16 { uint16_t *ptr; cee_usize len; };
-_Static_assert(sizeof(ceeSm_u16) == 16, "ceesafec layout: sizeof(SliceMut<u16>)");
-_Static_assert(_Alignof(ceeSm_u16) == 8, "ceesafec layout: alignof(SliceMut<u16>)");
 
 struct ceeR_QUu16E10AllocError {
     uint8_t tag;

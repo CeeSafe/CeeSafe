@@ -723,6 +723,28 @@ reports it and changes no code for it.
   warnings are reported for (diagnostics.md). The two thresholds are constants of the compiler.
 - Async fns are not in this report: their kept locals are in the task's frame, which the same option reports (§3a).
 
+## 4.2 Large values passed or returned: functions kept out of line (ADR 0199)
+
+A C compiler inlines a function as its own heuristics choose, and inlining a function that takes or returns a large
+value by value puts that value's copies at every call site. Since 0.84 writes a call's result straight into its
+destination, such functions are small enough for some compilers' inliners (Apple clang 17, the LLVM of GitHub's
+Windows runner), and a program of builders over a 5.7 KB struct doubled in size and build time. So:
+
+- **The rule.** A function is never inlined when one of its parameters passed by value (the receiver included) or its
+  result is a value of more than 1,024 bytes (`cLayout`: a struct, an enum, an optional, a result, an array). A
+  `borrow` is a pointer and does not count; a closure's environment does not either. The constant is the backend's
+  (`OUT_OF_LINE_BYTES`), not a flag.
+- **`@outOfLine`** on a function or a method (no arguments; N0290 otherwise) keeps it out of line whatever its
+  values.
+- **The mark** is `CEE_NOINLINE` (`rt.h`: `__attribute__((noinline))` for clang and gcc, `__declspec(noinline)` for
+  `cl`, nothing elsewhere) on the function's prototype and definition, in every build, debug ones included, so the C
+  is the same text.
+- **`ceesafec build --explain-frames`** lists each function of the package kept out of line, after its large locals
+  (§4.1): where it is, and why: `@outOfLine`, or the largest value it takes or returns by value, with its type and
+  size. Library functions are left out.
+- A hot path that passes a large value by value loses the C compiler's choice to inline it; a `borrow` is the
+  remedy.
+
 ## 5. UB avoidance checklist (enforced by construction + tests)
 
 | Hazard | Strategy |

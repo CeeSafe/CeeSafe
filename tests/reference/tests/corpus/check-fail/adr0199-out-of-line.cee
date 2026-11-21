@@ -1,0 +1,12 @@
+// ADR 0199: `@outOfLine` takes no arguments, and goes on a function or a method only.
+@outOfLine(1) // error[N0290]
+fn tidy(x: u32) -> u32 => x * 3 + 1;
+
+@outOfLine // error[N0290]
+struct Point {
+    x: u32;
+}
+
+fn main() {
+    Console.writeLine(tidy(2));
+}

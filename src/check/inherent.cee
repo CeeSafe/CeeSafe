@@ -317,7 +317,7 @@ fn processEnumMethodAttributes(c: borrow mut Checker, item: u32) -> Result<void,
             continue;
         }
         c.setFile(m.file);
-        let words = "effects effectsOf context constant test into noPoll";
+        let words = "effects effectsOf context constant test into noPoll outOfLine";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[m.function as usize].attributes;
         knownAttributes(c, attributes, "an enum's method", words, mut known)?;

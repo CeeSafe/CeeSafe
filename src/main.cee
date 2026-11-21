@@ -1745,6 +1745,7 @@ fn compileFiles(
         if (options.explainFrames) {
             explainFrames(checker, nir, sources, mut printed)!;
             explainLargeFrames(checker, nir, sources, mut printed)!; // sync functions (ADR 0163 §2.1)
+            explainOutOfLine(checker, nir, sources, mut printed)!;   // functions never inlined (ADR 0199)
         }
         if (options.explainBoundsChecks) {
             // What the C backend omits; with --no-bce, nothing (optimisations.md §2.7).

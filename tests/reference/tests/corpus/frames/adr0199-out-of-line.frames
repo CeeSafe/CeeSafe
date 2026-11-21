@@ -1,0 +1,4 @@
+frames/adr0199-out-of-line.cee:14:4: 'fresh' is kept out of line: it returns a 'Big' of 2048 bytes by value
+frames/adr0199-out-of-line.cee:16:4: 'withWidth' is kept out of line: it returns a 'Big' of 2048 bytes by value
+frames/adr0199-out-of-line.cee:22:4: 'weight' is kept out of line: 'b', a 'Big' of 2048 bytes by value
+frames/adr0199-out-of-line.cee:33:4: 'tidy' is kept out of line: @outOfLine

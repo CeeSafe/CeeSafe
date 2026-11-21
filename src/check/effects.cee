@@ -357,8 +357,8 @@ fn processFunctionAttributes(c: borrow mut Checker) -> Result<void, AllocError> 
     return Ok();
 }
 
-/// `@noPoll` on a function or method (ADR 0186 §2.3): its loops and its entry have no poll. It takes no arguments; the
-/// C backend reads it from the syntax.
+/// `@noPoll` on a function or method (ADR 0186 §2.3): its loops and its entry have no poll. `@outOfLine` (ADR 0199): the
+/// C compiler does not inline it. Neither takes arguments; the C backend reads them from the syntax.
 fn checkNoPollAttribute(c: borrow mut Checker, known: Slice<u32>) -> Result<void, AllocError> {
     for (attribute in known) {
         let a = c.front.ast.attributes[attribute as usize];
@@ -367,12 +367,17 @@ fn checkNoPollAttribute(c: borrow mut Checker, known: Slice<u32>) -> Result<void
             appendText(mut message, "'@noPoll' takes no arguments (type-system.md §40.11)")?;
             c.error(invalidAttribute(), a.start, a.end, message)?;
         }
+        if (sameText(attributeName(c, attribute), "outOfLine") && a.hasParentheses) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'@outOfLine' takes no arguments (c-backend.md §3, ADR 0199)")?;
+            c.error(invalidAttribute(), a.start, a.end, message)?;
+        }
     }
     return Ok();
 }
 
 fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, AllocError> {
-    let words = "export effects effectsOf context callback constant cfg test noPoll";
+    let words = "export effects effectsOf context callback constant cfg test noPoll outOfLine";
     var known = Vector<u32>.create();
     let attributes = c.front.ast.functions[f as usize].attributes;
     knownAttributes(c, attributes, "a function", words, mut known)?;
@@ -593,7 +598,7 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
             let fileToSet = methodFileOf(c, member, savedFile);
             c.setFile(fileToSet);
         }
-        let words = "effects effectsOf context placed constant test into noPoll";
+        let words = "effects effectsOf context placed constant test into noPoll outOfLine";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[member as usize].attributes;
         knownAttributes(c, attributes, "a method", words, mut known)?;

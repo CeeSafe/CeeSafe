@@ -257,6 +257,9 @@ fn emitProgram(
             continue;
         }
         e.fnProto()?;
+        if (isOutOfLine(c, n, function)) {
+            e.t("CEE_NOINLINE ")?;
+        }
         appendSignature(e, c, n, function, false)?;
         e.t(";")?;
         e.emit()?;

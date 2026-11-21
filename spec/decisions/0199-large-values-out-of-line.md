@@ -1,9 +1,10 @@
 # ADR 0199 — A function that takes or returns a large value by value is kept out of line
 
-- Status: **Proposed**, 2026-11-21, for the owner's acceptance. Asked for by the owner after ClayWind's
-  CEESAFE-FINDINGS.md Q4 ("CeeSafe fix instead").
-- Scope: the C backend's function definitions and prototypes (`src/backend`), c-backend.md, a run-pass case and a
-  size check. No language, library or runtime change; no new syntax.
+- Status: **Accepted** by the owner, 2026-11-21 ("Yes, I accept the ADR. Answer to your questions: 1. 1 Kib=yes,
+  2. yes"), after ClayWind's CEESAFE-FINDINGS.md Q4 ("CeeSafe fix instead"); implemented (§6).
+- Scope: the C backend's function definitions and prototypes (`src/backend`), `rt.h`'s `CEE_NOINLINE`, the attribute
+  `@outOfLine` (`src/check`), `--explain-frames`, c-backend.md §4.2, appendix A, corpus cases. No library or runtime
+  behaviour changes.
 
 ## 1. Context
 
@@ -67,8 +68,22 @@ library cannot fix this for its users: the inlining is chosen per call site by t
   struct's builder and not on a 512-byte one's; ClayWind's `tools/compare_codegen.sh` on the macos-15 runner, before
   and after, in the PR.
 
-## 5. Open questions for the owner
+## 5. Questions answered by the owner
 
-1. The threshold: 1,024 bytes, or another number (4,096 would still cover ClayWind's `Style`)?
-2. An explicit attribute as well (`@outOfLine`, or `@inline(never)`), for a function below the threshold that its
-   author knows should stay out of line? Not needed for Q4.
+1. The threshold: **1,024 bytes**.
+2. An explicit attribute as well: **yes**. It is `@outOfLine`, on a function or a method, with no arguments; a
+   function so marked is kept out of line whatever its values.
+
+## 6. As built
+
+- `src/backend/c_body.cee`: `isOutOfLine` (the attribute, or a by-value parameter or result whose `cLayout` is over
+  `OUT_OF_LINE_BYTES`, 1,024), `CEE_NOINLINE ` on the definition (`emitFunction`) and the prototype
+  (`c_skeleton.cee`); `explainOutOfLine` for `--explain-frames`. Async functions are left as they are: their frames
+  are the task's, not the C stack's.
+- `src/check`: `@outOfLine` is known on functions, methods and an enum's methods, and takes no arguments (N0290).
+- Corpus: `emit-c/adr0199-out-of-line` (the mark on a 2 KiB struct's builders, a function returning one and one
+  taking one, and on an `@outOfLine` function; not on a 512-byte struct's or a `borrow`'s), `run-pass` the same
+  program, `frames/adr0199-out-of-line` the listing, `check-fail/adr0199-out-of-line` (arguments; a struct).
+  `frames/large-values`'s snapshot gains its three functions that return 64 KiB values: an intended change.
+- ClayWind's headless host, stripped, macOS arm64: 989,312 bytes with 0.84.1, 675,648 with this rule (Apple clang
+  21); 855,144 and 706,640 with upstream clang 17. 127 of its functions are kept out of line.

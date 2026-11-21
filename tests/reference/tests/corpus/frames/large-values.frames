@@ -2,3 +2,6 @@ frames/large-values.cee:16:4: 'make' holds 3 large value(s), 196620 bytes of sta
 frames/large-values.cee:23:4: 'hold' holds 1 large value(s), 65544 bytes of stack: the value it returns, a 'Holder' of 65544 bytes
 frames/large-values.cee:25:4: 'chain' holds 5 large value(s), 327712 bytes of stack: a temporary, a 'Result<Big, AllocError>' of 65544 bytes; the value it returns, a 'Result<Big, AllocError>' of 65544 bytes; a temporary, a 'Result<Big, AllocError>' of 65544 bytes; 'first', a 'Big' of 65540 bytes; 'second', a 'Big' of 65540 bytes
 frames/large-values.cee:47:4: 'main' holds 5 large value(s), 327712 bytes of stack: 'holder', a 'Holder' of 65544 bytes; a temporary, a 'Result<Big, AllocError>' of 65544 bytes; a temporary, a 'Result<Big, AllocError>' of 65544 bytes; 'big', a 'Big' of 65540 bytes; 'c', a 'Big' of 65540 bytes
+frames/large-values.cee:16:4: 'make' is kept out of line: it returns a 'Result<Big, AllocError>' of 65544 bytes by value
+frames/large-values.cee:23:4: 'hold' is kept out of line: it returns a 'Holder' of 65544 bytes by value
+frames/large-values.cee:25:4: 'chain' is kept out of line: it returns a 'Result<Big, AllocError>' of 65544 bytes by value

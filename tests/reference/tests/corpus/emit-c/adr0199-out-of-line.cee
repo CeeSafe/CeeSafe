@@ -1,0 +1,40 @@
+// ADR 0199: a function that takes or returns a value of more than 1 KiB by value is kept out of line (`CEE_NOINLINE` on
+// its prototype and definition): `withWidth` takes and returns a 2 KiB `Big`, `fresh` returns one, `weight` takes one.
+// A 512-byte `Small` does not count (`grow`), nor a `borrow` of a `Big` (`peek`); `@outOfLine` marks a small function
+// (`tidy`).
+struct Big {
+    width: u32;
+    cells: [u32; 511];
+}
+
+struct Small {
+    width: u32;
+    cells: [u32; 127];
+}
+
+fn fresh() -> Big => Big { width: 0, cells: [0u32; 511] };
+
+fn withWidth(b: Big, w: u32) -> Big {
+    var out = b;
+    out.width = w;
+    return out;
+}
+
+fn weight(b: Big) -> u32 => b.width + b.cells[0];
+
+fn grow(s: Small, w: u32) -> Small {
+    var out = s;
+    out.width += w;
+    return out;
+}
+
+fn peek(b: borrow Big) -> u32 => b.width;
+
+@outOfLine
+fn tidy(x: u32) -> u32 => x * 3 + 1;
+
+fn main() {
+    let b = withWidth(fresh(), 7);
+    let s = grow(Small { width: 1, cells: [0u32; 127] }, 2);
+    Console.writeLine(weight(b) + peek(b) + s.width + tidy(2));
+}

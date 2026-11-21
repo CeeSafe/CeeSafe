@@ -74,6 +74,16 @@ typedef uint32_t cee_usize;
 #define CEE_COLD
 #endif
 
+/* A function the C compiler must not inline (ADR 0199): one that takes or returns a value of more than 1 KiB by value,
+ * whose inlined copies multiply at every call, or one marked `@outOfLine`. */
+#if defined(__GNUC__) || defined(__clang__)
+#define CEE_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define CEE_NOINLINE __declspec(noinline)
+#else
+#define CEE_NOINLINE
+#endif
+
 /* The end of a function with configured code (ADR 0080 §3.3) that no build reaches: every path returned before it.
  * Only for the C compiler's -Wreturn-type, which looks for a return statement and finds none in a build whose
  * configured code ends in an endless loop (c-backend.md §3). */

@@ -104,6 +104,89 @@ fn endMapping(e: borrow mut CEmitter) -> Result<void, AllocError> {
     return Ok();
 }
 
+/// The size past which a value passed or returned by value keeps its function out of line (ADR 0199 §2.3).
+const OUT_OF_LINE_BYTES: i64 = 1024;
+
+/// Whether NIR function `f` is kept out of line (ADR 0199): marked `@outOfLine`, or one of its parameters passed by
+/// value (a `borrow` is a pointer) or its result is a value of more than OUT_OF_LINE_BYTES.
+fn isOutOfLine(c: borrow Checker, n: borrow NirProgram, f: u32) -> bool {
+    let function = borrow n.functions[f as usize];
+    let source = borrow c.hir.functions[function.source as usize];
+    if (hasAttributeNamed(c, c.front.ast.functions[source.syntax as usize].attributes, "outOfLine")) {
+        return true;
+    }
+    if (!c.types.is(source.returnType, TypeKind.Never) && cLayout(c, source.returnType).size > OUT_OF_LINE_BYTES) {
+        return true;
+    }
+    for (k in 0..function.parameterCount) {
+        if (k == 0 && source.closureEnvironment != none()) {
+            continue; // the environment arrives as a pointer
+        }
+        if (cLayout(c, function.locals[k as usize].typ).size > OUT_OF_LINE_BYTES) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// For --explain-frames (ADR 0199 §2.3): each function of the package kept out of line, and why: `@outOfLine`, or its
+/// largest value passed or returned by value.
+fn explainOutOfLine(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    for (f in 0..truncate<u32>(n.functions.length)) {
+        let source = nirFunctionSource(n, f);
+        if (isAsyncNir(c, n, f) || functionIsGeneric(c, source) || n.functions[f as usize].variant != 0 ||
+            !isOutOfLine(c, n, f)) {
+            continue;
+        }
+        let file = c.hir.functions[source as usize].file;
+        if (c.fileIsLibrary[file as usize]) {
+            continue;
+        }
+        appendBytes(out, c.filePaths[file as usize].view())?;
+        out.push(':')?;
+        appendWhere(out, sources, file, functionNameStart(c, source))?;
+        appendText(out, ": ")?;
+        appendDescribedFunction(c, source, out)?;
+        appendText(out, " is kept out of line: ")?;
+        let function = borrow n.functions[f as usize];
+        let hir = borrow c.hir.functions[source as usize];
+        if (hasAttributeNamed(c, c.front.ast.functions[hir.syntax as usize].attributes, "outOfLine")) {
+            appendText(out, "@outOfLine")?;
+        } else {
+            var largest: i64 = 0;
+            var which: u32 = none();
+            for (k in 0..function.parameterCount) {
+                if (k == 0 && hir.closureEnvironment != none()) {
+                    continue;
+                }
+                let size = cLayout(c, function.locals[k as usize].typ).size;
+                if (size > largest) {
+                    largest = size;
+                    which = k;
+                }
+            }
+            let result = if (c.types.is(hir.returnType, TypeKind.Never)) 0 else cLayout(c, hir.returnType).size;
+            if (result >= largest) {
+                appendText(out, "it returns a ")?;
+                appendQuotedType(out, c, hir.returnType)?;
+                appendText(out, " of ")?;
+                appendDecimal(out, truncate<u64>(result))?;
+                appendText(out, " bytes")?;
+            } else {
+                appendLargeLocal(c, out, function, which, false, false)?;
+            }
+            appendText(out, " by value")?;
+        }
+        out.push('\n')?;
+    }
+    return Ok();
+}
+
 fn emitFunction(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -127,6 +210,9 @@ fn emitFunction(
     let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
     mapTo(e, c, n, sources, nameStart, c.front.ast.idents[syntax.name as usize].end);
     e.fnPrefix()?;
+    if (isOutOfLine(c, n, f)) {
+        e.t("CEE_NOINLINE ")?;
+    }
     appendSignature(e, c, n, f, true)?;
     e.t(" {")?;
     e.emit()?;

@@ -917,8 +917,11 @@ and `E.V…` there are patterns.
     N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
     first, from the value, and on a reference scrutinee every binding is a reference.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
-    through it is a separate `match` on that reference (N0205 otherwise). A slice or `StringView` payload takes string
-    and slice patterns, which test its elements (ADR 0085 §2.7).
+    through it is a separate `match` on that reference: N0205 otherwise, "this payload is a reference ('borrow E'):
+    bind it ('Some(n)') and match on 'n' separately" (a field of a struct pattern, ADR 0123, likewise, 'f: n'). The
+    names the refused pattern binds are declared in the arm with the error type, so their uses report nothing more
+    (ADR 0195 §2.2). A slice or `StringView` payload takes string and slice patterns, which test its elements (ADR
+    0085 §2.7).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision
@@ -2211,8 +2214,14 @@ fn main() {
 - **Optional borrow arguments.** At an argument whose parameter is `borrow T?`, a place of type `T?` is borrowed as
   by `asBorrow()`, and a place of type `T` as `Some(borrow t)`, as a place of `T` is borrowed for a `borrow T`
   parameter (§13.2). At a `(borrow mut T)?` parameter the same holds with `mut p` and `asBorrowMut()` (N0249 without
-  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. A `borrow (T?)` stays a different
-  type: it converts with `asBorrow()`.
+  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. An argument of type `borrow (T?)`
+  (`borrow mut (T?)`) is lent as by `asBorrow()` (`asBorrowMut()`) (ADR 0195 §2.4.1): so `f(borrow given)` is accepted
+  as `f(given)` is, and so is passing on a borrowed optional, `fn pass(r: borrow (T?)) => f(r)`; the conversion is
+  total and moves nothing, the one `??` makes. Elsewhere (a `let` with a type, a return, a field) a `borrow (T?)`
+  stays a different type: it converts with `asBorrow()`. Where the two meet, N0205 says which is which, "expected
+  '(borrow String)?', an optional borrow, found 'borrow (String?)', a borrow of an optional", with the fix
+  `given.asBorrow()` for a variable or a borrow of one (ADR 0195 §2.4.2); the reverse mismatch has no fix, as no
+  total conversion exists.
 - **`a ?? b`** (ADR 0072) is `a`'s value, or `b` when `a` is `null`. `a` is a `T?` (N0262 otherwise) and `b` is
   checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
   chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,

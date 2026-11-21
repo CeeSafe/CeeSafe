@@ -970,6 +970,10 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
             return enumValue(c, some, inner, expected, span);
         }
     }
+    if (wrapped != none() && c.types.is(wrapped, TypeKind.Reference) && c.types.is(t, TypeKind.Reference) &&
+        c.types.optionType(c.types.info(t).pointee) == c.types.info(wrapped).pointee) {
+        return optionalBorrowMismatch(c, e, expected, span);
+    }
     var message = Vector<u8>.create();
     appendText(mut message, "expected ")?;
     appendQuotedType(mut message, c, expected)?;
@@ -983,6 +987,45 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
         appendText(mut message, " before the value to lend it (only an argument is lent without it)")?;
     }
     c.error(typeMismatch(), span.start, span.end, message)?;
+    return c.errorResult(span.start, span.end);
+}
+
+/// N0205 for a borrow of an optional where an optional borrow is expected (ADR 0195 §2.4.2), saying which is which,
+/// with the fix `o.asBorrow()` (`asBorrowMut()`) for a variable or a borrow of one.
+fn optionalBorrowMismatch(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let t = c.typeOf(e);
+    let lent = c.types.optionType(expected);
+    var message = Vector<u8>.create();
+    appendText(mut message, "expected '(")?;
+    appendBytes(mut message, c.typeName(lent))?;
+    appendText(mut message, ")?', an optional borrow, found ")?;
+    appendQuotedType(mut message, c, t)?;
+    appendText(mut message, ", a borrow of an optional")?;
+    let mutable = c.types.info(lent).mutableReference;
+    var local = none();
+    if (!mutable || c.types.info(t).mutableReference) {
+        match (c.hir.exprs[e as usize]) {
+            HirExpr.LocalRef(l) => { local = l; }
+            HirExpr.Borrow(_, place) => {
+                if (c.hir.places[place as usize].projections.count == 0) {
+                    local = c.hir.places[place as usize].root;
+                }
+            }
+            _ => {}
+        }
+    }
+    if (local == none()) {
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(c.hir.locals[local as usize].name))?;
+    appendText(mut text, if (mutable) ".asBorrowMut()" else ".asBorrow()")?;
+    var title = Vector<u8>.create();
+    appendText(mut title, "write '")?;
+    appendBytes(mut title, text.view())?;
+    appendText(mut title, "'")?;
+    c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.start, span.end, text)?;
     return c.errorResult(span.start, span.end);
 }
 

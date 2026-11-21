@@ -368,7 +368,12 @@ fn optionalBorrowArgument(
     let mutable = c.types.info(lent).mutableReference;
     let target = c.types.info(lent).pointee;
     let operand = if (mutOperand != none()) mutOperand else argument;
-    if ((mutOperand != none() && !mutable) || !isPlaceSyntax(c, operand)) {
+    // `f(borrow given)` lends as `f(given)` does (ADR 0195 §2.4.1).
+    let borrowSyntax = match (c.front.ast.exprs[operand as usize]) {
+        ExprNode.Borrow(_, inner) => mutOperand == none() && isPlaceSyntax(c, inner),
+        _ => false,
+    };
+    if ((mutOperand != none() && !mutable) || (!isPlaceSyntax(c, operand) && !borrowSyntax)) {
         return Ok(none());
     }
     let operandSpan = c.front.ast.exprSpans[operand as usize];
@@ -378,9 +383,10 @@ fn optionalBorrowArgument(
     if (c.types.isBottom(t)) {
         return Ok(value);
     }
-    // A reference to an optional stays a different type (§22.1): it converts with `asBorrow()`.
+    // A reference to an optional, `borrow (T?)`, is lent as by `asBorrow()` (ADR 0195 §2.4.1); elsewhere it stays a
+    // different type (§22.1).
     let referent = if (c.types.is(t, TypeKind.Reference)) c.types.info(t).pointee else t;
-    let ofOptional = !c.types.is(t, TypeKind.Reference) && c.types.optionType(t) == target;
+    let ofOptional = c.types.optionType(referent) == target;
     let ofTarget = referent == target;
     if (!ofOptional && !ofTarget) {
         if (mutOperand == none()) {

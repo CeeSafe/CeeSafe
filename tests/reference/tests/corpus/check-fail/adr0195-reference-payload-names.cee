@@ -1,0 +1,25 @@
+// ADR 0195 §2.2 (G37): a nested pattern under a reference payload or field is refused (type-system.md §15.2), and
+// the names in it are declared with the error type, so their uses in the arm report nothing more: one error each.
+enum Node { Items(Vector<u32>), Leaf(u32) }
+struct Holder<region a> {
+    node: borrow(a) Node;
+}
+
+fn first<region a>(all: borrow(a) Vector<Node>) -> borrow(a) Node? {
+    if (all.length == 0) {
+        return null;
+    }
+    return Some(borrow all[0]);
+}
+
+fn count(all: borrow Vector<Node>) -> usize => match (first(all)) {
+    Some(Node.Items(v)) => v.length, // error[N0205]
+    _ => 0,
+};
+
+fn leaf(h: Holder) -> u32 => match (h) {
+    Holder { node: Node.Leaf(x) } => x + 1, // error[N0205]
+    _ => 0,
+};
+
+fn main() {}

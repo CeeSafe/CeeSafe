@@ -1,0 +1,37 @@
+// ADR 0195 §2.4.1 (G39): at a 'borrow T?' parameter, a 'borrow (T?)' argument is lent as by 'asBorrow()': 'f(borrow
+// given)' as 'f(given)' is, and a borrowed optional passed on, 'lengthOf(r)'. At '(borrow mut T)?', 'borrow mut (T?)'
+// as by 'asBorrowMut()'. And `class` is a name but at the start of an item (ADR 0195 §2.3).
+struct Item {
+    class: u32;
+}
+
+fn lengthOf(s: borrow String?) -> usize => match (s) {
+    Some(t) => t.length,
+    null => 0,
+};
+
+fn pass(r: borrow (String?)) -> usize => lengthOf(r);
+
+fn grow(s: (borrow mut String)?) {
+    match (s) {
+        Some(t) => { let _ = t.append("x"); }
+        null => {}
+    }
+}
+
+fn passMut(r: borrow mut (String?)) {
+    grow(r);
+}
+
+fn classOf(class: u32) -> u32 => class;
+
+fn main() {
+    var given: String? = null;
+    let a = lengthOf(given);
+    let b = lengthOf(borrow given);
+    let c = pass(borrow given);
+    grow(mut given);
+    passMut(mut given);
+    let item = Item { class: classOf(3) };
+    let _ = a + b + c + item.class as usize;
+}

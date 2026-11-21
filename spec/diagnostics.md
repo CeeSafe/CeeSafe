@@ -51,7 +51,7 @@ diagnostics, so any cascade fails the test.
 | Code | Meaning | Example |
 |---|---|---|
 | N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7) | missing `;`, `(` after `if`, `}` before `fn`, `Colour::Red` |
-| N0101 | Expected an item (`fn` or `const`) at the top level | `let x = 1;`, `struct S {}` (not in M1) |
+| N0101 | Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3) | `let x = 1;`, `class Foo {}` |
 | N0102 | Expected an expression | `let a = ;` |
 | N0103 | Comparison operators chained | `a < b < c` |
 | N0104 | Invalid assignment target | `1 = 2;`, `f() = 3;` |
@@ -68,7 +68,8 @@ diagnostics, so any cascade fails the test.
 up to three it might be: the type's members within a few edits of it, then those whose doc comment mentions it
 (`TextWriter.unsigned` gives `signed`, `decimal` or `hex`); for a built-in type (`Process`, `Console`, …) the members
 the built-in types page lists for it, the longest shared start first; and for a small type with no close member, all
-its members. A reserved word where a name goes (N0100) says so.
+its members. A reserved word where a name goes (N0100) says so, once: the word is taken as the name, so a parameter,
+field (`own: u32;`) or variant (`move(u32)`) is parsed on as one (ADR 0195 §2.3).
 
 A method that does not exist on a value that is not a struct (N0234) is treated the same: a number is offered its
 built-in methods, the very names the checker accepts (`n.rotateLef(1)` gives `rotateLeft`), and the methods of its
@@ -88,7 +89,13 @@ too, with the same suggestions, with or without type arguments (`Vec<i32> { x: 1
 a struct type" (N0234 in a literal) and "this pattern names another type than the value's" (N0205 in a pattern) are
 said only of a name that is something: an enum, an interface, a function, a constant, a local, a built-in type. A
 struct pattern of an unknown name is then checked as a pattern of the value's own type, so its bindings are
-declared and the name is the one thing reported.
+declared and the name is the one thing reported. A nested pattern refused under a reference payload or field
+(type-system.md §15.2) likewise declares its names with the error type, so their uses report nothing more (ADR 0195
+§2.2).
+
+A borrow of an optional where an optional borrow is expected (`let r: borrow String? = borrow given;`) is N0205
+"expected '(borrow String)?', an optional borrow, found 'borrow (String?)', a borrow of an optional", with the fix
+`given.asBorrow()` (ADR 0195 §2.4.2); at an argument the two are converted, not reported (type-system.md §22.1).
 
 One fault is one diagnostic. A struct pattern that would move a field out of a value whose type has a `drop` block
 (N0252) is reported once, at the innermost struct pattern that refuses the move: a pattern around it, of a struct

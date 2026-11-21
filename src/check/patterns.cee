@@ -921,6 +921,81 @@ fn declarePatternBinding(
     return c.hir.addLocal(c.function, ident.symbol, bindingType, false, false, ident.start, ident.end);
 }
 
+/// The names a refused pattern binds, declared with the error type (ADR 0195 §2.2), so their uses report nothing more.
+/// In a later alternative of an or-pattern, a name the first one binds is marked seen.
+fn declareRefusedNames(
+    c: borrow mut Checker,
+    pattern: u32,
+    alternatives: borrow mut Alternatives,
+) -> Result<void, AllocError> {
+    match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Binding(name, mutable) => {
+            if (mutable || constantNamed(c, name) == none()) {
+                declareRefusedName(c, name, alternatives)?;
+            }
+        }
+        PatternNode.At(name, inner) => {
+            declareRefusedName(c, name, alternatives)?;
+            declareRefusedNames(c, inner, alternatives)?;
+        }
+        PatternNode.Rest(name) => {
+            if (name != none()) {
+                declareRefusedName(c, name, alternatives)?;
+            }
+        }
+        PatternNode.Or(list) => {
+            if (list.count > 0) {
+                declareRefusedNames(c, c.front.ast.at(list, 0), alternatives)?; // every alternative binds the same
+            }
+        }
+        PatternNode.Slice(list) => {
+            for (k in 0..list.count) {
+                declareRefusedNames(c, c.front.ast.at(list, k), alternatives)?;
+            }
+        }
+        PatternNode.Variant(_, _, bindings) => {
+            for (k in 0..bindings.count) {
+                let b = c.front.ast.bindings[c.front.ast.at(bindings, k) as usize];
+                if (b.nested != none()) {
+                    declareRefusedNames(c, b.nested, alternatives)?;
+                } else if (b.name != none() && (b.mutable || constantNamed(c, b.name) == none())) {
+                    declareRefusedName(c, b.name, alternatives)?;
+                }
+            }
+        }
+        PatternNode.Struct(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let b = c.front.ast.bindings[c.front.ast.at(fields, k) as usize];
+                if (b.nested != none()) {
+                    declareRefusedNames(c, b.nested, alternatives)?;
+                } else if (b.mutable || constantNamed(c, b.name) == none()) {
+                    declareRefusedName(c, b.name, alternatives)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
+fn declareRefusedName(
+    c: borrow mut Checker,
+    name: u32,
+    alternatives: borrow mut Alternatives,
+) -> Result<void, AllocError> {
+    let symbol = c.front.ast.idents[name as usize].symbol;
+    if (alternatives.active) {
+        for (i in 0..alternatives.names.length) {
+            if (alternatives.names[i].symbol == symbol) {
+                alternatives.names[i].seen = true;
+                return Ok();
+            }
+        }
+    }
+    let _ = declareBinding(c, name, false, c.types.error, none())?;
+    return Ok();
+}
+
 /// A pattern for a value of `typ` (CheckPattern, §15.2); a failure is reported and becomes `_`.
 fn checkPattern(
     c: borrow mut Checker,
@@ -1078,12 +1153,25 @@ fn checkPattern(
                         var message = Vector<u8>.create();
                         appendText(mut message, "this payload is a reference (")?;
                         appendQuotedType(mut message, c, t)?;
-                        appendText(
-                            mut message,
-                            "): bind it and match on it separately (type-system.md §15.2)",
-                        )?;
+                        appendText(mut message, "): bind it ('")?;
+                        for (j in 0..path.parts.count) {
+                            if (j > 0) {
+                                appendText(mut message, ".")?;
+                            }
+                            let part = c.front.ast.idents[c.front.ast.at(path.parts, j) as usize];
+                            appendBytes(mut message, c.name(part.symbol))?;
+                        }
+                        appendText(mut message, "(")?;
+                        for (j in 0..count) {
+                            if (j > 0) {
+                                appendText(mut message, ", ")?;
+                            }
+                            appendText(mut message, if (j == i) "n" else "_")?;
+                        }
+                        appendText(mut message, ")') and match on 'n' separately (type-system.md §15.2)")?;
                         c.error(typeMismatch(), nestedSpan.start, nestedSpan.end, message)?;
                         failed = true;
+                        declareRefusedNames(c, binding.nested, alternatives)?;
                         payload.push(c.hir.addPattern(HirPattern.Wildcard)?)?;
                         continue;
                     }
@@ -1734,8 +1822,11 @@ fn checkStructPattern(
                 var message = Vector<u8>.create();
                 appendText(mut message, "this field is a reference (")?;
                 appendQuotedType(mut message, c, t)?;
-                appendText(mut message, "): bind it and match on it separately (type-system.md §15.2)")?;
+                appendText(mut message, "): bind it ('")?;
+                appendBytes(mut message, c.name(ident.symbol))?;
+                appendText(mut message, ": n') and match on 'n' separately (type-system.md §15.2)")?;
                 c.error(typeMismatch(), nestedSpan.start, nestedSpan.end, message)?;
+                declareRefusedNames(c, b.nested, alternatives)?;
                 ok = false;
                 trees[index] = c.hir.addPattern(HirPattern.Wildcard)?;
                 continue;

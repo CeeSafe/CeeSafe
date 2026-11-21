@@ -1302,6 +1302,9 @@ fn synthCall(
                                 if (b == builtinAsync()) {
                                     return checkAsyncCall(c, member, arguments, expected, span);
                                 }
+                                if (b == builtinSecret()) {
+                                    return checkSecretWipe(c, member, arguments, span); // ADR 0197 §2.2
+                                }
                                 if (b == builtinFile() || b == builtinTcpListener() || b == builtinTcpStream()) {
                                     return checkResourceFunction(c, b, member, arguments, span);
                                 }

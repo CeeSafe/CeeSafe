@@ -1000,6 +1000,24 @@ fn builtin(
         it.memory.store(bAddress, x)?;
         return Ok(null);
     }
+    if (b == bfSecretWipe()) {
+        // The place, or the slice's elements, set to zero bytes (ADR 0197 §2.2), as the C build's ceesafe_wipe.
+        let place = argument(it, c, n, frame, arguments, 0)?;
+        let typ = builtinArgumentType(n, arguments, 0);
+        let at = place.bits(0, 8)?;
+        var length: u64 = 0;
+        if (c.types.isSlice(typ)) {
+            length = place.bits(8, 8)? * (typeSize(c, elementOf(c, pointeeOf(c, typ)))? as u64);
+        } else {
+            length = typeSize(c, pointeeOf(c, typ))? as u64;
+        }
+        var k: u64 = 0;
+        while (k < length) {
+            it.memory.storeBits(at + k, 0, 1)?;
+            k += 1;
+        }
+        return Ok(null);
+    }
     if (b == bfAsyncPark()) {
         return asyncPark(it);
     }

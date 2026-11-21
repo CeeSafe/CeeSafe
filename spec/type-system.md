@@ -95,7 +95,7 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   - A function of an `impl I for T` block takes no modifier but `public` (`grammar.md` §2), which has no effect: the
     method is as visible as the interface.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
-  `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
+  `Console.writeLine`, `Process.exit`, `truncate`, `Secret.wipe` (§42.1), and the primitive type names.
 - **Reserved names.** The types and values the compiler itself implements are found by name wherever a type or a
   constructor is written, in the libraries' code as in a package's, so no item may take their names (**N0201**,
   "is a built-in name"): `Result`, `Ok`, `Err`, `Box`, `Scratch`, `Pool`, `PoolBox`, `Vector`, `String`, `SlotMap`,
@@ -6597,3 +6597,42 @@ struct keeps beside its data. `OnceLock<T>` (§38.3) is the same for values that
 - **Drop.** The cell drops its value, if it has one.
 - Like the other cells it is `Send` when `T` is and never `Share`: it is refused in a `static` (N0337) and in an
   `Arc` (N0334).
+
+## 42. Secrets: `Secret.wipe` and `SecretHeap` (ADR 0197)
+
+A key's bytes are left behind wherever a program, or the C compiler, stops using them: a local a `drop` zeroes with
+plain stores (the C compiler removes stores no later read observes, C11 5.1.2.3), a buffer a vector outgrew, the
+place a value was moved from. CeeSafe gives a key type two tools: `Secret.wipe`, a wipe the C compiler keeps, for the
+bytes a value holds inline, and `SecretHeap` (§42.2), an allocator whose blocks are wiped before they are freed, for
+keeping the secret in one place a move does not copy. What either guarantees, and what neither can, is listed in
+§42.3.
+
+### 42.1 `Secret.wipe(mut place)`
+
+```ceesafe
+struct Schedule {
+    words: [u32; 60];
+    rounds: u32;
+
+    drop {
+        Secret.wipe(mut this.words); // every byte zero, and the stores kept
+        Secret.wipe(mut this.rounds);
+    }
+}
+```
+
+- `Secret.wipe(mut place)` sets every byte of the place to zero, through the runtime's `ceesafe_wipe(&place, sizeof
+  place)` (§2.1 of the ADR): a store of zeros followed by a compiler barrier that takes the pointer, so neither the C
+  compiler nor a link-time optimiser removes it. It returns `void`.
+- `Secret.wipe(mut bytes[a..b])`, the slice form, wipes a mutable slice's elements: their count times their size. A
+  `SliceMut<T>` binding is written `mut s`.
+- **Zeroable types.** The place's type, or the slice's element type, must be one whose every value may be all zero
+  bytes: an integer, a float, `bool`, a raw pointer, an array of a zeroable type, or a struct with no `drop` whose
+  fields are all zeroable. All zero bytes are then a value of the type, so the place stays readable and nothing is
+  `unsafe`. Any other type (an enum, an optional, a reference, a box, a vector, a type parameter, a struct with a
+  `drop` or with a field that is not zeroable) is **N0365**, which names the first field that is not.
+- A struct with a `drop` is wiped field by field, from its own `drop` (`Secret.wipe(mut this.key)`): the value
+  itself is not zeroable, as zero bytes would be dropped as if they were it.
+- It has no effects (`@effects()`): a `drop`, async code, a `debugAssert`'s callee and the freestanding profile may
+  call it. The interpreter sets the bytes to zero.
+- `Secret` is a built-in name like `Console` (§2): a package's own item named `Secret` hides it.

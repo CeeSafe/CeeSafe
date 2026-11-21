@@ -395,6 +395,12 @@ Split builds and a dependency that does not check (N0363 and N0364; `c-backend.m
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 | N0364 | A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead | `mid = { path = "../mid" }` when `mid`, or a package it depends on, has a type error |
 
+Secrets (N0365; `type-system.md` §42, ADR 0197):
+
+| Code | Meaning | Example |
+|---|---|---|
+| N0365 | `Secret.wipe` of a place, or of a slice's elements, whose type is not zeroable: not an integer, float, `bool`, raw pointer, array of a zeroable type, or struct without a `drop` whose fields are all zeroable, so zero bytes need not be one of its values. The message names the first field that is not (`type-system.md` §42.1, ADR 0197 §2.2) | `Secret.wipe(mut names)` with `names: Vector<u8>`; `Secret.wipe(mut key)` of a struct with a `drop` |
+
 ### Warnings (N0400–N0499)
 
 A warning is reported like an error, `warning[N0400]` in the text format and `"severity": "warning"` in the JSON

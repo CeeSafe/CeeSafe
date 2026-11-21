@@ -1347,6 +1347,29 @@ fn emitBuiltin(
         e.t(" = cee_t; }")?;
         return e.emit();
     }
+    if (b == bfSecretWipe()) {
+        // A place, or a mutable slice's elements, set to zero bytes by the runtime's wipe, which the C compiler keeps
+        // (ADR 0197 §2.2).
+        let place = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let typ = n.operandTypes[n.at(arguments, 0) as usize];
+        e.t("    ceesafe_wipe((uint8_t *)")?;
+        if (c.types.isSlice(typ)) {
+            e.t("(")?;
+            e.b(place.view())?;
+            e.t(").ptr, (uint64_t)(")?;
+            e.b(place.view())?;
+            e.t(").len * (uint64_t)sizeof *(")?;
+            e.b(place.view())?;
+            e.t(").ptr);")?;
+        } else {
+            e.t("(")?;
+            e.b(place.view())?;
+            e.t("), (uint64_t)sizeof *(")?;
+            e.b(place.view())?;
+            e.t("));")?;
+        }
+        return e.emit();
+    }
     if (isRvalueBuiltin(b)) {
         var value = Vector<u8>.create();
         appendRvalue(e, c, n, sources, f, mut value, r)?;

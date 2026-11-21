@@ -179,6 +179,9 @@ fn bfPtrWriteUnaligned() -> u32 => 140;
 fn bfTcpListenerShutdown() -> u32 => 141;
 /// `Thread.service(name, move () => …)` (ADR 0182): a thread that runs for the process and is never joined.
 fn bfThreadService() -> u32 => 142;
+/// `Secret.wipe(mut place)` (ADR 0197 §2.2): the place, or a mutable slice's elements, set to zero bytes through
+/// `ceesafe_wipe`, which the C compiler keeps.
+fn bfSecretWipe() -> u32 => 143;
 
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
@@ -328,6 +331,7 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     140 => "PtrWriteUnaligned",
     141 => "TcpListenerShutdown",
     142 => "ThreadService",
+    143 => "SecretWipe",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

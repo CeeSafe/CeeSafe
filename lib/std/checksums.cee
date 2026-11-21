@@ -5,8 +5,6 @@
 
 extern "C" {
     @effects()
-    fn ceesafe_wipe(p: *mut u8, n: u64);
-    @effects()
     fn ceesafe_crc32c_available() -> u32;
     @effects()
     fn ceesafe_crc32c_update(crc: u32, bytes: *u8, length: u64) -> u32;
@@ -251,14 +249,10 @@ public struct Sha256 {
     used: usize;
     length: u64; // bytes fed, modulo 2^64
 
-    /// Its state and partial block set to zero, in a way the C compiler keeps (ADR 0194 §2.1): for a digest that
-    /// absorbed a key. The plain stores come first, and the wipe of the block last: its barrier keeps them all, as the
-    /// block and the state are one object to the C compiler.
+    /// Its state and partial block set to zero, in a way the C compiler keeps (ADR 0194 §2.1, ADR 0197 §2.2): for a
+    /// digest that absorbed a key.
     fn wipe(borrow mut this) {
-        for (i in 0..8) { this.state[i] = 0; }
-        this.used = 0;
-        this.length = 0;
-        wipeSecret(mut this.block[..]);
+        Secret.wipe(mut this);
     }
 
     /// A digest of no bytes yet.
@@ -370,13 +364,6 @@ public struct Sha256 {
     }
 }
 
-/// `bytes` set to zero, in a way the C compiler does not remove (ADR 0197 §2.1): for lib/std's key holders. A plain
-/// loop of stores to a value about to die is dead to the optimiser, and goes.
-/// Safety: the runtime writes the slice's length of bytes, during the call only.
-fn wipeSecret(bytes: SliceMut<u8>) {
-    unsafe { ceesafe_wipe(bytes.ptr, bytes.length as u64); }
-}
-
 /// HMAC-SHA-256 (RFC 2104, FIPS 198-1): a 32-byte message authentication code under a key of any length. A key longer
 /// than SHA-256's 64-byte block is first replaced by its SHA-256. Compare two codes in constant time, not with an
 /// early exit, where an attacker can time the comparison.
@@ -407,9 +394,9 @@ public struct HmacSha256 {
         inner.update(innerKey[..]);
         let mac = HmacSha256 { inner: inner, outerKey: outerKey };
         // The key's copies here, wiped (ADR 0194 §2.1, G34): the code keeps only its own.
-        wipeSecret(mut padded[..]);
-        wipeSecret(mut innerKey[..]);
-        wipeSecret(mut outerKey[..]);
+        Secret.wipe(mut padded);
+        Secret.wipe(mut innerKey);
+        Secret.wipe(mut outerKey);
         inner.wipe();
         return mac;
     }
@@ -430,7 +417,7 @@ public struct HmacSha256 {
         outer.update(this.outerKey[..]);
         outer.update(inner[..]);
         let code = outer.finish();
-        wipeSecret(mut inner[..]);
+        Secret.wipe(mut inner);
         outer.wipe(); // it absorbed the padded key
         return code;
     }
@@ -446,6 +433,6 @@ public struct HmacSha256 {
     /// digest that absorbed it XOR 0x36.
     drop {
         this.inner.wipe();
-        wipeSecret(mut this.outerKey[..]);
+        Secret.wipe(mut this.outerKey);
     }
 }

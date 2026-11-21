@@ -247,6 +247,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     364 =>
         "A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead",
+    365 =>
+        "`Secret.wipe` of a place, or of a slice's elements, whose type is not zeroable: not an integer, float, `bool`, raw pointer, array of a zeroable type, or struct without a `drop` whose fields are all zeroable, so zero bytes need not be one of its values. The message names the first field that is not (`type-system.md` §42.1, ADR 0197 §2.2)",
     400 =>
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     401 =>

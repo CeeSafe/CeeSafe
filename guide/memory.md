@@ -210,6 +210,58 @@ order, and allocation failure can no longer happen for those boxes. `ceesafec bu
 allocation and the decision; `--no-placement` turns it off. The rules are in
 [Optimisations](../spec/optimisations.md).
 
+## Secrets
+
+A program that holds keys wants their bytes gone once it is done with them. Zeroing them with a loop is not enough:
+the C compiler removes stores that nothing reads afterwards, and a value about to be dropped is never read again.
+`Secret.wipe(mut place)` sets a place to zero bytes in a way the C compiler keeps, so it is how a key type's `drop`
+clears what it holds:
+
+```ceesafe
+struct Key {
+    bytes: [u8; 32];
+
+    fn sum(borrow this) -> u32 {
+        var total: u32 = 0;
+        for (b in this.bytes) { total += b as u32; }
+        return total;
+    }
+
+    drop {
+        Secret.wipe(mut this.bytes);
+    }
+}
+
+fn main() {
+    var text: [u8; 6] = [1, 2, 3, 4, 5, 6];
+    Secret.wipe(mut text[1..5]); // a slice's elements
+    Console.writeLine(text[0] + text[1] + text[5]);
+    let key = Key { bytes: [7u8; 32] };
+    Console.writeLine(key.sum());
+}
+```
+
+```text
+7
+224
+```
+
+The place must be **zeroable**: an integer, float, `bool`, raw pointer, an array of these, or a struct without a
+`drop` whose fields are all zeroable. Zero bytes are then a value of its type, so the place can still be read and
+nothing is `unsafe`. Anything else, such as a vector, an optional or a struct with a `drop`, is N0365; a struct with a
+`drop` wipes its own fields.
+
+What a wipe does not reach:
+
+- **registers** and the C compiler's own temporaries and spills;
+- **copies the program makes itself**: a local it read a key into, or the place an inline value was moved from (a
+  move is a copy of the bytes);
+- **swap and hibernation**, which may write pages to disk, and **core dumps**, which include live memory; a server
+  that holds keys should turn core dumps off (`RLIMIT_CORE` 0, and on Linux `prctl(PR_SET_DUMPABLE, 0)`) and use
+  encrypted swap;
+- **`fork`**, whose child gets copies of the pages, and other processes' view of the memory (a debugger,
+  `/proc/<pid>/mem`).
+
 ## Next
 
 [Arrays, slices and collections](collections.md).

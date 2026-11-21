@@ -70,7 +70,7 @@ or not the language uses it yet.
 as borrow break const continue defer drop else enum extern false fn for if impl
 import in interface internal let loop match move mut namespace null own private
 public return Self static struct this true type unsafe using var where while
-class async await yield macro
+async await yield macro
 ```
 
 The names of the primitive types, such as `i32`, `u64`, `bool` and `void`, are identifiers and not keywords. Four

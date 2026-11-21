@@ -18,7 +18,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 =>
         "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7)",
-    101 => "Expected an item (`fn` or `const`) at the top level",
+    101 =>
+        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3)",
     102 => "Expected an expression",
     103 => "Comparison operators chained",
     104 => "Invalid assignment target",

@@ -64,7 +64,8 @@ fn builtinName(k: u32) -> StringView => match (k) {
     32 => "swap",
     33 => "debugAssert",
     34 => "embed",
-    _ => "embedText",
+    35 => "embedText",
+    _ => "arrayFrom",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -240,7 +241,6 @@ fn checkProgramWith(
         allowCChar: false,
         inStaticInitializer: false,
         inConstantInitializer: false,
-        inStaticType: false,
         inLiteralArithmetic: false,
         atomicStructs: Vector<u32>.create(),
         allowImported: false,

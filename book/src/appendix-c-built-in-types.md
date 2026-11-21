@@ -1,7 +1,7 @@
 ---
 title: "Appendix C: Built-in types and their methods"
 summary: A reference table for each type a program uses without declaring it - integers, floats, arrays, slices, StringView, String, optionals, Result, Box, Vector, HashMap, OrderedMap, ranges, iterators, Console, Process and the built-in functions - with each member's signature, what it does, how it fails and the section that teaches it.
-keywords: [built-in types, methods, signatures, integer methods, float methods, array, Slice, SliceMut, StringView, String, optional, Result, AllocError, IoError, Box, Vector, HashMap, OrderedMap, range, Iterator, Console, Process, truncate, checkedTruncate, saturatingTruncate, round, assert, debugAssert, panic, replace, swap, embed]
+keywords: [built-in types, methods, signatures, integer methods, float methods, array, Slice, SliceMut, StringView, String, optional, Result, AllocError, IoError, Box, Vector, HashMap, OrderedMap, range, Iterator, Console, Process, truncate, checkedTruncate, saturatingTruncate, round, assert, debugAssert, panic, replace, swap, arrayFrom, embed]
 ---
 
 # Appendix C: Built-in types and their methods
@@ -404,6 +404,7 @@ These functions are part of the compiler and are called by name alone. A functio
 | `debugAssert(condition: bool)`, `debugAssert(condition: bool, message: StringView)` | Checks a condition in debug builds, in tests and in the interpreter. A release build leaves the call out, so its arguments may change nothing. | Panics as `assert` does, where it is checked | [14.1](./ch14-01-build-settings) |
 | `replace(mut place, value: T) -> T` | Puts `value` in a variable, field or element and returns the value that was there. | No | – |
 | `swap(mut a, mut b)` | Exchanges the values of two places of one type. | No | – |
+| `arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]` | An array whose element `i` is `f(i)`, called for `i` from 0 to `N - 1` in order. `T` and `N` come from the type the value is given or the explicit list; the elements may be of a type that is not Copy, such as `AtomicU64`. | Panics only where `f` does | – |
 | `embed(path) -> Slice<u8>`, `embedText(path) -> StringView` | The bytes, or the UTF-8 text, of a file of the package, read when the program is compiled. `path` is a string literal, relative to the source file. | A compile error (N0362) for a path that is missing or leads out of the package | [14.1](./ch14-01-build-settings) |
 | `layoutOf<T>() -> Layout` | The size and alignment of the type `T` in bytes, as the fields `size` and `align`. | No | – |
 | `offsetOf<T>(field) -> usize` | The offset in bytes of a field in the struct type `T`. | No | – |

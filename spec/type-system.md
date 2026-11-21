@@ -310,6 +310,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     type `borrow mut T` (a parameter, a `let`) names its referent, as an assignment to it does: `replace(mut out, v)`
     with `out: borrow mut T` replaces what `out` refers to, through a reborrow, so `out` is usable after it; a field of
     reference type (`mut h.r`) is still the field.
+  - `arrayFrom(f)` (ADR 0198 §2.2): an array of `N` elements, `f(0)` to `f(N − 1)` moved in, in order (§16.2).
   - A package's own function or item of one of these names shadows the built-in (§2).
 - An expression statement must be a call, an `await`, or `?` or `!` on any operand (N0225; ADR 0138 §5): `x!;` checks
   that `x` holds a value, and `x?;` returns when it does not. `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
@@ -612,10 +613,10 @@ Normative for 2c. It implements `ownership.md` O1–O5 and R3. The NIR analyses 
   views `Slice<T>` and `StringView`. A struct is Copy iff it has no `drop` block, is not `@noncopy` (§28.1) and
   every field is Copy. An enum is Copy iff every payload is (§15.1), an array iff its element is (§16.1), an
   optional iff its `T` is (§22.1).
-- **Move types:** structs with a `drop` block or a move-type field, and `borrow mut T` (whose uses
-  are reborrows, §13.3, so in practice it is never moved out of a variable).
-- **Needs drop:** a struct with a `drop` block, or one with a field that needs drop. Every type that
-  needs drop is a move type. The converse does not hold.
+- **Move types:** structs with a `drop` block or a move-type field, arrays of move-type elements (`[AtomicU64; 4]`,
+  §16.1), and `borrow mut T` (whose uses are reborrows, §13.3, so in practice it is never moved out of a variable).
+- **Needs drop:** a struct with a `drop` block, or one with a field that needs drop; an array iff its element does
+  (§16.1, ADR 0198). Every type that needs drop is a move type. The converse does not hold.
 
 ### 14.2 `drop` blocks
 ```ceesafe
@@ -685,7 +686,8 @@ The analysis runs on NIR move paths (`intermediate-representation.md`):
     (M15 S2; before M15 they were never destroyed, #1);
   - being **overwritten** by an assignment, in which case the old value is destroyed first.
 - **Order:** locals in reverse declaration order; then a struct's `drop` block; then its fields in
-  declaration order. By-value parameters are destroyed when the function returns, after the locals.
+  declaration order; an array's elements from index 0 upward, as a vector's (§23.1; ADR 0198 §2.1). By-value
+  parameters are destroyed when the function returns, after the locals.
 - **Moved values are not destroyed.** A value that has been moved on *some* paths gets a runtime
   **drop flag**. A partially moved struct destroys only the fields it still has.
 - **`Process.exit` and panics do not run destructors or deferred statements** (panic = abort,
@@ -1077,9 +1079,18 @@ fn area(s: Shape) -> u32 {
   expression over a const parameter (`[u8; N + 1]`) or a local (`[u8; n * 2]`) is N0353, and any other form N0259.
   It is laid out as `N` consecutive `T`s: size `N × size(T)`, the alignment of `T`. The same holds for the `N` of a
   repeat `[v; N]` (§16.2).
-  - **v0 restriction:** `T` must be a Copy type, so arrays are Copy and never need drop. Arrays of
-    move types need element-wise move tracking (future). Slices may have move-type elements
-    since M6b (§21.3).
+  - **Arrays own their elements** (ADR 0198 §2.1). An array is Copy iff its element is (§14.1), needs drop iff its
+    element does, and moves as a whole: as a local, field, parameter, result, payload or capture, it is one value,
+    left moved-from as a whole (N0250 after), under one drop flag when it is moved on some paths only. Its `N`
+    elements are always all initialised: `a[i]` may be borrowed (`a[i].load()`, `borrow mut a[i]`), assigned when
+    `a` is mutable, and read by value only when `T` is Copy. Moving one element out (`let x = a[i];`, `move a[i]`
+    for a non-Copy `T`) is N0251; `replace(mut a[i], v)` and `a[..].swap(i, j)` (§16.5) take one out without
+    leaving a hole, so no array needs per-element drop flags. Array patterns bind only Copy elements by value
+    (ADR 0085 §2.7).
+  - **Phase 1 restriction** (ADR 0198 §2.4): `T` must not need drop (N0259): atomics, structs and enums of them,
+    `@noncopy` structs of plain data. `[String; 2]` waits for arrays' drop glue. With a type parameter, `[T; N]`
+    needs `T: Copy` (N0259 for an unbounded `T`, which may need drop); each instance decides its own copy-ness.
+    Slices may have move-type elements since M6b (§21.3).
   - Otherwise arrays may appear anywhere a value may: locals, parameters, results, struct fields,
     enum payloads and other arrays. Constants of array type are not supported yet (N0216).
 - `Slice<T>` / `SliceMut<T>` are **borrowed views** `(pointer, length)` of a run of `T`s in an array
@@ -1092,14 +1103,22 @@ fn area(s: Shape) -> u32 {
   - a slice holds a loan of the whole array (or slice) it was taken from (`lifetimes.md`);
   - a function returning a slice has no `borrow(...)` source list: it must have exactly one
     reference (or slice) parameter, which the result is derived from (§13.5's default rule);
-  - the element type follows the array rules: Copy, never a reference.
+  - the element type is never a reference; it may be any other element type (§21.3).
 - Internally, `Slice<T>` is `borrow [T]` and `SliceMut<T>` is `borrow mut [T]`, with `[T]` an
   unsized array type that only exists behind a slice. That is why every reference rule applies.
 
 ### 16.2 Values
 - `[e1, …, en]`: all elements have the same type (the expected element type, or the first
   element's), n ≥ 1.
-- `[v; N]`: N copies of `v`.
+- `[v; N]`: N copies of `v`. For a Copy `v`, `v` is evaluated once and copied. For a non-Copy `v` (ADR 0198
+  §2.2), `v` must be a static initialiser (§39.4: a `@constant` call such as `AtomicU64.constant(0)`, or a struct
+  literal of them), which has no effects and no drop, so its value is laid down `N` times and once or `N`
+  evaluations cannot be told apart; any other non-Copy `v` is N0259.
+- `arrayFrom(f)` (ADR 0198 §2.2), a built-in function (§2, beside `replace` and `swap`; a package's own `arrayFrom`
+  shadows it): `arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]` calls `f(0)` to `f(N − 1)` in order and
+  moves each result into its element. `T` and `N` come from the explicit list (`arrayFrom<AtomicU64, 4>(f)`) or the
+  expected type (`let words: [AtomicU64; 4] = arrayFrom((i) => AtomicU64.create(key.word(i)));`); with neither it
+  is N0265. A panic in `f` aborts (OD-5), so no half-built array is ever observed or destroyed. Effects: `f`'s.
 - `[]` (ADR 0075 §2.9) is the empty slice, where a `Slice<T>` or `SliceMut<T>` is expected (an initialiser, an
   argument, a return): no array is behind it, and its address is `T`'s alignment, never null and never read.
   Elsewhere it is N0259. There is no zero-length array type: C has no zero-sized object, so `[T; 0]` would be laid
@@ -1122,8 +1141,8 @@ fn area(s: Shape) -> u32 {
   - `a` is an array or slice place, or a reference to an array;
   - `i` is a `usize` (a flexible literal becomes `usize`);
   - `i ≥ a.length` **panics** ("index out of bounds", reported at the index expression);
-  - `a[i]` is a place: it can be read (a copy), assigned (if mutable: an array rooted at a `var`
-    or reached through `borrow mut`, or a `SliceMut`), and borrowed.
+  - `a[i]` is a place: it can be read (a copy, of a Copy element; N0251 otherwise), assigned (if mutable: an array
+    rooted at a `var` or reached through `borrow mut`, or a `SliceMut`), and borrowed.
 - `a[lo..hi]`, `a[lo..]`, `a[..hi]`, `a[..]` give a `Slice<T>` of elements `lo` up to but not
   including `hi` (default `0` and `a.length`). `lo ≤ hi ≤ a.length` is checked; otherwise the
   program **panics**.
@@ -1225,7 +1244,8 @@ fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {
   copied. Both indices are checked first (panic "index out of bounds", reported at the call), and nothing changes
   if either is out of range. `i == j` changes nothing. Effects: none.
 
-Diagnostics: N0259 (an element type that is not Copy, an invalid length, or a too-large array).
+Diagnostics: N0259 (an element type that needs drop, a non-Copy repeat that is not a static initialiser, an invalid
+length, or a too-large array; a copying method on a non-Copy element type).
 The other errors reuse N0205, N0211, N0216, N0230, N0246, N0247 and N0248 (`diagnostics.md`).
 
 ### 16.6 Bytes and text (ADR 0071)
@@ -2146,8 +2166,10 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ### 21.3 Slices of move types (correction to §16.1)
 - `Slice<T>` and `SliceMut<T>` may have any non-scoped element type, not just Copy ones. A slice
   only views elements: reading one by value still needs a Copy type (N0251 otherwise), but
-  borrowing one (`borrow s[i]`, `s[i].method()`) does not. Arrays still need Copy elements
-  (§16.1), since an array owns its elements and v0 tracks no per-element moves.
+  borrowing one (`borrow s[i]`, `s[i].method()`) does not. Arrays may have the same element types, except, until
+  arrays have drop glue, ones that need drop (§16.1, ADR 0198): `a[..]`, `k.cells[..]` and `v.view()` all give a
+  `Slice<AtomicU64>`. The methods that copy (`fill`, `copyFrom`, `copyWithin`, `extend`) keep `T: Copy` (N0259);
+  `swap`, `sortBy`, `forEach`, `any`, `all` and `partitionPoint` take any `T`.
 
 Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, or an
 ambiguous bound method), N0268 (a type argument that does not satisfy a bound).
@@ -5943,8 +5965,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may
   be of a non-Copy type with no `drop` block, such as atomics (ADR 0075 §2.15): a static is never moved out of or
   destroyed, and `[e; N]` there evaluates `e` N times at compile time, so `static SLOTS: [AtomicU64; 4] =
-  [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. Elsewhere array elements stay
-  Copy (N0259). A library's static is emitted in C only where compiled code uses it;
+  [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. ADR 0198 makes this the rule
+  everywhere (§16.1, §16.2). A library's static is emitted in C only where compiled code uses it;
 - a call of a `@constant` function whose arguments are static initialisers;
 - a call of a C constant macro whose arguments are static initialisers or `here` (below);
 - `layoutOf<T>()` (§30.1).

@@ -1158,6 +1158,9 @@ fn synthCall(
                     if (b == builtinReplace() || b == builtinSwap()) {
                         return checkReplaceOrSwap(c, b, arguments, span);
                     }
+                    if (b == builtinArrayFrom()) {
+                        return checkArrayFrom(c, typeArguments, arguments, expected, calleeSpan, span);
+                    }
                     // Other built-in names are not functions (SynthCall's last case).
                     var message = Vector<u8>.create();
                     appendText(mut message, "this expression cannot be called")?;

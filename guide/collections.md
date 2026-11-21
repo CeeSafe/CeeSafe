@@ -2,8 +2,8 @@
 
 ## Arrays
 
-`[T; N]` is `N` values of `T`, inline: on the stack, or inside the struct that holds it. Arrays are values (copied
-when assigned) and their element type must be Copy. `N` is known when the program is compiled: a literal, a `usize`
+`[T; N]` is `N` values of `T`, inline: on the stack, or inside the struct that holds it. Arrays are values: an array
+of Copy elements is copied when assigned, any other is moved as a whole. `N` is known when the program is compiled: a literal, a `usize`
 constant, or arithmetic on them (`[u32; CHARS * 8]`, `[0u8; 256 * 8]`), which the compiler evaluates as it does a
 constant's value, so an overflow is an error there.
 
@@ -30,6 +30,41 @@ fn main() {
 
 Every index is checked: `a[i]` with `i >= a.length` stops the program. The compiler removes the check where it can
 prove the index is in range, as in both loops above.
+
+### Arrays of atomics and other move types
+
+The elements may be of a type that is not Copy, as long as it needs no drop (yet): atomics, structs of them, and
+`@noncopy` structs of plain data. Such an array is a move type. Its elements are places, borrowed or assigned but
+never moved out one by one (`let x = a[0];` is N0251): `replace(mut a[i], v)` and `a[..].swap(i, j)` take one out
+without leaving a hole. `[v; N]` copies its value, so for these types `v` must be a constant such as
+`AtomicU64.constant(0)`; `arrayFrom(f)` builds the elements one by one, calling `f(0)` to `f(N - 1)`.
+
+```ceesafe
+struct Counters {
+    cells: [AtomicU64; 4];
+}
+
+fn total(cells: Slice<AtomicU64>) -> u64 {
+    var sum: u64 = 0;
+    for (c in cells) {
+        sum += c.load();                   // `c` is a `borrow AtomicU64`
+    }
+    return sum;
+}
+
+fn main() {
+    let counters = Counters { cells: [AtomicU64.constant(0); 4] };
+    counters.cells[2].fetchAdd(5);
+    let start: [AtomicU64; 4] = arrayFrom((i) => AtomicU64.create(i as u64 * 10));
+    Console.writeLine(total(counters.cells[..]));
+    Console.writeLine(total(start[..]));
+}
+```
+
+```text
+5
+60
+```
 
 ## Slices
 

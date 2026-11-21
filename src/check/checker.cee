@@ -63,7 +63,8 @@ fn builtinSwap() -> u32 => 32;
 fn builtinDebugAssert() -> u32 => 33; // ADR 0087 §2.5
 fn builtinEmbed() -> u32 => 34;       // ADR 0087 §2.8
 fn builtinEmbedText() -> u32 => 35;
-fn builtinCount() -> u32 => 36;
+fn builtinArrayFrom() -> u32 => 36; // ADR 0198 §2.2
+fn builtinCount() -> u32 => 37;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).
@@ -197,7 +198,6 @@ struct Checker {
     allowCChar: bool;                                // the next resolution is a pointer's pointee (§28.3)
     inStaticInitializer: bool;                       // checking a static's initialiser (S7c)
     inConstantInitializer: bool;                     // checking a constant's value (ADR 0087 §2.7's `+`)
-    inStaticType: bool;                              // resolving a static's declared type (ADR 0075 §2.15)
     inLiteralArithmetic: bool;                       // inside literal arithmetic that is folded whole (ADR 0110)
     atomicStructs: Vector<u32>;                      // Ast.items of structs declared `@context(atomic)`
     allowImported: bool;                             // the next resolution may be an imported C type (§31.2)

@@ -3017,6 +3017,12 @@ fn lowerRvalueCore(
             return if (through == none()) Ok(none()) else n.rvalue(NirRvalue.Ref(mutable, through), typ, span);
         }
         HirExpr.BorrowTemp(mutable, value) => {
+            if (reachesElement(c, value) && !c.types.isCopy(c.hir.exprTypes[value as usize])) {
+                // An element of an array temporary that is not Copy (`make()[1].load()`, ADR 0198 §2.1): the array
+                // is held in a temporary and the element borrowed in place, since it cannot be moved out.
+                let place = lowerPlaceExpr(c, n, b, value)?;
+                return if (place == none()) Ok(none()) else n.rvalue(NirRvalue.Ref(mutable, place), typ, span);
+            }
             // The value lives in a temporary until the end of the statement (lifetimes.md §6).
             let rvalue = lowerRvalue(c, n, b, value)?;
             if (rvalue == none()) {
@@ -3488,6 +3494,92 @@ fn lowerReplace(
     return useRvalue(n, old);
 }
 
+/// Whether `e` is an element of an array, or a field reached from one (`a[i]`, `a[i].f`).
+fn reachesElement(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Index(_, _) => true,
+    HirExpr.FieldAccess(target, _) => reachesElement(c, target),
+    _ => false,
+};
+
+/// `arrayFrom(f)` (ADR 0198 §2.2): the array, zero-filled, then `f(i)` moved into element `i` for `i` from 0 to `N - 1`
+/// in order. Nothing reads the array before every element is written, and a panic in `f` aborts (OD-5), so its zero
+/// bytes are never seen. Its elements have no drop glue (phase 1), so writing over a zero element destroys nothing.
+fn lowerArrayFrom(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    arguments: Range,
+    typ: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let functionExpr = c.hir.at(arguments, 0);
+    let function = lowerOperand(c, n, b, functionExpr)?;
+    if (function == none()) {
+        return Ok(none());
+    }
+    let saved = b.span;
+    b.span = span;
+    let referenceType = n.operandTypes[function as usize];
+    let held = newTemp(b, referenceType)?;
+    let heldPlace = localPlace(n, held)?;
+    let functionUse = useRvalue(n, function)?;
+    assign(n, b, heldPlace, functionUse)?;
+    let result = newTemp(b, typ)?;
+    let resultPlace = localPlace(n, result)?;
+    let zero = n.operand(NirOperand.Zero, typ)?;
+    let zeroUse = n.rvalue(NirRvalue.Use(zero), typ, span)?;
+    assign(n, b, resultPlace, zeroUse)?;
+    let usize = c.types.usize;
+    let counter = newTemp(b, usize)?;
+    let counterPlace = localPlace(n, counter)?;
+    let start = constOperand(n, 0, usize)?;
+    let startUse = useRvalue(n, start)?;
+    assign(n, b, counterPlace, startUse)?;
+    let boolType = c.types.boolType;
+    let condition = newTemp(b, boolType)?;
+    let element = c.types.info(typ).element;
+    let value = newTemp(b, element)?;
+    let loan = newTemp(b, referenceType)?;
+    let head = newBlock(b)?;
+    terminate(n, b, NirTerminator.Goto(head))?;
+    b.current = head;
+    let counterOperand = placeOperand(c, n, b, counterPlace)?;
+    let length = constOperand(n, c.types.info(typ).arrayLength, usize)?;
+    let less = n.rvalue(NirRvalue.Binary(BinaryOp.Less, counterOperand, length), boolType, span)?;
+    let conditionPlace = localPlace(n, condition)?;
+    assign(n, b, conditionPlace, less)?;
+    let body = newBlock(b)?;
+    let exit = newBlock(b)?;
+    let test = placeOperand(c, n, b, conditionPlace)?;
+    terminate(n, b, NirTerminator.Branch(test, body, exit))?;
+    b.current = body;
+    // `f(i)`, as a call through a `borrow mut` closure parameter: a reborrow of `*f`, then the call.
+    let closurePlace = projectPlace(n, heldPlace, derefProjectionN())?;
+    let reborrow = n.rvalue(NirRvalue.Ref(true, closurePlace), referenceType, span)?;
+    let loanPlace = localPlace(n, loan)?;
+    assign(n, b, loanPlace, reborrow)?;
+    let loanOperand = readPlace(c, n, b, loanPlace)?;
+    let values = [loanOperand, counterOperand];
+    let list = n.list(values[..])?;
+    let call = n.rvalue(NirRvalue.Builtin(bfCallClosure(), list), element, span)?;
+    n.arrayFromCalls.push(call)?;
+    let valuePlace = localPlace(n, value)?;
+    assign(n, b, valuePlace, call)?;
+    let slot = projectPlace(n, resultPlace, indexProjectionN(counterOperand))?;
+    let moved = readPlace(c, n, b, valuePlace)?;
+    let movedUse = useRvalue(n, moved)?;
+    assign(n, b, slot, movedUse)?;
+    // counter < N, so the increment cannot overflow.
+    let one = constOperand(n, 1, usize)?;
+    let add = n.rvalue(NirRvalue.Binary(BinaryOp.Add, counterOperand, one), usize, span)?;
+    assign(n, b, counterPlace, add)?;
+    terminate(n, b, NirTerminator.Goto(head))?;
+    b.current = exit;
+    b.span = saved;
+    let read = readPlace(c, n, b, resultPlace)?;
+    return useRvalue(n, read);
+}
+
 /// A call of lib/core's VectorEditing from a program's own code (ADR 0075 §2.12): 2 for `insert` (`at <= length`),
 /// 1 for `remove` and `swapRemove` (`at < length`), else 0. The check is at the call, so a panic names the program's
 /// line.
@@ -3905,6 +3997,9 @@ fn lowerBuiltinCall(
     }
     if (function == bfReplace() || function == bfSwap()) {
         return lowerReplace(c, n, b, function, arguments, typ, span);
+    }
+    if (function == bfArrayFrom()) {
+        return lowerArrayFrom(c, n, b, arguments, typ, span);
     }
     if (function == bfProcessExit()) {
         let hoisted101 = c.hir.at(arguments, 0);

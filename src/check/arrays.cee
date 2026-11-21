@@ -14,7 +14,6 @@ struct PendingElement {
     start: u32;
     end: u32;
     file: u32;
-    inStatic: bool; // in a static's type or initialiser (ADR 0075 §2.15)
 }
 
 /// `[T; N]`.
@@ -92,9 +91,8 @@ fn checkElement(c: borrow mut Checker, element: u32, length: i64, span: Span) ->
         c.error(referenceNotAllowed(), span.start, span.end, message)?;
         return Ok(false);
     }
-    let inStatic = c.inStaticType || c.inStaticInitializer;
     if (c.copyKnown) {
-        checkElementCopy(c, element, length, span, inStatic)?;
+        checkElementCopy(c, element, length, span)?;
     } else {
         c.pendingElements.push(
             PendingElement {
@@ -103,7 +101,6 @@ fn checkElement(c: borrow mut Checker, element: u32, length: i64, span: Span) ->
                 start: span.start,
                 end: span.end,
                 file: c.file,
-                inStatic: inStatic,
             },
         )?;
     }
@@ -120,7 +117,7 @@ fn checkPendingElements(c: borrow mut Checker) -> Result<void, AllocError> {
             let fileToSet = p.file;
             c.setFile(fileToSet);
         }
-        checkElementCopy(c, p.element, p.length, Span { start: p.start, end: p.end }, p.inStatic)?;
+        checkElementCopy(c, p.element, p.length, Span { start: p.start, end: p.end })?;
     }
     c.setFile(saved);
     return Ok();
@@ -131,16 +128,21 @@ fn checkElementCopy(
     element: u32,
     length: i64,
     span: Span,
-    inStatic: bool,
 ) -> Result<void, AllocError> {
-    // Arrays own their elements and v0 tracks no per-element moves; slices only view them (§21.3). A static's array
-    // is never moved out of or destroyed, so its elements may be any type without a drop block (ADR 0075 §2.15).
-    let staticTable = inStatic && !c.types.needsDrop(element);
-    if (length >= 0 && !c.types.isCopy(element) && !c.types.isCLaidOut(element, 0) && !staticTable) {
+    // An array owns its elements, which are never moved out of one by one, so it needs no per-element drop flags
+    // (ADR 0198 §2.1). Arrays of elements that need drop wait for drop glue (its phase 2); slices only view theirs
+    // (§21.3). ADR 0075 §2.15's rule for statics is now the rule everywhere.
+    if (length >= 0 && c.types.needsDrop(element) && !c.types.isCLaidOut(element, 0)) {
         var message = Vector<u8>.create();
-        appendText(mut message, "array and slice elements must be Copy types in v0; ")?;
-        appendQuotedType(mut message, c, element)?;
-        appendText(mut message, " is not Copy (it has a drop block or contains a move type)")?;
+        if (c.types.is(element, TypeKind.TypeParameter)) {
+            appendText(mut message, "an array's elements must not need drop yet, and ")?;
+            appendQuotedType(mut message, c, element)?;
+            appendText(mut message, " may: bound it 'Copy' (type-system.md §16.1)")?;
+        } else {
+            appendText(mut message, "an array's elements must not need drop yet; ")?;
+            appendQuotedType(mut message, c, element)?;
+            appendText(mut message, " has a drop block or contains one (type-system.md §16.1)")?;
+        }
         return c.error(invalidArray(), span.start, span.end, message);
     }
     if (length > 0 && elementHasLayout(c, element)?) {
@@ -432,7 +434,79 @@ fn synthArrayRepeat(
     if (c.types.isBottom(typ)) {
         return c.errorResult(span.start, span.end);
     }
+    if (!repeatable(c, elementType, value)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'[e; N]' copies its value, and ")?;
+        appendQuotedType(mut message, c, elementType)?;
+        appendText(
+            mut message,
+            " is not Copy: give a static initialiser (a '@constant' call such as 'AtomicU64.constant(0)', or a struct literal of them) or build the array with 'arrayFrom' (type-system.md §16.2)",
+        )?;
+        c.error(invalidArray(), valueSpan.start, valueSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     return c.expr(HirExpr.ArrayRepeat(value), typ, span.start, span.end);
+}
+
+/// May `[value; N]` lay its value down `N` times (ADR 0198 §2.2)? A Copy value may; a non-Copy one only if it is a
+/// static initialiser, which has no effects and no drop. A static's initialiser and a `@constant` body are checked
+/// as such already (§39.4).
+fn repeatable(c: borrow Checker, elementType: u32, value: u32) -> bool {
+    if (!c.copyKnown || c.types.isCopy(elementType) || c.isBottom(value) || c.inStaticInitializer) {
+        return true;
+    }
+    if (c.function != none() && containsU32(c.constantFunctions, c.hir.functions[c.function as usize].syntax)) {
+        return true;
+    }
+    return isStaticInitializerShape(c, value, 0);
+}
+
+/// Is `e` built only of constants, struct and array literals of them and `@constant` calls on them (§39.4)?
+fn isStaticInitializerShape(c: borrow Checker, e: u32, depth: u32) -> bool {
+    if (depth > 64) {
+        return false;
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.IntConst(_) => { return true; }
+        HirExpr.BoolConst(_) => { return true; }
+        HirExpr.FloatConst(_) => { return true; }
+        HirExpr.Unary(_, operand) => { return isStaticInitializerShape(c, operand, depth + 1); }
+        HirExpr.Binary(_, left, right) => {
+            return isStaticInitializerShape(c, left, depth + 1) && isStaticInitializerShape(c, right, depth + 1);
+        }
+        HirExpr.Truncate(operand) => { return isStaticInitializerShape(c, operand, depth + 1); }
+        HirExpr.Cast(operand) => { return isStaticInitializerShape(c, operand, depth + 1); }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                let field = c.hir.fieldValues[(fields.start + k) as usize];
+                if (!isStaticInitializerShape(c, field.value, depth + 1)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        HirExpr.ArrayLiteral(elements) => {
+            for (k in 0..elements.count) {
+                if (!isStaticInitializerShape(c, c.hir.at(elements, k), depth + 1)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        HirExpr.ArrayRepeat(inner) => { return isStaticInitializerShape(c, inner, depth + 1); }
+        HirExpr.Call(callee, arguments) => {
+            if (!containsU32(c.constantFunctions, c.hir.functions[callee as usize].syntax)) {
+                return false;
+            }
+            for (k in 0..arguments.count) {
+                if (!isStaticInitializerShape(c, c.hir.at(arguments, k), depth + 1)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        _ => { return false; }
+    }
 }
 
 /// `a[i]`.

@@ -82,6 +82,64 @@ def bits_model():
     return [f"bits: a {sum(a)}, b {sum(b)}, union {sum(union)}, intersection {sum(inter)}, difference {sum(diff)}"]
 
 
+def ordered_edges_model():
+    """tests/support/run-pass/ordered-map-edges.cee: lib/std's OrderedMap after loads in key order (ADR 0194 §2.4)."""
+    import bisect
+    x = 4242
+    puts = removals = hits = 0
+    checksum = 0
+    for r in range(40):
+        x = lcg(x)
+        n = 50 + (x >> 33) % 3000
+        keys, values = [], {}
+
+        def put(k, v):
+            nonlocal puts
+            puts += 1
+            if k not in values:
+                bisect.insort(keys, k)
+            values[k] = v
+
+        def remove(k):
+            nonlocal removals, hits
+            removals += 1
+            if k in values:
+                hits += 1
+                del values[k]
+                keys.pop(bisect.bisect_left(keys, k))
+
+        for i in range(n):
+            put(4 * i + 4 if r % 2 == 0 else 4 * (n - i), i)
+        for step in range(1500):
+            x = lcg(x)
+            op = (x >> 20) % 8
+            a = x >> 33
+            if op < 3:
+                put(a % (4 * n + 8), x >> 40)
+            elif op < 5:
+                remove(a % (4 * n + 8))
+            elif op == 5:
+                put((keys[-1] if keys else 0) + 1 + a % 3, step)
+            elif op == 6:
+                put(keys[0] - 1 if keys and keys[0] > 0 else a % 100, step)
+            elif keys:
+                remove(keys[0] if a & 1 == 0 else keys[-1])
+            else:
+                remove(a)
+        for k in keys:
+            checksum = (checksum * 31 + k * 1000003 + values[k]) & MASK
+        order = list(keys)
+        j = len(order)
+        while j > 1:
+            x = lcg(x)
+            p = (x >> 33) % j
+            order[p], order[j - 1] = order[j - 1], order[p]
+            j -= 1
+        for k in order:
+            remove(k)
+    return [f"ordered map edges: rounds 40, puts {puts}, removals {removals}, hits {hits}, checksum {checksum}"]
+
+
 def bytes_order():
     words = [b"", b"a", b"ab", b"abc", b"b", b"B", b"_", b"z", b"\xc3\xa9", b"\xe2\x82\xac", b"aa"]
     order = sorted(range(len(words)), key=lambda i: words[i])
@@ -89,5 +147,5 @@ def bytes_order():
 
 
 if __name__ == "__main__":
-    for line in map_model() + interner_model() + bits_model() + bytes_order():
+    for line in map_model() + interner_model() + bits_model() + bytes_order() + ordered_edges_model():
         print(line)

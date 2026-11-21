@@ -1,0 +1,212 @@
+// lib/std's OrderedMap after loads in key order (ADR 0194 §2.4: edge splits, 29 entries to 1) against a naive model
+// (keys sorted in a vector beside their values), on 40 seeded rounds: a load of 50 to 3,049 keys, ascending or
+// descending, 1,500 random puts, removals, appends past the last key, puts before the first and removals at the ends,
+// then every key removed in a random order. The whole map is compared with the model by cursor, both ways, every 100
+// operations; the summary is pinned by tools/oracles/support_models.py.
+// expect-stdout: ordered map edges: rounds 40, puts 95779, removals 97267, hits 86812, checksum 6260402189567176847
+
+fn lcg(x: u64) -> u64 => x.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+
+/// The naive model: its keys in order, each value at its key's index.
+struct Model {
+    keys: Vector<u64>;
+    values: Vector<u64>;
+
+    /// The first index whose key is not before `key`.
+    fn lower(borrow this, key: u64) -> usize {
+        var lo: usize = 0;
+        var hi = this.keys.length;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            if (this.keys[mid] < key) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    fn put(borrow mut this, key: u64, value: u64) -> u64? {
+        let i = this.lower(key);
+        if (i < this.keys.length && this.keys[i] == key) {
+            let old = this.values[i];
+            this.values[i] = value;
+            return old;
+        }
+        this.keys.push(key)!;
+        this.values.push(value)!;
+        var k = this.keys.length - 1;
+        while (k > i) {
+            this.keys.swap(k - 1, k);
+            this.values.swap(k - 1, k);
+            k -= 1;
+        }
+        return null;
+    }
+
+    fn remove(borrow mut this, key: u64) -> u64? {
+        let i = this.lower(key);
+        if (i >= this.keys.length || this.keys[i] != key) {
+            return null;
+        }
+        let old = this.values[i];
+        for (k in i..(this.keys.length - 1)) {
+            this.keys.swap(k, k + 1);
+            this.values.swap(k, k + 1);
+        }
+        let _ = this.keys.pop();
+        let _ = this.values.pop();
+        return old;
+    }
+}
+
+/// Whether `map` holds what `model` does, in order both ways.
+fn same(map: borrow OrderedMap<u64, u64>, model: borrow Model) -> bool {
+    if (map.length() != model.keys.length) {
+        return false;
+    }
+    var i: usize = 0;
+    var c = map.first();
+    while (c != null) {
+        let at = c!;
+        let k: u64 = map.keyAt(at);
+        let v: u64 = map.valueAt(at);
+        if (i >= model.keys.length || k != model.keys[i] || v != model.values[i]) {
+            return false;
+        }
+        i += 1;
+        c = map.next(at);
+    }
+    if (i != model.keys.length) {
+        return false;
+    }
+    c = map.last();
+    while (c != null) {
+        let at = c!;
+        let k: u64 = map.keyAt(at);
+        if (i == 0 || k != model.keys[i - 1]) {
+            return false;
+        }
+        i -= 1;
+        c = map.previous(at);
+    }
+    return i == 0;
+}
+
+fn agree(a: u64?, b: u64?) -> bool =>
+    (a ?? 0xFFFFFFFFFFFFFFFF) == (b ?? 0xFFFFFFFFFFFFFFFF) && (a == null) == (b == null);
+
+fn main() -> i32 {
+    var x: u64 = 4242;
+    var puts: u64 = 0;
+    var removals: u64 = 0;
+    var hits: u64 = 0;
+    var checksum: u64 = 0;
+    for (r in 0..40u64) {
+        x = lcg(x);
+        let n = 50 + (x >> 33) % 3000;
+        var map = OrderedMap<u64, u64>.create();
+        var model = Model { keys: Vector<u64>.create(), values: Vector<u64>.create() };
+        for (i in 0..n) {
+            let k = if (r % 2 == 0) 4 * i + 4 else 4 * (n - i);
+            puts += 1;
+            if (!agree(map.put(k, i)!, model.put(k, i))) {
+                Console.writeLine("MISMATCH: load");
+                return 1;
+            }
+        }
+        if (!same(borrow map, borrow model)) {
+            Console.writeLine("MISMATCH: after the load");
+            return 1;
+        }
+        for (step in 0..1500u64) {
+            x = lcg(x);
+            let op = (x >> 20) % 8;
+            let a = x >> 33;
+            var key: u64 = 0;
+            var isPut = false;
+            var value = step;
+            if (op < 3) {
+                key = a % (4 * n + 8);
+                isPut = true;
+                value = x >> 40;
+            } else if (op < 5) {
+                key = a % (4 * n + 8);
+            } else if (op == 5) {
+                let top = if (model.keys.length > 0) model.keys[model.keys.length - 1] else 0;
+                key = top + 1 + a % 3;
+                isPut = true;
+            } else if (op == 6) {
+                key = if (model.keys.length > 0 && model.keys[0] > 0) model.keys[0] - 1 else a % 100;
+                isPut = true;
+            } else if (model.keys.length > 0) {
+                key = if (a & 1 == 0) model.keys[0] else model.keys[model.keys.length - 1];
+            } else {
+                key = a;
+            }
+            if (isPut) {
+                puts += 1;
+                if (!agree(map.put(key, value)!, model.put(key, value))) {
+                    Console.writeLine("MISMATCH: put");
+                    return 1;
+                }
+            } else {
+                removals += 1;
+                let got = map.remove(borrow key);
+                if (got != null) {
+                    hits += 1;
+                }
+                if (!agree(got, model.remove(key))) {
+                    Console.writeLine("MISMATCH: remove");
+                    return 1;
+                }
+            }
+            if (step % 100 == 99 && !same(borrow map, borrow model)) {
+                Console.writeLine("MISMATCH: after an operation");
+                return 1;
+            }
+        }
+        for (i in 0..model.keys.length) {
+            checksum = checksum.wrappingMul(31).wrappingAdd(
+                model.keys[i].wrappingMul(1000003),
+            ).wrappingAdd(model.values[i]);
+        }
+        var order = Vector<u64>.create();
+        for (i in 0..model.keys.length) {
+            order.push(model.keys[i])!;
+        }
+        var j = order.length;
+        while (j > 1) {
+            x = lcg(x);
+            let p = ((x >> 33) % (j as u64)) as usize;
+            order.swap(p, j - 1);
+            j -= 1;
+        }
+        for (i in 0..order.length) {
+            let key = order[i];
+            removals += 1;
+            let got = map.remove(borrow key);
+            if (got != null) {
+                hits += 1;
+            }
+            if (!agree(got, model.remove(key))) {
+                Console.writeLine("MISMATCH: drain");
+                return 1;
+            }
+        }
+        if (!map.isEmpty() || map.first() != null || map.last() != null) {
+            Console.writeLine("MISMATCH: not empty");
+            return 1;
+        }
+    }
+    Console.write("ordered map edges: rounds 40, puts ");
+    Console.write(puts);
+    Console.write(", removals ");
+    Console.write(removals);
+    Console.write(", hits ");
+    Console.write(hits);
+    Console.write(", checksum ");
+    Console.writeLine(checksum);
+    return 0;
+}

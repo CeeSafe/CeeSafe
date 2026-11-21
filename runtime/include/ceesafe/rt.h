@@ -1904,6 +1904,11 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length);
  * and the reflected register after `length` bytes, by that instruction. Call the second only after a 1. */
 uint32_t ceesafe_crc32c_available(void);
 uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t length);
+/* Crc32 (ADR 0194 §2.3): how many bytes at a time the CPU path takes, asked once: 1 with AArch64's CRC extension, 64
+ * with x86-64's PCLMULQDQ and SSE4.1, else 0; and the reflected register (0xEDB88320) after `length` bytes. The
+ * second is fast for a multiple of that answer, and called only after a nonzero one. */
+uint32_t ceesafe_crc32_available(void);
+uint32_t ceesafe_crc32_update(uint32_t crc, const uint8_t *bytes, uint64_t length);
 
 /* A wipe the C compiler keeps (ADR 0197 §2.1): `n` bytes at `p` set to zero, then a barrier that takes `p`, so the
  * stores are not removed as dead, with or without LTO. On every target, with no C library needed. */

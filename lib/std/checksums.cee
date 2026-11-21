@@ -1,7 +1,8 @@
-// Checksums and hashes (ADR 0075 §2.5): CRC-32C, CRC-64/NVME, MD5, SHA-256 and HMAC-SHA-256, in pure CeeSafe. Each is
-// incremental (`create`, `update`, `finish`) and has a one-call `of`. The CRC tables and the round constants are in
-// checksum_tables.cee, which tools/gen_checksums.py writes. The CRCs are table-driven, slicing-by-8. Crc32c uses the
-// CPU's CRC-32C instruction where the runtime finds one (ADR 0089), with the same results and the same API.
+// Checksums and hashes (ADR 0075 §2.5): CRC-32, CRC-32C, CRC-64/NVME, MD5, SHA-1, SHA-256 and HMAC-SHA-256, in pure
+// CeeSafe. Each is incremental (`create`, `update`, `finish`) and has a one-call `of`. The CRC tables and the round
+// constants are in checksum_tables.cee, which tools/gen_checksums.py writes. The CRCs are table-driven, slicing-by-8.
+// Crc32c and Crc32 use the CPU's instructions where the runtime finds them (ADRs 0089 and 0194), with the same results
+// and the same API.
 
 extern "C" {
     @effects()
@@ -10,6 +11,59 @@ extern "C" {
     fn ceesafe_crc32c_available() -> u32;
     @effects()
     fn ceesafe_crc32c_update(crc: u32, bytes: *u8, length: u64) -> u32;
+    @effects()
+    fn ceesafe_crc32_available() -> u32;
+    @effects()
+    fn ceesafe_crc32_update(crc: u32, bytes: *u8, length: u64) -> u32;
+}
+
+/// CRC-32 (IEEE 802.3, ISO-HDLC: polynomial 0x04C11DB7, reflected, initial value and final XOR all ones), the checksum
+/// of the S3 `x-amz-checksum-crc32` header, gzip, zip and PNG, and zlib's `crc32`. `Crc32.of("123456789".bytes())` is
+/// 0xCBF43926.
+public struct Crc32 {
+    state: u32; // the register, before the final XOR
+
+    /// A checksum of no bytes yet.
+    public fn create() -> Crc32 => Crc32 { state: 0xFFFFFFFF };
+
+    /// Feeds `bytes`: through the CPU where the runtime has a path for it (the CRC extension's `crc32x` on AArch64,
+    /// carry-less multiply folding on x86-64; ADR 0194 §2.3), as many bytes as that path takes at a time, else, and
+    /// for the rest, eight at a time through the slicing tables, then one at a time.
+    /// Safety: the runtime reads at most the slice's length, during the call only, and keeps no pointer.
+    public fn update(borrow mut this, bytes: Slice<u8>) {
+        var c = this.state;
+        var i: usize = 0;
+        let n = bytes.length;
+        let step = unsafe { ceesafe_crc32_available() } as usize;
+        if (step != 0 && n >= step) {
+            i = n - n % step;
+            c = unsafe { ceesafe_crc32_update(c, bytes.ptr, i as u64) };
+        }
+        while (n - i >= 8) {
+            let lo = c ^ bytes.readLE<u32>(i);
+            let hi = bytes.readLE<u32>(i + 4);
+            c = CRC32_SLICES[7 * 256 + (lo & 0xFF) as usize] ^ CRC32_SLICES[6 * 256 + ((lo >> 8) & 0xFF) as usize] ^
+                CRC32_SLICES[5 * 256 + ((lo >> 16) & 0xFF) as usize] ^ CRC32_SLICES[4 * 256 + (lo >> 24) as usize] ^
+                CRC32_SLICES[3 * 256 + (hi & 0xFF) as usize] ^ CRC32_SLICES[2 * 256 + ((hi >> 8) & 0xFF) as usize] ^
+                CRC32_SLICES[256 + ((hi >> 16) & 0xFF) as usize] ^ CRC32_SLICES[(hi >> 24) as usize];
+            i += 8;
+        }
+        while (i < n) {
+            c = CRC32_SLICES[((c ^ bytes[i] as u32) & 0xFF) as usize] ^ (c >> 8);
+            i += 1;
+        }
+        this.state = c;
+    }
+
+    /// The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+    public fn finish(borrow this) -> u32 => this.state ^ 0xFFFFFFFF;
+
+    /// The checksum of `bytes`, in one call.
+    public fn of(bytes: Slice<u8>) -> u32 {
+        var c = Crc32.create();
+        c.update(bytes);
+        return c.finish();
+    }
 }
 
 /// CRC-32C (Castagnoli: polynomial 0x1EDC6F41, reflected, initial value and final XOR all ones), the checksum of
@@ -239,6 +293,136 @@ public struct Md5 {
     /// The digest of `bytes`, in one call.
     public fn of(bytes: Slice<u8>) -> [u8; 16] {
         var h = Md5.create();
+        h.update(bytes);
+        return h.finish();
+    }
+}
+
+/// SHA-1 (FIPS 180-4 §6.1): a 20-byte digest. **SHA-1 is broken for collisions** (SHAttered, 2017): two inputs with
+/// the same digest can be made, so it must never sign, authenticate or name a value an attacker chooses. It is here
+/// for the protocols that name it: S3's `x-amz-checksum-sha1`, the WebSocket handshake, Git's object ids. For anything
+/// else use Sha256, or HmacSha256 for a code under a key.
+public struct Sha1 {
+    state: [u32; 5];
+    block: [u8; 64]; // a partial block of `used` bytes
+    used: usize;
+    length: u64; // bytes fed, modulo 2^64
+
+    /// A digest of no bytes yet.
+    public fn create() -> Sha1 => Sha1 {
+        state: [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0],
+        block: [0u8; 64],
+        used: 0,
+        length: 0,
+    };
+
+    /// Compresses the 64 bytes at `at` of `data` into `state` (FIPS 180-4 §6.1.2).
+    fn compress(state: borrow mut [u32; 5], data: Slice<u8>, at: usize) {
+        let block = data[at..at + 64];
+        var w = [0u32; 80];
+        for (t in 0..16usize) {
+            w[t] = block.readBE<u32>(4 * t);
+        }
+        for (t in 16..80usize) {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotateLeft(1);
+        }
+        var a = state[0];
+        var b = state[1];
+        var c = state[2];
+        var d = state[3];
+        var e = state[4];
+        for (t in 0..20usize) {
+            let f = (b & c) | ((b ^ 0xFFFFFFFF) & d); // Ch
+            let x = a.rotateLeft(5).wrappingAdd(f).wrappingAdd(e).wrappingAdd(0x5A827999).wrappingAdd(w[t]);
+            e = d;
+            d = c;
+            c = b.rotateLeft(30);
+            b = a;
+            a = x;
+        }
+        for (t in 20..40usize) {
+            let f = b ^ c ^ d; // Parity
+            let x = a.rotateLeft(5).wrappingAdd(f).wrappingAdd(e).wrappingAdd(0x6ED9EBA1).wrappingAdd(w[t]);
+            e = d;
+            d = c;
+            c = b.rotateLeft(30);
+            b = a;
+            a = x;
+        }
+        for (t in 40..60usize) {
+            let f = (b & c) | (b & d) | (c & d); // Maj
+            let x = a.rotateLeft(5).wrappingAdd(f).wrappingAdd(e).wrappingAdd(0x8F1BBCDC).wrappingAdd(w[t]);
+            e = d;
+            d = c;
+            c = b.rotateLeft(30);
+            b = a;
+            a = x;
+        }
+        for (t in 60..80usize) {
+            let f = b ^ c ^ d; // Parity
+            let x = a.rotateLeft(5).wrappingAdd(f).wrappingAdd(e).wrappingAdd(0xCA62C1D6).wrappingAdd(w[t]);
+            e = d;
+            d = c;
+            c = b.rotateLeft(30);
+            b = a;
+            a = x;
+        }
+        state[0] = state[0].wrappingAdd(a);
+        state[1] = state[1].wrappingAdd(b);
+        state[2] = state[2].wrappingAdd(c);
+        state[3] = state[3].wrappingAdd(d);
+        state[4] = state[4].wrappingAdd(e);
+    }
+
+    /// Feeds `bytes`. Whole blocks are compressed straight from `bytes`; only a partial block is copied.
+    public fn update(borrow mut this, bytes: Slice<u8>) {
+        let n = bytes.length;
+        var k: usize = 0;
+        this.length = this.length.wrappingAdd(n as u64);
+        if (this.used > 0) {
+            while (this.used < 64 && k < n) {
+                this.block[this.used] = bytes[k];
+                this.used += 1;
+                k += 1;
+            }
+            if (this.used < 64) {
+                return;
+            }
+            Sha1.compress(mut this.state, this.block[..], 0);
+            this.used = 0;
+        }
+        while (n - k >= 64) {
+            Sha1.compress(mut this.state, bytes, k);
+            k += 64;
+        }
+        while (k < n) {
+            this.block[this.used] = bytes[k];
+            this.used += 1;
+            k += 1;
+        }
+    }
+
+    /// The digest of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+    public fn finish(borrow this) -> [u8; 20] {
+        var h = Sha1 { state: this.state, block: this.block, used: this.used, length: this.length };
+        let bits = this.length.wrappingMul(8);
+        var pad = [0u8; 72];
+        pad[0] = 0x80;
+        let zeros: usize = if (this.used < 56) 56 - this.used else 120 - this.used;
+        for (k in 0..8usize) {
+            pad[zeros + k] = truncate<u8>(bits >> (8 * (7 - k) as u64));
+        }
+        h.update(pad[..zeros + 8]);
+        var digest = [0u8; 20];
+        for (k in 0..5usize) {
+            digest[..].writeBE(4 * k, h.state[k]);
+        }
+        return digest;
+    }
+
+    /// The digest of `bytes`, in one call.
+    public fn of(bytes: Slice<u8>) -> [u8; 20] {
+        var h = Sha1.create();
         h.update(bytes);
         return h.finish();
     }

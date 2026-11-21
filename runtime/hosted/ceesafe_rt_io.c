@@ -4159,6 +4159,189 @@ uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t leng
     return crc;
 }
 
+/* ---- CRC-32 (IEEE: polynomial 0x04C11DB7, reflected 0xEDB88320) on the CPU (ADR 0194 §2.3): the CRC extension's
+ * `crc32x` and `crc32b` on AArch64, with Crc32c's probe and the same one chain; on x86-64, whose `crc32` is CRC-32C
+ * only, carry-less multiply folding (PCLMULQDQ, SSE4.1; Gopal et al., Intel, "Fast CRC Computation for Generic
+ * Polynomials Using PCLMULQDQ", 2009). lib/std's Crc32 asks ceesafe_crc32_available at each update how many bytes the
+ * path takes at a time (1, 64, or 0 for none) and runs its tables on the rest. The x86-64 path is reached by the
+ * compiler's intrinsics under a target attribute on the functions that use them, as AES-GCM's below, so no file
+ * needs a target flag; whether the CPU has it is asked of the CPU or the system, once. ---- */
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#include <immintrin.h>
+#define CEE_CRC32_X86 1
+#define CEE_CRC32_TARGET __attribute__((target("pclmul,sse4.1")))
+#elif defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
+#include <immintrin.h>
+#define CEE_CRC32_X86 1
+#define CEE_CRC32_TARGET
+#endif
+
+static uint32_t cee_crc32_state; /* 0 not asked, 1 no instructions, 2 the instructions (ceesafe_atomic_*) */
+
+static bool cee_crc32_probe(void) {
+#if defined(CEE_CRC32_X86) && defined(_MSC_VER) && !defined(__clang__)
+    int regs[4];
+    __cpuid(regs, 1);
+    return ((unsigned)regs[2] & 0x00080002u) == 0x00080002u; /* CPUID.1:ECX: PCLMULQDQ (1), SSE4.1 (19) */
+#elif defined(CEE_CRC32_X86)
+    uint32_t a = 1u, b, c = 0u, d;
+    __asm__ __volatile__("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    (void)a;
+    (void)b;
+    (void)d;
+    return (c & 0x00080002u) == 0x00080002u; /* CPUID.1:ECX: PCLMULQDQ (1), SSE4.1 (19) */
+#elif defined(CEE_CRC32C_ARM)
+    return cee_crc32c_probe(); /* the CRC extension has both polynomials */
+#else
+    return false;
+#endif
+}
+
+uint32_t ceesafe_crc32_available(void) {
+    uint32_t state = ceesafe_atomic_load_u32(&cee_crc32_state);
+    if (state == 0u) {
+        state = cee_crc32_probe() ? 2u : 1u;
+        ceesafe_atomic_store_u32(&cee_crc32_state, state); /* racing threads store the same answer */
+    }
+#if defined(CEE_CRC32_X86)
+    return state == 2u ? 64u : 0u;
+#else
+    return state == 2u ? 1u : 0u;
+#endif
+}
+
+/* The register after `length` bytes, a bit at a time: only for the bytes past the fast path's multiple, which
+ * lib/std's Crc32 never passes. */
+static uint32_t cee_crc32_bits(uint32_t crc, const uint8_t *bytes, uint64_t length) {
+    while (length > 0u) {
+        uint32_t bit;
+        crc ^= *bytes;
+        for (bit = 0u; bit < 8u; bit++) {
+            crc = (crc & 1u) != 0u ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+        }
+        bytes++;
+        length--;
+    }
+    return crc;
+}
+
+#if defined(CEE_CRC32C_ARM)
+static inline uint32_t cee_crc32_u64(uint32_t crc, uint64_t v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return __crc32d(crc, v);
+#elif defined(__ARM_FEATURE_CRC32)
+    __asm__("crc32x %w0, %w0, %x1" : "+r"(crc) : "r"(v));
+    return crc;
+#else
+    __asm__(".arch_extension crc\n\tcrc32x %w0, %w0, %x1" : "+r"(crc) : "r"(v));
+    return crc;
+#endif
+}
+
+static inline uint32_t cee_crc32_u8(uint32_t crc, uint8_t v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return __crc32b(crc, v);
+#elif defined(__ARM_FEATURE_CRC32)
+    __asm__("crc32b %w0, %w0, %w1" : "+r"(crc) : "r"((uint32_t)v));
+    return crc;
+#else
+    __asm__(".arch_extension crc\n\tcrc32b %w0, %w0, %w1" : "+r"(crc) : "r"((uint32_t)v));
+    return crc;
+#endif
+}
+#endif
+
+#if defined(CEE_CRC32_X86)
+/* The folding constants of the reflected CRC-32, each x^d mod P bit-reflected and shifted left one (33 bits), as the
+ * paper's reflected form wants them: K1, K2 fold a 128-bit lane over 512 bits (d = 4·128 + 32, 4·128 − 32), K3, K4
+ * over 128 (d = 128 + 32, 128 − 32), K5 is d = 64; MU is floor(x^64 / P) and POLY P, both reflected. They are
+ * computed and checked against these lines by tools/oracles/crc_model.py. */
+#define CEE_CRC32_K1 0x154442BD4LL
+#define CEE_CRC32_K2 0x1C6E41596LL
+#define CEE_CRC32_K3 0x1751997D0LL
+#define CEE_CRC32_K4 0x0CCAA009ELL
+#define CEE_CRC32_K5 0x163CD6124LL
+#define CEE_CRC32_MU 0x1F7011641LL
+#define CEE_CRC32_POLY 0x1DB710641LL
+
+CEE_CRC32_TARGET static inline __m128i cee_crc32_load(const uint8_t *p) {
+    return _mm_loadu_si128((const __m128i *)(const void *)p);
+}
+
+/* `x` carried forward over the distance whose constants are `k`'s halves, plus `next`. */
+CEE_CRC32_TARGET static inline __m128i cee_crc32_fold(__m128i x, __m128i k, __m128i next) {
+    return _mm_xor_si128(_mm_xor_si128(_mm_clmulepi64_si128(x, k, 0x00), _mm_clmulepi64_si128(x, k, 0x11)), next);
+}
+
+/* The register after `length` bytes, a nonzero multiple of 64: four lanes folded 64 bytes a step, then into one, then
+ * to 64 bits and reduced to 32 by Barrett's method (the paper's §4 and its Figure 12, in the reflected form). */
+CEE_CRC32_TARGET static uint32_t cee_crc32_fold64(uint32_t crc, const uint8_t *bytes, uint64_t length) {
+    const __m128i k12 = _mm_set_epi64x(CEE_CRC32_K2, CEE_CRC32_K1);
+    const __m128i k34 = _mm_set_epi64x(CEE_CRC32_K4, CEE_CRC32_K3);
+    const __m128i k5 = _mm_set_epi64x(0, CEE_CRC32_K5);
+    const __m128i barrett = _mm_set_epi64x(CEE_CRC32_MU, CEE_CRC32_POLY);
+    const __m128i low32 = _mm_set_epi32(0, 0, 0, -1);
+    __m128i x0 = _mm_xor_si128(cee_crc32_load(bytes), _mm_cvtsi32_si128((int)crc));
+    __m128i x1 = cee_crc32_load(bytes + 16);
+    __m128i x2 = cee_crc32_load(bytes + 32);
+    __m128i x3 = cee_crc32_load(bytes + 48);
+    __m128i t;
+    bytes += 64;
+    length -= 64u;
+    while (length >= 64u) {
+        x0 = cee_crc32_fold(x0, k12, cee_crc32_load(bytes));
+        x1 = cee_crc32_fold(x1, k12, cee_crc32_load(bytes + 16));
+        x2 = cee_crc32_fold(x2, k12, cee_crc32_load(bytes + 32));
+        x3 = cee_crc32_fold(x3, k12, cee_crc32_load(bytes + 48));
+        bytes += 64;
+        length -= 64u;
+    }
+    x0 = cee_crc32_fold(x0, k34, x1);
+    x0 = cee_crc32_fold(x0, k34, x2);
+    x0 = cee_crc32_fold(x0, k34, x3);
+    /* 128 bits to 64, appending the 32 zero bits a CRC's register is multiplied by */
+    x0 = _mm_xor_si128(_mm_clmulepi64_si128(x0, k34, 0x10), _mm_srli_si128(x0, 8));
+    t = _mm_srli_si128(x0, 4);
+    x0 = _mm_xor_si128(_mm_clmulepi64_si128(_mm_and_si128(x0, low32), k5, 0x00), t);
+    /* Barrett: the quotient by MU, then the product of it and P taken off */
+    t = x0;
+    x0 = _mm_clmulepi64_si128(_mm_and_si128(x0, low32), barrett, 0x10);
+    x0 = _mm_clmulepi64_si128(_mm_and_si128(x0, low32), barrett, 0x00);
+    x0 = _mm_xor_si128(x0, t);
+    return (uint32_t)_mm_extract_epi32(x0, 1);
+}
+#endif
+
+/* The register `crc` (reflected, before the final XOR, as Crc32 keeps it) after `length` bytes. Fast for a multiple
+ * of what ceesafe_crc32_available() answered, and called only after it answered nonzero; any bytes past that
+ * multiple, and every byte on a target without the path, are taken a bit at a time. */
+uint32_t ceesafe_crc32_update(uint32_t crc, const uint8_t *bytes, uint64_t length) {
+#if defined(CEE_CRC32_X86)
+    if (length >= 64u && ceesafe_crc32_available() == 64u) {
+        uint64_t whole = length - length % 64u;
+        crc = cee_crc32_fold64(crc, bytes, whole);
+        bytes += whole;
+        length -= whole;
+    }
+#elif defined(CEE_CRC32C_ARM)
+    if (ceesafe_crc32_available() == 1u) {
+        while (length >= 8u) {
+            uint64_t word;
+            ceesafe_mem_copy(&word, bytes, sizeof word); /* little-endian, as the reflected CRC wants */
+            crc = cee_crc32_u64(crc, word);
+            bytes += 8;
+            length -= 8u;
+        }
+        while (length > 0u) {
+            crc = cee_crc32_u8(crc, *bytes);
+            bytes++;
+            length--;
+        }
+    }
+#endif
+    return cee_crc32_bits(crc, bytes, length);
+}
+
 /* ---- AES-256-GCM on the CPU's instructions (ADR 0135): AES-NI and PCLMULQDQ on x86-64, the AES extension (AESE,
  * AESMC, PMULL) on AArch64. lib/std's Aes256Gcm asks ceesafe_aes256gcm_available when a key is made and keeps its
  * own constant-time code where it says 0. The instructions are reached by the compiler's intrinsics under a target

@@ -26,7 +26,8 @@ Checks the corpus cannot make, since they need the clock, the threads' interleav
    - `measured` (ADR 0193): under a 1 ms slice and a 200 ms bound, a unit alone that never ends is ended after about
      200 ms, the time it ran measured at each pause, where counting its pauses times the slice let it run twice that;
    - `workers`: under Async.runWorkers(4), units started by tasks on every worker compute and are paused, each on its
-     own worker's stacks, and finish with the right numbers;
+     own worker's stacks, and finish with the right numbers (each unit computes for well over a slice, more than
+     Windows' clock tick of about 15.6 ms, or it may end before a slice runs out);
    - `none` cases: with no slice, nothing is paused.
    Each normal exit is run with the allocation report too (CEESAFE_ALLOC_REPORT=1): nothing live but what a crashed
    unit left.
@@ -464,7 +465,7 @@ async fn onWorkers(x: Arc<AtomicU64>, y: Arc<AtomicU64>) -> Result<void, Fail> {
             let _ = k;
             let p = x.clone();
             let q = y.clone();
-            s.spawnSend(async move () => await onWorker(5000000, p, q));
+            s.spawnSend(async move () => await onWorker(50000000, p, q));
         }
     });
     return r;

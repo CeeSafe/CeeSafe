@@ -1003,6 +1003,10 @@ fn emitAsyncFunction(
     e.t(" *cee_frame) {")?;
     e.emit()?;
     let inFrame = frameLocals(n, f)?;
+    // Which C locals are written in part or borrowed, and so must start zeroed (§5); the rest are assigned whole before
+    // every read in the same resume (they are not live across a suspension point), as a sync function's (ADR 0204).
+    var partly = Vector<bool>.create();
+    partlyWritten(c, n, f, mut partly)?;
     for (k in 0..truncate<u32>(function.locals.length)) {
         if (!inFrame[k as usize] && isForwarded(n, f, k)) {
             continue; // forwarded away (optimisations.md §6): mentioned nowhere
@@ -1016,9 +1020,14 @@ fn emitAsyncFunction(
             appendCTypeName(c, mut e.buf, t)?;
             e.t(" ")?;
             appendLocalName(c, mut e.buf, function, k)?;
-            e.t(" = ")?;
-            e.t(localZero(c, t))?;
-            e.t(";")?;
+            let zero = localZero(c, t);
+            if (sameText(zero.bytes(), "{0}") && !inSet(partly, k)) {
+                e.t(";")?; // assigned whole before every read in this resume (§5, ADR 0204)
+            } else {
+                e.t(" = ")?;
+                e.t(zero)?;
+                e.t(";")?;
+            }
             e.emit()?;
             continue;
         }

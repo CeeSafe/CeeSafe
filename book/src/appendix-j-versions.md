@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.86.0
+## Releases 0.25.0 to 0.88.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.88.0 | 2026-11-21 | On Linux, FreeBSD and Windows the window thread is the first that opens a window, so a host whose runtime keeps the first thread (a JVM) opens windows (ADR 0201); `--emit lib` compiles position-independent code for Linux, FreeBSD and Android, so its archive goes into a PIE or a shared library (ADR 0202) | [Appendix E](./appendix-e-ceesafec) |
 | 0.87.0 | 2026-11-21 | `Secret.wipe` zeroes a place so the C compiler keeps it (N0365 for a type that is not zeroable), and `SecretHeap` wipes every block it frees or outgrows; `ceesafec test --scan-freed` and `Testing.freedHolds` check it (ADR 0197). `arrayFrom` and arrays of atomics and other types without drop glue, in fields and locals (ADR 0198). `Crc32` on the CPU's CRC instructions, and `Sha1` (ADR 0194). `OrderedMap` keeps in-order loads about twice as dense (ADR 0194). The C backend flattens a `match` whose cases return, so long chains of `?` no longer nest past C's limit; `class` is a name; a borrowed optional is accepted at a `borrow T?` parameter (ADR 0195) | [Appendix C](./appendix-c-built-in-types) |
 | 0.86.0 | 2026-11-21 | A host program opens windows on iOS and Android: `ceesafe_window_start()` in `ceesafe/embed.h` starts the iOS application from a host's `main`, and `ceesafe/android.h` gives a host library the Android activity's VM and Java object (ADR 0200); `--emit lib` finds `llvm-ar` beside the Android NDK's target-named clang | [Appendix E](./appendix-e-ceesafec) |
 | 0.85.1 | 2026-11-21 | `ceesafec test` gives each test a function of its own, so a package of 300 tests no longer passes C's limit of nested brackets (ADR 0195). lib/std's key holders wipe with a call the C compiler keeps: a local `Aes256Gcm` kept its key schedule on the stack at `-O2` (ADR 0197). `HmacSha256` wipes its key when it is dropped and has `clone()`, so `=` moves it (ADR 0194) | - |

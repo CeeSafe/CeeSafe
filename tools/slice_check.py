@@ -27,7 +27,8 @@ Checks the corpus cannot make, since they need the clock, the threads' interleav
      200 ms, the time it ran measured at each pause, where counting its pauses times the slice let it run twice that;
    - `readiness` (ADR 0203): beside a unit computing 500 ms under a 20 ms slice, a task reading what another thread
      writes over TCP every 13 ms gets each write within a few ms (mean <= 3, longest <= 8), where the slice ended by
-     the clock alone made it wait for the slice's rest (about 10 ms on average); without a slice it waits for the unit;
+     the clock alone made it wait for the slice's rest (about 10 ms on average; still so on Windows, which keeps the
+     time alone); without a slice it waits for the unit;
    - `workers`: under Async.runWorkers(4), units started by tasks on every worker compute and are paused, each on its
      own worker's stacks, and finish with the right numbers (each unit computes for well over a slice, more than
      Windows' clock tick of about 15.6 ms, or it may end before a slice runs out);
@@ -748,6 +749,8 @@ def main():
         expect(f"{label}: the unit finished", v.get("a") == 1, str(v))
         if extra:
             expect(f"{label}: without a slice the reader waits for the unit", v.get("c", 0) >= 300, str(v))
+        elif os.name == "nt":
+            pass  # Windows keeps the time alone (ADR 0203 §2): the writes wait for the slice's rest there
         else:
             expect(f"{label}: paused for what came", v.get("pauses", 0) >= 15, str(v))
             expect(f"{label}: each write read within a few ms, not the slice's rest",

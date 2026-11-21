@@ -4,7 +4,7 @@
   (platform completeness; the owner: "Continue to P5"), whose gate is "the component library passes VoiceOver, NVDA
   and TalkBack checks". The API and macOS are implemented (§6); iOS, Android, Windows and Linux are the steps left.
   ClayWind's side exists (its commit `3b23725`): a frame's elements with role, name, value, state and place, and a
-  screen reader's actions as the controls see them.
+  screen reader's actions as the controls see them. Linux and FreeBSD are implemented too (§11): every step is done.
 - Scope: `lib/std/window.cee` (`WindowAccessRole`, `WindowAccessNode`, `WindowAccessAction`, four methods of
   `Window`), `runtime/hosted/ceesafe_rt_window.c`, `runtime/android/` (a node provider and its embedded dex),
   type-system.md §26.13, `spec/api/std.md` (generated), `tools/window_check.py`. No compiler change, no change to the
@@ -275,3 +275,46 @@ order stays the reading order. A program that gives 0 everywhere has what it had
 - **Checked** (macOS, `window_check --display`): Save is of layer 1 and a later node of layer 0 covers it;
   `accessibilityHitTest:` at Save's middle answers Save.
 
+## 11. Step 5 as implemented: Linux and FreeBSD (2026-11-21)
+
+`runtime/hosted/ceesafe_rt_window.c` (the X11 part), type-system.md §26.13, `tools/atspi_check.py`. The owner: "Go
+ahead".
+
+- **AT-SPI 2 through libdbus**, loaded with `dlopen` as libX11 is: 33 functions, nothing linked. At the first open
+  the runtime asks the session bus for the accessibility bus (`org.a11y.Bus.GetAddress`), connects to it privately
+  and embeds its root in the registry's desktop (`Socket.Embed`). Without libdbus or the bus, or with
+  `CEESAFE_NO_ATSPI` set, there is no reader and windows are as before.
+- **The objects**: the root (`application`, named after the program), a `frame` per window under it, the nodes the
+  frame's children in the list's order, flat as §2.3 has it; a node's path is its window's serial and its `id`, so
+  one that stays in the list keeps its path. The interfaces are written out by hand from at-spi2-core's XML:
+  `Accessible`, `Component`, `Action`, `Value`, `Text` and `Properties`, the ones a reader asks of each role.
+- **On the window thread**: the bus's descriptor is in the window's waits (`waitEvent`, `waitAny`), and the pump
+  answers what came, so a program that sleeps between events still answers a reader, and nothing is called on
+  another thread (as on macOS; unlike UI Automation, §9).
+- **A slider's value is read only** to AT-SPI: steps are `Increment` and `Decrement` through the keyboard; AT-SPI has
+  no step action. A field's caret is the program's: `SetCaretOffset` is refused, as on Windows a field's value is.
+- **Found on the way**, each fixed:
+  - **The application vanished after 30 seconds**: the registry pings every application
+    (`org.freedesktop.DBus.Peer.Ping` on `/`) and hides one that does not answer ("Disabling unresponsive app").
+    libdbus answers `Peer` itself only for a connection that dispatches through its object tree, which this one does
+    not; the runtime answers it.
+  - **Every client printed "Error in GetItems"**: at-spi2's clients ask an application for its cache first. It is
+    answered empty (the list changes every frame; a cache's updates would be most of the traffic), and clients ask
+    each object.
+  - **An unnamed application**: a GTK program's name is its program's; this one's is `/proc/self/comm`.
+- **Checked on Fedora 45** (GNOME on Wayland, the window through Xwayland; at-spi2-core 2.62, pyatspi 2.58) by
+  `tools/atspi_check.py`, a reader's view from another process: one element of each role with its role, name,
+  states and parent; a field's text, caret, selection and word; a slider's value and range; a box and the element at
+  a point; a press and a focus asked through AT-SPI arriving in `takeAccessAction`; a changed value and a moved
+  focus heard by a listener on the bus; `accessActive` false, then true; and the application still listed after the
+  registry's ping. 53 checks, 0 problems. `window_check --display` there: 77 checks, 0 problems. On ClayWind's C
+  example, through pyatspi: "Add one" pressed twice makes "Pressed 2 times"; a step's checkbox toggles.
+- **Orca 51, the same day**, on the same desktop (the VM has no sound: its speech read from its debug log while the
+  owner, and then a script, pressed the keys). On ClayWind's component demo, Tab by Tab: "ClayWind — CeeSafe
+  frame", "Name entry" with what was typed in it, "Note entry", "Quantity slider 3 3 percent." (Orca's own form for a
+  slider: its value text, then its share of the range), "Save button", "Clear button". On the C example: "Build
+  claywind-capi check box checked", "Link it from C check box not checked", "Dark check box checked", "Add one
+  button", "Reset button", "Your name entry World"; typed letters echoed, and Backspace says the letter it took.
+  Its second window is read as itself ("Live state").
+- **Not checked**: FreeBSD (the same code; no machine), a window under a pure Wayland session (the backend is X11:
+  ADR 0069).

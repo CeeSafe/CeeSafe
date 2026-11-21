@@ -3706,9 +3706,27 @@ Diagnostics: none new.
     10 1709 on). The interfaces are written in the runtime as their vtables and their functions come from
     `uiautomationcore.dll` and `oleaut32.dll`, loaded at first use. A provider is called on threads of UI
     Automation's: the providers and the list are under one lock, and what was asked is queued when the window
-    takes its messages. A field's `caret` and `anchor` are not used. Linux and FreeBSD: not
-    implemented yet (ADR 0164 §3); the list is kept
-    and `takeAccessAction` is null, `accessActive` false.
+    takes its messages. A field's `caret` and `anchor` are not used. Linux and FreeBSD (X11): AT-SPI 2 on the
+    accessibility bus, through `libdbus-1.so.3` loaded with `dlopen` at the first `open`, which asks the session
+    bus for the accessibility bus's address (`org.a11y.Bus`), connects to it and embeds the application's root in
+    the registry's desktop (`Socket.Embed`); without the library or the bus, or with `CEESAFE_NO_ATSPI` set in the
+    environment, there is no reader and the rest is as before. The root, `/org/a11y/atspi/accessible/root`, is an
+    `application` named after the program (`/proc/self/comm`); each window is a `frame` under it named by its title,
+    active while it has the keyboard; each node is a child of its window's frame in the list's order, its path the
+    frame's and its `id`. The roles are `label`, `push button`, `check box`, `radio button`, `entry` (`password
+    text` when `secure`), `slider`, `page tab`, `list item`, `menu item`, `combo box` and `image`, with the states
+    their flags are (`checked`, `selected`, `focused`, `expanded`, and `enabled` and `sensitive` unless `disabled`;
+    a field is `editable` and `single line`). Every object answers `Accessible` and, but the root, `Component`
+    (extents in screen, window or parent coordinates, the element at a point, `GrabFocus`, which queues `Focus`);
+    every node but a `Text`, a field, a slider and an image `Action` (one action, `press`, or `toggle` for a
+    checkbox or radio, which queues `Press`); a slider `Value` (read only); a field `Text`, its value in characters with its
+    caret and selection from `caret` and `anchor`, and its characters, words and line. The registry's ping
+    (`org.freedesktop.DBus.Peer`) is answered, and an empty cache (`org.a11y.atspi.Cache.GetItems`), so clients ask
+    each object. The signals are `ChildrenChanged` on the frame when elements came or went (and on the root when a
+    window opened or closed), `PropertyChange` for a control's name and a slider's value, `TextChanged` and
+    `TextCaretMoved` for a field, `StateChanged` for the flags, `Window` `Activate` and `Deactivate`, and an
+    `Announcement` for `announce`. Every question is answered on the program's first thread, from the window's
+    pump and its waits, which wake for the bus too; the first makes `accessActive` true.
 - **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop` and `setAccessNodes`, allocate.

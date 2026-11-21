@@ -245,9 +245,10 @@ struct cee_access_node {
 
 /* The element at point (x, y) of the content, in points, among the first `count` of `nodes`: of those that hold it,
    the highest layer's, and of one layer the latest in the list (drawn later, so on top); -1 for none. The list is in
-   reading order, so a popup read before the page it covers is above it by its layer, not by its place. Only AppKit's
-   and UI Automation's hit tests ask; UIKit and Android choose for themselves. */
-#if defined(_WIN32) || (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT))
+   reading order, so a popup read before the page it covers is above it by its layer, not by its place. AppKit's, UI
+   Automation's and AT-SPI's hit tests ask; UIKit and Android choose for themselves. */
+#if defined(_WIN32) || (defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)) ||                                          \
+    ((defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__))
 static inline int64_t cee_access_at(const struct cee_access_node *nodes, uint32_t count, double x, double y) {
     int64_t found = -1;
     for (uint32_t k = 0; k < count; k++) {
@@ -11834,6 +11835,11 @@ struct cee_x11 {
     int xdnd_version, xdnd_offered, xdnd_converting, xdnd_known;
     uint32_t xdnd_files;
     float xdnd_x, xdnd_y;
+    /* Accessibility (ADR 0164, AT-SPI 2): the title, which names the window's frame; the frame's serial in its path;
+       whether the window has the keyboard (the frame is active). */
+    char *title;
+    uint32_t atspi_serial;
+    int atspi_active;
 };
 
 typedef void (*cee_x_fn)(void);
@@ -11931,6 +11937,1443 @@ static int cee_x_load(void) {
     return 1;
 }
 
+/* ---- Accessibility: AT-SPI 2 (ADR 0164 §3 step 5) ---------------------------------------------------------------
+   The application is on the accessibility bus as AT-SPI 2 describes it: its root, /org/a11y/atspi/accessible/root
+   (role application), embedded in the registry's desktop at the first open; each window a frame under it
+   (.../w<serial>); each element of the window's list a child of the frame, flat, in reading order
+   (.../w<serial>_<id>). libdbus-1.so.3 is loaded with dlopen, as libX11 is, so nothing links it; without it, or
+   without an accessibility bus, windows work as before and no reader sees them. Every request is answered on the
+   window thread, from the pump and the waits, which take the connection's descriptor too. A request makes the
+   window's accessActive true, as on the other systems: something reads it. The roles, states and signatures are
+   at-spi2-core's (atspi-constants.h and xml/). */
+#define CEE_WINDOW_ACCESS 1
+
+typedef struct {
+    const char *name;
+    const char *message;
+    unsigned int dummy1 : 1, dummy2 : 1, dummy3 : 1, dummy4 : 1, dummy5 : 1;
+    void *padding1;
+} cee_dbus_error;
+typedef union {
+    unsigned char bytes[128]; /* DBusMessageIter is 72 bytes on LP64; room to spare */
+    void *align;
+} cee_dbus_iter;
+typedef struct cee_dbus_connection cee_dbus_connection;
+typedef struct cee_dbus_message cee_dbus_message;
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    void (*error_init)(cee_dbus_error *);
+    void (*error_free)(cee_dbus_error *);
+    cee_dbus_connection *(*bus_get_private)(int, cee_dbus_error *);
+    cee_dbus_connection *(*open_private)(const char *, cee_dbus_error *);
+    uint32_t (*bus_register)(cee_dbus_connection *, cee_dbus_error *);
+    const char *(*unique_name)(cee_dbus_connection *);
+    void (*set_exit_on_disconnect)(cee_dbus_connection *, uint32_t);
+    uint32_t (*get_unix_fd)(cee_dbus_connection *, int *);
+    uint32_t (*read_write)(cee_dbus_connection *, int);
+    cee_dbus_message *(*pop_message)(cee_dbus_connection *);
+    uint32_t (*send)(cee_dbus_connection *, cee_dbus_message *, uint32_t *);
+    void (*flush)(cee_dbus_connection *);
+    cee_dbus_message *(*send_with_reply_and_block)(cee_dbus_connection *, cee_dbus_message *, int, cee_dbus_error *);
+    void (*connection_close)(cee_dbus_connection *);
+    void (*connection_unref)(cee_dbus_connection *);
+    cee_dbus_message *(*new_method_call)(const char *, const char *, const char *, const char *);
+    cee_dbus_message *(*new_method_return)(cee_dbus_message *);
+    cee_dbus_message *(*new_error)(cee_dbus_message *, const char *, const char *);
+    cee_dbus_message *(*new_signal)(const char *, const char *, const char *);
+    void (*message_unref)(cee_dbus_message *);
+    int (*message_type)(cee_dbus_message *);
+    const char *(*message_path)(cee_dbus_message *);
+    const char *(*message_interface)(cee_dbus_message *);
+    const char *(*message_member)(cee_dbus_message *);
+    uint32_t (*iter_init)(cee_dbus_message *, cee_dbus_iter *);
+    void (*iter_init_append)(cee_dbus_message *, cee_dbus_iter *);
+    uint32_t (*append_basic)(cee_dbus_iter *, int, const void *);
+    uint32_t (*open_container)(cee_dbus_iter *, int, const char *, cee_dbus_iter *);
+    uint32_t (*close_container)(cee_dbus_iter *, cee_dbus_iter *);
+    int (*arg_type)(cee_dbus_iter *);
+    void (*get_basic)(cee_dbus_iter *, void *);
+    uint32_t (*iter_next)(cee_dbus_iter *);
+    void (*recurse)(cee_dbus_iter *, cee_dbus_iter *);
+} cee_dbus;
+
+/* The application's one connection to the accessibility bus, made at the first open; its unique name; the desktop the
+   registry embedded the root in; and the serial the next window's frame takes. */
+static struct {
+    int state; /* 0 not tried, 1 connected, -1 none */
+    cee_dbus_connection *bus;
+    char name[256];
+    char desktop_name[256];
+    char desktop_path[256];
+    char app_name[64]; /* the process's name, the application's (as a GTK application's is its program's) */
+    uint32_t next_serial;
+} cee_atspi;
+
+static int cee_dbus_load(void) {
+    if (cee_dbus.state != 0) {
+        return cee_dbus.state == 1;
+    }
+    cee_dbus.state = -1;
+    void *d = dlopen("libdbus-1.so.3", RTLD_NOW | RTLD_LOCAL);
+    if (d == NULL) {
+        return 0;
+    }
+#define CEE_DBUS(field, type, name)                                                                                    \
+    cee_dbus.field = (type)cee_x_symbol(d, name);                                                                      \
+    if (cee_dbus.field == NULL) {                                                                                      \
+        return 0;                                                                                                      \
+    }
+    CEE_DBUS(error_init, void (*)(cee_dbus_error *), "dbus_error_init")
+    CEE_DBUS(error_free, void (*)(cee_dbus_error *), "dbus_error_free")
+    CEE_DBUS(bus_get_private, cee_dbus_connection * (*)(int, cee_dbus_error *), "dbus_bus_get_private")
+    CEE_DBUS(open_private, cee_dbus_connection * (*)(const char *, cee_dbus_error *), "dbus_connection_open_private")
+    CEE_DBUS(bus_register, uint32_t(*)(cee_dbus_connection *, cee_dbus_error *), "dbus_bus_register")
+    CEE_DBUS(unique_name, const char *(*)(cee_dbus_connection *), "dbus_bus_get_unique_name")
+    CEE_DBUS(set_exit_on_disconnect, void (*)(cee_dbus_connection *, uint32_t),
+             "dbus_connection_set_exit_on_disconnect")
+    CEE_DBUS(get_unix_fd, uint32_t(*)(cee_dbus_connection *, int *), "dbus_connection_get_unix_fd")
+    CEE_DBUS(read_write, uint32_t(*)(cee_dbus_connection *, int), "dbus_connection_read_write")
+    CEE_DBUS(pop_message, cee_dbus_message * (*)(cee_dbus_connection *), "dbus_connection_pop_message")
+    CEE_DBUS(send, uint32_t(*)(cee_dbus_connection *, cee_dbus_message *, uint32_t *), "dbus_connection_send")
+    CEE_DBUS(flush, void (*)(cee_dbus_connection *), "dbus_connection_flush")
+    CEE_DBUS(send_with_reply_and_block,
+             cee_dbus_message * (*)(cee_dbus_connection *, cee_dbus_message *, int, cee_dbus_error *),
+             "dbus_connection_send_with_reply_and_block")
+    CEE_DBUS(connection_close, void (*)(cee_dbus_connection *), "dbus_connection_close")
+    CEE_DBUS(connection_unref, void (*)(cee_dbus_connection *), "dbus_connection_unref")
+    CEE_DBUS(new_method_call, cee_dbus_message * (*)(const char *, const char *, const char *, const char *),
+             "dbus_message_new_method_call")
+    CEE_DBUS(new_method_return, cee_dbus_message * (*)(cee_dbus_message *), "dbus_message_new_method_return")
+    CEE_DBUS(new_error, cee_dbus_message * (*)(cee_dbus_message *, const char *, const char *),
+             "dbus_message_new_error")
+    CEE_DBUS(new_signal, cee_dbus_message * (*)(const char *, const char *, const char *), "dbus_message_new_signal")
+    CEE_DBUS(message_unref, void (*)(cee_dbus_message *), "dbus_message_unref")
+    CEE_DBUS(message_type, int (*)(cee_dbus_message *), "dbus_message_get_type")
+    CEE_DBUS(message_path, const char *(*)(cee_dbus_message *), "dbus_message_get_path")
+    CEE_DBUS(message_interface, const char *(*)(cee_dbus_message *), "dbus_message_get_interface")
+    CEE_DBUS(message_member, const char *(*)(cee_dbus_message *), "dbus_message_get_member")
+    CEE_DBUS(iter_init, uint32_t(*)(cee_dbus_message *, cee_dbus_iter *), "dbus_message_iter_init")
+    CEE_DBUS(iter_init_append, void (*)(cee_dbus_message *, cee_dbus_iter *), "dbus_message_iter_init_append")
+    CEE_DBUS(append_basic, uint32_t(*)(cee_dbus_iter *, int, const void *), "dbus_message_iter_append_basic")
+    CEE_DBUS(open_container, uint32_t(*)(cee_dbus_iter *, int, const char *, cee_dbus_iter *),
+             "dbus_message_iter_open_container")
+    CEE_DBUS(close_container, uint32_t(*)(cee_dbus_iter *, cee_dbus_iter *), "dbus_message_iter_close_container")
+    CEE_DBUS(arg_type, int (*)(cee_dbus_iter *), "dbus_message_iter_get_arg_type")
+    CEE_DBUS(get_basic, void (*)(cee_dbus_iter *, void *), "dbus_message_iter_get_basic")
+    CEE_DBUS(iter_next, uint32_t(*)(cee_dbus_iter *), "dbus_message_iter_next")
+    CEE_DBUS(recurse, void (*)(cee_dbus_iter *, cee_dbus_iter *), "dbus_message_iter_recurse")
+#undef CEE_DBUS
+    cee_dbus.state = 1;
+    return 1;
+}
+
+#define CEE_ATSPI_ROOT "/org/a11y/atspi/accessible/root"
+#define CEE_ATSPI_PREFIX "/org/a11y/atspi/accessible/w"
+
+/* What a path names: the root (window NULL), a window's frame (index -1), or an element of a window (its index in the
+   list); 0 for no object of ours. */
+static int cee_atspi_find(const char *path, struct cee_window **window, int64_t *index) {
+    *window = NULL;
+    *index = -1;
+    if (path == NULL) {
+        return 0;
+    }
+    if (strcmp(path, CEE_ATSPI_ROOT) == 0) {
+        return 1;
+    }
+    size_t prefix = sizeof(CEE_ATSPI_PREFIX) - 1u;
+    if (strncmp(path, CEE_ATSPI_PREFIX, prefix) != 0) {
+        return 0;
+    }
+    char *end = NULL;
+    unsigned long serial = strtoul(path + prefix, &end, 10);
+    for (struct cee_window *w = cee_wake_windows; w != NULL; w = w->wake_link) {
+        if (!w->scripted && w->native != NULL && ((struct cee_x11 *)w->native)->atspi_serial == (uint32_t)serial) {
+            *window = w;
+            if (*end == '\0') {
+                return 1;
+            }
+            if (*end != '_') {
+                return 0;
+            }
+            unsigned long long id = strtoull(end + 1, NULL, 10);
+            for (uint32_t k = 0; k < w->access_count; k++) {
+                if (w->access[k].id == (uint64_t)id) {
+                    *index = (int64_t)k;
+                    return 1;
+                }
+            }
+            return 0;
+        }
+    }
+    return 0;
+}
+
+/* An object's path: the root, a frame (index -1) or an element. */
+static void cee_atspi_path(char *out, size_t size, struct cee_window *w, int64_t index) {
+    if (w == NULL) {
+        snprintf(out, size, "%s", CEE_ATSPI_ROOT);
+    } else if (index < 0) {
+        snprintf(out, size, "%s%u", CEE_ATSPI_PREFIX, ((struct cee_x11 *)w->native)->atspi_serial);
+    } else {
+        snprintf(out, size, "%s%u_%llu", CEE_ATSPI_PREFIX, ((struct cee_x11 *)w->native)->atspi_serial,
+                 (unsigned long long)w->access[index].id);
+    }
+}
+
+/* ---- Writing replies */
+
+static void cee_atspi_string(cee_dbus_iter *it, const char *s) {
+    if (s == NULL) {
+        s = "";
+    }
+    cee_dbus.append_basic(it, 's', &s);
+}
+
+/* A run of the list's text as a string (copied, so it ends; invalid UTF-8 is libdbus's to refuse, which the list never
+   has: lib/std's are StringViews). */
+static void cee_atspi_text(cee_dbus_iter *it, const char *text, uint32_t start, uint32_t length) {
+    char few[256];
+    char *s = length < sizeof few ? few : (char *)ceesafe_platform_alloc((size_t)length + 1u);
+    if (s == NULL) {
+        cee_atspi_string(it, "");
+        return;
+    }
+    if (length > 0) {
+        memcpy(s, text + start, length);
+    }
+    s[length] = '\0';
+    cee_atspi_string(it, s);
+    if (s != few) {
+        ceesafe_platform_free(s);
+    }
+}
+
+static void cee_atspi_int(cee_dbus_iter *it, int32_t v) { cee_dbus.append_basic(it, 'i', &v); }
+static void cee_atspi_uint(cee_dbus_iter *it, uint32_t v) { cee_dbus.append_basic(it, 'u', &v); }
+static void cee_atspi_bool(cee_dbus_iter *it, int v) {
+    uint32_t b = v ? 1u : 0u;
+    cee_dbus.append_basic(it, 'b', &b);
+}
+static void cee_atspi_double(cee_dbus_iter *it, double v) { cee_dbus.append_basic(it, 'd', &v); }
+
+/* An object reference, (so): ours (window NULL with index -2 for "none", the null object) or the desktop. */
+static void cee_atspi_ref(cee_dbus_iter *it, struct cee_window *w, int64_t index) {
+    cee_dbus_iter s;
+    char path[160];
+    cee_dbus.open_container(it, 'r', NULL, &s);
+    if (index == -2) {
+        cee_atspi_string(&s, cee_atspi.name);
+        const char *none = "/org/a11y/atspi/null";
+        cee_dbus.append_basic(&s, 'o', &none);
+    } else {
+        cee_atspi_path(path, sizeof path, w, index);
+        const char *p = path;
+        cee_atspi_string(&s, cee_atspi.name);
+        cee_dbus.append_basic(&s, 'o', &p);
+    }
+    cee_dbus.close_container(it, &s);
+}
+
+static void cee_atspi_desktop(cee_dbus_iter *it) {
+    cee_dbus_iter s;
+    cee_dbus.open_container(it, 'r', NULL, &s);
+    cee_atspi_string(&s, cee_atspi.desktop_name);
+    const char *p = cee_atspi.desktop_path;
+    cee_dbus.append_basic(&s, 'o', &p);
+    cee_dbus.close_container(it, &s);
+}
+
+/* ---- What an object is */
+
+/* An element's AT-SPI role (ADR 0164's roles in lib/std's order). */
+static uint32_t cee_atspi_role(const struct cee_access_node *n) {
+    switch (n->role) {
+    case 1: return 43; /* PUSH_BUTTON */
+    case 2: return 7;  /* CHECK_BOX */
+    case 3: return 44; /* RADIO_BUTTON */
+    case 4: return (n->flags & CEE_ACCESS_SECURE) != 0 ? 40u : 79u; /* PASSWORD_TEXT, ENTRY */
+    case 5: return 51; /* SLIDER */
+    case 6: return 37; /* PAGE_TAB */
+    case 7: return 32; /* LIST_ITEM */
+    case 8: return 35; /* MENU_ITEM */
+    case 9: return 11; /* COMBO_BOX */
+    case 10: return 27; /* IMAGE */
+    default: return 29; /* LABEL */
+    }
+}
+
+static const char *cee_atspi_role_name(uint32_t role) {
+    switch (role) {
+    case 75: return "application";
+    case 23: return "frame";
+    case 43: return "push button";
+    case 7: return "check box";
+    case 44: return "radio button";
+    case 40: return "password text";
+    case 79: return "entry";
+    case 51: return "slider";
+    case 37: return "page tab";
+    case 32: return "list item";
+    case 35: return "menu item";
+    case 11: return "combo box";
+    case 27: return "image";
+    default: return "label";
+    }
+}
+
+/* Whether an element has Action (a press), Value (a slider) or Text (a field). */
+static int cee_atspi_acts(const struct cee_access_node *n) { return n->role != 0 && n->role != 4 && n->role != 5 && n->role != 10; }
+static int cee_atspi_valued(const struct cee_access_node *n) { return n->role == 5; }
+static int cee_atspi_texted(const struct cee_access_node *n) { return n->role == 4; }
+
+/* The state set, two words of AtspiStateType bits. */
+static void cee_atspi_states(struct cee_window *w, int64_t index, uint32_t words[2]) {
+    words[0] = words[1] = 0;
+#define CEE_ATSPI_STATE(bit) (words[(bit) / 32] |= 1u << ((bit) % 32))
+    if (w == NULL) {
+        return; /* the application has none */
+    }
+    CEE_ATSPI_STATE(25); /* SHOWING */
+    CEE_ATSPI_STATE(30); /* VISIBLE */
+    if (index < 0) {
+        CEE_ATSPI_STATE(8);  /* ENABLED */
+        CEE_ATSPI_STATE(24); /* SENSITIVE */
+        if (((struct cee_x11 *)w->native)->atspi_active) {
+            CEE_ATSPI_STATE(1); /* ACTIVE */
+        }
+        return;
+    }
+    const struct cee_access_node *n = &w->access[index];
+    if ((n->flags & CEE_ACCESS_DISABLED) == 0) {
+        CEE_ATSPI_STATE(8);
+        CEE_ATSPI_STATE(24);
+    }
+    if (n->role != 0 && n->role != 10) {
+        CEE_ATSPI_STATE(11); /* FOCUSABLE */
+    }
+    if ((n->flags & CEE_ACCESS_FOCUSED) != 0) {
+        CEE_ATSPI_STATE(12); /* FOCUSED */
+    }
+    if (n->role == 2 || n->role == 3) {
+        CEE_ATSPI_STATE(41); /* CHECKABLE */
+        if ((n->flags & CEE_ACCESS_CHECKED) != 0) {
+            CEE_ATSPI_STATE(4); /* CHECKED */
+        }
+    }
+    if (n->role == 6 || n->role == 7) {
+        CEE_ATSPI_STATE(22); /* SELECTABLE */
+        if ((n->flags & CEE_ACCESS_SELECTED) != 0) {
+            CEE_ATSPI_STATE(23); /* SELECTED */
+        }
+    }
+    if (n->role == 9) {
+        CEE_ATSPI_STATE(9); /* EXPANDABLE */
+        if ((n->flags & CEE_ACCESS_EXPANDED) != 0) {
+            CEE_ATSPI_STATE(10); /* EXPANDED */
+        }
+    }
+    if (n->role == 4) {
+        CEE_ATSPI_STATE(7);  /* EDITABLE */
+        CEE_ATSPI_STATE(26); /* SINGLE_LINE */
+    }
+#undef CEE_ATSPI_STATE
+}
+
+/* The window's content origin on the screen, in pixels. */
+static void cee_atspi_origin(struct cee_window *w, int *x, int *y) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_xid child = 0;
+    *x = *y = 0;
+    cee_x.translate_coordinates(n->display, n->window, cee_x.root_window(n->display, n->screen), 0, 0, x, y, &child);
+}
+
+/* An object's box: screen (coord 0) or window and parent (1, 2) coordinates, in pixels. */
+static void cee_atspi_extents(struct cee_window *w, int64_t index, uint32_t coord, int32_t box[4]) {
+    box[0] = box[1] = box[2] = box[3] = 0;
+    if (w == NULL) {
+        return;
+    }
+    float scale = w->scale > 0.0f ? w->scale : 1.0f;
+    int ox = 0, oy = 0;
+    if (coord == 0) {
+        cee_atspi_origin(w, &ox, &oy);
+    }
+    if (index < 0) {
+        box[0] = ox;
+        box[1] = oy;
+        box[2] = (int32_t)w->width;
+        box[3] = (int32_t)w->height;
+        return;
+    }
+    const struct cee_access_node *n = &w->access[index];
+    box[0] = ox + (int32_t)(n->x * scale);
+    box[1] = oy + (int32_t)(n->y * scale);
+    box[2] = (int32_t)(n->width * scale + 0.5f);
+    box[3] = (int32_t)(n->height * scale + 0.5f);
+}
+
+/* ---- Text: a field's value, in characters as AT-SPI counts them (code points), and the list's bytes */
+
+static uint32_t cee_atspi_chars(const char *s, uint32_t length) {
+    uint32_t count = 0;
+    for (uint32_t k = 0; k < length; k++) {
+        if (((unsigned char)s[k] & 0xC0u) != 0x80u) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* The byte offset of character `chars` (clamped to the end). */
+static uint32_t cee_atspi_byte(const char *s, uint32_t length, int32_t chars) {
+    if (chars <= 0) {
+        return 0;
+    }
+    uint32_t seen = 0;
+    for (uint32_t k = 0; k < length; k++) {
+        if (((unsigned char)s[k] & 0xC0u) != 0x80u) {
+            if (seen == (uint32_t)chars) {
+                return k;
+            }
+            seen++;
+        }
+    }
+    return length;
+}
+
+/* The [start, end) characters of a field around `offset` for boundary `kind` (AtspiTextBoundaryType): one character,
+   or a word (letters and digits, with what follows up to the next word for WORD_START), or the whole one-line text
+   for a sentence or a line. */
+static void cee_atspi_around(const char *s, uint32_t length, int32_t offset, uint32_t kind, int32_t *start,
+                             int32_t *end) {
+    int32_t count = (int32_t)cee_atspi_chars(s, length);
+    if (offset < 0) {
+        offset = 0;
+    }
+    if (offset > count) {
+        offset = count;
+    }
+    if (kind == 0) {
+        *start = offset;
+        *end = offset < count ? offset + 1 : offset;
+        return;
+    }
+    if (kind != 1 && kind != 2) {
+        *start = 0;
+        *end = count;
+        return;
+    }
+    /* Words: runs that are not spaces, by character. */
+    int32_t a = offset, b = offset;
+    while (a > 0) {
+        uint32_t at = cee_atspi_byte(s, length, a - 1);
+        if (s[at] == ' ' || s[at] == '\t') {
+            break;
+        }
+        a--;
+    }
+    while (b < count) {
+        uint32_t at = cee_atspi_byte(s, length, b);
+        if (s[at] == ' ' || s[at] == '\t') {
+            break;
+        }
+        b++;
+    }
+    while (kind == 1 && b < count) { /* WORD_START: the spaces after it too */
+        uint32_t at = cee_atspi_byte(s, length, b);
+        if (s[at] != ' ' && s[at] != '\t') {
+            break;
+        }
+        b++;
+    }
+    *start = a;
+    *end = b;
+}
+
+/* ---- Signals */
+
+/* An Event.<kind> signal on an object, AT-SPI's (siiva{sv}): its detail, two numbers and a value written by `value`
+   (an int 0 when NULL). */
+typedef void (*cee_atspi_any)(cee_dbus_iter *, const void *);
+static void cee_atspi_signal(struct cee_window *w, int64_t index, const char *interface, const char *member,
+                             const char *detail, int32_t one, int32_t two, const char *signature, cee_atspi_any value,
+                             const void *data) {
+    if (cee_atspi.state != 1) {
+        return;
+    }
+    char path[160];
+    cee_atspi_path(path, sizeof path, w, index);
+    cee_dbus_message *m = cee_dbus.new_signal(path, interface, member);
+    if (m == NULL) {
+        return;
+    }
+    cee_dbus_iter it, v, d;
+    cee_dbus.iter_init_append(m, &it);
+    cee_atspi_string(&it, detail);
+    cee_atspi_int(&it, one);
+    cee_atspi_int(&it, two);
+    cee_dbus.open_container(&it, 'v', value != NULL ? signature : "i", &v);
+    if (value != NULL) {
+        value(&v, data);
+    } else {
+        cee_atspi_int(&v, 0);
+    }
+    cee_dbus.close_container(&it, &v);
+    cee_dbus.open_container(&it, 'a', "{sv}", &d);
+    cee_dbus.close_container(&it, &d);
+    cee_dbus.send(cee_atspi.bus, m, NULL);
+    cee_dbus.message_unref(m);
+}
+
+static void cee_atspi_any_string(cee_dbus_iter *it, const void *data) { cee_atspi_string(it, (const char *)data); }
+static void cee_atspi_any_double(cee_dbus_iter *it, const void *data) { cee_atspi_double(it, *(const double *)data); }
+
+/* A child added or removed: the frame tells, with the child's reference. */
+struct cee_atspi_child {
+    struct cee_window *w;
+    int64_t index;
+};
+static void cee_atspi_any_child(cee_dbus_iter *it, const void *data) {
+    const struct cee_atspi_child *c = (const struct cee_atspi_child *)data;
+    cee_atspi_ref(it, c->w, c->index);
+}
+
+static void cee_atspi_state_changed(struct cee_window *w, int64_t index, const char *state, int on) {
+    cee_atspi_signal(w, index, "org.a11y.atspi.Event.Object", "StateChanged", state, on ? 1 : 0, 0, NULL, NULL, NULL);
+}
+
+/* ---- Answering requests */
+
+static void cee_atspi_reply_error(cee_dbus_message *m, const char *name, const char *text) {
+    cee_dbus_message *r = cee_dbus.new_error(m, name, text);
+    if (r != NULL) {
+        cee_dbus.send(cee_atspi.bus, r, NULL);
+        cee_dbus.message_unref(r);
+    }
+}
+
+/* The arguments of a request, in order: ints, uints and a string. */
+static int cee_atspi_args(cee_dbus_message *m, const char *types, void *out[]) {
+    cee_dbus_iter it;
+    if (!cee_dbus.iter_init(m, &it)) {
+        return types[0] == '\0';
+    }
+    for (size_t k = 0; types[k] != '\0'; k++) {
+        if (cee_dbus.arg_type(&it) != types[k]) {
+            return 0;
+        }
+        cee_dbus.get_basic(&it, out[k]);
+        if (types[k + 1] != '\0' && !cee_dbus.iter_next(&it)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* One property of an object as a variant: 1 written, 0 not one of its properties. */
+static int cee_atspi_property(cee_dbus_iter *out, struct cee_window *w, int64_t index, const char *interface,
+                              const char *name) {
+    const struct cee_access_node *n = w != NULL && index >= 0 ? &w->access[index] : NULL;
+    cee_dbus_iter v;
+#define CEE_ATSPI_VARIANT(sig, write)                                                                                  \
+    do {                                                                                                               \
+        cee_dbus.open_container(out, 'v', sig, &v);                                                                    \
+        write;                                                                                                         \
+        cee_dbus.close_container(out, &v);                                                                             \
+        return 1;                                                                                                      \
+    } while (0)
+    if (strcmp(interface, "org.a11y.atspi.Accessible") == 0) {
+        if (strcmp(name, "Name") == 0) {
+            if (n != NULL) {
+                CEE_ATSPI_VARIANT("s", cee_atspi_text(&v, w->access_text, n->label_start, n->label_length));
+            }
+            CEE_ATSPI_VARIANT("s", cee_atspi_string(&v, w != NULL ? ((struct cee_x11 *)w->native)->title
+                                                                    : cee_atspi.app_name));
+        }
+        if (strcmp(name, "Description") == 0 || strcmp(name, "Locale") == 0 || strcmp(name, "AccessibleId") == 0 ||
+            strcmp(name, "HelpText") == 0) {
+            CEE_ATSPI_VARIANT("s", cee_atspi_string(&v, ""));
+        }
+        if (strcmp(name, "Parent") == 0) {
+            if (w == NULL) {
+                CEE_ATSPI_VARIANT("(so)", cee_atspi_desktop(&v));
+            }
+            CEE_ATSPI_VARIANT("(so)", cee_atspi_ref(&v, n != NULL ? w : NULL, -1));
+        }
+        if (strcmp(name, "ChildCount") == 0) {
+            int32_t count = 0;
+            if (w == NULL) {
+                for (struct cee_window *e = cee_wake_windows; e != NULL; e = e->wake_link) {
+                    count += !e->scripted && e->native != NULL;
+                }
+            } else if (n == NULL) {
+                count = (int32_t)w->access_count;
+            }
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, count));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Application") == 0 && w == NULL) {
+        if (strcmp(name, "ToolkitName") == 0) {
+            CEE_ATSPI_VARIANT("s", cee_atspi_string(&v, "CeeSafe"));
+        }
+        if (strcmp(name, "Version") == 0 || strcmp(name, "ToolkitVersion") == 0) {
+            CEE_ATSPI_VARIANT("s", cee_atspi_string(&v, "1"));
+        }
+        if (strcmp(name, "AtspiVersion") == 0) {
+            CEE_ATSPI_VARIANT("s", cee_atspi_string(&v, "2.1"));
+        }
+        if (strcmp(name, "InterfaceVersion") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+        if (strcmp(name, "Id") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, 0));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Value") == 0 && n != NULL && cee_atspi_valued(n)) {
+        if (strcmp(name, "MinimumValue") == 0) {
+            CEE_ATSPI_VARIANT("d", cee_atspi_double(&v, n->min));
+        }
+        if (strcmp(name, "MaximumValue") == 0) {
+            CEE_ATSPI_VARIANT("d", cee_atspi_double(&v, n->max));
+        }
+        if (strcmp(name, "MinimumIncrement") == 0) {
+            CEE_ATSPI_VARIANT("d", cee_atspi_double(&v, (n->max - n->min) / 100.0));
+        }
+        if (strcmp(name, "CurrentValue") == 0) {
+            CEE_ATSPI_VARIANT("d", cee_atspi_double(&v, n->now));
+        }
+        if (strcmp(name, "Text") == 0) {
+            CEE_ATSPI_VARIANT("s", cee_atspi_text(&v, w->access_text, n->value_start, n->value_length));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Text") == 0 && n != NULL && cee_atspi_texted(n)) {
+        const char *s = w->access_text + n->value_start;
+        if (strcmp(name, "CharacterCount") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, (int32_t)cee_atspi_chars(s, n->value_length)));
+        }
+        if (strcmp(name, "CaretOffset") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, (int32_t)cee_atspi_chars(s, n->caret)));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Action") == 0 && n != NULL && cee_atspi_acts(n)) {
+        if (strcmp(name, "NActions") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, 1));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Component") == 0 && w != NULL && strcmp(name, "version") == 0) {
+        CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+    }
+#undef CEE_ATSPI_VARIANT
+    return 0;
+}
+
+static const char *const cee_atspi_accessible_properties[] = {"Name", "Description", "Parent", "ChildCount", "Locale",
+                                                              "AccessibleId", "HelpText", "version"};
+
+/* The request `m` to an object of ours: answered, and 1; 0 when it is not one we know (the caller answers
+   UnknownMethod). */
+static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee_window *w, int64_t index,
+                            const char *interface, const char *member) {
+    cee_dbus_iter it, s, e;
+    cee_dbus.iter_init_append(r, &it);
+    const struct cee_access_node *n = w != NULL && index >= 0 ? &w->access[index] : NULL;
+    if (strcmp(interface, "org.freedesktop.DBus.Properties") == 0) {
+        if (strcmp(member, "Get") == 0) {
+            const char *iface = NULL, *name = NULL;
+            void *args[] = {&iface, &name};
+            return cee_atspi_args(m, "ss", args) && cee_atspi_property(&it, w, index, iface, name);
+        }
+        if (strcmp(member, "GetAll") == 0) {
+            const char *iface = NULL;
+            void *args[] = {&iface};
+            if (!cee_atspi_args(m, "s", args)) {
+                return 0;
+            }
+            cee_dbus.open_container(&it, 'a', "{sv}", &s);
+            if (strcmp(iface, "org.a11y.atspi.Accessible") == 0) {
+                for (size_t k = 0; k < sizeof cee_atspi_accessible_properties / sizeof *cee_atspi_accessible_properties;
+                     k++) {
+                    cee_dbus.open_container(&s, 'e', NULL, &e);
+                    cee_atspi_string(&e, cee_atspi_accessible_properties[k]);
+                    cee_atspi_property(&e, w, index, iface, cee_atspi_accessible_properties[k]);
+                    cee_dbus.close_container(&s, &e);
+                }
+            }
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "Set") == 0) {
+            return 1; /* the registry sets Application.Id; nothing else is writable here */
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Accessible") == 0) {
+        if (strcmp(member, "GetRole") == 0) {
+            cee_atspi_uint(&it, w == NULL ? 75u : n == NULL ? 23u : cee_atspi_role(n));
+            return 1;
+        }
+        if (strcmp(member, "GetRoleName") == 0 || strcmp(member, "GetLocalizedRoleName") == 0) {
+            cee_atspi_string(&it, cee_atspi_role_name(w == NULL ? 75u : n == NULL ? 23u : cee_atspi_role(n)));
+            return 1;
+        }
+        if (strcmp(member, "GetState") == 0) {
+            uint32_t words[2];
+            cee_atspi_states(w, index, words);
+            cee_dbus.open_container(&it, 'a', "u", &s);
+            cee_atspi_uint(&s, words[0]);
+            cee_atspi_uint(&s, words[1]);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "GetChildren") == 0) {
+            cee_dbus.open_container(&it, 'a', "(so)", &s);
+            if (w == NULL) {
+                for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
+                    if (!f->scripted && f->native != NULL) {
+                        cee_atspi_ref(&s, f, -1);
+                    }
+                }
+            } else if (n == NULL) {
+                for (uint32_t k = 0; k < w->access_count; k++) {
+                    cee_atspi_ref(&s, w, (int64_t)k);
+                }
+            }
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "GetChildAtIndex") == 0) {
+            int32_t at = 0;
+            void *args[] = {&at};
+            if (!cee_atspi_args(m, "i", args)) {
+                return 0;
+            }
+            if (w == NULL) {
+                int32_t k = 0;
+                for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
+                    if (!f->scripted && f->native != NULL && k++ == at) {
+                        cee_atspi_ref(&it, f, -1);
+                        return 1;
+                    }
+                }
+            } else if (n == NULL && at >= 0 && (uint32_t)at < w->access_count) {
+                cee_atspi_ref(&it, w, at);
+                return 1;
+            }
+            cee_atspi_ref(&it, NULL, -2);
+            return 1;
+        }
+        if (strcmp(member, "GetIndexInParent") == 0) {
+            int32_t at = -1;
+            if (n != NULL) {
+                at = (int32_t)index;
+            } else if (w != NULL) {
+                int32_t k = 0;
+                for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
+                    if (!f->scripted && f->native != NULL) {
+                        if (f == w) {
+                            at = k;
+                        }
+                        k++;
+                    }
+                }
+            }
+            cee_atspi_int(&it, at);
+            return 1;
+        }
+        if (strcmp(member, "GetRelationSet") == 0) {
+            cee_dbus.open_container(&it, 'a', "(ua(so))", &s);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "GetAttributes") == 0) {
+            cee_dbus.open_container(&it, 'a', "{ss}", &s);
+            cee_dbus.open_container(&s, 'e', NULL, &e);
+            cee_atspi_string(&e, "toolkit");
+            cee_atspi_string(&e, "CeeSafe");
+            cee_dbus.close_container(&s, &e);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "GetApplication") == 0) {
+            cee_atspi_ref(&it, NULL, -1);
+            return 1;
+        }
+        if (strcmp(member, "GetInterfaces") == 0) {
+            cee_dbus.open_container(&it, 'a', "s", &s);
+            cee_atspi_string(&s, "org.a11y.atspi.Accessible");
+            if (w == NULL) {
+                cee_atspi_string(&s, "org.a11y.atspi.Application");
+            } else {
+                cee_atspi_string(&s, "org.a11y.atspi.Component");
+                if (n != NULL && cee_atspi_acts(n)) {
+                    cee_atspi_string(&s, "org.a11y.atspi.Action");
+                }
+                if (n != NULL && cee_atspi_valued(n)) {
+                    cee_atspi_string(&s, "org.a11y.atspi.Value");
+                }
+                if (n != NULL && cee_atspi_texted(n)) {
+                    cee_atspi_string(&s, "org.a11y.atspi.Text");
+                }
+            }
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Application") == 0 && w == NULL) {
+        if (strcmp(member, "GetLocale") == 0) {
+            const char *l = getenv("LANG");
+            cee_atspi_string(&it, l != NULL ? l : "C");
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Component") == 0 && w != NULL) {
+        int32_t box[4];
+        if (strcmp(member, "GetExtents") == 0 || strcmp(member, "GetPosition") == 0) {
+            uint32_t coord = 0;
+            void *args[] = {&coord};
+            if (!cee_atspi_args(m, "u", args)) {
+                return 0;
+            }
+            cee_atspi_extents(w, index, coord, box);
+            if (strcmp(member, "GetPosition") == 0) {
+                cee_atspi_int(&it, box[0]);
+                cee_atspi_int(&it, box[1]);
+                return 1;
+            }
+            cee_dbus.open_container(&it, 'r', NULL, &s);
+            for (int k = 0; k < 4; k++) {
+                cee_atspi_int(&s, box[k]);
+            }
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "GetSize") == 0) {
+            cee_atspi_extents(w, index, 1, box);
+            cee_atspi_int(&it, box[2]);
+            cee_atspi_int(&it, box[3]);
+            return 1;
+        }
+        if (strcmp(member, "Contains") == 0 || strcmp(member, "GetAccessibleAtPoint") == 0) {
+            int32_t x = 0, y = 0;
+            uint32_t coord = 0;
+            void *args[] = {&x, &y, &coord};
+            if (!cee_atspi_args(m, "iiu", args)) {
+                return 0;
+            }
+            cee_atspi_extents(w, index, coord, box);
+            int inside = x >= box[0] && y >= box[1] && x < box[0] + box[2] && y < box[1] + box[3];
+            if (strcmp(member, "Contains") == 0) {
+                cee_atspi_bool(&it, inside);
+                return 1;
+            }
+            /* The frame's child at the point: of those that hold it, the highest layer's, then the latest. */
+            int64_t found = -1;
+            if (n == NULL && inside) {
+                float scale = w->scale > 0.0f ? w->scale : 1.0f;
+                found = cee_access_at(w->access, w->access_count, (double)(x - box[0]) / scale,
+                                      (double)(y - box[1]) / scale);
+            }
+            cee_atspi_ref(&it, w, found >= 0 ? found : -2);
+            return 1;
+        }
+        if (strcmp(member, "GetLayer") == 0) {
+            cee_atspi_uint(&it, n == NULL ? 7u : 3u); /* WINDOW, WIDGET */
+            return 1;
+        }
+        if (strcmp(member, "GetMDIZOrder") == 0) {
+            int16_t z = 0;
+            cee_dbus.append_basic(&it, 'n', &z);
+            return 1;
+        }
+        if (strcmp(member, "GetAlpha") == 0) {
+            cee_atspi_double(&it, 1.0);
+            return 1;
+        }
+        if (strcmp(member, "GrabFocus") == 0) {
+            cee_atspi_bool(&it, n != NULL && cee_access_ask(w, n->id, CEE_ACCESS_FOCUS));
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Action") == 0 && n != NULL && cee_atspi_acts(n)) {
+        const char *name = n->role == 2 || n->role == 3 ? "toggle" : "press";
+        if (strcmp(member, "GetName") == 0 || strcmp(member, "GetLocalizedName") == 0) {
+            cee_atspi_string(&it, name);
+            return 1;
+        }
+        if (strcmp(member, "GetDescription") == 0 || strcmp(member, "GetKeyBinding") == 0) {
+            cee_atspi_string(&it, "");
+            return 1;
+        }
+        if (strcmp(member, "GetActions") == 0) {
+            cee_dbus.open_container(&it, 'a', "(sss)", &s);
+            cee_dbus.open_container(&s, 'r', NULL, &e);
+            cee_atspi_string(&e, name);
+            cee_atspi_string(&e, "");
+            cee_atspi_string(&e, "");
+            cee_dbus.close_container(&s, &e);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        if (strcmp(member, "DoAction") == 0) {
+            int32_t which = 0;
+            void *args[] = {&which};
+            cee_atspi_bool(&it, cee_atspi_args(m, "i", args) && which == 0 &&
+                                    cee_access_ask(w, n->id, CEE_ACCESS_PRESS));
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Text") == 0 && n != NULL && cee_atspi_texted(n)) {
+        const char *text = w->access_text + n->value_start;
+        uint32_t length = n->value_length;
+        int32_t count = (int32_t)cee_atspi_chars(text, length);
+        /* A run of the text: answered by cee_atspi_text_reply, which reads its own arguments. */
+        if (strcmp(member, "GetText") == 0 || strcmp(member, "GetStringAtOffset") == 0 ||
+            strcmp(member, "GetTextAtOffset") == 0 ||
+            strcmp(member, "GetTextBeforeOffset") == 0 || strcmp(member, "GetTextAfterOffset") == 0) {
+            return 2;
+        }
+        if (strcmp(member, "GetCharacterAtOffset") == 0) {
+            int32_t at = 0;
+            void *args[] = {&at};
+            if (!cee_atspi_args(m, "i", args)) {
+                return 0;
+            }
+            uint32_t b = cee_atspi_byte(text, length, at);
+            int32_t cp = 0;
+            if (at >= 0 && at < count) {
+                unsigned char c0 = (unsigned char)text[b];
+                int extra = c0 >= 0xF0 ? 3 : c0 >= 0xE0 ? 2 : c0 >= 0xC0 ? 1 : 0;
+                cp = extra == 0 ? c0 : (int32_t)(c0 & (0x3F >> extra));
+                for (int k = 1; k <= extra && b + (uint32_t)k < length; k++) {
+                    cp = (cp << 6) | ((unsigned char)text[b + (uint32_t)k] & 0x3F);
+                }
+            }
+            cee_atspi_int(&it, cp);
+            return 1;
+        }
+        if (strcmp(member, "GetNSelections") == 0) {
+            cee_atspi_int(&it, n->caret != n->anchor ? 1 : 0);
+            return 1;
+        }
+        if (strcmp(member, "GetSelection") == 0) {
+            uint32_t lo = n->caret < n->anchor ? n->caret : n->anchor;
+            uint32_t hi = n->caret < n->anchor ? n->anchor : n->caret;
+            cee_atspi_int(&it, (int32_t)cee_atspi_chars(text, lo));
+            cee_atspi_int(&it, (int32_t)cee_atspi_chars(text, hi));
+            return 1;
+        }
+        if (strcmp(member, "SetCaretOffset") == 0) {
+            cee_atspi_bool(&it, 0); /* the program moves its caret; a reader reads where it is */
+            return 1;
+        }
+        if (strcmp(member, "GetCharacterExtents") == 0 || strcmp(member, "GetRangeExtents") == 0) {
+            int32_t box[4];
+            cee_atspi_extents(w, index, 0, box);
+            for (int k = 0; k < 4; k++) {
+                cee_atspi_int(&it, box[k]);
+            }
+            return 1;
+        }
+        if (strcmp(member, "GetOffsetAtPoint") == 0) {
+            cee_atspi_int(&it, -1);
+            return 1;
+        }
+        if (strcmp(member, "GetAttributes") == 0 || strcmp(member, "GetAttributeRun") == 0) {
+            cee_dbus.open_container(&it, 'a', "{ss}", &s);
+            cee_dbus.close_container(&it, &s);
+            cee_atspi_int(&it, 0);
+            cee_atspi_int(&it, count);
+            return 1;
+        }
+        if (strcmp(member, "GetDefaultAttributes") == 0 || strcmp(member, "GetDefaultAttributeSet") == 0) {
+            cee_dbus.open_container(&it, 'a', "{ss}", &s);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* Text requests that answer a run of the field's text: GetText (s), and the boundary ones (s, start, end). */
+static cee_dbus_message *cee_atspi_text_reply(cee_dbus_message *m, struct cee_window *w, int64_t index,
+                                              const char *member) {
+    const struct cee_access_node *n = &w->access[index];
+    const char *text = w->access_text + n->value_start;
+    uint32_t length = n->value_length;
+    int32_t count = (int32_t)cee_atspi_chars(text, length);
+    int32_t a = 0, b = 0;
+    int boundary = strcmp(member, "GetText") != 0;
+    if (!boundary) {
+        void *args[] = {&a, &b};
+        if (!cee_atspi_args(m, "ii", args)) {
+            return NULL;
+        }
+        if (b < 0 || b > count) {
+            b = count;
+        }
+        if (a < 0) {
+            a = 0;
+        }
+        if (a > b) {
+            a = b;
+        }
+    } else {
+        int32_t offset = 0;
+        uint32_t kind = 0;
+        void *args[] = {&offset, &kind};
+        if (!cee_atspi_args(m, "iu", args)) {
+            return NULL;
+        }
+        if (strcmp(member, "GetTextBeforeOffset") == 0) {
+            int32_t s0 = 0, e0 = 0;
+            cee_atspi_around(text, length, offset, kind, &s0, &e0);
+            offset = s0 - 1;
+            if (offset < 0) {
+                a = b = 0;
+                goto reply;
+            }
+        } else if (strcmp(member, "GetTextAfterOffset") == 0) {
+            int32_t s0 = 0, e0 = 0;
+            cee_atspi_around(text, length, offset, kind, &s0, &e0);
+            offset = e0;
+            if (offset >= count) {
+                a = b = count;
+                goto reply;
+            }
+        }
+        cee_atspi_around(text, length, offset, kind == 0 ? 0u : kind <= 2 ? 1u : 5u, &a, &b);
+    }
+reply:;
+    cee_dbus_message *r = cee_dbus.new_method_return(m);
+    if (r == NULL) {
+        return NULL;
+    }
+    cee_dbus_iter it;
+    cee_dbus.iter_init_append(r, &it);
+    uint32_t from = cee_atspi_byte(text, length, a), to = cee_atspi_byte(text, length, b);
+    cee_atspi_text(&it, text, from, to - from);
+    if (boundary) {
+        cee_atspi_int(&it, a);
+        cee_atspi_int(&it, b);
+    }
+    return r;
+}
+
+/* Every request the bus has for us, answered; called from the pump and after the waits. */
+static void cee_atspi_dispatch(void) {
+    if (cee_atspi.state != 1) {
+        return;
+    }
+    cee_dbus.read_write(cee_atspi.bus, 0);
+    cee_dbus_message *m;
+    while ((m = cee_dbus.pop_message(cee_atspi.bus)) != NULL) {
+        if (cee_dbus.message_type(m) == 1 /* METHOD_CALL */) {
+            const char *path = cee_dbus.message_path(m);
+            const char *interface = cee_dbus.message_interface(m);
+            const char *member = cee_dbus.message_member(m);
+            struct cee_window *w = NULL;
+            int64_t index = -1;
+            if (interface != NULL && strcmp(interface, "org.freedesktop.DBus.Peer") == 0) {
+                /* On any path, as libdbus's own dispatch answers it: the registry pings each application every 30
+                   s and hides one that does not answer ("Disabling unresponsive app"). */
+                cee_dbus_message *r = cee_dbus.new_method_return(m);
+                if (r != NULL && member != NULL && strcmp(member, "GetMachineId") == 0) {
+                    cee_dbus_iter it;
+                    cee_dbus.iter_init_append(r, &it);
+                    cee_atspi_string(&it, "");
+                }
+                if (r != NULL) {
+                    cee_dbus.send(cee_atspi.bus, r, NULL);
+                    cee_dbus.message_unref(r);
+                }
+            } else if (path != NULL && strcmp(path, "/org/a11y/atspi/cache") == 0 && interface != NULL &&
+                       member != NULL && strcmp(interface, "org.a11y.atspi.Cache") == 0 &&
+                       strcmp(member, "GetItems") == 0) {
+                /* Every client asks for the cache first; an empty one has it ask each object, which is what is here
+                   (the list changes each frame, so a cache's updates would be most of the traffic). */
+                cee_dbus_message *r = cee_dbus.new_method_return(m);
+                if (r != NULL) {
+                    cee_dbus_iter it, a;
+                    cee_dbus.iter_init_append(r, &it);
+                    cee_dbus.open_container(&it, 'a', "((so)(so)(so)iiassusau)", &a);
+                    cee_dbus.close_container(&it, &a);
+                    cee_dbus.send(cee_atspi.bus, r, NULL);
+                    cee_dbus.message_unref(r);
+                }
+            } else if (interface == NULL || member == NULL || !cee_atspi_find(path, &w, &index)) {
+                cee_atspi_reply_error(m, "org.freedesktop.DBus.Error.UnknownObject", "no such object");
+            } else {
+                if (w != NULL) {
+                    w->access_active = 1; /* something reads the window: the program sends its list (ADR 0164) */
+                } else {
+                    for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
+                        if (!f->scripted) {
+                            f->access_active = 1;
+                        }
+                    }
+                }
+                cee_dbus_message *r = cee_dbus.new_method_return(m);
+                int answered = r != NULL ? cee_atspi_answer(m, r, w, index, interface, member) : 0;
+                if (answered == 2) {
+                    cee_dbus.message_unref(r);
+                    r = cee_atspi_text_reply(m, w, index, member);
+                    answered = r != NULL;
+                }
+                if (answered) {
+                    cee_dbus.send(cee_atspi.bus, r, NULL);
+                } else {
+                    cee_atspi_reply_error(m, "org.freedesktop.DBus.Error.UnknownMethod", "not answered");
+                }
+                if (r != NULL) {
+                    cee_dbus.message_unref(r);
+                }
+            }
+        }
+        cee_dbus.message_unref(m);
+    }
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+/* The connection's descriptor, for the waits; -1 without one. */
+static int cee_atspi_fd(void) {
+    int fd = -1;
+    if (cee_atspi.state == 1 && !cee_dbus.get_unix_fd(cee_atspi.bus, &fd)) {
+        fd = -1;
+    }
+    return fd;
+}
+
+/* The first open's: the accessibility bus's address from the session bus (org.a11y.Bus), a connection to it, and the
+   root embedded in the registry's desktop (Socket.Embed). Any failure leaves the program without a reader. */
+static void cee_atspi_connect(void) {
+    if (cee_atspi.state != 0) {
+        return;
+    }
+    cee_atspi.state = -1;
+    if (getenv("CEESAFE_NO_ATSPI") != NULL || !cee_dbus_load()) {
+        return;
+    }
+#if defined(__FreeBSD__)
+    snprintf(cee_atspi.app_name, sizeof cee_atspi.app_name, "%s", getprogname());
+#else
+    FILE *comm = fopen("/proc/self/comm", "r");
+    if (comm != NULL) {
+        if (fgets(cee_atspi.app_name, sizeof cee_atspi.app_name, comm) != NULL) {
+            cee_atspi.app_name[strcspn(cee_atspi.app_name, "\n")] = '\0';
+        }
+        fclose(comm);
+    }
+#endif
+    cee_dbus_error err;
+    cee_dbus.error_init(&err);
+    cee_dbus_connection *session = cee_dbus.bus_get_private(0 /* DBUS_BUS_SESSION */, &err);
+    if (session == NULL) {
+        cee_dbus.error_free(&err);
+        return;
+    }
+    cee_dbus.set_exit_on_disconnect(session, 0);
+    char address[512];
+    address[0] = '\0';
+    cee_dbus_message *call =
+        cee_dbus.new_method_call("org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress");
+    cee_dbus_message *reply = call != NULL ? cee_dbus.send_with_reply_and_block(session, call, 2000, &err) : NULL;
+    if (reply != NULL) {
+        cee_dbus_iter it;
+        const char *a = NULL;
+        if (cee_dbus.iter_init(reply, &it) && cee_dbus.arg_type(&it) == 's') {
+            cee_dbus.get_basic(&it, &a);
+            snprintf(address, sizeof address, "%s", a != NULL ? a : "");
+        }
+        cee_dbus.message_unref(reply);
+    }
+    if (call != NULL) {
+        cee_dbus.message_unref(call);
+    }
+    cee_dbus.error_free(&err);
+    cee_dbus.connection_close(session);
+    cee_dbus.connection_unref(session);
+    if (address[0] == '\0') {
+        return;
+    }
+    cee_dbus.error_init(&err);
+    cee_dbus_connection *bus = cee_dbus.open_private(address, &err);
+    if (bus == NULL || !cee_dbus.bus_register(bus, &err)) {
+        cee_dbus.error_free(&err);
+        if (bus != NULL) {
+            cee_dbus.connection_close(bus);
+            cee_dbus.connection_unref(bus);
+        }
+        return;
+    }
+    cee_dbus.set_exit_on_disconnect(bus, 0);
+    const char *unique = cee_dbus.unique_name(bus);
+    snprintf(cee_atspi.name, sizeof cee_atspi.name, "%s", unique != NULL ? unique : "");
+    cee_atspi.bus = bus;
+    cee_atspi.state = 1;
+    snprintf(cee_atspi.desktop_name, sizeof cee_atspi.desktop_name, "%s", "org.a11y.atspi.Registry");
+    snprintf(cee_atspi.desktop_path, sizeof cee_atspi.desktop_path, "%s", "/org/a11y/atspi/accessible/root");
+    call = cee_dbus.new_method_call("org.a11y.atspi.Registry", CEE_ATSPI_ROOT, "org.a11y.atspi.Socket", "Embed");
+    if (call == NULL) {
+        return;
+    }
+    cee_dbus_iter it, s;
+    cee_dbus.iter_init_append(call, &it);
+    cee_dbus.open_container(&it, 'r', NULL, &s);
+    cee_atspi_string(&s, cee_atspi.name);
+    const char *root = CEE_ATSPI_ROOT;
+    cee_dbus.append_basic(&s, 'o', &root);
+    cee_dbus.close_container(&it, &s);
+    reply = cee_dbus.send_with_reply_and_block(bus, call, 2000, &err);
+    cee_dbus.message_unref(call);
+    if (reply != NULL) {
+        cee_dbus_iter r, ref;
+        if (cee_dbus.iter_init(reply, &r) && cee_dbus.arg_type(&r) == 'r') {
+            const char *name = NULL, *path = NULL;
+            cee_dbus.recurse(&r, &ref);
+            if (cee_dbus.arg_type(&ref) == 's') {
+                cee_dbus.get_basic(&ref, &name);
+                cee_dbus.iter_next(&ref);
+                if (cee_dbus.arg_type(&ref) == 'o') {
+                    cee_dbus.get_basic(&ref, &path);
+                    snprintf(cee_atspi.desktop_name, sizeof cee_atspi.desktop_name, "%s", name);
+                    snprintf(cee_atspi.desktop_path, sizeof cee_atspi.desktop_path, "%s", path);
+                }
+            }
+        }
+        cee_dbus.message_unref(reply);
+    }
+    cee_dbus.error_free(&err);
+}
+
+/* A window opened (its frame is the root's newest child) or closed. */
+static void cee_atspi_frame_added(struct cee_window *w) {
+    if (cee_atspi.state != 1) {
+        return;
+    }
+    struct cee_atspi_child c = {w, -1};
+    int32_t at = 0;
+    for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
+        at += !f->scripted && f->native != NULL && f != w;
+    }
+    cee_atspi_signal(NULL, -1, "org.a11y.atspi.Event.Object", "ChildrenChanged", "add", at, 0, "(so)",
+                     cee_atspi_any_child, &c);
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+static void cee_atspi_frame_removed(struct cee_window *w) {
+    if (cee_atspi.state != 1) {
+        return;
+    }
+    struct cee_atspi_child c = {w, -1};
+    cee_atspi_state_changed(w, -1, "defunct", 1);
+    cee_atspi_signal(NULL, -1, "org.a11y.atspi.Event.Object", "ChildrenChanged", "remove", 0, 0, "(so)",
+                     cee_atspi_any_child, &c);
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+/* The window took or lost the keyboard: the frame is activated or deactivated. */
+static void cee_atspi_frame_focus(struct cee_window *w, int on) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (cee_atspi.state != 1 || n == NULL || n->atspi_active == on) {
+        return;
+    }
+    n->atspi_active = on;
+    const char *title = n->title != NULL ? n->title : "";
+    cee_atspi_signal(w, -1, "org.a11y.atspi.Event.Window", on ? "Activate" : "Deactivate", "", 0, 0, "s",
+                     cee_atspi_any_string, title);
+    cee_atspi_state_changed(w, -1, "active", on);
+    if (on) {
+        for (uint32_t k = 0; k < w->access_count; k++) {
+            if ((w->access[k].flags & CEE_ACCESS_FOCUSED) != 0) {
+                cee_atspi_state_changed(w, (int64_t)k, "focused", 1);
+            }
+        }
+    }
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+/* Equal runs of two lists' texts. */
+static int cee_atspi_same(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
+                          uint32_t b_length) {
+    return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* The window's list changed (w->access is the new one; `old` the last, with its text): readers are told what was added
+   or removed, renamed, changed value, checked, selected, expanded or focused, and where a field's caret went. */
+static void cee_native_access(struct cee_window *w, const struct cee_access_node *old, uint32_t old_count,
+                              const char *old_text) {
+    if (cee_atspi.state != 1 || w->native == NULL) {
+        return;
+    }
+    /* Elements gone: told before those that came, with their old place (their path is their id, the same). */
+    for (uint32_t j = 0; j < old_count; j++) {
+        int kept = 0;
+        for (uint32_t k = 0; k < w->access_count && !kept; k++) {
+            kept = w->access[k].id == old[j].id;
+        }
+        if (!kept) {
+            char path[160];
+            snprintf(path, sizeof path, "%s%u_%llu", CEE_ATSPI_PREFIX, ((struct cee_x11 *)w->native)->atspi_serial,
+                     (unsigned long long)old[j].id);
+            char frame[160];
+            cee_atspi_path(frame, sizeof frame, w, -1);
+            cee_dbus_message *s = cee_dbus.new_signal(frame, "org.a11y.atspi.Event.Object", "ChildrenChanged");
+            if (s != NULL) {
+                cee_dbus_iter it, v, r, d;
+                cee_dbus.iter_init_append(s, &it);
+                cee_atspi_string(&it, "remove");
+                cee_atspi_int(&it, (int32_t)j);
+                cee_atspi_int(&it, 0);
+                cee_dbus.open_container(&it, 'v', "(so)", &v);
+                cee_dbus.open_container(&v, 'r', NULL, &r);
+                cee_atspi_string(&r, cee_atspi.name);
+                const char *p = path;
+                cee_dbus.append_basic(&r, 'o', &p);
+                cee_dbus.close_container(&v, &r);
+                cee_dbus.close_container(&it, &v);
+                cee_dbus.open_container(&it, 'a', "{sv}", &d);
+                cee_dbus.close_container(&it, &d);
+                cee_dbus.send(cee_atspi.bus, s, NULL);
+                cee_dbus.message_unref(s);
+            }
+        }
+    }
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        uint32_t j = old_count;
+        if (k < old_count && old[k].id == n->id) {
+            j = k;
+        } else {
+            for (uint32_t i = 0; i < old_count; i++) {
+                if (old[i].id == n->id) {
+                    j = i;
+                    break;
+                }
+            }
+        }
+        if (j == old_count) {
+            struct cee_atspi_child c = {w, (int64_t)k};
+            cee_atspi_signal(w, -1, "org.a11y.atspi.Event.Object", "ChildrenChanged", "add", (int32_t)k, 0, "(so)",
+                             cee_atspi_any_child, &c);
+            if ((n->flags & CEE_ACCESS_FOCUSED) != 0) {
+                cee_atspi_state_changed(w, (int64_t)k, "focused", 1);
+            }
+            continue;
+        }
+        const struct cee_access_node *o = &old[j];
+        if (n->role != 0 && !cee_atspi_same(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
+                                            o->label_length)) {
+            char few[256];
+            uint32_t len = n->label_length < sizeof few - 1u ? n->label_length : (uint32_t)sizeof few - 1u;
+            memcpy(few, w->access_text + n->label_start, len);
+            few[len] = '\0';
+            cee_atspi_signal(w, (int64_t)k, "org.a11y.atspi.Event.Object", "PropertyChange", "accessible-name", 0, 0,
+                             "s", cee_atspi_any_string, few);
+        }
+        if (n->role == 5 && n->now != o->now) {
+            double now = n->now;
+            cee_atspi_signal(w, (int64_t)k, "org.a11y.atspi.Event.Object", "PropertyChange", "accessible-value", 0, 0,
+                             "d", cee_atspi_any_double, &now);
+        }
+        if (n->role == 4 && !cee_atspi_same(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
+                                            o->value_length)) {
+            /* The old text deleted and the new inserted, whole: a reader speaks what was typed from the difference. */
+            const char *was = old_text + o->value_start;
+            const char *now = w->access_text + n->value_start;
+            uint32_t lead = 0;
+            while (lead < o->value_length && lead < n->value_length && was[lead] == now[lead]) {
+                lead++;
+            }
+            while (lead > 0 && ((unsigned char)now[lead] & 0xC0u) == 0x80u) {
+                lead--;
+            }
+            int32_t at = (int32_t)cee_atspi_chars(now, lead);
+            uint32_t gone = o->value_length - lead, came = n->value_length - lead;
+            if (gone > 0) {
+                char *s = (char *)ceesafe_platform_alloc((size_t)gone + 1u);
+                if (s != NULL) {
+                    memcpy(s, was + lead, gone);
+                    s[gone] = '\0';
+                    cee_atspi_signal(w, (int64_t)k, "org.a11y.atspi.Event.Object", "TextChanged", "delete", at,
+                                     (int32_t)cee_atspi_chars(s, gone), "s", cee_atspi_any_string, s);
+                    ceesafe_platform_free(s);
+                }
+            }
+            if (came > 0) {
+                char *s = (char *)ceesafe_platform_alloc((size_t)came + 1u);
+                if (s != NULL) {
+                    memcpy(s, now + lead, came);
+                    s[came] = '\0';
+                    cee_atspi_signal(w, (int64_t)k, "org.a11y.atspi.Event.Object", "TextChanged", "insert", at,
+                                     (int32_t)cee_atspi_chars(s, came), "s", cee_atspi_any_string, s);
+                    ceesafe_platform_free(s);
+                }
+            }
+        }
+        if (n->role == 4 && (n->caret != o->caret || n->value_length != o->value_length) &&
+            (n->flags & CEE_ACCESS_FOCUSED) != 0) {
+            cee_atspi_signal(w, (int64_t)k, "org.a11y.atspi.Event.Object", "TextCaretMoved", "",
+                             (int32_t)cee_atspi_chars(w->access_text + n->value_start, n->caret), 0, NULL, NULL, NULL);
+        }
+        uint32_t changed = n->flags ^ o->flags;
+        if ((n->role == 2 || n->role == 3) && (changed & CEE_ACCESS_CHECKED) != 0) {
+            cee_atspi_state_changed(w, (int64_t)k, "checked", (n->flags & CEE_ACCESS_CHECKED) != 0);
+        }
+        if ((changed & CEE_ACCESS_SELECTED) != 0) {
+            cee_atspi_state_changed(w, (int64_t)k, "selected", (n->flags & CEE_ACCESS_SELECTED) != 0);
+        }
+        if ((changed & CEE_ACCESS_EXPANDED) != 0) {
+            cee_atspi_state_changed(w, (int64_t)k, "expanded", (n->flags & CEE_ACCESS_EXPANDED) != 0);
+        }
+        if ((changed & CEE_ACCESS_DISABLED) != 0) {
+            cee_atspi_state_changed(w, (int64_t)k, "enabled", (n->flags & CEE_ACCESS_DISABLED) == 0);
+        }
+        if ((changed & CEE_ACCESS_FOCUSED) != 0) {
+            cee_atspi_state_changed(w, (int64_t)k, "focused", (n->flags & CEE_ACCESS_FOCUSED) != 0);
+        }
+    }
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+/* A message for a reader to speak (ADR 0164's announce): the frame's Announcement. */
+static void cee_native_announce(struct cee_window *w, const char *text, size_t length) {
+    if (cee_atspi.state != 1 || w->native == NULL) {
+        return;
+    }
+    char *s = (char *)ceesafe_platform_alloc(length + 1u);
+    if (s == NULL) {
+        return;
+    }
+    memcpy(s, text, length);
+    s[length] = '\0';
+    cee_atspi_signal(w, -1, "org.a11y.atspi.Event.Object", "Announcement", "", 1 /* polite */, 0, "s",
+                     cee_atspi_any_string, s);
+    ceesafe_platform_free(s);
+    cee_dbus.flush(cee_atspi.bus);
+}
+
+/* The title, UTF-8 as the program gives it: _NET_WM_NAME (EWMH), which window managers show, and WM_NAME, which
+   XStoreName fills and which ICCCM reads as Latin-1, so a "—" there is "â" and two more. */
+static void cee_x_title(cee_x_display *display, cee_xid window, unsigned long utf8, const char *title) {
+    cee_x.store_name(display, window, title);
+    cee_x.change_property(display, window, cee_x.intern_atom(display, "_NET_WM_NAME", 0), utf8, 8,
+                          0 /* PropModeReplace */, (const unsigned char *)title, (int)strlen(title));
+}
+
 static int cee_native_open(struct cee_window *w, const char *title) {
     if (!cee_x_load()) {
         return CEE_WINDOW_NO_DISPLAY;
@@ -11989,11 +13432,19 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     unsigned long version = 5; /* format 32 is longs */
     cee_x.change_property(display, n->window, n->xdnd_aware, 4 /* XA_ATOM */, 32, 0 /* PropModeReplace */,
                           (const unsigned char *)&version, 1);
-    cee_x.store_name(display, n->window, title);
+    cee_x_title(display, n->window, n->utf8_atom, title);
     cee_x.map_window(display, n->window);
     cee_x.flush(display);
+    size_t title_length = strlen(title);
+    n->title = (char *)ceesafe_platform_alloc(title_length + 1u);
+    if (n->title != NULL) {
+        memcpy(n->title, title, title_length + 1u);
+    }
+    n->atspi_serial = ++cee_atspi.next_serial;
     w->native = n;
     w->scale = 1.0f;
+    cee_atspi_connect(); /* the first open's: the accessibility bus, if there is one (ADR 0164) */
+    cee_atspi_frame_added(w);
     return 0;
 }
 
@@ -12009,6 +13460,7 @@ static void cee_native_close(struct cee_window *w) {
     if (n == NULL) {
         return;
     }
+    cee_atspi_frame_removed(w);
     if (n->ic != NULL) {
         cee_x.destroy_ic(n->ic);
     }
@@ -12019,6 +13471,7 @@ static void cee_native_close(struct cee_window *w) {
     cee_x.close_display(n->display);
     ceesafe_platform_free(n->owned);
     ceesafe_platform_free(n->frame);
+    ceesafe_platform_free(n->title);
     ceesafe_platform_free(n);
     w->native = NULL;
 }
@@ -12382,6 +13835,7 @@ static void cee_x_xdnd_message(struct cee_window *w, const cee_x_client *c) {
 
 static void cee_native_pump(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_atspi_dispatch(); /* what readers asked (ADR 0164) */
     for (int k = 0; k < 256 && cee_x.pending(n->display) > 0; k++) {
         cee_x_event e;
         cee_x.next_event(n->display, &e);
@@ -12449,12 +13903,14 @@ static void cee_native_pump(struct cee_window *w) {
             break;
         case 9: /* FocusIn */
             cee_window_focus(w, 1);
+            cee_atspi_frame_focus(w, 1);
             if (n->ic != NULL && w->text_input == 1) {
                 cee_x.set_ic_focus(n->ic);
             }
             break;
         case 10: /* FocusOut */
             cee_window_focus(w, 0);
+            cee_atspi_frame_focus(w, 0);
             if (n->ic != NULL) {
                 cee_x.unset_ic_focus(n->ic);
             }
@@ -12610,8 +14066,17 @@ static void cee_native_cursor(struct cee_window *w) {
 
 static void cee_native_title(struct cee_window *w, const char *title) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
-    cee_x.store_name(n->display, n->window, title);
+    cee_x_title(n->display, n->window, n->utf8_atom, title);
     cee_x.flush(n->display);
+    size_t length = strlen(title);
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy != NULL) {
+        memcpy(copy, title, length + 1u);
+        ceesafe_platform_free(n->title);
+        n->title = copy;
+        cee_atspi_signal(w, -1, "org.a11y.atspi.Event.Object", "PropertyChange", "accessible-name", 0, 0, "s",
+                         cee_atspi_any_string, copy);
+    }
 }
 
 /* The spot the input method draws its pre-edit at, over the spot: the area's bottom left, in pixels. */
@@ -12813,8 +14278,10 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
         return;
     }
     double ms = seconds * 1000.0 + 0.999;
-    struct pollfd p[2] = {{cee_x.connection_number(n->display), POLLIN, 0}, {w->wake_read, POLLIN, 0}};
-    poll(p, 2, ms <= 0.0 ? 0 : ms >= 2147483647.0 ? 2147483647 : (int)ms);
+    /* The accessibility bus too (ADR 0164): a reader's request ends the wait, and the pump answers it. */
+    int bus = cee_atspi_fd();
+    struct pollfd p[3] = {{cee_x.connection_number(n->display), POLLIN, 0}, {w->wake_read, POLLIN, 0}, {bus, POLLIN, 0}};
+    poll(p, bus >= 0 ? 3 : 2, ms <= 0.0 ? 0 : ms >= 2147483647.0 ? 2147483647 : (int)ms);
 }
 
 /* waitAny's wait (ADR 0145): every window has its own connection, so `poll` takes each one's descriptor, after Xlib's
@@ -12823,7 +14290,8 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
 static void cee_native_wait_any(double seconds) {
     struct pollfd few[16];
     struct pollfd *p = few;
-    size_t count = 1;
+    int bus = cee_atspi_fd(); /* the accessibility bus (ADR 0164) */
+    size_t count = bus >= 0 ? 2 : 1;
     for (struct cee_window *w = cee_wake_windows; w != NULL; w = w->wake_link) {
         if (!w->scripted) {
             if (cee_x.pending(((struct cee_x11 *)w->native)->display) > 0) {
@@ -12844,6 +14312,11 @@ static void cee_native_wait_any(double seconds) {
     p[n].fd = cee_wake_any_read;
     p[n].events = POLLIN;
     p[n++].revents = 0;
+    if (bus >= 0 && n < count) {
+        p[n].fd = bus;
+        p[n].events = POLLIN;
+        p[n++].revents = 0;
+    }
     for (struct cee_window *w = cee_wake_windows; w != NULL && n < count; w = w->wake_link) {
         if (!w->scripted) {
             p[n].fd = cee_x.connection_number(((struct cee_x11 *)w->native)->display);

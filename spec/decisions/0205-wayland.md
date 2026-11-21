@@ -1,7 +1,8 @@
 # ADR 0205 — Windows on Wayland
 
-- Status: **Proposed**, 2026-11-22, for ClayWind's roadmap phase P5 (platform completeness), whose last open item is
-  Wayland. Not yet accepted.
+- Status: **Accepted** by the owner, 2026-11-22 ("I accept your recommendation 1-3": X11 stays the default until
+  step 2, libdecor draws the title bar on GNOME, a release per step), for ClayWind's roadmap phase P5 (platform
+  completeness), whose last open item is Wayland.
 - Scope: `runtime/hosted/ceesafe_rt_window.c` (a Wayland part beside the X11 one, for Linux and FreeBSD),
   `lib/std/window.cee` (one `WindowHandle` variant, and words in the errors' notes), type-system.md §26.13,
   `tools/window_check.py` and `tools/atspi_check.py` (run under both). No language or compiler change.
@@ -113,7 +114,7 @@
 - ClayWind's demo and C example on Wayland, with libdecor's title bar on GNOME.
 - Not checkable here: KDE and wlroots compositors (no machine; a second VM could be).
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered: the proposals, all three)
 
 1. **The default**: X11 until step 2 (proposed), or Wayland from step 1?
 2. **The title bar on GNOME**: libdecor (proposed), or a CeeSafe-drawn one now?

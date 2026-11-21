@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.84.1
+## Releases 0.25.0 to 0.85.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.85.0 | 2026-11-21 | A function that takes or returns a value of more than 1 KiB by value is kept out of line, and `@outOfLine` keeps any function or method so; `--explain-frames` lists them. Some C compilers inlined builders of large structs at every call: ClayWind's hosts had doubled in size and build time (ADR 0199) | [Appendix A](./appendix-a-keywords) |
 | 0.84.1 | 2026-11-21 | With a time slice, `Async.runBound` counts the time a resume ran, measured at each pause, not its slices times the slice: under a small slice on a loaded machine a 250 ms bound had let a task run 1.5 s (ADR 0193) | [Async](./ch17-00-async) |
 | 0.84.0 | 2026-11-21 | 32-bit targets: `--arch armv7` and `x86` give `usize` 32 bits, layouts from the pointer width, and a narrowing `as` that does not fit traps (ADR 0192); Android from 7.1 (API level 25), its runtime's dex loaded from a file (ADR 0188) | [Integer types](./ch03-02-data-types) |
 | 0.83.0 | 2026-11-21 | A busy executor runs its due timers and sees socket events every millisecond, not only when no task is ready, and a task paused past its slice waits in a queue of its own, so the tasks woken behind it run first (ADR 0191): a heartbeat timer under HTTP/2 load, and requests beside computing ones, no longer wait for the queue to empty | [Async](./ch17-00-async) |

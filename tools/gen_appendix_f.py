@@ -72,10 +72,10 @@ GROUPS = [
     ("Packages (N0320 to N0329, N0335)", list(range(320, 330)) + [335], "build-n0300–n0399",
      "The manifest `ceesafe.toml`, the lock file `ceesafe.lock`, dependencies, versions and publishing. These are "
      "reported at a line of the manifest or the lock file, not of a source file."),
-    ("Later rules (N0330 to N0364)", [n for n in range(330, 400) if n != 335], "build-n0300–n0399",
+    ("Later rules (N0330 to N0365)", [n for n in range(330, 400) if n != 335], "build-n0300–n0399",
      "The codes of the features that came after the groups above were numbered - `dyn`, owning closures, threads, "
-     "statics, async, tests, cells, const parameters, patterns, `debugAssert`, embedded files and the package "
-     "cache. The specification lists them in one table under \"Build\"."),
+     "statics, async, tests, cells, const parameters, patterns, `debugAssert`, embedded files, the package "
+     "cache and `Secret.wipe`. The specification lists them in one table under \"Build\"."),
     ("Warnings (N0400 to N0407)", range(400, 500), "warnings-n0400–n0499",
      "A warning is printed as `warning[N0400]`. It never stops `check`, `build`, `run` or `test`, and never changes "
      "the exit status, unless the command has `--deny-warnings`, which makes each warning an error "

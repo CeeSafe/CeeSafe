@@ -1,0 +1,20 @@
+// What ADR 0198's phase 1 still refuses (N0259): a repeat of a non-Copy value that is not a static initialiser, an
+// element that needs drop, an unbounded type parameter as element, and the slice methods that copy; an array pattern
+// binds only Copy elements by value (N0205, ADR 0085 §2.7); `arrayFrom` needs the array's type (N0265).
+fn first<T>(a: [T; 2]) -> u32 => 0; // error[N0259]
+
+fn initial() -> u64 => 0;
+
+fn main() {
+    let a = [AtomicU64.create(0); 4];                        // error[N0259]
+    let b = [AtomicU64.constant(initial()); 4];              // error[N0259]
+    let s: [String; 2] = [String.create(), String.create()]; // error[N0259] // error[N0259]@27
+    var c = [AtomicU64.constant(0); 2];
+    let d = [AtomicU64.constant(1); 2];
+    c[..].fill(AtomicU64.constant(1)); // error[N0259]
+    c[..].copyFrom(d[..]);             // error[N0259]
+    match (d) {
+        [p, q] => {} // error[N0205] // error[N0205]@13
+    }
+    let e = arrayFrom((i) => AtomicU64.create(i as u64)); // error[N0265]
+}

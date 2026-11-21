@@ -162,6 +162,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "                    (tooling.md §10.2)\n")?;
     appendText(
         out,
+        "  --scan-freed      (test) keep every freed block, as it was at its free, for Testing.freedHolds; growth\n                    allocates, copies and frees (ADR 0197 §4.3)\n",
+    )?;
+    appendText(
+        out,
         "  --show-output     (test) print what each passing test wrote to its standard output, under its name; a\n                    failing test's is always shown (ADR 0185)\n",
     )?;
     appendText(
@@ -359,6 +363,7 @@ struct Options {
     testTimeout: u64;           // test --timeout, in seconds
     testSweep: u32;             // test --sweep: 0 none, 1 alloc, 2 cancel
     testSweepStrict: bool;      // test --sweep-strict (ADR 0075 §2.16)
+    testScanFreed: bool;        // test --scan-freed (ADR 0197 §4.3)
     testShowOutput: bool;       // test --show-output: a passing test's output too (ADR 0185)
     testJson: bool;             // test --format json
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
@@ -587,6 +592,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.dumpTokens = true;
         } else if (options.testing && arg == "--show-output") {
             options.testShowOutput = true; // ADR 0185: what a passing test printed, under its name
+        } else if (options.testing && arg == "--scan-freed") {
+            options.testScanFreed = true; // ADR 0197 §4.3: freed blocks kept, for Testing.freedHolds
         } else if (options.testing && arg == "--sweep-strict") {
             options.testSweepStrict = true; // ADR 0075 §2.16: a test's own unwraps fail the sweep too
         } else if (options.testing && (arg == "--list" || arg == "--interp")) {
@@ -1031,6 +1038,7 @@ fn parseCommand() -> i32 {
         testTimeout: 60,
         testSweep: 0,
         testSweepStrict: false,
+        testScanFreed: false,
         testShowOutput: false,
         testJson: false,
         defaultOutput: Vector<u8>.create(),
@@ -1414,6 +1422,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     testTimeout: 60,
     testSweep: 0,
     testSweepStrict: false,
+    testScanFreed: false,
     testShowOutput: false,
     testJson: false,
     defaultOutput: Vector<u8>.create(),

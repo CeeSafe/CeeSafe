@@ -120,35 +120,37 @@ static void ceeF_main(void) {
     t_6 = (uint32_t)t_5.tag;
     switch (t_6) {
     case ((uint32_t)0):
-        v_h_1 = t_5.u.v_Ok.f__0;
-        t_7 = &v_m_0;
-        t_8 = ceeKG_Ki32S10SystemHeap(t_7, v_h_1);
-        t_9 = &t_8;
-        t_10 = ((uint32_t)((*t_9).f__0 != NULL));
-        t_11 = (t_10 != ((uint32_t)0));
-        ceesafe_write_bool(t_11);
-        ceesafe_write_newline();
-        v_sv_2 = ((ceeSV_i32S10SystemHeap){ .len = 0u });
-        t_12 = &v_sv_2;
-        t_13 = ceeSVP_Wi32S10SystemHeap(t_12, ((int32_t)1));
-        t_14 = t_13;
-        t_15 = (uint32_t)t_14.tag;
-        switch (t_15) {
-        case ((uint32_t)0):
-            (void)t_14.u.v_Ok.f__0;
-            t_16 = v_sv_2.len;
-            cee_check_index(((uint64_t)0), t_16, &ceeL_0);
-            ceesafe_write_i64((int64_t)(*ceeSVE_Wi32S10SystemHeap(&v_sv_2, ((uint64_t)0))));
-            ceesafe_write_newline();
-            ceeD_Wi32S10SystemHeap(&v_sv_2);
-            ceeD_Ki32S10SystemHeap(&v_m_0);
-            return;
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 5u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 3u, 13u));
     }
+    v_h_1 = t_5.u.v_Ok.f__0;
+    t_7 = &v_m_0;
+    t_8 = ceeKG_Ki32S10SystemHeap(t_7, v_h_1);
+    t_9 = &t_8;
+    t_10 = ((uint32_t)((*t_9).f__0 != NULL));
+    t_11 = (t_10 != ((uint32_t)0));
+    ceesafe_write_bool(t_11);
+    ceesafe_write_newline();
+    v_sv_2 = ((ceeSV_i32S10SystemHeap){ .len = 0u });
+    t_12 = &v_sv_2;
+    t_13 = ceeSVP_Wi32S10SystemHeap(t_12, ((int32_t)1));
+    t_14 = t_13;
+    t_15 = (uint32_t)t_14.tag;
+    switch (t_15) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 5u));
+    }
+    (void)t_14.u.v_Ok.f__0;
+    t_16 = v_sv_2.len;
+    cee_check_index(((uint64_t)0), t_16, &ceeL_0);
+    ceesafe_write_i64((int64_t)(*ceeSVE_Wi32S10SystemHeap(&v_sv_2, ((uint64_t)0))));
+    ceesafe_write_newline();
+    ceeD_Wi32S10SystemHeap(&v_sv_2);
+    ceeD_Ki32S10SystemHeap(&v_m_0);
+    return;
 }
 
 static void ceeD_Ki32S10SystemHeap(ceeK_i32S10SystemHeap *p) {

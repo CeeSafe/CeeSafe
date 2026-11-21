@@ -1,0 +1,13 @@
+// ADR 0195 §2.4.2 (G39): outside an argument a borrow of an optional, 'borrow (String?)', is not an optional borrow,
+// '(borrow String)?'; N0205 says which is which and offers 'given.asBorrow()'. The reverse has no total conversion.
+fn pass(r: borrow (String?)) -> usize => match (r.asBorrow()) {
+    Some(t) => t.length,
+    null => 0,
+};
+
+fn main() {
+    let given: String? = null;
+    let r: borrow String? = borrow given; // error[N0205]
+    let _ = pass(given.asBorrow()); // error[N0205]
+    let _ = r;
+}

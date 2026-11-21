@@ -32,9 +32,7 @@ fn declareStatic(c: borrow mut Checker, item: u32, mutable: bool, typeSyntax: u3
     let entry = c.front.ast.items[item as usize];
     let id = c.front.ast.idents[entry.name as usize];
     c.allowImported = true;
-    c.inStaticType = true;
     let typ = c.resolveType(typeSyntax, false)?;
-    c.inStaticType = false;
     let file = c.file;
     let qualified = qualifiedSymbol(c, id.symbol)?;
     c.hir.statics.push(
@@ -1044,7 +1042,8 @@ fn isHostedOnlyType(c: borrow Checker, typ: u32) -> bool {
 fn isHostedOnlyBuiltin(b: u32) -> bool =>
     !(b == builtinTruncate() ||
         b == builtinFixedBufferAllocator() || b == builtinPtr() || b == builtinSlice() || b == builtinSliceMut() ||
-        b == builtinStringView() || b == builtinCpu() || b == builtinTarget() || b == builtinAsync());
+        b == builtinStringView() || b == builtinCpu() || b == builtinTarget() || b == builtinAsync() ||
+        b == builtinSecret()); // Secret.wipe: the runtime core's first part (ADR 0197 §2.2)
 
 /// N0293 once per place (HostedOnly): `what` is not available in the freestanding profile.
 fn hostedOnly(c: borrow mut Checker, span: Span, what: Slice<u8>) -> Result<void, AllocError> {

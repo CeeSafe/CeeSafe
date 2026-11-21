@@ -18,7 +18,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 =>
         "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7)",
-    101 => "Expected an item (`fn` or `const`) at the top level",
+    101 =>
+        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3)",
     102 => "Expected an expression",
     103 => "Comparison operators chained",
     104 => "Invalid assignment target",
@@ -96,7 +97,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     249 => "`mut` argument marker missing or misplaced",
     250 =>
         "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2)",
-    251 => "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy",
+    251 =>
+        "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy; out of an array element that is not Copy (ADR 0198 §2.1: an array is never left with a hole; the message names `replace(mut a[i], …)` and `a[..].swap(i, j)`)",
     252 =>
         "Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, one outside the file that declares the struct, or one that tests a field (the message then says to bind every field and test what was bound; ADR 0123 §2.6)",
     253 => "Move out of a `using` binding",
@@ -108,7 +110,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
+        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy (since ADR 0198, one that needs drop, an unbounded type parameter included, until arrays have drop glue), or an array larger than 2^31 − 1 bytes; since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
@@ -116,7 +118,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     262 =>
         "`?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional; an `@from` variant without exactly one payload, or two `@from` variants of one payload type (ADR 0075 §2.3)",
     263 =>
-        "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`)",
+        "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, `SecretHeap`, or for `Box` since C5 a struct without fields implementing `Allocator`); or `Vector.intoForeign`/`fromForeign` of a `SecretHeap` vector, whose block C would free unwiped (ADR 0197 §2.3)",
     264 =>
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>
@@ -247,6 +249,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     364 =>
         "A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead",
+    365 =>
+        "`Secret.wipe` of a place, or of a slice's elements, whose type is not zeroable: not an integer, float, `bool`, raw pointer, array of a zeroable type, or struct without a `drop` whose fields are all zeroable, so zero bytes need not be one of its values. The message names the first field that is not (`type-system.md` §42.1, ADR 0197 §2.2)",
     400 =>
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     401 =>

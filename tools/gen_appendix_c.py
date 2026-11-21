@@ -753,6 +753,9 @@ TABLES.append(table(
         ("`replace(mut place, value: T) -> T`",
          "Puts `value` in a variable, field or element and returns the value that was there.", NO, []),
         ("`swap(mut a, mut b)`", "Exchanges the values of two places of one type.", NO, []),
+        ("`arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]`",
+         "An array whose element `i` is `f(i)`, called for `i` from 0 to `N - 1` in order. `T` and `N` come from the type the value is given or the explicit list; the elements may be of a type that is not Copy, such as `AtomicU64`.",
+         "Panics only where `f` does", []),
         ("`embed(path) -> Slice<u8>`, `embedText(path) -> StringView`",
          "The bytes, or the UTF-8 text, of a file of the package, read when the program is compiled. `path` is a string literal, relative to the source file.",
          "A compile error (N0362) for a path that is missing or leads out of the package"),
@@ -772,7 +775,7 @@ SITE = "https://ceesafe.github.io/CeeSafe"
 HEAD = """---
 title: "Appendix C: Built-in types and their methods"
 summary: A reference table for each type a program uses without declaring it - integers, floats, arrays, slices, StringView, String, optionals, Result, Box, Vector, HashMap, OrderedMap, ranges, iterators, Console, Process and the built-in functions - with each member's signature, what it does, how it fails and the section that teaches it.
-keywords: [built-in types, methods, signatures, integer methods, float methods, array, Slice, SliceMut, StringView, String, optional, Result, AllocError, IoError, Box, Vector, HashMap, OrderedMap, range, Iterator, Console, Process, truncate, checkedTruncate, saturatingTruncate, round, assert, debugAssert, panic, replace, swap, embed]
+keywords: [built-in types, methods, signatures, integer methods, float methods, array, Slice, SliceMut, StringView, String, optional, Result, AllocError, IoError, Box, Vector, HashMap, OrderedMap, range, Iterator, Console, Process, truncate, checkedTruncate, saturatingTruncate, round, assert, debugAssert, panic, replace, swap, arrayFrom, embed]
 ---
 
 # Appendix C: Built-in types and their methods
@@ -893,7 +896,7 @@ REST_ROWS = [
      [], link("lib/core", "reference/api/core#struct-textwriter")),
     ("`Layout`, `Allocator`, `Volatile<T>`, `MmioPtr`, `Cpu`", "Programs without an operating system: allocators of your own, device registers, the processor.",
      ["ch22-01", "ch22-02"], link("kernel code", "guide/kernel")),
-    ("`Crc32c`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `AsyncUdpSocket`, `AsyncDns`, `Window`, "
+    ("`Crc32`, `Crc32c`, `Sha1`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `AsyncUdpSocket`, `AsyncDns`, `Window`, "
      "`Bluetooth`, `BluetoothLink`",
      "Checksums and hashes, authenticated encryption and comparing secrets, UDP and name lookup, native windows, "
      "Bluetooth printers.", [],

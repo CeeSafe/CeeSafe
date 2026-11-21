@@ -1693,6 +1693,10 @@ struct TypeTable {
             TypeKind.SlotMap => { return false; }
             TypeKind.Resource => { return false; }
             TypeKind.Thread => { return false; }
+            TypeKind.Array => {
+                // As its element (ADR 0198 §2.1). An array of C state keeps its old answer: N0294 refuses its moves.
+                return this.isCopy(t.element) || this.isCLaidOut(t.element, 0);
+            }
             _ => { return true; }
         }
     }
@@ -1710,6 +1714,7 @@ struct TypeTable {
             TypeKind.SlotMap => { return true; }
             TypeKind.Resource => { return true; }
             TypeKind.Thread => { return true; }
+            TypeKind.Array => { return this.needsDrop(t.element); } // ADR 0198 §2.1: as its element
             _ => {}
         }
         match (t.region) {
@@ -1881,7 +1886,7 @@ struct TypeTable {
             return false;
         }
         let n = this.name(allocator);
-        return sameText(n, "SystemHeap") || sameText(n, "FailingAllocator");
+        return sameText(n, "SystemHeap") || sameText(n, "FailingAllocator") || sameText(n, "SecretHeap");
     }
 
     /// May a value be moved to another thread (IsSend, §38.1)? `visiting` breaks cycles: a type that reaches itself

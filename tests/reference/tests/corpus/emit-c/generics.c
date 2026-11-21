@@ -89,15 +89,16 @@ static int32_t ceeG_3get1i32(CEE_UNUSED ceeE_5Maybe1i32 v_m_0, CEE_UNUSED int32_
     t_3 = (uint32_t)v_m_0.tag;
     switch (t_3) {
     case ((uint32_t)1):
-        v_v_2 = v_m_0.u.v_Just.f__0;
-        t_4 = v_v_2;
-        return t_4;
+        break;
     case ((uint32_t)0):
         t_5 = v_d_1;
         return t_5;
     default:
         ceesafe_panic(CEE_PANIC_UNREACHABLE, CEE_LOC(cee_file_0, 4u, 4u));
     }
+    v_v_2 = v_m_0.u.v_Just.f__0;
+    t_4 = v_v_2;
+    return t_4;
 }
 
 int main(int argc, char **argv) {

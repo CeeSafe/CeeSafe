@@ -625,8 +625,9 @@ main.cee:2:24: error[N0100]: expected '.', found '::': '::' is not CeeSafe; a me
 
 ### Reserved words are not names
 
-Some keywords read like ordinary names: `own`, `type`, `move`, `drop`, `where`, `class`, `yield`, `macro`, `using`,
-`static` and `in` are among them ([grammar](../spec/grammar.md) §1.3 lists them all).
+Some keywords read like ordinary names: `own`, `type`, `move`, `drop`, `where`, `yield`, `macro`, `using`,
+`static` and `in` are among them ([grammar](../spec/grammar.md) §1.3 lists them all). `class` is a name, except at
+the start of an item.
 
 <!-- ceesafe: fail N0100 -->
 ```ceesafe

@@ -38,13 +38,20 @@ Keywords (all reserved, whether or not the language uses them yet):
 as borrow break const continue defer drop else enum extern false fn for if impl
 import in interface internal let loop match move mut namespace null own private
 public return Self static struct this true type unsafe using var where while
-class async await yield macro
+async await yield macro
 ```
+A keyword where a name goes (`let own = 1;`, `fn f(own: u32)`, a field `own: u32;`, a variant `move(u32)`) is one
+N0100, "…, which is a reserved word: choose another name"; the word is passed over as the name, and the declaration
+is parsed as it would be with a name (ADR 0195 §2.3).
 Primitive type names (`i32`, `u64`, `bool`, `void`, …) are **identifiers**,
 resolved by name resolution, not keywords.
 
 `is` (ADR 0085 §2.8) is **contextual**: it is the operator of `e is P` (§2.1) only where a complete operand is followed
 by the identifier `is`; everywhere else it is an identifier, so `c.types.is(t, k)` and a local named `is` keep working.
+
+`class` (ADR 0195 §2.3) is **contextual** too: at the start of an item, followed by an identifier (`class Foo { … }`),
+it is N0101 "CeeSafe has no classes: declare a 'struct' (behind 'Box' for a value with identity; language-spec.md
+Ex4)"; everywhere else it is an identifier, so `class: StorageClass` is a field and `class` a parameter or local.
 
 `Self` (ADR 0086 §2.2) names a type: in an interface, the implementing type; in an `impl` block and in a struct's or
 enum's body, the target type with its parameters. It is written where a type name is, as the first part of a

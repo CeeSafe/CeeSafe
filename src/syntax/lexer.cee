@@ -217,7 +217,12 @@ struct Lexer {
             return this.lexPrefixedString(text, start, diagnostics);
         }
         match (keywordOf(name)) {
-            Some(keyword) => { return this.add(keyword, start, 0); }
+            // `class` is contextual (ADR 0195 §2.3): a name, but at the start of an item, where the parser says so.
+            Some(keyword) => {
+                if (!sameKind(keyword, TokenKind.ClassKeyword)) {
+                    return this.add(keyword, start, 0);
+                }
+            }
             null => {}
         }
         let symbol = symbols.intern(name)?;

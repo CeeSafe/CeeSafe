@@ -1,0 +1,9 @@
+// `arrayFrom(f)` has `f`'s effects (ADR 0198 §2.2): its closure literal's, as for an `@effectsOf` parameter, so a
+// literal that writes to the console may not be called from an `@effects()` function (N0295).
+@effects()
+fn quiet() -> [AtomicU64; 2] => arrayFrom((i) => { // error[N0295]
+    Console.writeLine("built");
+    return AtomicU64.create(i as u64);
+});
+
+fn main() {}

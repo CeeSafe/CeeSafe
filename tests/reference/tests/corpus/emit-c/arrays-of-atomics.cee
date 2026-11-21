@@ -1,0 +1,14 @@
+// An array of atomics as a field (ADR 0198 phase 1, G41): `[AtomicU64; 4]` is laid out as four u64s (32 bytes,
+// align 8), moved as a whole with no drop glue, built by a constant repeat or by `arrayFrom`'s loop.
+struct Key {
+    cells: [AtomicU64; 4];
+}
+
+fn build() -> Key => Key { cells: arrayFrom((i) => AtomicU64.create(i as u64)) };
+
+fn main() {
+    let blank = Key { cells: [AtomicU64.constant(0); 4] };
+    let key = build();
+    blank.cells[1].store(key.cells[3].load());
+    Console.writeLine(blank.cells[1].load());
+}

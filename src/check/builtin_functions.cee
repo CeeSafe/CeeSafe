@@ -129,6 +129,69 @@ fn checkReplaceOrSwap(c: borrow mut Checker, builtin: u32, arguments: Range, spa
     return c.expr(HirExpr.BuiltinCall(if (isReplace) bfReplace() else bfSwap(), list), result, span.start, span.end);
 }
 
+/// `arrayFrom(f)` (ADR 0198 §2.2): `arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]`, `f(0)` to `f(N - 1)` in
+/// order, each result moved into its element. `T` and `N` come from the explicit list or the expected type.
+fn checkArrayFrom(
+    c: borrow mut Checker,
+    typeArguments: Range,
+    arguments: Range,
+    expected: u32,
+    nameSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var arrayType = none();
+    if (typeArguments.count == 2) {
+        let elementSyntax = c.front.ast.at(typeArguments, 0);
+        let lengthSyntax = c.front.ast.at(typeArguments, 1);
+        let lengthExpr = match (c.front.ast.types[lengthSyntax as usize]) {
+            TypeNode.Constant(e) => e,
+            TypeNode.Named(q) => if (q.parts.count == 1) nameAsExpression(c, q)? else none(),
+            _ => none(),
+        };
+        if (lengthExpr == none()) {
+            let lengthSpan = c.front.ast.typeSpans[lengthSyntax as usize];
+            arrayLengthError(c, lengthSpan)?;
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        arrayType = resolveArrayType(c, elementSyntax, lengthExpr, false)?;
+    } else if (typeArguments.count == 0 && expected != none() && c.types.is(expected, TypeKind.Array) &&
+        !c.types.isUnsized(expected)) {
+        arrayType = expected;
+    } else {
+        let inferred = typeArguments.count == 0;
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            if (inferred) "'arrayFrom' needs the array's type: give it where the value goes ('let a: [T; N] = arrayFrom(f)') or write 'arrayFrom<T, N>(f)' (type-system.md §16.2)"
+                else "'arrayFrom' takes two type arguments, the element type and the length: 'arrayFrom<T, N>(f)' (type-system.md §16.2)",
+        )?;
+        c.error(cannotInferTypeArguments(), nameSpan.start, nameSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (c.types.isBottom(arrayType)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 1) {
+        return builtinArity(c, arguments, span, "write 'arrayFrom(f)', where 'f' is a 'borrow mut fn(usize) -> T'");
+    }
+    let element = c.types.info(arrayType).element;
+    let usize = c.types.usize;
+    let parameters = [usize];
+    let callable = c.types.closureTo(parameters[..], element, allEffects())?;
+    let closureType = c.types.referenceTo(callable, true)?;
+    let functionSyntax = c.front.ast.at(arguments, 0);
+    let function = checkExpr(c, functionSyntax, closureType)?;
+    if (c.isBottom(function)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [function];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(bfArrayFrom(), list), arrayType, span.start, span.end);
+}
+
 /// `mut p` as an argument of `replace` or `swap`: a mutable borrow of the place `p` (N0247 if it is not one, N0249
 /// without `mut`).
 fn mutablePlaceArgument(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocError> {
@@ -179,4 +242,127 @@ fn builtinArity(c: borrow mut Checker, arguments: Range, span: Span, usage: Stri
     c.error(argumentCount(), span.start, span.end, message)?;
     checkArgumentsLoosely(c, arguments)?;
     return c.errorResult(span.start, span.end);
+}
+
+/// N0365: `Secret.wipe` of a place whose type all zero bytes are not a value of (ADR 0197 §2.2).
+fn notZeroable() -> u32 => 365;
+
+/// `Secret.wipe(mut place)` and `Secret.wipe(mut bytes[..])` (ADR 0197 §2.2): the place, or the slice's elements, set
+/// to zero bytes through the runtime's `ceesafe_wipe`, which the C compiler keeps. The type must be zeroable
+/// (zeroablePart), so the place stays a value of its type and nothing is unsafe. Void, and pure (`@effects()`).
+fn checkSecretWipe(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    if (!sameText(c.name(memberIdent.symbol), "wipe")) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Secret' has no function ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, "; use 'Secret.wipe(mut place)' (ADR 0197 §2.2)")?;
+        c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 1) {
+        return builtinArity(c, arguments, span, "write 'Secret.wipe(mut place)' or 'Secret.wipe(mut bytes[..])'");
+    }
+    let syntax = c.front.ast.at(arguments, 0);
+    let argumentSpan = c.front.ast.exprSpans[syntax as usize];
+    // The slice form: `mut place[a..b]`, a mutable slice of the place's elements.
+    let sliceOperand = match (c.front.ast.exprs[syntax as usize]) {
+        ExprNode.MutArg(o) => o,
+        _ => none(),
+    };
+    var value = none();
+    if (sliceOperand != none()) {
+        match (c.front.ast.exprs[sliceOperand as usize]) {
+            ExprNode.Slice(target, low, high) => { value = synthSlice(c, target, low, high, true, argumentSpan)?; }
+            _ => {}
+        }
+    }
+    if (value == none()) {
+        value = mutablePlaceArgument(c, syntax)?;
+    }
+    if (c.isBottom(value)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let typ = c.typeOf(value);
+    let isSlice = c.types.isSlice(typ);
+    let wiped = if (isSlice) c.types.info(c.types.info(typ).pointee).element else c.types.info(typ).pointee;
+    var reason = Vector<u8>.create();
+    if (!zeroablePart(c, wiped, mut reason, 0)?) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Secret.wipe' sets the place to zero bytes, which are not a value of ")?;
+        appendQuotedType(mut message, c, wiped)?;
+        if (reason.length != 0) {
+            appendText(mut message, ": ")?;
+            appendBytes(mut message, reason.view())?;
+        }
+        appendText(
+            mut message,
+            "; only integers, floats, 'bool', raw pointers, arrays of them and structs without a 'drop' whose fields are all of them can be wiped (ADR 0197 §2.2)",
+        )?;
+        c.error(notZeroable(), argumentSpan.start, argumentSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [value];
+    let list = c.hir.list(values[..])?;
+    let voidType = c.types.voidType;
+    return c.expr(HirExpr.BuiltinCall(bfSecretWipe(), list), voidType, span.start, span.end);
+}
+
+/// Whether every value of `typ` may be all zero bytes (ADR 0197 §2.2): an integer, a float, `bool`, a raw pointer, an
+/// array of such, or a struct with no `drop` whose fields are all such. If not, `reason` says which part is not, for a
+/// struct: its `drop`, or the first field that is not, by its path.
+fn zeroablePart(
+    c: borrow Checker,
+    typ: u32,
+    reason: borrow mut Vector<u8>,
+    depth: u32,
+) -> Result<bool, AllocError> {
+    let info = c.types.info(typ);
+    match (info.kind) {
+        TypeKind.Integer => { return Ok(true); }
+        TypeKind.Float => { return Ok(true); }
+        TypeKind.Bool => { return Ok(true); }
+        TypeKind.RawPointer => { return Ok(true); }
+        TypeKind.CChar => { return Ok(true); }
+        TypeKind.Error => { return Ok(true); } // reported already
+        TypeKind.Array => {
+            if (info.arrayLength >= 0 && depth < 64) {
+                return zeroablePart(c, info.element, reason, depth + 1);
+            }
+        }
+        TypeKind.Struct => {
+            let definition = borrow c.types.structs[info.structDef as usize];
+            if (definition.dropFunction != none()) {
+                if (depth == 0) {
+                    appendText(mut reason, "it has a 'drop'")?;
+                } else {
+                    appendQuotedType(mut reason, c, typ)?;
+                    appendText(mut reason, " has a 'drop'")?;
+                }
+                return Ok(false);
+            }
+            if (depth >= 64) {
+                return Ok(false);
+            }
+            for (field in definition.fields.view()) {
+                let f = c.types.fields[field as usize];
+                var inner = Vector<u8>.create();
+                if (!zeroablePart(c, f.typ, mut inner, depth + 1)?) {
+                    appendText(mut reason, "its field ")?;
+                    appendQuotedName(mut reason, c, f.name)?;
+                    appendText(mut reason, " is of type ")?;
+                    appendQuotedType(mut reason, c, f.typ)?;
+                    if (inner.length != 0) {
+                        appendText(mut reason, ", and ")?;
+                        appendBytes(mut reason, inner.view())?;
+                    }
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        _ => {}
+    }
+    return Ok(false);
 }

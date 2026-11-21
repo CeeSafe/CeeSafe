@@ -218,7 +218,8 @@ public struct ByteOrder {
 
 /// Appending integers to a byte vector in a byte order: `v.pushBE(x)` and `v.pushLE(x)` (ADR 0071 §2.2). Each is one
 /// `extend` of the bytes, so it grows the vector at most once and leaves it unchanged if that fails. A vector's
-/// allocator is `SystemHeap` or `FailingAllocator` (type-system.md §23.1); the `…Failing` functions are the latter's.
+/// allocator is `SystemHeap`, `FailingAllocator` or `SecretHeap` (type-system.md §23.1); the `…Failing` and
+/// `…Secret` functions are the latter two's.
 public struct VectorBytes {
     /// Appends `x` as 1 byte, big-endian.
     public fn pushU8BE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError> {
@@ -315,12 +316,30 @@ public struct VectorBytes {
         return v.extend(bytes[..]);
     }
 
+    /// Appends `x` as 1 byte, big-endian.
+    public fn pushU8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
     /// Appends `x` as 1 byte, big-endian, in two's complement.
     public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError> =>
         VectorBytes.pushU8BEFailing(v, truncate<u8>(x));
 
+    /// Appends `x` as 1 byte, big-endian, in two's complement.
+    public fn pushI8BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8BESecret(v, truncate<u8>(x));
+
     /// Appends `x` as 1 byte, little-endian.
     public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 1 byte, little-endian.
+    public fn pushU8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u8) -> Result<void, AllocError> {
         var bytes = [0u8; 1];
         ByteOrder.writeU8LE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -330,8 +349,19 @@ public struct VectorBytes {
     public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError> =>
         VectorBytes.pushU8LEFailing(v, truncate<u8>(x));
 
+    /// Appends `x` as 1 byte, little-endian, in two's complement.
+    public fn pushI8LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8LESecret(v, truncate<u8>(x));
+
     /// Appends `x` as 2 bytes, big-endian.
     public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, big-endian.
+    public fn pushU16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError> {
         var bytes = [0u8; 2];
         ByteOrder.writeU16BE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -341,8 +371,19 @@ public struct VectorBytes {
     public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError> =>
         VectorBytes.pushU16BEFailing(v, truncate<u16>(x));
 
+    /// Appends `x` as 2 bytes, big-endian, in two's complement.
+    public fn pushI16BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16BESecret(v, truncate<u16>(x));
+
     /// Appends `x` as 2 bytes, little-endian.
     public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, little-endian.
+    public fn pushU16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u16) -> Result<void, AllocError> {
         var bytes = [0u8; 2];
         ByteOrder.writeU16LE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -352,8 +393,19 @@ public struct VectorBytes {
     public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError> =>
         VectorBytes.pushU16LEFailing(v, truncate<u16>(x));
 
+    /// Appends `x` as 2 bytes, little-endian, in two's complement.
+    public fn pushI16LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16LESecret(v, truncate<u16>(x));
+
     /// Appends `x` as 4 bytes, big-endian.
     public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, big-endian.
+    public fn pushU32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError> {
         var bytes = [0u8; 4];
         ByteOrder.writeU32BE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -363,8 +415,19 @@ public struct VectorBytes {
     public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError> =>
         VectorBytes.pushU32BEFailing(v, truncate<u32>(x));
 
+    /// Appends `x` as 4 bytes, big-endian, in two's complement.
+    public fn pushI32BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32BESecret(v, truncate<u32>(x));
+
     /// Appends `x` as 4 bytes, little-endian.
     public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, little-endian.
+    public fn pushU32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u32) -> Result<void, AllocError> {
         var bytes = [0u8; 4];
         ByteOrder.writeU32LE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -374,8 +437,19 @@ public struct VectorBytes {
     public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError> =>
         VectorBytes.pushU32LEFailing(v, truncate<u32>(x));
 
+    /// Appends `x` as 4 bytes, little-endian, in two's complement.
+    public fn pushI32LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32LESecret(v, truncate<u32>(x));
+
     /// Appends `x` as 8 bytes, big-endian.
     public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, big-endian.
+    public fn pushU64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError> {
         var bytes = [0u8; 8];
         ByteOrder.writeU64BE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -385,8 +459,19 @@ public struct VectorBytes {
     public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError> =>
         VectorBytes.pushU64BEFailing(v, truncate<u64>(x));
 
+    /// Appends `x` as 8 bytes, big-endian, in two's complement.
+    public fn pushI64BESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64BESecret(v, truncate<u64>(x));
+
     /// Appends `x` as 8 bytes, little-endian.
     public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, little-endian.
+    public fn pushU64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: u64) -> Result<void, AllocError> {
         var bytes = [0u8; 8];
         ByteOrder.writeU64LE(mut bytes[..], 0, x);
         return v.extend(bytes[..]);
@@ -395,6 +480,10 @@ public struct VectorBytes {
     /// Appends `x` as 8 bytes, little-endian, in two's complement.
     public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError> =>
         VectorBytes.pushU64LEFailing(v, truncate<u64>(x));
+
+    /// Appends `x` as 8 bytes, little-endian, in two's complement.
+    public fn pushI64LESecret(v: borrow mut Vector<u8, SecretHeap>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64LESecret(v, truncate<u64>(x));
     /// Appends `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper` (ADR 0087 §2.9).
     public fn appendHex(v: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError> =>
         Formatted.hex(v, value, minWidth, upper);

@@ -156,6 +156,9 @@ struct NirProgram {
     rvalueSpans: Vector<Span>;   // a Binary's, Unary's or FloatToInt's span, where it may panic
     rvalueVariants: Vector<u32>; // a Call's callee variant (NirCall.Variant), 0 unless specialisation chose one
     rvalueTasks: Vector<u8>;     // a Call's task role (type-system.md §40): 0 a call, taskAwait(), taskRun(), taskStacked()
+    /// The CallClosure rvalues `arrayFrom(f)` lowers to (ADR 0198 §2.2): their effects are `f`'s, the closure literal's
+    /// when it is known, as for an `@effectsOf` parameter (type-system.md §32.5).
+    arrayFromCalls: Vector<u32>;
     statements: Vector<NirStatement>;
     statementSpans: Vector<Span>;
     terminators: Vector<NirTerminator>;
@@ -179,6 +182,7 @@ struct NirProgram {
         rvalueSpans: Vector<Span>.create(),
         rvalueVariants: Vector<u32>.create(),
         rvalueTasks: Vector<u8>.create(),
+        arrayFromCalls: Vector<u32>.create(),
         statements: Vector<NirStatement>.create(),
         statementSpans: Vector<Span>.create(),
         terminators: Vector<NirTerminator>.create(),

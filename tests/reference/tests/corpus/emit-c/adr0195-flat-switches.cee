@@ -1,0 +1,50 @@
+// ADR 0195 §2.1.1 and §2.1.2 (G36): a switch whose cases end in a transfer but one prints that case after it, as a
+// guard clause. `all`'s `?`s and `first`'s statement matches stay at one depth; `pick`'s `if` arms, each a match
+// whose arms all return, are seen to end, so each `else` follows its `if` (§2.1.1).
+fn step(i: i32, stop: i32) -> Result<i32, i32> {
+    if (i == stop) {
+        return Err(i);
+    }
+    return Ok(i);
+}
+
+fn all(stop: i32) -> Result<i32, i32> {
+    var total: i32 = 0;
+    total += step(0, stop)?;
+    total += step(1, stop)?;
+    total += step(2, stop)?;
+    return Ok(total);
+}
+
+fn first(stop: i32) -> i32 {
+    match (step(0, stop)) {
+        Ok(_) => {}
+        Err(e) => { return e; }
+    }
+    match (step(1, stop)) {
+        Ok(_) => {}
+        Err(e) => { return e; }
+    }
+    return -1;
+}
+
+fn pick(name: i32) -> i32 {
+    if (name == 0) {
+        match (step(0, 1)) {
+            Ok(v) => { return v; }
+            Err(e) => { return e; }
+        }
+    }
+    if (name == 1) {
+        match (step(1, 1)) {
+            Ok(v) => { return v; }
+            Err(e) => { return e; }
+        }
+    }
+    return -1;
+}
+
+fn main() {
+    let _ = all(-1);
+    let _ = first(1) + pick(0);
+}

@@ -95,12 +95,12 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   - A function of an `impl I for T` block takes no modifier but `public` (`grammar.md` §2), which has no effect: the
     method is as visible as the interface.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
-  `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
+  `Console.writeLine`, `Process.exit`, `truncate`, `Secret.wipe` (§42.1), and the primitive type names.
 - **Reserved names.** The types and values the compiler itself implements are found by name wherever a type or a
   constructor is written, in the libraries' code as in a package's, so no item may take their names (**N0201**,
   "is a built-in name"): `Result`, `Ok`, `Err`, `Box`, `Scratch`, `Pool`, `PoolBox`, `Vector`, `String`, `SlotMap`,
   `StableVector`, `Handle`, `File`, `TcpListener`, `TcpStream`, `Ptr`, `Slice`, `SliceMut`, `Cpu`, `Target`, and
-  `AllocError`, `IoError`, `SystemHeap`, `FailingAllocator`. The reservation is not needed for safety; it keeps one
+  `AllocError`, `IoError`, `SystemHeap`, `FailingAllocator`, `SecretHeap` (§42.2). The reservation is not needed for safety; it keeps one
   meaning for each of these names in every file. A local may have such a name.
 - **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
   one of their names (ADR 0075 §5; before it, N0201): the package's item shadows the library's in that package, while
@@ -310,6 +310,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     type `borrow mut T` (a parameter, a `let`) names its referent, as an assignment to it does: `replace(mut out, v)`
     with `out: borrow mut T` replaces what `out` refers to, through a reborrow, so `out` is usable after it; a field of
     reference type (`mut h.r`) is still the field.
+  - `arrayFrom(f)` (ADR 0198 §2.2): an array of `N` elements, `f(0)` to `f(N − 1)` moved in, in order (§16.2).
   - A package's own function or item of one of these names shadows the built-in (§2).
 - An expression statement must be a call, an `await`, or `?` or `!` on any operand (N0225; ADR 0138 §5): `x!;` checks
   that `x` holds a value, and `x?;` returns when it does not. `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
@@ -612,10 +613,10 @@ Normative for 2c. It implements `ownership.md` O1–O5 and R3. The NIR analyses 
   views `Slice<T>` and `StringView`. A struct is Copy iff it has no `drop` block, is not `@noncopy` (§28.1) and
   every field is Copy. An enum is Copy iff every payload is (§15.1), an array iff its element is (§16.1), an
   optional iff its `T` is (§22.1).
-- **Move types:** structs with a `drop` block or a move-type field, and `borrow mut T` (whose uses
-  are reborrows, §13.3, so in practice it is never moved out of a variable).
-- **Needs drop:** a struct with a `drop` block, or one with a field that needs drop. Every type that
-  needs drop is a move type. The converse does not hold.
+- **Move types:** structs with a `drop` block or a move-type field, arrays of move-type elements (`[AtomicU64; 4]`,
+  §16.1), and `borrow mut T` (whose uses are reborrows, §13.3, so in practice it is never moved out of a variable).
+- **Needs drop:** a struct with a `drop` block, or one with a field that needs drop; an array iff its element does
+  (§16.1, ADR 0198). Every type that needs drop is a move type. The converse does not hold.
 
 ### 14.2 `drop` blocks
 ```ceesafe
@@ -685,7 +686,8 @@ The analysis runs on NIR move paths (`intermediate-representation.md`):
     (M15 S2; before M15 they were never destroyed, #1);
   - being **overwritten** by an assignment, in which case the old value is destroyed first.
 - **Order:** locals in reverse declaration order; then a struct's `drop` block; then its fields in
-  declaration order. By-value parameters are destroyed when the function returns, after the locals.
+  declaration order; an array's elements from index 0 upward, as a vector's (§23.1; ADR 0198 §2.1). By-value
+  parameters are destroyed when the function returns, after the locals.
 - **Moved values are not destroyed.** A value that has been moved on *some* paths gets a runtime
   **drop flag**. A partially moved struct destroys only the fields it still has.
 - **`Process.exit` and panics do not run destructors or deferred statements** (panic = abort,
@@ -917,8 +919,11 @@ and `E.V…` there are patterns.
     N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
     first, from the value, and on a reference scrutinee every binding is a reference.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
-    through it is a separate `match` on that reference (N0205 otherwise). A slice or `StringView` payload takes string
-    and slice patterns, which test its elements (ADR 0085 §2.7).
+    through it is a separate `match` on that reference: N0205 otherwise, "this payload is a reference ('borrow E'):
+    bind it ('Some(n)') and match on 'n' separately" (a field of a struct pattern, ADR 0123, likewise, 'f: n'). The
+    names the refused pattern binds are declared in the arm with the error type, so their uses report nothing more
+    (ADR 0195 §2.2). A slice or `StringView` payload takes string and slice patterns, which test its elements (ADR
+    0085 §2.7).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision
@@ -1074,9 +1079,18 @@ fn area(s: Shape) -> u32 {
   expression over a const parameter (`[u8; N + 1]`) or a local (`[u8; n * 2]`) is N0353, and any other form N0259.
   It is laid out as `N` consecutive `T`s: size `N × size(T)`, the alignment of `T`. The same holds for the `N` of a
   repeat `[v; N]` (§16.2).
-  - **v0 restriction:** `T` must be a Copy type, so arrays are Copy and never need drop. Arrays of
-    move types need element-wise move tracking (future). Slices may have move-type elements
-    since M6b (§21.3).
+  - **Arrays own their elements** (ADR 0198 §2.1). An array is Copy iff its element is (§14.1), needs drop iff its
+    element does, and moves as a whole: as a local, field, parameter, result, payload or capture, it is one value,
+    left moved-from as a whole (N0250 after), under one drop flag when it is moved on some paths only. Its `N`
+    elements are always all initialised: `a[i]` may be borrowed (`a[i].load()`, `borrow mut a[i]`), assigned when
+    `a` is mutable, and read by value only when `T` is Copy. Moving one element out (`let x = a[i];`, `move a[i]`
+    for a non-Copy `T`) is N0251; `replace(mut a[i], v)` and `a[..].swap(i, j)` (§16.5) take one out without
+    leaving a hole, so no array needs per-element drop flags. Array patterns bind only Copy elements by value
+    (ADR 0085 §2.7).
+  - **Phase 1 restriction** (ADR 0198 §2.4): `T` must not need drop (N0259): atomics, structs and enums of them,
+    `@noncopy` structs of plain data. `[String; 2]` waits for arrays' drop glue. With a type parameter, `[T; N]`
+    needs `T: Copy` (N0259 for an unbounded `T`, which may need drop); each instance decides its own copy-ness.
+    Slices may have move-type elements since M6b (§21.3).
   - Otherwise arrays may appear anywhere a value may: locals, parameters, results, struct fields,
     enum payloads and other arrays. Constants of array type are not supported yet (N0216).
 - `Slice<T>` / `SliceMut<T>` are **borrowed views** `(pointer, length)` of a run of `T`s in an array
@@ -1089,14 +1103,22 @@ fn area(s: Shape) -> u32 {
   - a slice holds a loan of the whole array (or slice) it was taken from (`lifetimes.md`);
   - a function returning a slice has no `borrow(...)` source list: it must have exactly one
     reference (or slice) parameter, which the result is derived from (§13.5's default rule);
-  - the element type follows the array rules: Copy, never a reference.
+  - the element type is never a reference; it may be any other element type (§21.3).
 - Internally, `Slice<T>` is `borrow [T]` and `SliceMut<T>` is `borrow mut [T]`, with `[T]` an
   unsized array type that only exists behind a slice. That is why every reference rule applies.
 
 ### 16.2 Values
 - `[e1, …, en]`: all elements have the same type (the expected element type, or the first
   element's), n ≥ 1.
-- `[v; N]`: N copies of `v`.
+- `[v; N]`: N copies of `v`. For a Copy `v`, `v` is evaluated once and copied. For a non-Copy `v` (ADR 0198
+  §2.2), `v` must be a static initialiser (§39.4: a `@constant` call such as `AtomicU64.constant(0)`, or a struct
+  literal of them), which has no effects and no drop, so its value is laid down `N` times and once or `N`
+  evaluations cannot be told apart; any other non-Copy `v` is N0259.
+- `arrayFrom(f)` (ADR 0198 §2.2), a built-in function (§2, beside `replace` and `swap`; a package's own `arrayFrom`
+  shadows it): `arrayFrom<T, N>(f: borrow mut fn(usize) -> T) -> [T; N]` calls `f(0)` to `f(N − 1)` in order and
+  moves each result into its element. `T` and `N` come from the explicit list (`arrayFrom<AtomicU64, 4>(f)`) or the
+  expected type (`let words: [AtomicU64; 4] = arrayFrom((i) => AtomicU64.create(key.word(i)));`); with neither it
+  is N0265. A panic in `f` aborts (OD-5), so no half-built array is ever observed or destroyed. Effects: `f`'s.
 - `[]` (ADR 0075 §2.9) is the empty slice, where a `Slice<T>` or `SliceMut<T>` is expected (an initialiser, an
   argument, a return): no array is behind it, and its address is `T`'s alignment, never null and never read.
   Elsewhere it is N0259. There is no zero-length array type: C has no zero-sized object, so `[T; 0]` would be laid
@@ -1119,8 +1141,8 @@ fn area(s: Shape) -> u32 {
   - `a` is an array or slice place, or a reference to an array;
   - `i` is a `usize` (a flexible literal becomes `usize`);
   - `i ≥ a.length` **panics** ("index out of bounds", reported at the index expression);
-  - `a[i]` is a place: it can be read (a copy), assigned (if mutable: an array rooted at a `var`
-    or reached through `borrow mut`, or a `SliceMut`), and borrowed.
+  - `a[i]` is a place: it can be read (a copy, of a Copy element; N0251 otherwise), assigned (if mutable: an array
+    rooted at a `var` or reached through `borrow mut`, or a `SliceMut`), and borrowed.
 - `a[lo..hi]`, `a[lo..]`, `a[..hi]`, `a[..]` give a `Slice<T>` of elements `lo` up to but not
   including `hi` (default `0` and `a.length`). `lo ≤ hi ≤ a.length` is checked; otherwise the
   program **panics**.
@@ -1222,7 +1244,8 @@ fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {
   copied. Both indices are checked first (panic "index out of bounds", reported at the call), and nothing changes
   if either is out of range. `i == j` changes nothing. Effects: none.
 
-Diagnostics: N0259 (an element type that is not Copy, an invalid length, or a too-large array).
+Diagnostics: N0259 (an element type that needs drop, a non-Copy repeat that is not a static initialiser, an invalid
+length, or a too-large array; a copying method on a non-Copy element type).
 The other errors reuse N0205, N0211, N0216, N0230, N0246, N0247 and N0248 (`diagnostics.md`).
 
 ### 16.6 Bytes and text (ADR 0071)
@@ -1409,10 +1432,11 @@ fn main() -> i32 {
 }                            // the box is dropped: Account destroyed, memory freed
 ```
 
-`Box`, `SystemHeap` and `FailingAllocator` are built in (ADR 0003).
+`Box`, `SystemHeap`, `FailingAllocator` and `SecretHeap` are built in (ADR 0003, ADR 0197).
 
 ### 18.1 Allocator types
-- `SystemHeap` and `FailingAllocator` are built-in, field-less, Copy structs. They are the only
+- `SystemHeap`, `FailingAllocator` and `SecretHeap` (§42.2, ADR 0197) are built-in, field-less, Copy structs. They
+  are the only
   **allocator types** in M3; user allocators come with interfaces in M6 (`memory-model.md` §3.2).
   Their values are written as struct literals: `SystemHeap {}`.
 - `SystemHeap` is the platform heap (`malloc`/`free` in hosted and CosmoOS userland builds).
@@ -1426,6 +1450,8 @@ fn main() -> i32 {
   order in which the threads reach the countdown. A test that needs the same allocation to fail on every run arms
   the countdown on one thread and allocates through `FailingAllocator` from that thread only, or orders the threads'
   allocations itself (a join, a mutex).
+- `SecretHeap` allocates from the platform heap too, and wipes: every block is all zeros before it goes back, its
+  growth never uses `realloc`, and the slots its containers give up are wiped (§42.2). It is for keys, not bulk data.
 - Their names, and `Box`, cannot be declared as items (N0201).
 
 ### 18.2 `Box<T, A>`
@@ -1572,7 +1598,7 @@ fn process(input: Slice<u8>) -> Result<u64, AllocError> {
 ```
 - `Arena` is a built-in move type that needs drop. It is not scoped: it owns its memory, which
   it obtains from a free-standing allocator.
-- `Arena.create(a, chunkSize)`, with `a` an allocator value (`SystemHeap {}`, `FailingAllocator {}`)
+- `Arena.create(a, chunkSize)`, with `a` an allocator value (`SystemHeap {}`, `FailingAllocator {}`, `SecretHeap {}`)
   and `chunkSize: u64`, makes an empty arena. It cannot fail: memory is obtained in chunks of
   `chunkSize` bytes when needed. An allocation larger than a chunk gets a chunk of its own.
 - **Allocation** (R1). Both methods take `borrow this` and return a scoped result that carries a
@@ -2143,8 +2169,10 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ### 21.3 Slices of move types (correction to §16.1)
 - `Slice<T>` and `SliceMut<T>` may have any non-scoped element type, not just Copy ones. A slice
   only views elements: reading one by value still needs a Copy type (N0251 otherwise), but
-  borrowing one (`borrow s[i]`, `s[i].method()`) does not. Arrays still need Copy elements
-  (§16.1), since an array owns its elements and v0 tracks no per-element moves.
+  borrowing one (`borrow s[i]`, `s[i].method()`) does not. Arrays may have the same element types, except, until
+  arrays have drop glue, ones that need drop (§16.1, ADR 0198): `a[..]`, `k.cells[..]` and `v.view()` all give a
+  `Slice<AtomicU64>`. The methods that copy (`fill`, `copyFrom`, `copyWithin`, `extend`) keep `T: Copy` (N0259);
+  `swap`, `sortBy`, `forEach`, `any`, `all` and `partitionPoint` take any `T`.
 
 Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, or an
 ambiguous bound method), N0268 (a type argument that does not satisfy a bound).
@@ -2211,8 +2239,14 @@ fn main() {
 - **Optional borrow arguments.** At an argument whose parameter is `borrow T?`, a place of type `T?` is borrowed as
   by `asBorrow()`, and a place of type `T` as `Some(borrow t)`, as a place of `T` is borrowed for a `borrow T`
   parameter (§13.2). At a `(borrow mut T)?` parameter the same holds with `mut p` and `asBorrowMut()` (N0249 without
-  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. A `borrow (T?)` stays a different
-  type: it converts with `asBorrow()`.
+  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. An argument of type `borrow (T?)`
+  (`borrow mut (T?)`) is lent as by `asBorrow()` (`asBorrowMut()`) (ADR 0195 §2.4.1): so `f(borrow given)` is accepted
+  as `f(given)` is, and so is passing on a borrowed optional, `fn pass(r: borrow (T?)) => f(r)`; the conversion is
+  total and moves nothing, the one `??` makes. Elsewhere (a `let` with a type, a return, a field) a `borrow (T?)`
+  stays a different type: it converts with `asBorrow()`. Where the two meet, N0205 says which is which, "expected
+  '(borrow String)?', an optional borrow, found 'borrow (String?)', a borrow of an optional", with the fix
+  `given.asBorrow()` for a variable or a borrow of one (ADR 0195 §2.4.2); the reverse mismatch has no fix, as no
+  total conversion exists.
 - **`a ?? b`** (ADR 0072) is `a`'s value, or `b` when `a` is `null`. `a` is a `T?` (N0262 otherwise) and `b` is
   checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
   chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,
@@ -4598,9 +4632,9 @@ fn make() -> Result<Box<u64, KernelHeap>, AllocError> => Box.createIn(KernelHeap
   allocator needs (counters, a C handle) lives on the C side or in global C state.
 - An allocation of either built-in allocator also fails when it would pass the current allocation budget (§40.9,
   ADR 0170).
-- The built-in allocators are still `SystemHeap` and `FailingAllocator`. `Vector`, `String`,
-  `SlotMap`, `StableVector`, `Arena` and `Pool` take only those in v0 (N0263): their growth is in the C
-  runtime, which cannot call CeeSafe methods.
+- The built-in allocators are `SystemHeap`, `FailingAllocator` and `SecretHeap` (§42.2). `Vector`, `String`,
+  `SlotMap`, `StableVector`, `Arena` and `Pool` take only those (N0263): their growth is in the C runtime, which
+  cannot call CeeSafe methods.
 - A type named as a box's allocator that is not a struct without fields implementing `Allocator` is
   N0263.
 
@@ -5944,8 +5978,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may
   be of a non-Copy type with no `drop` block, such as atomics (ADR 0075 §2.15): a static is never moved out of or
   destroyed, and `[e; N]` there evaluates `e` N times at compile time, so `static SLOTS: [AtomicU64; 4] =
-  [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. Elsewhere array elements stay
-  Copy (N0259). A library's static is emitted in C only where compiled code uses it;
+  [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. ADR 0198 makes this the rule
+  everywhere (§16.1, §16.2). A library's static is emitted in C only where compiled code uses it;
 - a call of a `@constant` function whose arguments are static initialisers;
 - a call of a C constant macro whose arguments are static initialisers or `here` (below);
 - `layoutOf<T>()` (§30.1).
@@ -6384,7 +6418,8 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   when the system has no memory: `Err(AllocError.OutOfMemory)` from `push`, `Box.create`, `String.append` and the
   rest. Nothing else changes, so the code that handles a failed allocation handles this one. Code that unwraps an
   allocation (`push(x)!`) panics, and a panic ends the process (§14.5), under a budget as outside one.
-- **What is held** is the sum of the sizes of the blocks of the system allocator (and `FailingAllocator`) that were
+- **What is held** is the sum of the sizes of the blocks of the system allocator (and `FailingAllocator` and
+  `SecretHeap`, whose blocks count with their header, §42.2) that were
   allocated while the budget was current and are not yet freed, as the C library sizes them. A block freed while a
   budget is current is taken off it, whoever allocated it, never below zero. A block that is freed where no budget
   is current stays counted until the budget ends: the count is then too high, never too low. Memory a C library
@@ -6607,3 +6642,115 @@ struct keeps beside its data. `OnceLock<T>` (§38.3) is the same for values that
 - **Drop.** The cell drops its value, if it has one.
 - Like the other cells it is `Send` when `T` is and never `Share`: it is refused in a `static` (N0337) and in an
   `Arc` (N0334).
+
+## 42. Secrets: `Secret.wipe` and `SecretHeap` (ADR 0197)
+
+A key's bytes are left behind wherever a program, or the C compiler, stops using them: a local a `drop` zeroes with
+plain stores (the C compiler removes stores no later read observes, C11 5.1.2.3), a buffer a vector outgrew, the
+place a value was moved from. CeeSafe gives a key type two tools: `Secret.wipe`, a wipe the C compiler keeps, for the
+bytes a value holds inline, and `SecretHeap` (§42.2), an allocator whose blocks are wiped before they are freed, for
+keeping the secret in one place a move does not copy. What either guarantees, and what neither can, is listed in
+§42.3.
+
+### 42.1 `Secret.wipe(mut place)`
+
+```ceesafe
+struct Schedule {
+    words: [u32; 60];
+    rounds: u32;
+
+    drop {
+        Secret.wipe(mut this.words); // every byte zero, and the stores kept
+        Secret.wipe(mut this.rounds);
+    }
+}
+```
+
+- `Secret.wipe(mut place)` sets every byte of the place to zero, through the runtime's `ceesafe_wipe(&place, sizeof
+  place)` (§2.1 of the ADR): a store of zeros followed by a compiler barrier that takes the pointer, so neither the C
+  compiler nor a link-time optimiser removes it. It returns `void`.
+- `Secret.wipe(mut bytes[a..b])`, the slice form, wipes a mutable slice's elements: their count times their size. A
+  `SliceMut<T>` binding is written `mut s`.
+- **Zeroable types.** The place's type, or the slice's element type, must be one whose every value may be all zero
+  bytes: an integer, a float, `bool`, a raw pointer, an array of a zeroable type, or a struct with no `drop` whose
+  fields are all zeroable. All zero bytes are then a value of the type, so the place stays readable and nothing is
+  `unsafe`. Any other type (an enum, an optional, a reference, a box, a vector, a type parameter, a struct with a
+  `drop` or with a field that is not zeroable) is **N0365**, which names the first field that is not.
+- A struct with a `drop` is wiped field by field, from its own `drop` (`Secret.wipe(mut this.key)`): the value
+  itself is not zeroable, as zero bytes would be dropped as if they were it.
+- It has no effects (`@effects()`): a `drop`, async code, a `debugAssert`'s callee and the freestanding profile may
+  call it. The interpreter sets the bytes to zero.
+- `Secret` is a built-in name like `Console` (§2): a package's own item named `Secret` hides it.
+
+### 42.2 `SecretHeap`
+
+```ceesafe
+struct MasterKey {
+    id: u32;
+    key: Box<[u8; 32], SecretHeap>; // a Vector<MasterKey> moves pointers only
+}
+```
+
+`SecretHeap` is the third built-in allocator type (§18.1): a field-less Copy struct, passed to the runtime as
+`CEE_ALLOC_SECRET` (4). Every container that takes a built-in allocator takes it: `Box<T, SecretHeap>`,
+`Vector<T, SecretHeap>`, `String<SecretHeap>`, `SlotMap<T, SecretHeap>`, `StableVector<T, SecretHeap>`, and an
+`Arena` made with `SecretHeap {}`. A box's bytes do not move when the box does, only its pointer, so a key kept in a
+`SecretHeap` box has one copy, in one block.
+
+- **A block is wiped before it goes back.** A free of a `SecretHeap` block sets it to zero whole (with
+  `ceesafe_wipe`, §42.1), then gives it to the platform allocator or the host's hook. Each block carries a header of
+  `CEE_HEAP_ALIGN` bytes (16 or more) that holds its size, so the wipe needs nothing from the C library.
+- **Growth never uses `realloc`.** A `SecretHeap` buffer grows by allocating the new block, copying, and freeing (so
+  wiping) the old one. A failed growth leaves the old block live and unchanged, as for the other allocators (one
+  attempt).
+- **Slots given up are wiped.** `pop`, `truncate`, `clear`, `remove`, `swapRemove`, `retain` and `resize` down on a
+  `SecretHeap` vector or string, and `remove` on a `SecretHeap` slot map, set the slots they vacate to zero after
+  the element is moved out or destroyed, so a live buffer holds no bytes of an element it no longer has.
+- **Never stack-placed.** Placement (`c-backend.md` §2.2) leaves `SecretHeap` boxes on the heap, as it does a user
+  allocator's: their bytes never take a stack slot.
+- **Never on the fast path.** The runtime's inline `malloc`/`free` path (ADR 0101) is for `SystemHeap` alone.
+- **Counted like the others.** The allocation report's `live`, `CEESAFE_FAIL_ALLOC_AT`, `ceesafec test --sweep alloc`
+  and allocation budgets (§40.9; a block counts with its header) include it. `FailingAllocator.failAfter` does not.
+- **Not given to C.** `Vector.intoForeign` and `Vector.fromForeign` (§23.3) of a `SecretHeap` vector are N0263: C
+  would free the block with its own `free`, unwiped and past the header.
+- `SecretHeap` is a reserved name (§2).
+
+### 42.3 What is and is not guaranteed
+
+**Guaranteed** on every target, at every optimisation level, link-time optimisation included:
+- every `SecretHeap` block is all zeros before it is returned to the platform allocator or the host's hook, by a
+  free, by growth, or by a container's drop;
+- every slot a `SecretHeap` container vacates (§42.2) is zeroed;
+- every `Secret.wipe` is performed, at the place named.
+
+**Not guaranteed:**
+- **registers**, general and vector, and the C compiler's own temporaries and spills;
+- **places a program copies to itself**: a `[u8; 32]` local it reads a key into, a moved inline value's old slot
+  (the reason to keep keys in a box);
+- **swap and hibernation**, which may write pages to disk, and **core dumps**, which include live secret blocks
+  (servers should turn core dumps off: `RLIMIT_CORE` 0, Linux `prctl(PR_SET_DUMPABLE, 0)`; and use encrypted swap);
+- **`fork`**: a child gets copies of the pages;
+- **the kernel's and other processes' view** of the memory (ptrace, `/proc/pid/mem`).
+
+`mlock` and `MADV_DONTDUMP` are not used: they would need a page allocator for secret blocks (ADR 0197 §5 question
+4).
+
+### 42.4 Checking it: the freed-block scan
+
+`ceesafec test --scan-freed` (and `CEESAFE_SCAN_FREED=1` for a built program) keeps every freed block of every
+CeeSafe allocator in a quarantine, as it was at its free and never reused, and makes growth allocate, copy and free
+for every allocator, so the C library's `realloc` frees no block out of sight. lib/std's
+`Testing.freedHolds(pattern: Slice<u8>) -> bool` is whether a kept block holds the bytes of `pattern`; it is `false`
+while the scan is off. The interpreter keeps its own freed blocks the same way, so `ceesafec test --interp
+--scan-freed` agrees. A test shows that `SystemHeap` leaves a key behind and `SecretHeap` does not:
+
+```ceesafe
+@test
+fn secretVectorsLeaveNothing() -> Result<void, TestFailure> {
+    let key = [0x5Au8, 0xC3, 0x17, 0xE8, 0x42, 0x99, 0x0D, 0x7B];
+    var v = Vector<u8, SecretHeap>.create();
+    for (i in 0..64usize) { v.extend(key[..])!; } // it grows, and each old block is wiped
+    v.clear();
+    return Check.isFalse(Testing.freedHolds(key[..]), "the key in a freed block");
+}
+```

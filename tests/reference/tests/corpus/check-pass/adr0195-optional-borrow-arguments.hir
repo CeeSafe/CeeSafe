@@ -1,0 +1,48 @@
+(program
+  (fn lengthOf ((s#0: borrow String?)) -> usize
+    (block
+      (return (value (match s#0 (arm Some (t#1: borrow String = payload 0) (block (yield (length (deref t#1):String):usize))) (arm null (block (yield 0:usize))))):usize)
+    )
+  )
+  (fn pass ((r#0: borrow (String?))) -> usize
+    (block
+      (return (call lengthOf (value (block (let lent#1: borrow (String?) = (reborrow r#0)) (match lent#1 (arm Some (payload#2: borrow String = payload 0) (block (yield (borrow String?.Some payload#2)))) (arm null (block (yield (borrow String?.null))))))):borrow String?):usize)
+    )
+  )
+  (fn grow ((s#0: borrow mut String?)) -> void
+    (block
+      (match-consume s#0
+        (arm Some (t#1: borrow mut String = payload 0)
+          (block
+            (expr (Process.exit (borrow-mut (*t#1)) "x"))
+          )
+        )
+        (arm null
+          (block)
+        )
+      )
+    )
+  )
+  (fn passMut ((r#0: borrow mut (String?))) -> void
+    (block
+      (expr (call grow (value (block (let lent#1: borrow mut (String?) = (reborrow-mut r#0)) (match lent#1 (arm Some (payload#2: borrow mut String = payload 0) (block (yield (borrow mut String?.Some payload#2)))) (arm null (block (yield (borrow mut String?.null))))))):borrow mut String?):void)
+    )
+  )
+  (fn classOf ((class#0: u32)) -> u32
+    (block
+      (return class#0)
+    )
+  )
+  (fn main () -> void
+    (block
+      (var given#0: String? = (String?.null))
+      (let a#3: usize = (call lengthOf (value (block (let lent#1: borrow (String?) = (borrow given#0)) (match lent#1 (arm Some (payload#2: borrow String = payload 0) (block (yield (borrow String?.Some payload#2)))) (arm null (block (yield (borrow String?.null))))))):borrow String?):usize)
+      (let b#6: usize = (call lengthOf (value (block (let lent#4: borrow (String?) = (reborrow (borrow given#0))) (match lent#4 (arm Some (payload#5: borrow String = payload 0) (block (yield (borrow String?.Some payload#5)))) (arm null (block (yield (borrow String?.null))))))):borrow String?):usize)
+      (let c#7: usize = (call pass (borrow given#0)):usize)
+      (expr (call grow (value (block (let lent#8: borrow mut (String?) = (borrow-mut given#0)) (match lent#8 (arm Some (payload#9: borrow mut String = payload 0) (block (yield (borrow mut String?.Some payload#9)))) (arm null (block (yield (borrow mut String?.null))))))):borrow mut String?):void)
+      (expr (call passMut (borrow-mut given#0)):void)
+      (let item#10: Item = (new Item (class (call classOf 3:u32):u32)))
+      (expr (+ (+ (+ a#3 b#6):usize c#7):usize (as (. item#10 class):u32 usize)):usize)
+    )
+  )
+)

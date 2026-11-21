@@ -369,11 +369,89 @@ fn intCases() {
     Console.writeLine(flags.valueAt(second));
 }
 
+fn firstKey(map: borrow OrderedMap<u64, u64>) -> u64 => map.keyAt(map.first()!);
+
+fn lastKey(map: borrow OrderedMap<u64, u64>) -> u64 => map.keyAt(map.last()!);
+
+fn backHash(map: borrow OrderedMap<u64, u64>) -> u64 {
+    var h: u64 = 0xCBF29CE484222325;
+    var c = map.last();
+    while (c != null) {
+        let at = c!;
+        h = fnv(fnv(h, map.keyAt(at)), map.valueAt(at));
+        c = map.previous(at);
+    }
+    return h;
+}
+
+/// Section 8: loads in key order each way, then removals and puts at the ends (ADR 0194 §2.4).
+fn edgeCases() {
+    for (order in 0..2) {
+        var map = OrderedMap<u64, u64>.create();
+        let n: u64 = 2000;
+        for (i in 0..n) {
+            let k = if (order == 0) 3 * i + 3 else 3 * (n - i);
+            let old = map.put(k, k ^ 0xABCD)!;
+        }
+        Console.write(if (order == 0) "edges ascending" else "edges descending");
+        showLength(borrow map);
+        ends(borrow map);
+        Console.write(" ");
+        Console.writeLine(wholeHash(borrow map));
+        var h: u64 = 0xCBF29CE484222325;
+        for (i in 0..400) {
+            let k = if (i % 2 == 0) firstKey(borrow map) else lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        Console.write("ends ");
+        Console.write(h);
+        showLength(borrow map);
+        ends(borrow map);
+        Console.writeLine("");
+        h = 0xCBF29CE484222325;
+        for (i in 0..600u64) {
+            h = some(h, map.put(lastKey(borrow map) + 1, i)!);
+            let k = firstKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        for (i in 0..600u64) {
+            h = some(h, map.put(firstKey(borrow map) - 1, i)!);
+            let k = lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        Console.write("queue ");
+        Console.write(h);
+        showLength(borrow map);
+        ends(borrow map);
+        Console.writeLine("");
+        Console.write("scans ");
+        Console.write(wholeHash(borrow map));
+        Console.write(" ");
+        Console.write(backHash(borrow map));
+        showLength(borrow map);
+        Console.writeLine("");
+        h = 0xCBF29CE484222325;
+        var removed: u64 = 0;
+        while (!map.isEmpty()) {
+            let k = if (removed % 2 == 0) firstKey(borrow map) else lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+            removed += 1;
+        }
+        Console.write("emptied ");
+        Console.write(h);
+        Console.write(" ");
+        Console.write(removed);
+        Console.write(" ");
+        Console.writeLine(map.first() == null);
+    }
+}
+
 fn main() {
     u64Cases();
     textCases();
     byteCases();
     intCases();
+    edgeCases();
 }
 // expect-stdout: fill 11206546370022952229 10000
 // expect-stdout: mixed 1000 17345393024287454357 10205 0 39996
@@ -432,3 +510,13 @@ fn main() {
 // expect-stdout: i8 -128 -64 -2 -1 0 1 5 64 127
 // expect-stdout: i64 -9000000000 -1 0 1 3 9000000000
 // expect-stdout: bool false=2 true=1
+// expect-stdout: edges ascending 2000 3 6000 14018290503223808389
+// expect-stdout: ends 10328242984554105625 1600 603 5400
+// expect-stdout: queue 5934903098495380098 1600 1803 5400
+// expect-stdout: scans 16593819888337051415 3282470946800098479 1600
+// expect-stdout: emptied 12441279571800111571 1600 true
+// expect-stdout: edges descending 2000 3 6000 14018290503223808389
+// expect-stdout: ends 10328242984554105625 1600 603 5400
+// expect-stdout: queue 5934903098495380098 1600 1803 5400
+// expect-stdout: scans 16593819888337051415 3282470946800098479 1600
+// expect-stdout: emptied 12441279571800111571 1600 true

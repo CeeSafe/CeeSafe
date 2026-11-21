@@ -7,7 +7,7 @@ struct DynSignature {
     methods: Range; // HIR functions, in Hir.lists
 }
 
-/// The built-in item a type is (AllocError 0, IoError 1, SystemHeap 2, FailingAllocator 3), or none.
+/// The built-in item a type is (AllocError 0, IoError 1, SystemHeap 2, FailingAllocator 3, SecretHeap 4), or none.
 fn builtinItemIndex(c: borrow Checker, typ: u32) -> u32 {
     if (typ == c.allocErrorType) {
         return 0;
@@ -21,6 +21,9 @@ fn builtinItemIndex(c: borrow Checker, typ: u32) -> u32 {
     if (c.structs.length > 1 && typ == c.structs[1].typ) {
         return 3;
     }
+    if (c.structs.length > 2 && typ == c.structs[2].typ) {
+        return 4; // SecretHeap (ADR 0197 §2.3)
+    }
     return none();
 }
 
@@ -29,7 +32,7 @@ fn builtinItemIndex(c: borrow Checker, typ: u32) -> u32 {
 fn useBuiltin(c: borrow mut Checker, typ: u32) -> u32 {
     let k = builtinItemIndex(c, typ);
     if (k != none()) {
-        while (c.builtinUses.length < 4) {
+        while (c.builtinUses.length < 5) {
             c.builtinUses.push(0)!;
         }
         let library = c.file != none() && c.fileIsLibrary[c.file as usize];
@@ -77,7 +80,8 @@ fn finishProgramTables(c: borrow mut Checker) -> Result<void, AllocError> {
                 0 => c.allocErrorType,
                 1 => c.ioErrorType,
                 2 => c.systemHeapType,
-                _ => c.structs[1].typ,
+                3 => c.structs[1].typ,
+                _ => c.structs[2].typ,
             };
             c.types.types[typ as usize].libraryUse = true;
         }

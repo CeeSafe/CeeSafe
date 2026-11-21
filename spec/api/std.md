@@ -18,9 +18,11 @@
 - [struct Channel](#struct-channel)
 - [struct AsyncMutex](#struct-asyncmutex)
 - [struct AsyncMutexGuard](#struct-asyncmutexguard)
+- [struct Crc32](#struct-crc32)
 - [struct Crc32c](#struct-crc32c)
 - [struct Crc64Nvme](#struct-crc64nvme)
 - [struct Md5](#struct-md5)
+- [struct Sha1](#struct-sha1)
 - [struct Sha256](#struct-sha256)
 - [struct HmacSha256](#struct-hmacsha256)
 - [struct Aes256Gcm](#struct-aes256gcm)
@@ -1237,6 +1239,51 @@ public fn heal(borrow this)
 
 Clears the mark: the data is whole again.
 
+## struct Crc32
+
+```ceesafe
+public struct Crc32
+```
+
+CRC-32 (IEEE 802.3, ISO-HDLC: polynomial 0x04C11DB7, reflected, initial value and final XOR all ones), the checksum
+of the S3 `x-amz-checksum-crc32` header, gzip, zip and PNG, and zlib's `crc32`. `Crc32.of("123456789".bytes())` is
+0xCBF43926.
+
+### Crc32.create
+
+```ceesafe
+public fn create() -> Crc32
+```
+
+A checksum of no bytes yet.
+
+### Crc32.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`: through the CPU where the runtime has a path for it (the CRC extension's `crc32x` on AArch64,
+carry-less multiply folding on x86-64; ADR 0194 §2.3), as many bytes as that path takes at a time, else, and
+for the rest, eight at a time through the slicing tables, then one at a time.
+Safety: the runtime reads at most the slice's length, during the call only, and keeps no pointer.
+
+### Crc32.finish
+
+```ceesafe
+public fn finish(borrow this) -> u32
+```
+
+The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Crc32.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> u32
+```
+
+The checksum of `bytes`, in one call.
+
 ## struct Crc32c
 
 ```ceesafe
@@ -1359,6 +1406,49 @@ The digest of the bytes fed so far. It does not change the state: more bytes may
 
 ```ceesafe
 public fn of(bytes: Slice<u8>) -> [u8; 16]
+```
+
+The digest of `bytes`, in one call.
+
+## struct Sha1
+
+```ceesafe
+public struct Sha1
+```
+
+SHA-1 (FIPS 180-4 §6.1): a 20-byte digest. **SHA-1 is broken for collisions** (SHAttered, 2017): two inputs with
+the same digest can be made, so it must never sign, authenticate or name a value an attacker chooses. It is here
+for the protocols that name it: S3's `x-amz-checksum-sha1`, the WebSocket handshake, Git's object ids. For anything
+else use Sha256, or HmacSha256 for a code under a key.
+
+### Sha1.create
+
+```ceesafe
+public fn create() -> Sha1
+```
+
+A digest of no bytes yet.
+
+### Sha1.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`. Whole blocks are compressed straight from `bytes`; only a partial block is copied.
+
+### Sha1.finish
+
+```ceesafe
+public fn finish(borrow this) -> [u8; 20]
+```
+
+The digest of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Sha1.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> [u8; 20]
 ```
 
 The digest of `bytes`, in one call.
@@ -2785,7 +2875,9 @@ public struct OrderedMap<K: OrderKey<K>, V>
 ```
 
 A map whose iteration order is its keys' order (ADR 0075 §2.4): a B-tree of minimum degree 16 (at most 31 entries
-a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. Ordered access is through
+a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. A put past the last key or
+before the first splits the full nodes on its path unevenly, 29 entries to 1 with the one on the key's side (ADR
+0194 §2.4), so a map loaded in key order, either way, ends up nearly full rather than half empty. Ordered access is through
 cursors (`first`, `last`, `seek`, `seekAfter`, `next`, `previous`); a put, a removal or a clear changes the map's
 version, and a cursor made before it panics when used ("ordered map changed under a cursor"). Only `put`
 allocates; a failed `put` leaves the map as it was.

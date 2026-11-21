@@ -87,16 +87,17 @@ static ceeR_vE4Code ceeF_use2(void) {
     t_3 = (uint32_t)t_2.tag;
     switch (t_3) {
     case ((uint32_t)0):
-        v_r_0 = t_2.u.v_Ok.f__0;
-        t_5 = ((ceeR_vE4Code){ .tag = 0 });
-        t_6 = t_5;
-        ceeD_3Res(&v_r_0);
-        return t_6;
+        break;
     default:
         t_4 = ((ceeR_vE4Code){ .tag = 1, .u.v_Err = { .f__0 = t_2.u.v_Err.f__0 } });
         ceeD_RS3ResE4Code(&t_2);
         return t_4;
     }
+    v_r_0 = t_2.u.v_Ok.f__0;
+    t_5 = ((ceeR_vE4Code){ .tag = 0 });
+    t_6 = t_5;
+    ceeD_3Res(&v_r_0);
+    return t_6;
 }
 
 static int32_t ceeF_main(void) {

@@ -261,6 +261,9 @@ When `CEmitOptions.Placement` is on (the default since M9e, `optimisations.md` �
 
 Everything else is unchanged. Heap boxes, and every other site, use the drop glue of §2.
 
+Only `SystemHeap` boxes are placed. A `SecretHeap` box (ADR 0197 §2.3) stays on the heap, as a user allocator's does:
+its bytes never take a stack slot, which no wipe would reach once the frame is gone.
+
 ## 2.3 C interoperability (M8b; type-system.md §28)
 
 - **Extern functions.** Each `extern "C"` function gets a prototype with the C types of §28.3
@@ -401,6 +404,12 @@ and a transfer may be dropped only where falling through provably reaches the sa
      `goto`, so this is not expected; it is a fallback.
    - The natural loop of a header `h` is `h` plus every block that reaches a back-edge source
      without passing through `h`.
+   - **A bound** (ADR 0195 §2.1.3): after step 6 the tree is measured, an `if`, a loop, a `switch`
+     and a `case` each one level (an `else` printed as `else if` is at its `if`'s level). A function
+     deeper than **96** levels is emitted flat, so a function's C nests at most 96 levels whatever
+     its source: under C11's minimum of 127 nested blocks (5.2.4.1), with room for a line's
+     parentheses, and under clang's default `-fbracket-depth=256`. Only deeply nested source or an
+     `else if` chain of about 90 arms (each `else` holds its condition's temporary) reaches it.
 2. **Placement.** Each block's code is emitted exactly once, inside the code of its immediate
    dominator `d`, in one of three ways:
    - **Inline**, at the branch to it: when it has one forward predecessor and leaves no loop that
@@ -437,6 +446,27 @@ and a transfer may be dropped only where falling through provably reaches the sa
      ending in a transfer becomes `if (c) { A } B`. Symmetrically, when only `B` ends in a
      transfer it becomes `if (!c) { B } A`. When both arms end in a transfer, the shorter arm is
      the guarded one.
+   - A `switch` completes when some `case` body completes or breaks the switch; a body that ends
+     in `return`, `goto`, `continue` or a `_Noreturn` call (the unreachable `default`'s
+     `ceesafe_panic`) does not (ADR 0195 §2.1.1). So an `if` arm ending in a `match` whose every
+     arm returns ends in a transfer, and the rule above applies to it.
+   - **Switch guard clauses** (ADR 0195 §2.1.2): when exactly one `case` body can reach what
+     follows the switch and the others end in a transfer, that body is moved after the switch and
+     the case becomes `break;` (a last `break` of the body is dropped, since falling off the moved
+     body reaches the same place). When none can, the largest body is moved, if it is larger than
+     every other. A body holding any other `break` of this switch stays: moved out, the `break`
+     would bind to an enclosing loop. `t()?;` thus prints the rest of the function after the
+     switch, not inside its `Ok` case:
+
+     ```c
+     switch (t_2) {
+     case ((uint32_t)0):
+         break;
+     default:
+         return t_3;
+     }
+     ceeD_RvS11TestFailure(&t_1);   /* the rest of the function, at the same depth */
+     ```
    - An empty `then` arm is negated away.
    - An `else` holding a single `if` is printed as `else if`.
 
@@ -775,8 +805,21 @@ Heap (M3b):
   `malloc`/`realloc`/`free`, which also serve CosmoOS userland). They count attempts and live
   allocations; a reallocation is one attempt, and on failure its block is unchanged and still live. `ceesafe_fail_after`/`ceesafe_fail_reset`
   implement `FailingAllocator`.
+- **`CEE_ALLOC_SECRET`** (4, `SecretHeap`, ADR 0197 §2.3): a block has a `CEE_HEAP_ALIGN` header in front that holds
+  its size; `ceesafe_free` wipes header and block with `ceesafe_wipe` before it goes back, and `ceesafe_realloc`
+  allocates, copies and frees (so wipes) instead of calling `realloc`, one attempt, the old block unchanged on failure.
+  Its blocks are counted, failed by `CEESAFE_FAIL_ALLOC_AT` and held against budgets like the system allocator's. The
+  helpers `ceeVO_` (pop), `ceeVC_` (clear), `ceeVZ_` (resize down), `ceeKR_` (a slot map's remove) and `truncate`
+  wipe the slots they give up, after the element is moved out or destroyed.
+- **`ceesafe_wipe(p, n)`** (ADR 0197 §2.1): `n` bytes set to zero, then a compiler barrier that takes `p` (a
+  volatile loop under MSVC's `cl`); out of line (`noinline`), in the first, freestanding part of
+  `ceesafe_rt_core.c`. `Secret.wipe(mut place)` is `ceesafe_wipe((uint8_t *)(p), (uint64_t)sizeof *(p));` for the
+  place's address `p`, or of a slice's `ptr` for `len * sizeof *ptr` bytes.
+- **The freed-block scan** (ADR 0197 §4.3; hosted): with `CEESAFE_SCAN_FREED=1`, or from `ceesafe_scan_begin()` (the
+  test harness), `ceesafe_free` keeps each block in a quarantine of the C library's memory instead of freeing it, and
+  a reallocation of a counted block allocates, copies and frees; `ceesafe_freed_holds(p, n)` searches the quarantine.
 - **The inline path** (ADR 0101; hosted only). In `rt.h`, `ceesafe_alloc` and `ceesafe_free` are macros for two inline
-  functions: for `CEE_ALLOC_SYSTEM`, when the word `ceesafe_alloc_watched` is zero, they are `malloc` (of at least
+  functions: for `CEE_ALLOC_SYSTEM` alone (never `CEE_ALLOC_SECRET`), when the word `ceesafe_alloc_watched` is zero, they are `malloc` (of at least
   one byte) and `free`; otherwise, and for every other allocator, the functions above. The word is zero exactly when
   allocations are not counted (no report, no `CEESAFE_FAIL_ALLOC_AT`, not `ceesafec test`) and the platform functions
   are the C library's with their first block handed out (no host hook). So a counted run, an injected failure and a

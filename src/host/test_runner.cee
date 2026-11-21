@@ -409,6 +409,9 @@ fn runTest(
     var timeout = Vector<u8>.create();
     appendDecimal(mut timeout, options.testTimeout * 1000)!;
     arguments.push(timeout)!;
+    if (options.testScanFreed) {
+        pushText(mut arguments, "1")!; // the freed-block scan (ADR 0197 §4.3): TestRun.begin's sixth argument
+    }
     if (hostIsWindows()) {
         for (k in 0..program.length) {
             if (program[k] == '/') {
@@ -602,6 +605,7 @@ fn testHelp() {
     Console.writeLine("                        cancellation point (native only)");
     Console.writeLine("  --sweep-strict        with --sweep alloc: a panic from an unwrap in a test's own file, or a");
     Console.writeLine("                        stacked await out of memory, fails the sweep too");
+    Console.writeLine("  --scan-freed          keep every freed block as it was, for Testing.freedHolds (ADR 0197)");
     Console.writeLine("  --show-output         print what each passing test wrote, under its name (a failing test's");
     Console.writeLine("                        output is always shown; ADR 0185)");
     Console.writeLine("  --format text|json    the report's form");

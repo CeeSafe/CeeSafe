@@ -4,7 +4,7 @@
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): three small library gaps, one ADR because each is a few lines of
   lib/std and they can ship together. Measured on `origin/main` at v0.84.1 (§1.4); nothing here is built yet. G34's
   wipe is ADR 0197's `ceesafe_wipe` and `Secret.wipe` (proposed the same day, for G42 and G34): this ADR uses them
-  and adds what 0197 §2.5 leaves out of HMAC.
+  and adds what 0197 §2.5 leaves out of HMAC. The rest implemented for 0.87.0: `Crc32` (on AArch64's CRC instructions and x86-64's PCLMULQDQ folding, slicing tables elsewhere), `Sha1`, and OrderedMap's edge splits.
 - Scope: `lib/std/checksums.cee` (`HmacSha256`'s `drop` and `clone`, `Sha256.finish`, new `Crc32` and `Sha1`),
   `lib/std/checksum_tables.cee` and `tools/gen_checksums.py` (CRC-32's slicing tables), `lib/std/ordered_map.cee`
   (`split`, `put`), `runtime/hosted/ceesafe_rt_io.c` and `runtime/include/ceesafe/rt.h` (two functions), the
@@ -220,3 +220,14 @@ key order, and recovery puts a checkpoint's entries in key order. At 1M objects 
    question 6 proposes for its runtime wipe (recommended), or all of this ADR in that patch? *Recommended: G34 with
    the wipe fix; `Crc32`, `Sha1` and the edge splits in the minor release, since they add API and a runtime path
    that needs an x86-64 run. None blocks CosmoStore, which logs them as P2 and P3.*
+
+## As built (0.87.0)
+
+- **x86-64's folding constants** are written in `ceesafe_rt_io.c`. They are checked by `tools/oracles/crc_model.py`,
+  which computes them, rather than generated.
+- **x86-64's probe** repeats the AES probe's `cpuid` pattern with its own bits.
+- **Measured** (M1, a loaded machine):
+  - `Crc32` 6.9 to 7.9 GB/s; under Rosetta, x86-64's path 17 to 24 GB/s. 200,000 random lengths and offsets agree
+    with a bitwise CRC on both.
+  - `Sha1` 162 MB/s.
+  - In-order OrderedMap loads, 1M entries: 184 to 97 MB.

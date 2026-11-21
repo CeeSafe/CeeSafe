@@ -312,6 +312,7 @@ Medium
 | `x as T` | only conversions that never lose information; `a as u64 < b` compares |
 | `*r` | the Copy value `r` refers to; `*r = v` writes through a `borrow mut` |
 | `replace(mut place, v)`, `swap(mut a, mut b)` | the old value, which nothing is left without; exchange two places |
+| `arrayFrom(f)` | an array `[T; N]` whose element `i` is `f(i)`, called for `i` from 0 to `N - 1`; `T` and `N` come from the expected type or `arrayFrom<T, N>(f)` ([Arrays](collections.md#arrays-of-atomics-and-other-move-types)) |
 | `assert(cond)`, `assert(cond, message)`, `panic(message)` | panic when false; always (`never`) |
 | `debugAssert(cond)`, `debugAssert(cond, message)` | as `assert`, but only in debug builds, tests and the interpreter; may change nothing that exists before it ([Debugging](debugging.md#debug-assertions)) |
 | `embed("path")`, `embedText("path")` | a file's bytes as a `Slice<u8>`, or as UTF-8 text, read when the package is checked; the path is relative to the source file and stays inside the package ([Constants](basics.md#embedded-files)) |
@@ -360,6 +361,8 @@ true
 | Type or function | Notes |
 |---|---|
 | `Box.create(value)` | `Result<Box<T>, AllocError>`, heap-owned; `Box<dyn I>` for dynamic dispatch |
+| `SecretHeap` | the allocator for keys: its blocks are wiped before they are freed, its growth copies and wipes, its containers wipe the slots they give up (see [memory](memory.md#secrets)) |
+| `Secret.wipe(mut place)` | sets a zeroable place, or `mut bytes[a..b]`, to zero bytes in a way the C compiler keeps: for keys (see [memory](memory.md#secrets)) |
 | `FixedBufferAllocator.over(mut bytes)` | an allocator over a caller's buffer, for freestanding code |
 | `Arena`, `Scratch`, `Pool<T>`, `SlotMap<T>`, `StableVector<T>` | see [memory](memory.md) and [collections](collections.md) |
 | `Thread.spawn`, `Thread.both`, `Async.run`, `Async.scope` | see [threads](threads.md) and [async](async.md) |

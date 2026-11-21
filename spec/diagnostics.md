@@ -51,7 +51,7 @@ diagnostics, so any cascade fails the test.
 | Code | Meaning | Example |
 |---|---|---|
 | N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7) | missing `;`, `(` after `if`, `}` before `fn`, `Colour::Red` |
-| N0101 | Expected an item (`fn` or `const`) at the top level | `let x = 1;`, `struct S {}` (not in M1) |
+| N0101 | Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3) | `let x = 1;`, `class Foo {}` |
 | N0102 | Expected an expression | `let a = ;` |
 | N0103 | Comparison operators chained | `a < b < c` |
 | N0104 | Invalid assignment target | `1 = 2;`, `f() = 3;` |
@@ -68,7 +68,8 @@ diagnostics, so any cascade fails the test.
 up to three it might be: the type's members within a few edits of it, then those whose doc comment mentions it
 (`TextWriter.unsigned` gives `signed`, `decimal` or `hex`); for a built-in type (`Process`, `Console`, …) the members
 the built-in types page lists for it, the longest shared start first; and for a small type with no close member, all
-its members. A reserved word where a name goes (N0100) says so.
+its members. A reserved word where a name goes (N0100) says so, once: the word is taken as the name, so a parameter,
+field (`own: u32;`) or variant (`move(u32)`) is parsed on as one (ADR 0195 §2.3).
 
 A method that does not exist on a value that is not a struct (N0234) is treated the same: a number is offered its
 built-in methods, the very names the checker accepts (`n.rotateLef(1)` gives `rotateLeft`), and the methods of its
@@ -88,7 +89,13 @@ too, with the same suggestions, with or without type arguments (`Vec<i32> { x: 1
 a struct type" (N0234 in a literal) and "this pattern names another type than the value's" (N0205 in a pattern) are
 said only of a name that is something: an enum, an interface, a function, a constant, a local, a built-in type. A
 struct pattern of an unknown name is then checked as a pattern of the value's own type, so its bindings are
-declared and the name is the one thing reported.
+declared and the name is the one thing reported. A nested pattern refused under a reference payload or field
+(type-system.md §15.2) likewise declares its names with the error type, so their uses report nothing more (ADR 0195
+§2.2).
+
+A borrow of an optional where an optional borrow is expected (`let r: borrow String? = borrow given;`) is N0205
+"expected '(borrow String)?', an optional borrow, found 'borrow (String?)', a borrow of an optional", with the fix
+`given.asBorrow()` (ADR 0195 §2.4.2); at an argument the two are converted, not reported (type-system.md §22.1).
 
 One fault is one diagnostic. A struct pattern that would move a field out of a value whose type has a `drop` block
 (N0252) is reported once, at the innermost struct pattern that refuses the move: a pattern around it, of a struct
@@ -163,14 +170,14 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | Code | Meaning | Example |
 |---|---|---|
 | N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2) | `consume(r); consume(r);` |
-| N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
+| N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy; out of an array element that is not Copy (ADR 0198 §2.1: an array is never left with a hole; the message names `replace(mut a[i], …)` and `a[..].swap(i, j)`) | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type; `let x = a[0];` with `a: [AtomicU64; 4]` |
 | N0252 | Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, one outside the file that declares the struct, or one that tests a field (the message then says to bind every field and test what was bound; ADR 0123 §2.6) | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |
 | N0254 | `return`, `break`, `continue` or `defer` inside a deferred statement | `defer return 1;` |
 | N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2). Also a `let` without `else` whose struct pattern can fail (ADR 0123 §2.4) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
-| N0259 | Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
+| N0259 | Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy (since ADR 0198, one that needs drop, an unbounded type parameter included, until arrays have drop glue), or an array larger than 2^31 − 1 bytes; since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected | `[Res; 2]` with `Res` a struct with a `drop` block, `[i32; 0]`, `let e = [];` |
 
 Arrays and slices otherwise reuse codes: indexing or slicing a non-array, a non-`usize` index,
 or a bad `for` sequence or range is N0205; writing an element of a `let` array or through a
@@ -241,7 +248,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | N0260 | `Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected | `let a = Ok(1);`, `let p = Pool.create(SystemHeap {}, 4u32);`, `let n = null;` |
 | N0261 | `?` in a function that does not return a `Result` with the same error type, or an enum with an `@from` variant for it (ADR 0075 §2.3; the message names the variant to add), where the error's type has no `@into` method that returns the function's error type either (ADR 0128); `?` on an optional in a function that does not return an optional (M6c) | `?` on `Result<i32, F>` in a function returning `Result<i32, E>` |
 | N0262 | `?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional; an `@from` variant without exactly one payload, or two `@from` variants of one payload type (ADR 0075 §2.3) | `n?` with `n: i32`, `@from A` |
-| N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
+| N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, `SecretHeap`, or for `Box` since C5 a struct without fields implementing `Allocator`); or `Vector.intoForeign`/`fromForeign` of a `SecretHeap` vector, whose block C would free unwiped (ADR 0197 §2.3) | `Box<i32, Point>`, `Box.createIn(point, 1)`, `Vector.intoForeign(secretBytes)` |
 | N0265 | Type arguments that cannot be inferred: a generic call whose arguments and unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter (a call's expected type is not used: `let m: Maybe<i32> = make();` needs `make<i32>()`), or a struct literal or enum value whose fields, payloads and expected type do not. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep, or with type arguments made of more than 1048576 types and members (polymorphic recursion): a function's, or the functions of a struct or enum instance at their first use (type-system.md §20.4) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }`, `fn depth(borrow this) -> u32 => 1 + this.nest().depth();` in a `Pair<T>` with `fn nest(borrow this) -> Pair<Pair<T>>` |
 | N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) or without restating its region parameters' bounds exactly (type-system.md §25.8, ADR 0134) | `impl Shape for Square { fn area(this) -> i64 … }` |
@@ -394,6 +401,12 @@ Split builds and a dependency that does not check (N0363 and N0364; `c-backend.m
 |---|---|---|
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 | N0364 | A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead | `mid = { path = "../mid" }` when `mid`, or a package it depends on, has a type error |
+
+Secrets (N0365; `type-system.md` §42, ADR 0197):
+
+| Code | Meaning | Example |
+|---|---|---|
+| N0365 | `Secret.wipe` of a place, or of a slice's elements, whose type is not zeroable: not an integer, float, `bool`, raw pointer, array of a zeroable type, or struct without a `drop` whose fields are all zeroable, so zero bytes need not be one of its values. The message names the first field that is not (`type-system.md` §42.1, ADR 0197 §2.2) | `Secret.wipe(mut names)` with `names: Vector<u8>`; `Secret.wipe(mut key)` of a struct with a `drop` |
 
 ### Warnings (N0400–N0499)
 

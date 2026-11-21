@@ -1,0 +1,28 @@
+// An array of atomics owns its elements and is never left with a hole (ADR 0198 §2.1): an element that is not Copy
+// cannot be read or moved out (N0251, whose message names 'replace' and 'swap'), and a moved array cannot be used
+// (N0250).
+struct Key {
+    cells: [AtomicU64; 2];
+}
+
+fn read() {
+    let a = [AtomicU64.create(1), AtomicU64.create(2)];
+    let x = a[0]; // error[N0251]
+}
+
+fn moveOne() {
+    let a = [AtomicU64.create(1), AtomicU64.create(2)];
+    let y = move a[1]; // error[N0251]
+}
+
+fn field(key: Key) {
+    let z = key.cells[1]; // error[N0251]
+}
+
+fn afterMove() {
+    let a = [AtomicU64.create(1), AtomicU64.create(2)];
+    let b = a;
+    Console.writeLine(a[0].load()); // error[N0250]
+}
+
+fn main() {}

@@ -1057,7 +1057,7 @@ test from anything but the generated harness, is N0348.
 ### 10.2 The command
 
 `ceesafec test [--filter TEXT] [--list] [--interp] [--jobs N] [--timeout SECONDS] [--sweep alloc|cancel]
-[--sweep-strict] [--show-output] [--format text|json]`, in a package:
+[--sweep-strict] [--scan-freed] [--show-output] [--format text|json]`, in a package:
 
 1. It checks the package with its tests and writes the harness and the list of tests to `out/ceesafe-test/`.
 2. It builds the harness once, as `out/<name>-tests`.
@@ -1115,6 +1115,10 @@ Each test's outcome:
   `sweepFrameStackOutOfMemory` in the JSON). It is the rule `tools/fault_injection.py` has followed since ADR 0056.
   `--sweep-strict` makes such a panic a sweep failure too: the sweep for code that must not stop where memory runs
   out, which then keeps such recursion behind `Async.boxed`.
+- **The freed-block scan** (ADR 0197 §4.3, `type-system.md` §42.4). **`--scan-freed`** runs each test with the
+  runtime keeping every freed block of every CeeSafe allocator, as it was at its free and never reused, and growing
+  every buffer by allocate, copy and free, so that lib/std's `Testing.freedHolds(pattern)` can say whether a secret
+  was left behind. Natively and with `--interp`; `CEESAFE_SCAN_FREED=1` does the same for a built program.
 
 ### 10.3 The harness protocol (version 1)
 
@@ -1122,8 +1126,8 @@ The generated function `ceesafeTestMain` is the harness's entry. An executable p
 compiled but not run.
 
 - **Listing.** `--ceesafe-list` prints `ceesafe-test 1` and then one name a line.
-- **Running.** `--ceesafe-test <name> <fail-alloc-at> <cancel-at> <timeout-ms>` runs one test (0: none for the last
-  three):
+- **Running.** `--ceesafe-test <name> <fail-alloc-at> <cancel-at> <timeout-ms> [1]` runs one test (0: none for the
+  three numbers; a last `1` for `--scan-freed`, which `TestRun.begin` passes to `ceesafe_scan_begin`):
   - lib/std's `TestRun.begin` turns on the runtime's allocation and cancellation reports and the two points
     (`ceesafe_test_begin`), and arms a watchdog thread (`ceesafe_thread_watchdog`). The watchdog prints
     `ceesafe-test 1 timeout` and ends the process with status 124.
@@ -1292,7 +1296,7 @@ for it.
 | `--explain-allocations`, `--explain-bounds-checks`, `--explain-closure-calls`, `--explain-frames`, `--explain-overflow-checks` | build, test | build, test (the test program's) | |
 | `--exports-header` | build, test | build, test | |
 | `--target` | parse, check, build, run, fix, test | check, build, test, run: the manifests' `[target.NAME]` tables that apply are the named system's and no other (ADR 0171); without it, this machine's | NAME is `linux`, `macos`, `windows`, `freebsd`, `ios` or `android`, and anything else is a usage error. It names the system and nothing else: `--cc` and `--cflag` choose the C compiler and what it builds for. With `run` or `test`, `ios` and `android` are usage errors: this machine cannot run what it builds for a phone |
-| `--filter`, `--format`, `--list`, `--show-output`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
+| `--filter`, `--format`, `--list`, `--scan-freed`, `--show-output`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
 | `--flat-c` | build, test | build, test | |
 | `--interp` | run, test | run, test | |
 | `--jobs` | build, test | build, with `--split` (without it a usage error); test: the tests run at once, and with `--split` the C files compiled at once | check answers `unknown option`: it is one process |

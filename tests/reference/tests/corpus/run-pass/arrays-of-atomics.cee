@@ -1,0 +1,120 @@
+// Arrays whose elements are not Copy but need no drop (ADR 0198 phase 1, CosmoStore's G41): `[AtomicU64; 4]` as a
+// local, a field, a parameter, a result, an enum payload and an optional; an array of a struct of atomics; a constant
+// repeat and `arrayFrom`; `for` by reference; one `Slice<AtomicU64>` function over an array, a field, a static and a
+// vector; `replace(mut a[i], …)` and `a[..].swap(i, j)`; an element of an array temporary borrowed in place;
+// `arrayFrom` in an `@effects()` function, whose effects are its closure literal's; two threads sharing the array (it is
+// Share).
+struct Key {
+    cells: [AtomicU64; 4];
+}
+
+struct Pair {
+    low: AtomicU64;
+    high: AtomicU64;
+}
+
+enum Slot {
+    Empty,
+    Full([AtomicU64; 4]),
+}
+
+static SLOTS: [AtomicU64; 4] = [AtomicU64.constant(0); 4];
+
+fn total(cells: Slice<AtomicU64>) -> u64 {
+    var sum: u64 = 0;
+    for (c in cells) {
+        sum += c.load();
+    }
+    return sum;
+}
+
+fn counting(start: u64) -> [AtomicU64; 4] {
+    var next = start;
+    return arrayFrom((i) => {
+        next += 1;
+        return AtomicU64.create(next * 10 + (i as u64));
+    });
+}
+
+@effects()
+fn indexes() -> [AtomicU64; 2] => arrayFrom((i) => AtomicU64.create(i as u64 + 1));
+
+fn consume(cells: [AtomicU64; 4]) -> u64 => total(cells[..]);
+
+fn wipe(key: borrow Key) {
+    for (c in key.cells) {
+        c.store(0);
+    }
+}
+
+fn main() {
+    // A local, built by a repeat of a constant.
+    let local = [AtomicU64.constant(7); 4];
+    local[1].fetchAdd(3);
+    Console.writeLine(total(local[..])); // expect-stdout: 31
+
+    // A field, and a result built by `arrayFrom` (each call in index order).
+    let key = Key { cells: counting(0) };
+    Console.writeLine(key.cells[0].load());  // expect-stdout: 10
+    Console.writeLine(key.cells[3].load());  // expect-stdout: 43
+    Console.writeLine(total(key.cells[..])); // expect-stdout: 106
+    wipe(borrow key);
+    Console.writeLine(total(key.cells[..])); // expect-stdout: 0
+
+    // An explicit element type and length.
+    let squares = arrayFrom<AtomicU64, 3>((i) => AtomicU64.create((i * i) as u64));
+    Console.writeLine(squares[2].load()); // expect-stdout: 4
+
+    // An element of a temporary, borrowed where it is; a function with no effects.
+    Console.writeLine(counting(5)[2].load()); // expect-stdout: 82
+    Console.writeLine(indexes()[1].load());   // expect-stdout: 2
+
+    // A parameter: the array moves as a whole.
+    var moved = counting(1);
+    let old = replace(mut moved[0], AtomicU64.create(1000));
+    Console.writeLine(old.load()); // expect-stdout: 20
+    moved[..].swap(0, 3);
+    Console.writeLine(moved[3].load()); // expect-stdout: 1000
+    moved[2] = AtomicU64.create(5);
+    Console.writeLine(consume(moved)); // expect-stdout: 1089
+
+    // An enum payload and an optional.
+    let slot = Slot.Full(counting(2));
+    match (slot) {
+        Slot.Full(cells) => { Console.writeLine(total(cells[..])); } // expect-stdout: 186
+        Slot.Empty => {}
+    }
+    let maybe: [AtomicU64; 4]? = counting(3);
+    match (maybe) {
+        Some(cells) => { Console.writeLine(cells[1].load()); } // expect-stdout: 51
+        null => {}
+    }
+
+    // An array of a struct of atomics.
+    let pairs = [
+        Pair { low: AtomicU64.create(1), high: AtomicU64.create(2) },
+        Pair { low: AtomicU64.create(3), high: AtomicU64.create(4) },
+    ];
+    pairs[1].high.fetchAdd(10);
+    Console.writeLine(pairs[1].high.load()); // expect-stdout: 14
+
+    // A static and a vector through the same function.
+    SLOTS[2].fetchAdd(9);
+    Console.writeLine(total(SLOTS[..])); // expect-stdout: 9
+    var v = Vector<AtomicU64>.create();
+    v.push(AtomicU64.create(8))!;
+    Console.writeLine(total(v.view())); // expect-stdout: 8
+
+    // Two threads share the array.
+    let shared = [AtomicU64.constant(0); 4];
+    Thread.both(() => {
+        for (k in 0..100) {
+            shared[0].fetchAdd(1);
+        }
+    }, () => {
+        for (k in 0..100) {
+            shared[0].fetchAdd(2);
+        }
+    });
+    Console.writeLine(shared[0].load()); // expect-stdout: 300
+}

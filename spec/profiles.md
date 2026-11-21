@@ -156,7 +156,8 @@ flags, C1–C3; `cosmoos-kernel` is C4–C8 and builds on this profile.)
 Everything in the language that needs no runtime service: integers, `bool`, structs, enums,
 arrays, slices, `StringView`, optionals, `Result` and `AllocError`, references, generics and
 interfaces, `unsafe` and raw pointers (type-system §27), the C FFI (§28), `FixedBufferAllocator`
-over caller-provided storage, `Ptr`, `Slice.fromRaw`, and `truncate`.
+over caller-provided storage, `Ptr`, `Slice.fromRaw`, `truncate`, and `Secret.wipe` (type-system §42.1; its
+`ceesafe_wipe` is in the runtime core's freestanding part, ADR 0197 §2.1).
 
 These need a hosted runtime and are rejected in freestanding code (N0293), wherever they are
 named (a type, a call, a struct literal):
@@ -165,7 +166,7 @@ named (a type, a call, a struct literal):
 |---|---|
 | `Console`, `Process` | standard streams, exit, arguments and processes are operating-system services |
 | `File`, `TcpListener`, `TcpStream`, `IoError` | files and sockets |
-| `SystemHeap`, `FailingAllocator` | there is no system heap; `FailingAllocator` wraps it |
+| `SystemHeap`, `FailingAllocator`, `SecretHeap` | there is no system heap; `FailingAllocator` and `SecretHeap` wrap it |
 | `Box`, `PoolBox`, `Pool`, `Arena`, `Scratch`, `Vector`, `String`, `SlotMap`, `StableVector` | each allocates from one of the two allocators above (`Scratch` from the runtime's heap-backed stack) |
 | `Async.scope`, `Async.blocking`, `Async.runWorkers`, `s.spawnSend`; lib/std's async I/O | a scope's children come from the system heap (use `Async.scopeIn`), and there are no threads or descriptors (ADR 0039) |
 

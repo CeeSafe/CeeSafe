@@ -345,7 +345,10 @@ fn checkRegionAllocator(c: borrow mut Checker, allocator: u32, syntax: u32) -> R
     let span = c.front.ast.exprSpans[syntax as usize];
     var message = Vector<u8>.create();
     appendQuotedType(mut message, c, t)?;
-    appendText(mut message, " is not an allocator type; use 'SystemHeap {}' or 'FailingAllocator {}'")?;
+    appendText(
+        mut message,
+        " is not an allocator type; use 'SystemHeap {}', 'FailingAllocator {}' or 'SecretHeap {}'",
+    )?;
     c.error(notAnAllocator(), span.start, span.end, message)?;
     return Ok(false);
 }

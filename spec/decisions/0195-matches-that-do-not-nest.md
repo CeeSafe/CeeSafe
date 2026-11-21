@@ -1,7 +1,7 @@
 # ADR 0195 — A `match` that does not nest what follows it, and three messages
 
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.85.1: §2.1.4, one function per test in the harness (with the checker's N0348 allowing the harness's `ceesafeTest…` functions); §2.1.1 to §2.1.3 and §2.2 to §2.4 are for 0.86.0. Raised by CosmoStore's CEESAFE_GAPS G36 to G39 (G36 P1, G39 P2, G37 and G38
-  P3), found with 0.54.0 to 0.79.0 and reproduced with 0.84.1 for this ADR.
+  P3), found with 0.54.0 to 0.79.0 and reproduced with 0.84.1 for this ADR. The rest implemented for 0.87.0: §2.1.1 to §2.1.3 (the structurer), §2.2 (G37), §2.3 (G38), §2.4 (G39).
 - Scope: the C structurer (`src/backend/c_structurer.cee`, c-backend.md §3 steps 2 and 6); the test harness
   (`src/host/test_runner.cee`, `harnessSource`; ADR 0049 §3.4); the pattern checker (`src/check/patterns.cee`); the
   argument check (`src/check/references.cee`, `optionalBorrowArgument`); the parser's names (`src/syntax/parser.cee`);
@@ -205,3 +205,20 @@ written.
    ADR 0139 already makes it for `??`; the message alone would keep a trap that cost CosmoStore three detours.
 6. The bound of 2.1.3 at 96 levels? Recommended: yes: under C11's 127 with room for a line's parentheses, and far
    above anything but generated or pathological code.
+
+## As built (0.87.0)
+
+- **§2.1.2's guard clause, as built.** After `t()?;` no case body completes, since the `Ok` body ends in the
+  function's return. So "exactly one completes", taken literally, never moves it. As built:
+  - a body *reaches* past the switch when it completes or breaks the switch;
+  - when none reaches, the strictly largest body moves after the switch;
+  - a moved body's last `break` is dropped, and a body that breaks the switch elsewhere stays;
+  - a body that completes without a `break` moves only from the last case.
+- **The 300-repetition shapes** (`?`, statement `match`, the harness, all-return, an `if` or `match` tail) reach a C
+  depth of at most 8.
+- **§2.3.** Only the lexer reads `class` as a name. `keywordOf` still lists it, so the cbind rename and the
+  package-name rule are unchanged, and the VS Code grammar still colours it.
+- **Tests:**
+  - the 300-test package check is in `tools/test_command_check.py`;
+  - the G39 fix is a `fix_paths_check.py` case;
+  - the 300-repetition cases are run-pass files, so clang's default bracket depth enforces them.

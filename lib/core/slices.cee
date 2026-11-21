@@ -314,8 +314,9 @@ public struct SliceCopying<T: Copy> {
 
 /// `v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12). The index is checked at the call, so a
 /// panic names the program's line: `at <= length` for `insert`, `at < length` for the others. The elements move by
-/// `swap`, so they may be of any type. A vector's allocator is `SystemHeap` or `FailingAllocator` (type-system.md
-/// §23.1); the `…Failing` functions are the latter's.
+/// `swap`, so they may be of any type. A vector's allocator is `SystemHeap`, `FailingAllocator` or `SecretHeap`
+/// (type-system.md §23.1, §42.2); the `…Failing` and `…Secret` functions are the latter two's. A `SecretHeap` vector's
+/// `pop` wipes the slot it gives up, so `remove` and `swapRemove` leave none behind.
 public struct VectorEditing<T> {
     /// Puts `x` at `at`, moving the elements from `at` on one place up. O(length - at). If growing fails, `v` is
     /// unchanged and `x` is destroyed.
@@ -368,8 +369,35 @@ public struct VectorEditing<T> {
         return Ok();
     }
 
+    /// `insert` for a vector of `SecretHeap`.
+    public fn insertSecret(v: borrow mut Vector<T, SecretHeap>, at: usize, x: T) -> Result<void, AllocError> {
+        let length = v.length;
+        v.push(x)?;
+        let s = v.viewMut();
+        var i = length;
+        while (i > at) {
+            s.swap(i, i - 1);
+            i -= 1;
+        }
+        return Ok();
+    }
+
     /// `remove` for a vector of `FailingAllocator`.
     public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T {
+        let length = v.length;
+        {
+            let s = v.viewMut();
+            var i = at;
+            while (i + 1 < length) {
+                s.swap(i, i + 1);
+                i += 1;
+            }
+        }
+        return v.pop()!;
+    }
+
+    /// `remove` for a vector of `SecretHeap`.
+    public fn removeSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T {
         let length = v.length;
         {
             let s = v.viewMut();
@@ -391,11 +419,21 @@ public struct VectorEditing<T> {
         }
         return v.pop()!;
     }
+
+    /// `swapRemove` for a vector of `SecretHeap`.
+    public fn swapRemoveSecret(v: borrow mut Vector<T, SecretHeap>, at: usize) -> T {
+        let last = v.length - 1;
+        {
+            let s = v.viewMut();
+            s.swap(at, last);
+        }
+        return v.pop()!;
+    }
 }
 
 /// `v.clone()` (ADR 0108, type-system.md §23.1): a new vector holding a copy of the elements, so the element type is
 /// Copy. One allocation, sized as `withCapacity` of the length sizes it, none for an empty slice. The `…Failing`
-/// function makes a vector of `FailingAllocator`.
+/// function makes a vector of `FailingAllocator`, the `…Secret` one of `SecretHeap`.
 public struct VectorCopying<T: Copy> {
     /// A vector with a copy of the elements of `s`: its length is `s.length`, its capacity at least that.
     public fn clone(s: Slice<T>) -> Result<Vector<T>, AllocError> {
@@ -407,6 +445,13 @@ public struct VectorCopying<T: Copy> {
     /// `clone` for a vector of `FailingAllocator`.
     public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, AllocError> {
         var copy = Vector<T, FailingAllocator>.withCapacity(s.length)?;
+        copy.extend(s)?;
+        return Ok(copy);
+    }
+
+    /// `clone` for a vector of `SecretHeap`.
+    public fn cloneSecret(s: Slice<T>) -> Result<Vector<T, SecretHeap>, AllocError> {
+        var copy = Vector<T, SecretHeap>.withCapacity(s.length)?;
         copy.extend(s)?;
         return Ok(copy);
     }
@@ -422,7 +467,8 @@ public struct VectorParts<T> {
 /// `Vector.intoRaw` and `Vector.fromRaw` (ADR 0090, type-system.md §23.3). `releaseBuffer` and `adoptBuffer` are the
 /// compiler's, for the libraries alone: the first makes a vector the empty one without freeing its buffer or dropping
 /// its elements, the second gives an empty vector a buffer; their last argument moves the block out of, or into, the
-/// allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`.
+/// allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`, the `…Secret` ones for
+/// `SecretHeap` (whose vectors have no Foreign pair: C would free the block unwiped, ADR 0197 §2.3).
 public struct VectorRaw<T> {
     /// `Vector.intoRaw(v)`: the caller owns the buffer and its elements.
     public fn intoRaw(v: Vector<T>) -> VectorParts<T> {
@@ -462,10 +508,34 @@ public struct VectorRaw<T> {
         return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
     }
 
+    /// `Vector.intoRaw(v)` for a vector of `SecretHeap`: the caller owns the buffer and its elements.
+    public fn intoRawSecret(v: Vector<T, SecretHeap>) -> VectorParts<T> {
+        var owned = v;
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity == 0) {
+            return VectorParts<T> { pointer: 0 as *mut T, length: 0, capacity: 0 };
+        }
+        // As an address: a pointer made from the view would keep the vector borrowed past `releaseBuffer`.
+        let address = owned.viewMut().ptr as usize;
+        owned.releaseBuffer(false);
+        return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
+    }
+
     /// `Vector.fromRaw(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
     /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
     public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, FailingAllocator> {
         var v = Vector<T, FailingAllocator>.create();
+        if (capacity != 0) {
+            v.adoptBuffer(pointer, length, capacity, false);
+        }
+        return v;
+    }
+
+    /// `Vector.fromRaw(pointer, length, capacity)` for a vector of `SecretHeap`. A capacity of 0 gives the empty vector.
+    /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+    public unsafe fn fromRawSecret(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, SecretHeap> {
+        var v = Vector<T, SecretHeap>.create();
         if (capacity != 0) {
             v.adoptBuffer(pointer, length, capacity, false);
         }

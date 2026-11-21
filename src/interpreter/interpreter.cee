@@ -1409,6 +1409,11 @@ fn operand(
             return Ok(viewValue(pointer, bytes.length as u64));
         }
         NirOperand.Zero => {
+            if (!c.types.isCLaidOut(t, 0)) {
+                // An array 'arrayFrom' fills (ADR 0198 §2.2): zero bytes, each element written before it is read.
+                let size = typeSize(c, t)?;
+                return Ok(valueOf(0, size));
+            }
             var m = copyBytes("making C state of type '".bytes())!;
             appendTypeName(c, mut m, t);
             appendText(mut m, "', whose layout only the C compiler knows")!;

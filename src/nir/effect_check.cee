@@ -746,6 +746,13 @@ fn builtinOperation(
             through.builtin = function;
             return Ok(through);
         }
+        // `arrayFrom(f)`'s calls of `f` (ADR 0198 §2.2): a known literal's effects, as for an @effectsOf parameter.
+        if (function == bfCallClosure() && containsU32(n.arrayFromCalls, rvalue)) {
+            let literal = originLiteral(n, e, argument);
+            if (literal != none()) {
+                return Ok(effectOp(effectsOf(c, e, literal), opCall(), none(), literal, literal));
+            }
+        }
         // The type's effect list (type-system.md §36.3): every value of the type is checked against it.
         let argumentType = n.operandTypes[argument as usize];
         let typ = if (function == bfCallClosure()) c.types.info(argumentType).pointee else argumentType;

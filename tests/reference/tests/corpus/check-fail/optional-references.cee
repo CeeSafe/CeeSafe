@@ -6,7 +6,7 @@ fn grouped(o: (borrow i32)?) { }
 fn main() {
     var x: i32? = 5;
     let r = borrow x;
-    optionalReference(r); // error[N0205]
+    optionalReference(r); // a borrow of an optional, lent as by `asBorrow()` at an argument (ADR 0195 §2.4.1)
     let y = 3;
     let p: borrow i32? = borrow y;
     referenceToOptional(p); // error[N0205]

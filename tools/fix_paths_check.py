@@ -27,6 +27,9 @@ MAIN_FAULT = "fn main() {\n    let x = 1;\n    x = 2;\n    Console.writeLine(x);
 MAIN_FIXED = "fn main() {\n    var x = 1;\n    x = 2;\n    Console.writeLine(x);\n}\n"
 UNFORMATTED = "fn main() {\n  Console.writeLine( 1 );\n}\n"
 FORMATTED = "fn main() {\n    Console.writeLine(1);\n}\n"
+# N0205 with a fix (ADR 0195 §2.4.2): a borrow of an optional where an optional borrow is expected.
+OPTIONAL_FAULT = "fn main() {\n    let given: String? = null;\n    let r: borrow String? = borrow given;\n    let _ = r;\n}\n"
+OPTIONAL_FIXED = "fn main() {\n    let given: String? = null;\n    let r: borrow String? = given.asBorrow();\n    let _ = r;\n}\n"
 MANIFEST = '[package]\nname = "app"\nversion = "0.1.0"\nkind = "executable"\n'
 
 
@@ -168,6 +171,9 @@ def fix_cases():
              stdout="sub/f.cee:2:5: declare 'x' with 'var': 'let' -> 'var'\n"),
         Case("fix --dry-run: a package from below its root", package, "pkg/docs", ["fix", "--dry-run"], {},
              status=1, applied=[]),
+        Case("fix: 'given.asBorrow()' for a borrow of an optional (ADR 0195 §2.4.2)",
+             {"here/f.cee": OPTIONAL_FAULT}, "here", ["fix", "f.cee"], {"here/f.cee": OPTIONAL_FIXED},
+             applied=one(1, 1)),
         Case("fix: nothing to fix writes nothing", {"there/f.cee": fixed}, "here", ["fix", "{root}/there/f.cee"],
              {}, applied=[]),
     ]

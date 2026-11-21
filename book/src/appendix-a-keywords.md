@@ -1,7 +1,7 @@
 ---
 title: "Appendix A: Keywords"
 summary: Every reserved word of CeeSafe with its meaning and the section that teaches it, the words that are special only in one place and stay usable as names, and every attribute.
-keywords: [keyword, reserved word, contextual word, identifier, attribute, is, region, dyn, union, own, type, move, drop, where, "@test", "@from", "@derive", N0100, N0290]
+keywords: [keyword, reserved word, contextual word, identifier, attribute, is, class, region, dyn, union, own, type, move, drop, where, "@test", "@from", "@derive", N0100, N0290]
 diagnostics: [N0100]
 specification: ["grammar.md §1.3", "grammar.md §2", "type-system.md §28.1"]
 ---
@@ -21,7 +21,7 @@ those the checker accepts. The grammar is in
 ## Reserved words
 
 A reserved word cannot name anything: not a local, a parameter, a field, a function, a type or a package. That
-holds for every word of this table, also for the six that have no meaning yet. The names of the built-in types
+holds for every word of this table, also for the five that have no meaning yet. The names of the built-in types
 (`i32`, `u8`, `bool`, `void`, `never`, `StringView`, `Vector`, …) are not here because they are not reserved: they
 are names that the compiler declares, found like any other name.
 
@@ -32,7 +32,6 @@ are names that the compiler declares, found like any other name.
 | `await` | Runs a task to its result, inside async code: `await read(path)?`. | [17.1](./ch17-01-tasks-and-await) |
 | `borrow` | Lends a value without moving it. In a type, `borrow T` reads and `borrow mut T` may change. As an expression, `borrow x` makes the borrow. | [4.2](./ch04-02-borrowing) |
 | `break` | Leaves the nearest `while`, `loop` or `for`. It takes no label and no value. | [3.5](./ch03-05-control-flow) |
-| `class` | Reserved, with no meaning. CeeSafe has structs, enums and interfaces, and no classes. | [5.1](./ch05-01-defining-structs) for structs |
 | `const` | Declares a constant, a value fixed when the program is compiled: `const LIMIT: u32 = 10;`. Also declares a const parameter of a generic item, and a constant of an interface. | [3.1](./ch03-01-variables), [20.3](./ch20-03-more-interfaces-and-generics) |
 | `continue` | Starts the next turn of the nearest `while`, `loop` or `for`. | [3.5](./ch03-05-control-flow) |
 | `defer` | Runs a statement when the enclosing block ends, however it ends. | [15.2](./ch15-02-destruction) |
@@ -97,6 +96,7 @@ everywhere else it is a name you may declare and use.
 
 | Word | Where it is special | What it means there | Taught in |
 |---|---|---|---|
+| `class` | At the start of an item, before a name: `class Account { … }` | An error that says CeeSafe has no classes and to declare a `struct`, behind `Box` for a value with identity. Elsewhere `class` is a name, so a field may be `class: StorageClass`. | [5.1](./ch05-01-defining-structs) for structs |
 | `is` | After a complete operand, in an expression | `e is PATTERN` tests whether the value fits the pattern, and binds the pattern's names. | [6.3](./ch06-03-optionals), [19.1](./ch19-01-where-patterns-go) |
 | `region` | Before a name, in the parameter list of a generic item: `struct Token<region r>` | Declares a region parameter, which says how long the borrows inside the type last. | [10.3](./ch10-03-regions) |
 | `dyn` | In a type, before an interface, `fn` or `mut fn`: `Box<dyn Shape>` | A value of some type that implements the interface, with its methods found when the program runs. `dyn fn` is the type of a closure that owns what it captures. | [18.1](./ch18-01-dynamic-dispatch), [13.1](./ch13-01-closures) |

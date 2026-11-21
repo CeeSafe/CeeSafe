@@ -13,10 +13,10 @@ static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 11u, 26u };
 typedef struct ceeT_SystemHeap ceeT_SystemHeap;
 typedef struct ceeT_SecretHeap ceeT_SecretHeap;
 typedef struct ceeE_AllocError ceeE_AllocError;
-typedef struct ceeR_vE10AllocError ceeR_vE10AllocError;
 typedef struct ceeO_u32 ceeO_u32;
-typedef struct ceeV_Uu32S10SecretHeap ceeV_Uu32S10SecretHeap;
+typedef struct ceeR_vE10AllocError ceeR_vE10AllocError;
 typedef struct ceeV_Uu32S10SystemHeap ceeV_Uu32S10SystemHeap;
+typedef struct ceeV_Uu32S10SecretHeap ceeV_Uu32S10SecretHeap;
 
 struct ceeT_SystemHeap {
     uint8_t cee_empty; /* C has no empty structs */
@@ -36,16 +36,6 @@ struct ceeE_AllocError {
 _Static_assert(sizeof(ceeE_AllocError) == 1, "ceesafec layout: sizeof(AllocError)");
 _Static_assert(_Alignof(ceeE_AllocError) == 1, "ceesafec layout: alignof(AllocError)");
 
-struct ceeR_vE10AllocError {
-    uint8_t tag;
-    union {
-        struct { ceeE_AllocError f__0; } v_Err;
-    } u;
-};
-_Static_assert(sizeof(ceeR_vE10AllocError) == 2, "ceesafec layout: sizeof(Result<void, AllocError>)");
-_Static_assert(_Alignof(ceeR_vE10AllocError) == 1, "ceesafec layout: alignof(Result<void, AllocError>)");
-_Static_assert(offsetof(ceeR_vE10AllocError, u) == 1, "ceesafec layout: Result<void, AllocError> payload offset");
-
 struct ceeO_u32 {
     uint8_t tag;
     union {
@@ -56,29 +46,39 @@ _Static_assert(sizeof(ceeO_u32) == 8, "ceesafec layout: sizeof(u32\?)");
 _Static_assert(_Alignof(ceeO_u32) == 4, "ceesafec layout: alignof(u32\?)");
 _Static_assert(offsetof(ceeO_u32, u) == 4, "ceesafec layout: u32\? payload offset");
 
-struct ceeV_Uu32S10SecretHeap { uint32_t *ptr; cee_usize len; cee_usize cap; };
-_Static_assert(sizeof(ceeV_Uu32S10SecretHeap) == 24, "ceesafec layout: sizeof(Vector<u32, SecretHeap>)");
-_Static_assert(_Alignof(ceeV_Uu32S10SecretHeap) == 8, "ceesafec layout: alignof(Vector<u32, SecretHeap>)");
+struct ceeR_vE10AllocError {
+    uint8_t tag;
+    union {
+        struct { ceeE_AllocError f__0; } v_Err;
+    } u;
+};
+_Static_assert(sizeof(ceeR_vE10AllocError) == 2, "ceesafec layout: sizeof(Result<void, AllocError>)");
+_Static_assert(_Alignof(ceeR_vE10AllocError) == 1, "ceesafec layout: alignof(Result<void, AllocError>)");
+_Static_assert(offsetof(ceeR_vE10AllocError, u) == 1, "ceesafec layout: Result<void, AllocError> payload offset");
 
 struct ceeV_Uu32S10SystemHeap { uint32_t *ptr; cee_usize len; cee_usize cap; };
 _Static_assert(sizeof(ceeV_Uu32S10SystemHeap) == 24, "ceesafec layout: sizeof(Vector<u32>)");
 _Static_assert(_Alignof(ceeV_Uu32S10SystemHeap) == 8, "ceesafec layout: alignof(Vector<u32>)");
 
+struct ceeV_Uu32S10SecretHeap { uint32_t *ptr; cee_usize len; cee_usize cap; };
+_Static_assert(sizeof(ceeV_Uu32S10SecretHeap) == 24, "ceesafec layout: sizeof(Vector<u32, SecretHeap>)");
+_Static_assert(_Alignof(ceeV_Uu32S10SecretHeap) == 8, "ceesafec layout: alignof(Vector<u32, SecretHeap>)");
+
 static CEE_UNUSED int32_t ceeF_main(void);
-static CEE_UNUSED void ceeD_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
 static CEE_UNUSED void ceeD_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *);
-static CEE_UNUSED ceeR_vE10AllocError ceeVP_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint32_t);
-static CEE_UNUSED ceeR_vE10AllocError ceeVR_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint64_t);
-static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint32_t const *, uint64_t);
-static CEE_UNUSED ceeR_vE10AllocError ceeVZ_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint64_t, uint32_t);
-static CEE_UNUSED ceeO_u32 ceeVO_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
-static CEE_UNUSED void ceeVC_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
+static CEE_UNUSED void ceeD_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
 static CEE_UNUSED ceeR_vE10AllocError ceeVP_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *, uint32_t);
 static CEE_UNUSED ceeR_vE10AllocError ceeVR_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *, uint64_t);
 static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *, uint32_t const *, uint64_t);
 static CEE_UNUSED ceeR_vE10AllocError ceeVZ_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *, uint64_t, uint32_t);
 static CEE_UNUSED ceeO_u32 ceeVO_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *);
 static CEE_UNUSED void ceeVC_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *);
+static CEE_UNUSED ceeR_vE10AllocError ceeVP_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint32_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVR_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint64_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint32_t const *, uint64_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVZ_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *, uint64_t, uint32_t);
+static CEE_UNUSED ceeO_u32 ceeVO_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
+static CEE_UNUSED void ceeVC_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
 
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeV_Uu32S10SecretHeap v_secret_0 = {0};
@@ -156,12 +156,90 @@ static int32_t ceeF_main(void) {
     return t_22;
 }
 
+static void ceeD_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *p) {
+    if (p->cap != 0u) ceesafe_free(p->ptr, CEE_ALLOC_SYSTEM);
+}
+
 static void ceeD_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *p) {
     if (p->cap != 0u) ceesafe_free(p->ptr, CEE_ALLOC_SECRET);
 }
 
-static void ceeD_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *p) {
-    if (p->cap != 0u) ceesafe_free(p->ptr, CEE_ALLOC_SYSTEM);
+static ceeR_vE10AllocError ceeVP_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint32_t x) {
+    _Static_assert(_Alignof(uint32_t) <= _Alignof(cee_max_align_t), "ceesafec: Vector<u32> needs over-aligned memory");
+    if (v->len == v->cap) {
+        cee_usize cap = v->cap;
+        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, 1u, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
+        if (p == NULL) {
+            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        }
+        v->ptr = (uint32_t *)p;
+        v->cap = cap;
+    }
+    v->ptr[v->len] = x;
+    v->len += 1u;
+    return ((ceeR_vE10AllocError){ .tag = 0 });
+}
+
+static ceeR_vE10AllocError ceeVR_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t extra) {
+    if (extra > v->cap - v->len) {
+        cee_usize cap = v->cap;
+        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        v->ptr = (uint32_t *)p;
+        v->cap = cap;
+    }
+    return ((ceeR_vE10AllocError){ .tag = 0 });
+}
+
+static ceeR_vE10AllocError ceeVE_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint32_t const *src, uint64_t n) {
+    ceeR_vE10AllocError room = ceeVR_VUu32S10SystemHeap(v, n);
+    if (room.tag != 0) return room;
+    if (n <= 16u) {
+        for (uint64_t i = 0u; i < n; i++) v->ptr[v->len + i] = src[i];
+    } else {
+        ceesafe_mem_copy(v->ptr + v->len, src, (size_t)n * sizeof *src);
+    }
+    v->len += n;
+    return room;
+}
+
+static ceeR_vE10AllocError ceeVZ_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t n, uint32_t fill) {
+    if (n <= v->len) {
+        v->len = n;
+        return ((ceeR_vE10AllocError){ .tag = 0 });
+    }
+    if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {
+        cee_usize cap = 0u;
+        void *p = ceesafe_vec_zeroed(&cap, n, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        v->ptr = (uint32_t *)p;
+        v->cap = cap;
+        v->len = n;
+        return ((ceeR_vE10AllocError){ .tag = 0 });
+    }
+    ceeR_vE10AllocError room = ceeVR_VUu32S10SystemHeap(v, n - v->len);
+    if (room.tag != 0) return room;
+    uint32_t *at = v->ptr;
+    uint64_t from = v->len;
+    if (cee_all_zero(&fill, sizeof fill)) {
+        ceesafe_mem_set(at + from, 0, (size_t)(n - from) * sizeof fill);
+    } else {
+        for (uint64_t i = from; i < n; i++) at[i] = fill;
+    }
+    v->len = n;
+    return room;
+}
+
+static ceeO_u32 ceeVO_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v) {
+    if (v->len == 0u) return ((ceeO_u32){ .tag = 0 });
+    v->len -= 1u;
+    return ((ceeO_u32){ .tag = 1, .u.v_Some = { .f__0 = v->ptr[v->len] } });
+}
+
+static void ceeVC_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v) {
+    uint64_t n = v->len;
+    v->len = 0u;
+    (void)n;
 }
 
 static ceeR_vE10AllocError ceeVP_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, uint32_t x) {
@@ -244,84 +322,6 @@ static void ceeVC_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v) {
     v->len = 0u;
     (void)n;
     ceesafe_wipe((uint8_t *)v->ptr, n * (uint64_t)sizeof *v->ptr); /* ADR 0197 §2.3 */
-}
-
-static ceeR_vE10AllocError ceeVP_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint32_t x) {
-    _Static_assert(_Alignof(uint32_t) <= _Alignof(cee_max_align_t), "ceesafec: Vector<u32> needs over-aligned memory");
-    if (v->len == v->cap) {
-        cee_usize cap = v->cap;
-        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, 1u, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
-        if (p == NULL) {
-            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
-        }
-        v->ptr = (uint32_t *)p;
-        v->cap = cap;
-    }
-    v->ptr[v->len] = x;
-    v->len += 1u;
-    return ((ceeR_vE10AllocError){ .tag = 0 });
-}
-
-static ceeR_vE10AllocError ceeVR_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t extra) {
-    if (extra > v->cap - v->len) {
-        cee_usize cap = v->cap;
-        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
-        v->ptr = (uint32_t *)p;
-        v->cap = cap;
-    }
-    return ((ceeR_vE10AllocError){ .tag = 0 });
-}
-
-static ceeR_vE10AllocError ceeVE_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint32_t const *src, uint64_t n) {
-    ceeR_vE10AllocError room = ceeVR_VUu32S10SystemHeap(v, n);
-    if (room.tag != 0) return room;
-    if (n <= 16u) {
-        for (uint64_t i = 0u; i < n; i++) v->ptr[v->len + i] = src[i];
-    } else {
-        ceesafe_mem_copy(v->ptr + v->len, src, (size_t)n * sizeof *src);
-    }
-    v->len += n;
-    return room;
-}
-
-static ceeR_vE10AllocError ceeVZ_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t n, uint32_t fill) {
-    if (n <= v->len) {
-        v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
-    }
-    if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {
-        cee_usize cap = 0u;
-        void *p = ceesafe_vec_zeroed(&cap, n, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
-        v->ptr = (uint32_t *)p;
-        v->cap = cap;
-        v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
-    }
-    ceeR_vE10AllocError room = ceeVR_VUu32S10SystemHeap(v, n - v->len);
-    if (room.tag != 0) return room;
-    uint32_t *at = v->ptr;
-    uint64_t from = v->len;
-    if (cee_all_zero(&fill, sizeof fill)) {
-        ceesafe_mem_set(at + from, 0, (size_t)(n - from) * sizeof fill);
-    } else {
-        for (uint64_t i = from; i < n; i++) at[i] = fill;
-    }
-    v->len = n;
-    return room;
-}
-
-static ceeO_u32 ceeVO_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v) {
-    if (v->len == 0u) return ((ceeO_u32){ .tag = 0 });
-    v->len -= 1u;
-    return ((ceeO_u32){ .tag = 1, .u.v_Some = { .f__0 = v->ptr[v->len] } });
-}
-
-static void ceeVC_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v) {
-    uint64_t n = v->len;
-    v->len = 0u;
-    (void)n;
 }
 
 int main(int argc, char **argv) {

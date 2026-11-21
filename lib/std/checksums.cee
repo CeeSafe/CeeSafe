@@ -1,5 +1,5 @@
-// Checksums and hashes (ADR 0075 §2.5): CRC-32, CRC-32C, CRC-64/NVME, MD5, SHA-1, SHA-256 and HMAC-SHA-256, in pure
-// CeeSafe. Each is incremental (`create`, `update`, `finish`) and has a one-call `of`. The CRC tables and the round
+// Checksums and hashes (ADR 0075 §2.5): CRC-32, CRC-32C, CRC-64/NVME, Adler-32 (ADR 0196), MD5, SHA-1, SHA-256 and
+// HMAC-SHA-256, in pure CeeSafe. Each is incremental (`create`, `update`, `finish`) and has a one-call `of`. The CRC tables and the round
 // constants are in checksum_tables.cee, which tools/gen_checksums.py writes. The CRCs are table-driven, slicing-by-8.
 // Crc32c and Crc32 use the CPU's instructions where the runtime finds them (ADRs 0089 and 0194), with the same results
 // and the same API.
@@ -147,6 +147,68 @@ public struct Crc64Nvme {
     /// The checksum of `bytes`, in one call.
     public fn of(bytes: Slice<u8>) -> u64 {
         var c = Crc64Nvme.create();
+        c.update(bytes);
+        return c.finish();
+    }
+}
+
+/// Adler-32 (RFC 1950 §8.2), zlib's checksum: two sums modulo 65521, the second of the first's running values, as
+/// `(b << 16) | a`. `Adler32.of("123456789".bytes())` is 0x091E01DE. It is weak for short inputs and no hash: it is
+/// here for the zlib format (ADR 0196).
+public struct Adler32 {
+    a: u32; // 1 plus the bytes, modulo 65521
+    b: u32; // the sum of `a` after each byte, modulo 65521
+
+    /// A checksum of no bytes yet (1).
+    public fn create() -> Adler32 => Adler32 { a: 1, b: 0 };
+
+    /// Feeds `bytes`: in runs of 5,552, the most for which neither sum can pass 2^32 before it is reduced, eight
+    /// bytes at a time and then the rest one at a time.
+    @effects()
+    public fn update(borrow mut this, bytes: Slice<u8>) {
+        var a = this.a;
+        var b = this.b;
+        var i: usize = 0;
+        let n = bytes.length;
+        while (i < n) {
+            let end = if (n - i > 5552) i + 5552 else n;
+            while (end - i >= 8) {
+                a += bytes[i] as u32;
+                b += a;
+                a += bytes[i + 1] as u32;
+                b += a;
+                a += bytes[i + 2] as u32;
+                b += a;
+                a += bytes[i + 3] as u32;
+                b += a;
+                a += bytes[i + 4] as u32;
+                b += a;
+                a += bytes[i + 5] as u32;
+                b += a;
+                a += bytes[i + 6] as u32;
+                b += a;
+                a += bytes[i + 7] as u32;
+                b += a;
+                i += 8;
+            }
+            while (i < end) {
+                a += bytes[i] as u32;
+                b += a;
+                i += 1;
+            }
+            a %= 65521;
+            b %= 65521;
+        }
+        this.a = a;
+        this.b = b;
+    }
+
+    /// The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+    public fn finish(borrow this) -> u32 => (this.b << 16) | this.a;
+
+    /// The checksum of `bytes`, in one call.
+    public fn of(bytes: Slice<u8>) -> u32 {
+        var c = Adler32.create();
         c.update(bytes);
         return c.finish();
     }

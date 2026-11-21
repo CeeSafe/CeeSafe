@@ -146,12 +146,39 @@ best of three on a machine shared with other work:
 (The times are for ascending keys.) A map built from a sorted source, such as a checkpoint, a snapshot or an import,
 takes about 1.3 times a `HashMap`'s memory instead of 2.5 times.
 
+## Deflate, zlib and gzip
+
+lib/std's codecs (ADR 0196) are pure CeeSafe; `benchmarks/codecs/run.py` compares them with the system's zlib, called
+from C, on the same machine. Measured 2026-11-21 on an Apple M1 with Apple clang, `ceesafec build`, zlib 1.2.12, on
+32 MiB inputs: an inventory-shaped CSV with a random 128-bit hex column, a column of 64-bit timestamps, and text. Both
+decoders read the streams zlib wrote at each level; MB/s of uncompressed data, the best of three, on a machine shared
+with other work (load average 4 to 6):
+
+| input | level | zlib size | lib/std size | inflate zlib | inflate lib/std | deflate zlib | deflate lib/std |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CSV | 1 | 12,770,130 | 13,108,634 | 903 | 341 | 138 | 166 |
+| CSV | 6 | 11,474,314 | 11,491,975 | 680 | 269 | 45 | 39 |
+| CSV | 9 | 11,339,843 | 11,357,561 | 726 | 281 | 26 | 20 |
+| integers | 1 | 11,442,696 | 11,460,690 | 732 | 325 | 134 | 147 |
+| integers | 6 | 10,518,876 | 10,535,653 | 767 | 338 | 33 | 31 |
+| integers | 9 | 10,544,785 | 10,563,024 | 757 | 332 | 4 | 3 |
+| text | 1 | 8,264,300 | 8,640,522 | 1,093 | 315 | 171 | 190 |
+| text | 6 | 5,937,534 | 5,969,432 | 1,778 | 477 | 28 | 26 |
+| text | 9 | 5,713,119 | 5,745,255 | 1,795 | 474 | 10 | 8 |
+
+lib/std's decoder runs at 27 to 45% of zlib's speed (ADR 0196 §4.4's target is half), above 300 MB/s everywhere but
+the CSV at levels 6 and 9 (270 to 280); its encoder is faster than zlib's at level 1, where it probes the hash once,
+and 75 to 95% of zlib's speed above, with output within 0.6% of zlib's size at levels 6 and 9 and up to 4.6% larger
+at level 1. Of the decoder's time, a profile gives about a quarter to the copies of matches and a sixth to zlib's
+Adler-32 (1.8 GB/s alone), which raw deflate and gzip skip.
+
 ## Run it yourself
 
 ```sh
 python3 benchmarks/run.py                                    # every workload: cee, rust, rust-checked, c; 5 runs
 python3 benchmarks/run.py --workloads hash-map,nbody --runs 3
 python3 benchmarks/run.py --cee-flag --no-bce                # with bounds-check elimination off
+python3 benchmarks/codecs/run.py                             # deflate, zlib and gzip against the system's zlib
 ```
 
 Each workload is the same algorithm with the same data structures in every language, and prints one checksum, which

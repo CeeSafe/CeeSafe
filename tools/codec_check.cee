@@ -1,0 +1,153 @@
+// tools/codec_check.py's program (ADR 0196 §4.2): lib/std's deflate codecs on the long lists, compiled only. It reads
+// cases from the file named by its first argument and writes what it made of each to the second; the Python side
+// says what each should be, from its oracles (Python's zlib).
+//
+// A case: op (u8: 1 decode, 2 encode, 3 Adler-32), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8), a pad byte,
+// limit (u64), a and b (u32: a decode's step sizes in and out, an encode's piece size and flush interval), the length
+// of the data (u32) and the data, all little-endian.
+// Its result: a decode's status (u8: 0 ok, 1 Malformed, 2 TooLarge, 3 Unsupported, 4 ChecksumMismatch, 5
+// OutOfMemory), length (u64) and CRC-32 (u32) whole, then the same decoded in steps; an encode's whole output and its
+// streamed output, each a length (u32) and the bytes; an Adler-32's value (u32) fed whole and in three pieces.
+
+fn readAll(path: StringView) -> Vector<u8> {
+    var f = File.open(path)!;
+    var v = Vector<u8>.create();
+    var buffer = Vector<u8>.create();
+    buffer.resize(1 << 20, 0)!;
+    while (true) {
+        let n = f.read(buffer.viewMut())!;
+        if (n == 0) { break; }
+        v.extend(buffer[0..n])!;
+    }
+    return v;
+}
+
+fn formatOf(code: u8) -> DeflateFormat {
+    if (code == 1) { return DeflateFormat.Zlib; }
+    if (code == 2) { return DeflateFormat.Gzip; }
+    return DeflateFormat.Raw;
+}
+
+fn statusOf(r: Result<void, DecodeError>) -> u8 => match (r) {
+    Ok() => 0,
+    Err(e) => match (e) {
+        DecodeError.Malformed => 1,
+        DecodeError.TooLarge => 2,
+        DecodeError.Unsupported => 3,
+        DecodeError.ChecksumMismatch => 4,
+        DecodeError.OutOfMemory(_) => 5,
+    },
+};
+
+fn whole(format: u8, input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    if (format == 1) { return Zlib.decompress(input, limit, out); }
+    if (format == 2) { return Gzip.decompress(input, limit, out); }
+    return Deflate.decompress(input, limit, out);
+}
+
+/// Decodes in steps of about `stepIn` and `stepOut` bytes, varying from step to step.
+fn steps(
+    format: u8,
+    input: Slice<u8>,
+    limit: u64,
+    stepIn: usize,
+    stepOut: usize,
+    out: borrow mut Vector<u8>,
+) -> Result<void, DecodeError> {
+    var inflater = Inflater.create(formatOf(format), limit)?;
+    var buffer = Vector<u8>.create();
+    buffer.resize(stepOut, 0)?;
+    var at: usize = 0;
+    var k: usize = 0;
+    while (true) {
+        k += 1;
+        let si = 1 + (stepIn * (k % 3)) / 2;
+        let so = 1 + ((stepOut - 1) * ((k * 7) % 5 + 1)) / 5;
+        let end = if (input.length - at < si) input.length else at + si;
+        let chunk = input[at..end];
+        let p = inflater.step(chunk, mut buffer[0..so])?;
+        out.extend(buffer[0..p.written])?;
+        at += p.read;
+        if (p.done) {
+            if (at == input.length) { return Ok(); }
+            if (format != 2) { return Err(DecodeError.Malformed); }
+        } else if (p.read == 0 && p.written == 0 && end == input.length) {
+            return Err(DecodeError.Malformed);
+        }
+    }
+    return Ok();
+}
+
+fn report(r: Result<void, DecodeError>, out: borrow Vector<u8>, results: borrow mut Vector<u8>) {
+    results.push(statusOf(r))!;
+    results.pushLE(out.length as u64)!;
+    results.pushLE(Crc32.of(out.view()))!;
+}
+
+fn encodeWhole(format: u8, input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) {
+    if (format == 1) {
+        Zlib.compress(input, level, out)!;
+    } else if (format == 2) {
+        Gzip.compress(input, level, out)!;
+    } else {
+        Deflate.compress(input, level, out)!;
+    }
+}
+
+fn encodeStreamed(format: u8, input: Slice<u8>, level: u32, piece: usize, every: usize, out: borrow mut Vector<u8>) {
+    var d = Deflater.create(formatOf(format), level)!;
+    var at: usize = 0;
+    var k: usize = 0;
+    while (at < input.length) {
+        let end = if (input.length - at < piece) input.length else at + piece;
+        d.update(input[at..end], out)!;
+        at = end;
+        k += 1;
+        if (every != 0 && k % every == 0) { d.flush(out)!; }
+    }
+    d.finish(out)!;
+}
+
+fn main() {
+    let cases = readAll(Process.argument(1)!);
+    var results = Vector<u8>.create();
+    var at: usize = 0;
+    while (at < cases.length) {
+        let op = cases[at];
+        let format = cases[at + 1];
+        let level = cases[at + 2] as u32;
+        let limit = cases.readLE<u64>(at + 4);
+        let a = cases.readLE<u32>(at + 12) as usize;
+        let b = cases.readLE<u32>(at + 16) as usize;
+        let n = cases.readLE<u32>(at + 20) as usize;
+        let data = cases[at + 24..at + 24 + n];
+        at += 24 + n;
+        if (op == 1) {
+            var x = Vector<u8>.create();
+            let rx = whole(format, data, truncate<usize>(limit), mut x);
+            report(rx, x, mut results);
+            var y = Vector<u8>.create();
+            let ry = steps(format, data, limit, a, b, mut y);
+            report(ry, y, mut results);
+        } else if (op == 2) {
+            var x = Vector<u8>.create();
+            encodeWhole(format, data, level, mut x);
+            results.pushLE(truncate<u32>(x.length))!;
+            results.extend(x.view())!;
+            var y = Vector<u8>.create();
+            encodeStreamed(format, data, level, a, b, mut y);
+            results.pushLE(truncate<u32>(y.length))!;
+            results.extend(y.view())!;
+        } else {
+            var c = Adler32.create();
+            let third = n / 3;
+            c.update(data[0..third]);
+            c.update(data[third..2 * third]);
+            c.update(data[2 * third..]);
+            results.pushLE(Adler32.of(data))!;
+            results.pushLE(c.finish())!;
+        }
+    }
+    var f = File.create(Process.argument(2)!)!;
+    f.write(results.view())!;
+}

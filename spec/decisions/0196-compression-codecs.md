@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G35 and G40
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): its Iceberg table maintenance (CosmoStore ADR-0086) reads
   Avro and Parquet that other writers compressed, its compaction (ADR-0098) was designed around never
-  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C.
+  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`.
 - Scope: `lib/std` (new `compress_deflate.cee`, `compress_snappy.cee`, `compress_zstd.cee`; `Adler32`
   and `Xxh64` added to `checksums.cee`; `Crc32` is ADR 0194's, their tables by `tools/gen_checksums.py`), `spec/api/std.md`, the guide's
   built-in types page and the book's Appendix on lib/std, `tools/oracles/`, the corpus, a fuzzer under `tests/fuzz/`,
@@ -264,3 +264,28 @@ adds, in CosmoStore's repository, the change that drops its copies; CeeSafe.Web'
 7. **zstd's golden test files:** vendor them under BSD with zstd's notice (recommended), or only cases generated
    from libzstd?
    **Recommended:** vendor them; they hold the corner cases libzstd's own encoder never writes.
+
+## As built (0.90.0, phase 1)
+
+- **`Inflater`** is table-driven, from zlib's `inflate_table`. It has a fast loop and a slow path that stops and
+  resumes between any two bytes. Its memory is 58 KiB: 25 KiB of tables and the 32 KiB window. The `Deflater`
+  allocates about 400 KiB.
+- **Levels 1 to 3** use one hash probe each and differ in how much of a match is hashed, so their output is close.
+  zlib's search 4, 8 and 32 chain entries.
+- **Behaviour §2 did not say:**
+  - with gzip, a step after `done` that is given input decodes the next member;
+  - an empty gzip input is `Malformed`;
+  - with `setWindow`, a zlib FDICT stream whose dictionary id differs is `ChecksumMismatch`;
+  - `finish` starts a new stream.
+- **Measured** (M1, best of 3, MB/s; `guide/performance.md`):
+  - inflate 269 to 477, which is 27 to 45 % of zlib's; the 300 MB/s target is missed on the CSV at levels 6 and 9;
+  - deflate faster than zlib at level 1 (166 to 138), and 75 to 95 % of it above;
+  - output within 0.6 % of zlib's at levels 6 and 9, and up to 4.6 % larger at level 1.
+- **A cost of its own:** `ceesafec check` of a hello world went from 0.065 s to 0.096 s. The checker checks all of
+  lib/std for every program, so lib/std's size is every program's. Left for an ADR of its own.
+- **Tests:**
+  - `run-pass/deflate.cee`: 296 lines from Python's `zlib`;
+  - `tools/codec_check.py`, the contract suite's "codecs" step: 8,701 zlib streams decoded whole and in steps,
+    3,600 of ours read by zlib, and an allocation sweep of 202 points;
+  - a fuzzer under `tests/fuzz/deflate`: 44.8 million inputs and 174,711 round trips under ASan and UBSan, none
+    failing, with a differential decoder from CosmoStore's.

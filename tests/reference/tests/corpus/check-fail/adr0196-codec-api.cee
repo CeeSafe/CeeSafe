@@ -1,0 +1,18 @@
+// ADR 0196 §2.2 and §2.3: every decoder takes a limit, so no call decodes without one; a step writes into a mutable
+// slice the caller owns, not a vector; and a match on DecodeError names every reason, out of memory among them.
+fn noLimit(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    return Gzip.decompress(input, out); // error[N0209] // error[N0205]
+}
+
+fn noLimitStream() -> Result<Inflater, AllocError> => Inflater.create(DeflateFormat.Zlib); // error[N0209]
+
+fn intoVector(i: borrow mut Inflater, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<Progress, DecodeError> {
+    return i.step(input, out); // error[N0205]
+}
+
+fn reason(e: DecodeError) -> u32 => match (e) { // error[N0256]
+    DecodeError.Malformed => 1,
+    DecodeError.TooLarge => 2,
+};
+
+fn main() {}

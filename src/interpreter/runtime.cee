@@ -3,6 +3,7 @@
 
 fn allocSystem() -> u64 => 0;
 fn allocFailing() -> u64 => 1;
+fn allocSecret() -> u64 => 4; // CEE_ALLOC_SECRET (ADR 0197 §2.3)
 fn arenaHeader() -> u64 => 16;
 fn scratchChunkSize() -> u64 => 65536;
 fn stableVectorChunks() -> u64 => 32;
@@ -100,8 +101,13 @@ fn reachAddress(it: borrow Interp, address: u64, seen: borrow mut Vector<bool>, 
 
 // ---- Heap ----
 
-fn allocatorId(c: borrow Checker, allocator: u32) -> u64 =>
-    if (sameText(c.types.name(allocator), "FailingAllocator")) allocFailing() else allocSystem();
+fn allocatorId(c: borrow Checker, allocator: u32) -> u64 {
+    let name = c.types.name(allocator);
+    if (sameText(name, "FailingAllocator")) {
+        return allocFailing();
+    }
+    return if (sameText(name, "SecretHeap")) allocSecret() else allocSystem();
+}
 
 /// ceesafe_alloc: 0 on failure.
 fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> {
@@ -126,8 +132,23 @@ fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> 
         "a heap allocation".bytes(),
     )?;
     it.memory.allocations[((address >> 32) - 1) as usize].counted = true;
+    it.memory.allocations[((address >> 32) - 1) as usize].secret = allocator == allocSecret();
     unitAllocated(it, address);
     return Ok(address);
+}
+
+/// Whether a `borrow mut` vector argument's vector is SecretHeap's (ADR 0197 §2.3): its vacated slots are wiped.
+fn secretVector(c: borrow Checker, reference: u32) -> bool =>
+    allocatorId(c, c.types.info(pointeeOf(c, reference)).allocator) == allocSecret();
+
+/// `length` bytes at `at` set to zero: a SecretHeap slot given up (ADR 0197 §2.3), as ceesafe_wipe does.
+fn wipeBytes(it: borrow mut Interp, at: u64, length: u64) -> Result<void, Stop> {
+    var k: u64 = 0;
+    while (k < length) {
+        it.memory.storeBits(at + k, 0, 1)?;
+        k += 1;
+    }
+    return Ok();
 }
 
 fn freeMemory(it: borrow mut Interp, pointer: u64) -> Result<void, Stop> {
@@ -1000,6 +1021,24 @@ fn builtin(
         it.memory.store(bAddress, x)?;
         return Ok(null);
     }
+    if (b == bfSecretWipe()) {
+        // The place, or the slice's elements, set to zero bytes (ADR 0197 §2.2), as the C build's ceesafe_wipe.
+        let place = argument(it, c, n, frame, arguments, 0)?;
+        let typ = builtinArgumentType(n, arguments, 0);
+        let at = place.bits(0, 8)?;
+        var length: u64 = 0;
+        if (c.types.isSlice(typ)) {
+            length = place.bits(8, 8)? * (typeSize(c, elementOf(c, pointeeOf(c, typ)))? as u64);
+        } else {
+            length = typeSize(c, pointeeOf(c, typ))? as u64;
+        }
+        var k: u64 = 0;
+        while (k < length) {
+            it.memory.storeBits(at + k, 0, 1)?;
+            k += 1;
+        }
+        return Ok(null);
+    }
     if (b == bfAsyncPark()) {
         return asyncPark(it);
     }
@@ -1269,6 +1308,9 @@ fn builtin(
         } else if (b == bfVectorResize()) {
             target = argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
             if (target <= length) {
+                if (allocatorId(c, c.types.info(vectorType).allocator) == allocSecret()) {
+                    wipeBytes(it, pointerAt(it, vector)? + target * size, (length - target) * size)?; // ADR 0197 §2.3
+                }
                 it.memory.storeBits(vector + 8, target, 8)?; // Copy elements: nothing to destroy
                 return Ok(okValue(c, resultType, null)?);
             }
@@ -1334,7 +1376,11 @@ fn builtin(
         }
         it.memory.storeBits(vector + 8, length - 1, 8)?;
         let size = typeSize(c, element)?;
-        let value = it.memory.load(pointerAt(it, vector)? + (length - 1) * (size as u64), size)?;
+        let at = pointerAt(it, vector)? + (length - 1) * (size as u64);
+        let value = it.memory.load(at, size)?;
+        if (secretVector(c, builtinArgumentType(n, arguments, 0))) {
+            wipeBytes(it, at, size as u64)?; // the element moved out, its slot wiped (ADR 0197 §2.3)
+        }
         return Ok(someValue(c, resultType, value)?);
     }
     if (b == bfVectorTruncate() || b == bfVectorClear()) {
@@ -1344,12 +1390,15 @@ fn builtin(
         let keep = if (b == bfVectorClear()) 0 else argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
         if (keep < length) {
             it.memory.storeBits(vector + 8, keep, 8)?;
+            let size = typeSize(c, element)? as u64;
             if (c.types.needsDrop(element)) {
-                let size = typeSize(c, element)? as u64;
                 for (i in keep..length) {
                     let at = pointerAt(it, vector)? + i * size;
                     destroy(it, c, n, element, at)?;
                 }
+            }
+            if (secretVector(c, builtinArgumentType(n, arguments, 0))) {
+                wipeBytes(it, pointerAt(it, vector)? + keep * size, (length - keep) * size)?; // ADR 0197 §2.3
             }
         } else if (b == bfVectorClear()) {
             it.memory.storeBits(vector + 8, 0, 8)?;
@@ -1444,7 +1493,11 @@ fn builtin(
             it.memory.storeBits(slot + 4, free, 4)?;
             it.memory.storeBits(map + 32, index, 4)?;
         }
-        let value = it.memory.load(slot + layout.valueOffset, typeSize(c, elementOf(c, mapType))?)?;
+        let valueSize = typeSize(c, elementOf(c, mapType))?;
+        let value = it.memory.load(slot + layout.valueOffset, valueSize)?;
+        if (allocatorId(c, c.types.info(mapType).allocator) == allocSecret()) {
+            wipeBytes(it, slot + layout.valueOffset, valueSize as u64)?; // ADR 0197 §2.3
+        }
         return Ok(someValue(c, resultType, value)?);
     }
     if (b == bfSlotMapLength()) {

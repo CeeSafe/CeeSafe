@@ -1,0 +1,24 @@
+// profile: freestanding
+// Secret.wipe in the freestanding profile (ADR 0197 §2.1, §4.5): ceesafe_wipe is in the runtime core's first part,
+// which needs no C library, so a freestanding object that wipes links with the environment alone (wipe.c).
+
+struct Key {
+    bytes: [u8; 16];
+    rounds: u32;
+}
+
+/// Mixes a key from `seed`, uses it, and wipes it before it returns: the result is what the key gave.
+@export("wipe_demo")
+fn demo(seed: u32) -> u32 {
+    var key = Key { bytes: [0u8; 16], rounds: 14 };
+    for (i in 0..16usize) {
+        key.bytes[i] = truncate<u8>(seed + truncate<u32>(i));
+    }
+    var sum: u32 = key.rounds;
+    for (b in key.bytes) { sum += b as u32; }
+    Secret.wipe(mut key.bytes[4..]);
+    Secret.wipe(mut key);
+    for (b in key.bytes) { sum += b as u32; }
+    return sum + key.rounds;
+}
+// expect-stdout: wipe 150

@@ -114,6 +114,14 @@ help text; the table of §12.1 names, for each option, exactly the commands that
 `CEESAFE_FAIL_ALLOC_AT=k` a program run with `run --interp` gives what its build gives for every k, the compiler
 never panicking, in `check` and `build` too, while `CEESAFE_ALLOC_REPORT=1` gives the program's report first.
 
+`tools/scan_freed_check.py` runs `ceesafec test --scan-freed` (ADR 0197 §4.3) on `tests/packages/scan-freed`,
+natively and with `--interp`: a test for each guarantee of ADR 0197 §3 finds no SecretHeap secret in a freed block,
+and two controls find the system heap's; without the scan the controls fail; and a built program does the same with
+`CEESAFE_SCAN_FREED=1`. `tools/wipe_check.py` builds two programs that wipe a key on the stack with `Secret.wipe`
+at `-O0`, `-O2`, `-O3` and `-O2 -flto`, with clang and with gcc where it is installed, and checks in the
+disassembly that `ceesafe_wipe` is called after the key's last use; a control with a loop of plain stores instead
+must never reach it, and the check reports whether the C compiler removed those stores.
+
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
 --package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.

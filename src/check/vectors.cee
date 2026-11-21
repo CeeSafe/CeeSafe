@@ -41,7 +41,7 @@ fn resolveVectorType(c: borrow mut Checker, isString: bool, arguments: Range) ->
         let span = c.front.ast.typeSpans[c.front.ast.at(arguments, allocatorIndex) as usize];
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, allocator)?;
-        appendText(mut message, " is not an allocator type; use 'SystemHeap' or 'FailingAllocator'")?;
+        appendText(mut message, " is not an allocator type; use 'SystemHeap', 'FailingAllocator' or 'SecretHeap'")?;
         c.error(notAnAllocator(), span.start, span.end, message)?;
         return Ok(c.types.error);
     }
@@ -213,8 +213,10 @@ fn checkVectorCreate(
 /// A call of lib/core's `StringCopying.from(text)` (ADR 0108), or of `fromFailing` for a string of `FailingAllocator`,
 /// the only other allocator a string has (§23.1): `string` is the type of the string to make, `text` a `StringView`.
 fn stringCopy(c: borrow mut Checker, string: u32, text: u32, span: Span) -> Result<u32, AllocError> {
-    let failing = c.types.info(string).allocator == c.structs[1].typ;
-    let symbol = c.intern(if (failing) "fromFailing" else "from")?;
+    var name = Vector<u8>.create();
+    appendText(mut name, "from")?;
+    appendText(mut name, allocatorSuffix(c, c.types.info(string).allocator))?; // `Failing`, `Secret` (§23.1)
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
     let none0 = Vector<u32>.create();
     let function = libraryFunction(c, "StringCopying", none0.view(), symbol, span)?;
     if (function == none()) {
@@ -365,14 +367,23 @@ fn checkVectorRaw(
         c.error(invalidArray(), ident.start, ident.end, message)?;
         return c.errorResult(span.start, span.end);
     }
+    if (foreign && isSecretHeap(c, c.types.info(vectorType).allocator)) {
+        // C would free the block with `free`, unwiped and past its header (ADR 0197 §2.3).
+        var message = Vector<u8>.create();
+        appendBytes(mut message, what.view())?;
+        appendText(
+            mut message,
+            " hands a buffer to or from C, which frees it with its own allocator; a 'SecretHeap' block is wiped and freed by CeeSafe alone (ADR 0197 §2.3)",
+        )?;
+        c.error(notAnAllocator(), ident.start, ident.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (!unsafeOk) {
         return c.errorResult(span.start, span.end);
     }
     var name = Vector<u8>.create();
     appendBytes(mut name, text)?;
-    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
-        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
-    }
+    appendText(mut name, allocatorSuffix(c, c.types.info(vectorType).allocator))?; // `Failing` or `Secret` (§23.1)
     let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
     let elements = [element];
     let function = libraryFunction(c, if (foreign) "VectorForeign" else "VectorRaw", elements[..], symbol, span)?;
@@ -986,9 +997,7 @@ fn checkVectorEditing(
     }
     var name = Vector<u8>.create();
     appendBytes(mut name, text)?;
-    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
-        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
-    }
+    appendText(mut name, allocatorSuffix(c, c.types.info(vectorType).allocator))?; // `Failing` or `Secret` (§23.1)
     let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
     let elements = [element];
     let function = libraryFunction(c, "VectorEditing", elements[..], symbol, span)?;
@@ -1045,8 +1054,10 @@ fn checkVectorClone(
     if (isString) {
         return stringCopy(c, typ, view, span);
     }
-    let failing = c.types.info(typ).allocator == c.structs[1].typ;
-    let symbol = c.intern(if (failing) "cloneFailing" else "clone")?;
+    var name = Vector<u8>.create();
+    appendText(mut name, "clone")?;
+    appendText(mut name, allocatorSuffix(c, c.types.info(typ).allocator))?; // `Failing`, `Secret` (§23.1)
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
     let types = [element];
     let function = libraryFunction(c, "VectorCopying", types[..], symbol, span)?;
     if (function == none()) {

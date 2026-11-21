@@ -1886,7 +1886,7 @@ struct TypeTable {
             return false;
         }
         let n = this.name(allocator);
-        return sameText(n, "SystemHeap") || sameText(n, "FailingAllocator");
+        return sameText(n, "SystemHeap") || sameText(n, "FailingAllocator") || sameText(n, "SecretHeap");
     }
 
     /// May a value be moved to another thread (IsSend, §38.1)? `visiting` breaks cycles: a type that reaches itself

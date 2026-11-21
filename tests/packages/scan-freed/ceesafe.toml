@@ -1,0 +1,4 @@
+# The fixture for the freed-block scan (ADR 0197 §4.3, type-system.md §42.4; tools/scan_freed_check.py).
+[package]
+name = "scanfreed"
+version = "0.1.0"

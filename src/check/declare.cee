@@ -65,7 +65,8 @@ fn builtinName(k: u32) -> StringView => match (k) {
     33 => "debugAssert",
     34 => "embed",
     35 => "embedText",
-    _ => "arrayFrom",
+    36 => "arrayFrom",
+    _ => "Secret",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -86,7 +87,8 @@ fn builtinItemSymbol(k: usize) -> StringView => match (k) {
     12 => "Other",
     13 => "i32",
     14 => "SystemHeap",
-    _ => "FailingAllocator",
+    15 => "FailingAllocator",
+    _ => "SecretHeap", // ADR 0197 §2.3
 };
 
 /// Checks the program: `units` are the parsed files, library files first (TypeChecker.Check). The returned
@@ -488,13 +490,14 @@ fn checkProgramWith(
 }
 
 fn declareBuiltinItems(c: borrow mut Checker) -> Result<void, AllocError> {
-    for (k in 0..16usize) {
+    for (k in 0..17usize) {
         let symbol = c.intern(builtinItemSymbol(k))?;
         let index: u32 = match (k) {
             0 => 0,
             2 => 1,
             14 => 2,
             15 => 3,
+            16 => 4,
             _ => none(),
         };
         if (index != none()) {

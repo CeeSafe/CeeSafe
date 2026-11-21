@@ -1671,6 +1671,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_wipe")) {
         return "Ps:-";
     }
+    if (sameText(name, "ceesafe_freed_holds")) {
+        return "Ps:u";
+    }
+    if (sameText(name, "ceesafe_scan_begin")) {
+        return ":-";
+    }
     if (sameText(name, "ceesafe_crc32c_available")) {
         return ":u";
     }
@@ -2183,6 +2189,22 @@ fn callC(
         // timeout, on the virtual clock (ADR 0075 §2.6).
         it.asyncClock += arguments[0].bits(0, 4)?;
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_scan_begin")) {
+        // `ceesafec test --interp --scan-freed` (ADR 0197 §4.3): freed blocks are kept as they were at their free.
+        it.memory.scanFreed = true;
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_freed_holds")) {
+        let at = arguments[0].bits(0, 8)?;
+        let length = arguments[1].bits(0, 8)?;
+        var pattern = Vector<u8>.create();
+        var k: u64 = 0;
+        while (k < length) {
+            pattern.push(truncate<u8>(it.memory.loadBits(at + k, 1)?))!;
+            k += 1;
+        }
+        return Ok(valueOf(if (it.memory.freedHolds(pattern.view())) 1 else 0, 4));
     }
     if (sameText(n0, "ceesafe_test_begin")) {
         // `ceesafec test --interp` (ADR 0049 §3.3): the allocation report, so a leak is found as natively; the

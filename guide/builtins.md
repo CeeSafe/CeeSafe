@@ -361,6 +361,8 @@ true
 | Type or function | Notes |
 |---|---|
 | `Box.create(value)` | `Result<Box<T>, AllocError>`, heap-owned; `Box<dyn I>` for dynamic dispatch |
+| `SecretHeap` | the allocator for keys: its blocks are wiped before they are freed, its growth copies and wipes, its containers wipe the slots they give up (see [memory](memory.md#secrets)) |
+| `Secret.wipe(mut place)` | sets a zeroable place, or `mut bytes[a..b]`, to zero bytes in a way the C compiler keeps: for keys (see [memory](memory.md#secrets)) |
 | `FixedBufferAllocator.over(mut bytes)` | an allocator over a caller's buffer, for freestanding code |
 | `Arena`, `Scratch`, `Pool<T>`, `SlotMap<T>`, `StableVector<T>` | see [memory](memory.md) and [collections](collections.md) |
 | `Thread.spawn`, `Thread.both`, `Async.run`, `Async.scope` | see [threads](threads.md) and [async](async.md) |

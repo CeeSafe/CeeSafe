@@ -64,7 +64,8 @@ fn builtinDebugAssert() -> u32 => 33; // ADR 0087 §2.5
 fn builtinEmbed() -> u32 => 34;       // ADR 0087 §2.8
 fn builtinEmbedText() -> u32 => 35;
 fn builtinArrayFrom() -> u32 => 36; // ADR 0198 §2.2
-fn builtinCount() -> u32 => 37;
+fn builtinSecret() -> u32 => 37; // ADR 0197 §2.2
+fn builtinCount() -> u32 => 38;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).

@@ -1,6 +1,6 @@
 # ADR 0197 — A heap that wipes, and a wipe the C compiler keeps
 
-- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.84.2: §2.1, `ceesafe_wipe` in the runtime and the interpreter, and lib/std's key holders on it (`Aes256Gcm`'s drop, ADR 0194's `HmacSha256`); `Secret.wipe` and `SecretHeap` are for 0.85.0. Raised by CosmoStore's CEESAFE_GAPS G42 ("a value with a wiping `drop` leaves its
+- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.85.1: §2.1, `ceesafe_wipe` in the runtime and the interpreter, and lib/std's key holders on it (`Aes256Gcm`'s drop, ADR 0194's `HmacSha256`); `Secret.wipe` and `SecretHeap` are for 0.86.0. Raised by CosmoStore's CEESAFE_GAPS G42 ("a value with a wiping `drop` leaves its
   bytes behind when moved, and a growing vector frees its old buffer unwiped") and G34 (`HmacSha256` leaves its key in
   freed memory); `~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`. Measured with ceesafec 0.84.1 on an M1 (macOS, Apple
   clang 21), §1.3.

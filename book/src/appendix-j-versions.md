@@ -29,6 +29,7 @@ compiler then refuses it with a message that names the version it needs.
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.85.1 | 2026-11-21 | `ceesafec test` gives each test a function of its own, so a package of 300 tests no longer passes C's limit of nested brackets (ADR 0195). lib/std's key holders wipe with a call the C compiler keeps: a local `Aes256Gcm` kept its key schedule on the stack at `-O2` (ADR 0197). `HmacSha256` wipes its key when it is dropped and has `clone()`, so `=` moves it (ADR 0194) | - |
 | 0.85.0 | 2026-11-21 | A function that takes or returns a value of more than 1 KiB by value is kept out of line, and `@outOfLine` keeps any function or method so; `--explain-frames` lists them. Some C compilers inlined builders of large structs at every call: ClayWind's hosts had doubled in size and build time (ADR 0199) | [Appendix A](./appendix-a-keywords) |
 | 0.84.1 | 2026-11-21 | With a time slice, `Async.runBound` counts the time a resume ran, measured at each pause, not its slices times the slice: under a small slice on a loaded machine a 250 ms bound had let a task run 1.5 s (ADR 0193) | [Async](./ch17-00-async) |
 | 0.84.0 | 2026-11-21 | 32-bit targets: `--arch armv7` and `x86` give `usize` 32 bits, layouts from the pointer width, and a narrowing `as` that does not fit traps (ADR 0192); Android from 7.1 (API level 25), its runtime's dex loaded from a file (ADR 0188) | [Integer types](./ch03-02-data-types) |

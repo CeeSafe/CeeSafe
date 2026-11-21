@@ -6,8 +6,25 @@ fn notAnAllocator() -> u32 => 263;
 
 fn builtinBox() -> u32 => 9;
 
-/// The SystemHeap and FailingAllocator types (IsAllocatorType).
-fn isAllocatorType(c: borrow Checker, typ: u32) -> bool => typ == c.systemHeapType || typ == c.structs[1].typ;
+/// The SystemHeap, FailingAllocator and SecretHeap types (IsAllocatorType; ADR 0197 §2.3).
+fn isAllocatorType(c: borrow Checker, typ: u32) -> bool =>
+    typ == c.systemHeapType || typ == c.structs[1].typ || typ == c.structs[2].typ;
+
+/// The SecretHeap type (ADR 0197 §2.3): its blocks are wiped before they are freed.
+fn isSecretHeap(c: borrow Checker, typ: u32) -> bool =>
+    typ != none() && c.structs.length > 2 && typ == c.structs[2].typ;
+
+/// The suffix of lib/core's functions for a container's built-in allocator: `Failing` for FailingAllocator, `Secret`
+/// for SecretHeap (ADR 0197 §2.3), none for SystemHeap.
+fn allocatorSuffix(c: borrow Checker, allocator: u32) -> StringView {
+    if (allocator == c.structs[1].typ) {
+        return "Failing";
+    }
+    if (isSecretHeap(c, allocator)) {
+        return "Secret";
+    }
+    return "";
+}
 
 fn boxOf(c: borrow mut Checker, contents: u32, allocator: u32) -> Result<u32, AllocError> {
     let systemHeap = c.systemHeapType;
@@ -55,7 +72,7 @@ fn checkBoxAllocator(c: borrow mut Checker, typ: u32, span: Span) -> Result<bool
     appendQuotedType(mut message, c, typ)?;
     appendText(
         mut message,
-        " is not an allocator type: use 'SystemHeap', 'FailingAllocator', or a struct without fields that implements 'Allocator' (type-system.md §30.2)",
+        " is not an allocator type: use 'SystemHeap', 'FailingAllocator', 'SecretHeap', or a struct without fields that implements 'Allocator' (type-system.md §30.2)",
     )?;
     c.error(notAnAllocator(), span.start, span.end, message)?;
     return Ok(false);

@@ -261,6 +261,9 @@ When `CEmitOptions.Placement` is on (the default since M9e, `optimisations.md` �
 
 Everything else is unchanged. Heap boxes, and every other site, use the drop glue of §2.
 
+Only `SystemHeap` boxes are placed. A `SecretHeap` box (ADR 0197 §2.3) stays on the heap, as a user allocator's does:
+its bytes never take a stack slot, which no wipe would reach once the frame is gone.
+
 ## 2.3 C interoperability (M8b; type-system.md §28)
 
 - **Extern functions.** Each `extern "C"` function gets a prototype with the C types of §28.3
@@ -775,8 +778,21 @@ Heap (M3b):
   `malloc`/`realloc`/`free`, which also serve CosmoOS userland). They count attempts and live
   allocations; a reallocation is one attempt, and on failure its block is unchanged and still live. `ceesafe_fail_after`/`ceesafe_fail_reset`
   implement `FailingAllocator`.
+- **`CEE_ALLOC_SECRET`** (4, `SecretHeap`, ADR 0197 §2.3): a block has a `CEE_HEAP_ALIGN` header in front that holds
+  its size; `ceesafe_free` wipes header and block with `ceesafe_wipe` before it goes back, and `ceesafe_realloc`
+  allocates, copies and frees (so wipes) instead of calling `realloc`, one attempt, the old block unchanged on failure.
+  Its blocks are counted, failed by `CEESAFE_FAIL_ALLOC_AT` and held against budgets like the system allocator's. The
+  helpers `ceeVO_` (pop), `ceeVC_` (clear), `ceeVZ_` (resize down), `ceeKR_` (a slot map's remove) and `truncate`
+  wipe the slots they give up, after the element is moved out or destroyed.
+- **`ceesafe_wipe(p, n)`** (ADR 0197 §2.1): `n` bytes set to zero, then a compiler barrier that takes `p` (a
+  volatile loop under MSVC's `cl`); out of line (`noinline`), in the first, freestanding part of
+  `ceesafe_rt_core.c`. `Secret.wipe(mut place)` is `ceesafe_wipe((uint8_t *)(p), (uint64_t)sizeof *(p));` for the
+  place's address `p`, or of a slice's `ptr` for `len * sizeof *ptr` bytes.
+- **The freed-block scan** (ADR 0197 §4.3; hosted): with `CEESAFE_SCAN_FREED=1`, or from `ceesafe_scan_begin()` (the
+  test harness), `ceesafe_free` keeps each block in a quarantine of the C library's memory instead of freeing it, and
+  a reallocation of a counted block allocates, copies and frees; `ceesafe_freed_holds(p, n)` searches the quarantine.
 - **The inline path** (ADR 0101; hosted only). In `rt.h`, `ceesafe_alloc` and `ceesafe_free` are macros for two inline
-  functions: for `CEE_ALLOC_SYSTEM`, when the word `ceesafe_alloc_watched` is zero, they are `malloc` (of at least
+  functions: for `CEE_ALLOC_SYSTEM` alone (never `CEE_ALLOC_SECRET`), when the word `ceesafe_alloc_watched` is zero, they are `malloc` (of at least
   one byte) and `free`; otherwise, and for every other allocator, the functions above. The word is zero exactly when
   allocations are not counted (no report, no `CEESAFE_FAIL_ALLOC_AT`, not `ceesafec test`) and the platform functions
   are the C library's with their first block handed out (no host hook). So a counted run, an injected failure and a

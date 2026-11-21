@@ -1052,6 +1052,10 @@ extern uint32_t ceesafe_rt_allocated;
 /* Allocator types, as passed by generated code. */
 #define CEE_ALLOC_SYSTEM 0u
 #define CEE_ALLOC_FAILING 1u
+/* SecretHeap (ADR 0197 §2.3): the platform heap, with every block wiped (ceesafe_wipe) before it is freed, and growth
+   by allocating, copying, wiping and freeing, never realloc. Each block has a CEE_HEAP_ALIGN header that holds its
+   size. Never on the inline fast path below, never handed to C. */
+#define CEE_ALLOC_SECRET 4u
 /* CEE_ALLOC_FOREIGN (2u, for C code: ADR 0060), CEE_ALLOC_FOREIGN_INIT (3u, a C library's one-time initialisation:
    ADR 0061) and the three calls are declared in ceesafe/foreign.h, which a package's C files include on their own. */
 #include "foreign.h" /* beside this header, whatever the include path */
@@ -1127,6 +1131,7 @@ static inline void cee_free_inline(void *p, uint32_t allocator) {
     ceesafe_free(p, allocator);
 }
 
+/* Only CEE_ALLOC_SYSTEM is inline: CEE_ALLOC_SECRET's blocks (ADR 0197 §2.3) always go through ceesafe_rt_core.c. */
 #define ceesafe_alloc(size, allocator) cee_alloc_inline(size, allocator)
 #define ceesafe_free(p, allocator) cee_free_inline(p, allocator)
 #endif
@@ -1908,6 +1913,13 @@ uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t leng
 /* A wipe the C compiler keeps (ADR 0197 §2.1): `n` bytes at `p` set to zero, then a barrier that takes `p`, so the
  * stores are not removed as dead, with or without LTO. On every target, with no C library needed. */
 void ceesafe_wipe(uint8_t *p, uint64_t n);
+/* The freed-block scan (ADR 0197 §4.3; `ceesafec test --scan-freed`, CEESAFE_SCAN_FREED=1): while it is on, a freed
+   block of every CeeSafe allocator is kept as it was at its free and never reused, and growth allocates, copies and
+   frees for every allocator. ceesafe_freed_holds is 1 if a kept block holds the `n` bytes at `p`, else 0 (also while
+   the scan is off). Hosted only; the freestanding runtime has no scan and answers 0. */
+uint32_t ceesafe_freed_holds(const uint8_t *p, uint64_t n);
+/* Turns the scan on from here (the test harness, for `ceesafec test --scan-freed`); a run that counts allocations. */
+void ceesafe_scan_begin(void);
 
 /* AES-256-GCM on the CPU's instructions (ADR 0135), for lib/std's Aes256Gcm. `available` is 1 when the CPU has AES
  * and carry-less multiply instructions; the other three are called only then. `schedule` is 304 bytes that `expand`

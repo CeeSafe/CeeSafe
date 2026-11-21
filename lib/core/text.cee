@@ -291,7 +291,7 @@ public struct ByteSearch<region r> {
 
 /// `String.from(text)` and `s.clone()` (ADR 0108, type-system.md §23.2): a new string holding a copy of a text. One
 /// allocation, sized as `withCapacity` of the length in bytes sizes it, none for an empty text. The `…Failing`
-/// function makes a string of `FailingAllocator`.
+/// function makes a string of `FailingAllocator`, the `…Secret` one of `SecretHeap`.
 public struct StringCopying {
     /// A string with a copy of `text`: its length is `text.length`, its capacity at least that.
     public fn from(text: StringView) -> Result<String, AllocError> {
@@ -303,6 +303,13 @@ public struct StringCopying {
     /// `from` for a string of `FailingAllocator`.
     public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, AllocError> {
         var copy = String<FailingAllocator>.withCapacity(text.length)?;
+        copy.append(text)?;
+        return Ok(copy);
+    }
+
+    /// `from` for a string of `SecretHeap`.
+    public fn fromSecret(text: StringView) -> Result<String<SecretHeap>, AllocError> {
+        var copy = String<SecretHeap>.withCapacity(text.length)?;
         copy.append(text)?;
         return Ok(copy);
     }

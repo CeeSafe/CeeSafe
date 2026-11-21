@@ -81,6 +81,7 @@ A long list of boxes is destroyed with a loop, not recursion, so it cannot overf
 | your own | any struct that implements `Allocator` | as you implement it |
 
 `FailingAllocator` is a `SystemHeap` that can be told to fail after *n* allocations, for testing failure paths.
+`SecretHeap` is a `SystemHeap` that wipes: see [Secrets](#secrets).
 
 ## Arenas
 
@@ -250,6 +251,38 @@ The place must be **zeroable**: an integer, float, `bool`, raw pointer, an array
 `drop` whose fields are all zeroable. Zero bytes are then a value of its type, so the place can still be read and
 nothing is `unsafe`. Anything else, such as a vector, an optional or a struct with a `drop`, is N0365; a struct with a
 `drop` wipes its own fields.
+
+A wipe clears the place it names, but a value that moves leaves its bytes in the place it left, and a vector that
+grows frees its old buffer as it was. So keep the secret itself in a `SecretHeap` block: the third built-in
+allocator, whose blocks are wiped before they are freed, whose buffers grow by copying and wiping instead of
+`realloc`, and whose containers wipe the slots they give up (`pop`, `truncate`, `clear`, `remove`). A box's bytes do
+not move when the box does, so a key in a `Box<[u8; 32], SecretHeap>` has one copy, in one block:
+
+```ceesafe
+struct MasterKey {
+    id: u32;
+    key: Box<[u8; 32], SecretHeap>;
+}
+
+fn main() {
+    var keys = Vector<MasterKey>.create(); // growing moves the boxes' pointers only
+    for (i in 0..3u32) {
+        keys.push(MasterKey { id: i, key: Box.createIn(SecretHeap {}, [truncate<u8>(i); 32])! })!;
+    }
+    var text = Vector<u8, SecretHeap>.create(); // decoded key text: its growth wipes
+    text.extend("a passphrase".bytes())!;
+    Console.writeLine(keys[2].key[0] + text[0]);
+}
+```
+
+```text
+99
+```
+
+`Vector`, `String`, `SlotMap`, `StableVector`, `Arena` and `Box` all take `SecretHeap`. It is for keys, not bulk data:
+each free writes the block once more. Its blocks never go to C (`Vector.intoForeign` is refused). A test can check
+that nothing is left: `ceesafec test --scan-freed` keeps every freed block, and `Testing.freedHolds(key[..])` says
+whether one of them holds the key.
 
 What a wipe does not reach:
 

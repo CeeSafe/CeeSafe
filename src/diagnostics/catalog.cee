@@ -116,7 +116,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     262 =>
         "`?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional; an `@from` variant without exactly one payload, or two `@from` variants of one payload type (ADR 0075 §2.3)",
     263 =>
-        "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`)",
+        "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, `SecretHeap`, or for `Box` since C5 a struct without fields implementing `Allocator`); or `Vector.intoForeign`/`fromForeign` of a `SecretHeap` vector, whose block C would free unwiped (ADR 0197 §2.3)",
     264 =>
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>

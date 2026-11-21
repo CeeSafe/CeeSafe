@@ -100,7 +100,7 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   constructor is written, in the libraries' code as in a package's, so no item may take their names (**N0201**,
   "is a built-in name"): `Result`, `Ok`, `Err`, `Box`, `Scratch`, `Pool`, `PoolBox`, `Vector`, `String`, `SlotMap`,
   `StableVector`, `Handle`, `File`, `TcpListener`, `TcpStream`, `Ptr`, `Slice`, `SliceMut`, `Cpu`, `Target`, and
-  `AllocError`, `IoError`, `SystemHeap`, `FailingAllocator`. The reservation is not needed for safety; it keeps one
+  `AllocError`, `IoError`, `SystemHeap`, `FailingAllocator`, `SecretHeap` (§42.2). The reservation is not needed for safety; it keeps one
   meaning for each of these names in every file. A local may have such a name.
 - **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
   one of their names (ADR 0075 §5; before it, N0201): the package's item shadows the library's in that package, while
@@ -1409,10 +1409,11 @@ fn main() -> i32 {
 }                            // the box is dropped: Account destroyed, memory freed
 ```
 
-`Box`, `SystemHeap` and `FailingAllocator` are built in (ADR 0003).
+`Box`, `SystemHeap`, `FailingAllocator` and `SecretHeap` are built in (ADR 0003, ADR 0197).
 
 ### 18.1 Allocator types
-- `SystemHeap` and `FailingAllocator` are built-in, field-less, Copy structs. They are the only
+- `SystemHeap`, `FailingAllocator` and `SecretHeap` (§42.2, ADR 0197) are built-in, field-less, Copy structs. They
+  are the only
   **allocator types** in M3; user allocators come with interfaces in M6 (`memory-model.md` §3.2).
   Their values are written as struct literals: `SystemHeap {}`.
 - `SystemHeap` is the platform heap (`malloc`/`free` in hosted and CosmoOS userland builds).
@@ -1426,6 +1427,8 @@ fn main() -> i32 {
   order in which the threads reach the countdown. A test that needs the same allocation to fail on every run arms
   the countdown on one thread and allocates through `FailingAllocator` from that thread only, or orders the threads'
   allocations itself (a join, a mutex).
+- `SecretHeap` allocates from the platform heap too, and wipes: every block is all zeros before it goes back, its
+  growth never uses `realloc`, and the slots its containers give up are wiped (§42.2). It is for keys, not bulk data.
 - Their names, and `Box`, cannot be declared as items (N0201).
 
 ### 18.2 `Box<T, A>`
@@ -1572,7 +1575,7 @@ fn process(input: Slice<u8>) -> Result<u64, AllocError> {
 ```
 - `Arena` is a built-in move type that needs drop. It is not scoped: it owns its memory, which
   it obtains from a free-standing allocator.
-- `Arena.create(a, chunkSize)`, with `a` an allocator value (`SystemHeap {}`, `FailingAllocator {}`)
+- `Arena.create(a, chunkSize)`, with `a` an allocator value (`SystemHeap {}`, `FailingAllocator {}`, `SecretHeap {}`)
   and `chunkSize: u64`, makes an empty arena. It cannot fail: memory is obtained in chunks of
   `chunkSize` bytes when needed. An allocation larger than a chunk gets a chunk of its own.
 - **Allocation** (R1). Both methods take `borrow this` and return a scoped result that carries a
@@ -4588,9 +4591,9 @@ fn make() -> Result<Box<u64, KernelHeap>, AllocError> => Box.createIn(KernelHeap
   allocator needs (counters, a C handle) lives on the C side or in global C state.
 - An allocation of either built-in allocator also fails when it would pass the current allocation budget (§40.9,
   ADR 0170).
-- The built-in allocators are still `SystemHeap` and `FailingAllocator`. `Vector`, `String`,
-  `SlotMap`, `StableVector`, `Arena` and `Pool` take only those in v0 (N0263): their growth is in the C
-  runtime, which cannot call CeeSafe methods.
+- The built-in allocators are `SystemHeap`, `FailingAllocator` and `SecretHeap` (§42.2). `Vector`, `String`,
+  `SlotMap`, `StableVector`, `Arena` and `Pool` take only those (N0263): their growth is in the C runtime, which
+  cannot call CeeSafe methods.
 - A type named as a box's allocator that is not a struct without fields implementing `Allocator` is
   N0263.
 
@@ -6374,7 +6377,8 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   when the system has no memory: `Err(AllocError.OutOfMemory)` from `push`, `Box.create`, `String.append` and the
   rest. Nothing else changes, so the code that handles a failed allocation handles this one. Code that unwraps an
   allocation (`push(x)!`) panics, and a panic ends the process (§14.5), under a budget as outside one.
-- **What is held** is the sum of the sizes of the blocks of the system allocator (and `FailingAllocator`) that were
+- **What is held** is the sum of the sizes of the blocks of the system allocator (and `FailingAllocator` and
+  `SecretHeap`, whose blocks count with their header, §42.2) that were
   allocated while the budget was current and are not yet freed, as the C library sizes them. A block freed while a
   budget is current is taken off it, whoever allocated it, never below zero. A block that is freed where no budget
   is current stays counted until the budget ends: the count is then too high, never too low. Memory a C library
@@ -6636,3 +6640,76 @@ struct Schedule {
 - It has no effects (`@effects()`): a `drop`, async code, a `debugAssert`'s callee and the freestanding profile may
   call it. The interpreter sets the bytes to zero.
 - `Secret` is a built-in name like `Console` (§2): a package's own item named `Secret` hides it.
+
+### 42.2 `SecretHeap`
+
+```ceesafe
+struct MasterKey {
+    id: u32;
+    key: Box<[u8; 32], SecretHeap>; // a Vector<MasterKey> moves pointers only
+}
+```
+
+`SecretHeap` is the third built-in allocator type (§18.1): a field-less Copy struct, passed to the runtime as
+`CEE_ALLOC_SECRET` (4). Every container that takes a built-in allocator takes it: `Box<T, SecretHeap>`,
+`Vector<T, SecretHeap>`, `String<SecretHeap>`, `SlotMap<T, SecretHeap>`, `StableVector<T, SecretHeap>`, and an
+`Arena` made with `SecretHeap {}`. A box's bytes do not move when the box does, only its pointer, so a key kept in a
+`SecretHeap` box has one copy, in one block.
+
+- **A block is wiped before it goes back.** A free of a `SecretHeap` block sets it to zero whole (with
+  `ceesafe_wipe`, §42.1), then gives it to the platform allocator or the host's hook. Each block carries a header of
+  `CEE_HEAP_ALIGN` bytes (16 or more) that holds its size, so the wipe needs nothing from the C library.
+- **Growth never uses `realloc`.** A `SecretHeap` buffer grows by allocating the new block, copying, and freeing (so
+  wiping) the old one. A failed growth leaves the old block live and unchanged, as for the other allocators (one
+  attempt).
+- **Slots given up are wiped.** `pop`, `truncate`, `clear`, `remove`, `swapRemove`, `retain` and `resize` down on a
+  `SecretHeap` vector or string, and `remove` on a `SecretHeap` slot map, set the slots they vacate to zero after
+  the element is moved out or destroyed, so a live buffer holds no bytes of an element it no longer has.
+- **Never stack-placed.** Placement (`c-backend.md` §2.2) leaves `SecretHeap` boxes on the heap, as it does a user
+  allocator's: their bytes never take a stack slot.
+- **Never on the fast path.** The runtime's inline `malloc`/`free` path (ADR 0101) is for `SystemHeap` alone.
+- **Counted like the others.** The allocation report's `live`, `CEESAFE_FAIL_ALLOC_AT`, `ceesafec test --sweep alloc`
+  and allocation budgets (§40.9; a block counts with its header) include it. `FailingAllocator.failAfter` does not.
+- **Not given to C.** `Vector.intoForeign` and `Vector.fromForeign` (§23.3) of a `SecretHeap` vector are N0263: C
+  would free the block with its own `free`, unwiped and past the header.
+- `SecretHeap` is a reserved name (§2).
+
+### 42.3 What is and is not guaranteed
+
+**Guaranteed** on every target, at every optimisation level, link-time optimisation included:
+- every `SecretHeap` block is all zeros before it is returned to the platform allocator or the host's hook, by a
+  free, by growth, or by a container's drop;
+- every slot a `SecretHeap` container vacates (§42.2) is zeroed;
+- every `Secret.wipe` is performed, at the place named.
+
+**Not guaranteed:**
+- **registers**, general and vector, and the C compiler's own temporaries and spills;
+- **places a program copies to itself**: a `[u8; 32]` local it reads a key into, a moved inline value's old slot
+  (the reason to keep keys in a box);
+- **swap and hibernation**, which may write pages to disk, and **core dumps**, which include live secret blocks
+  (servers should turn core dumps off: `RLIMIT_CORE` 0, Linux `prctl(PR_SET_DUMPABLE, 0)`; and use encrypted swap);
+- **`fork`**: a child gets copies of the pages;
+- **the kernel's and other processes' view** of the memory (ptrace, `/proc/pid/mem`).
+
+`mlock` and `MADV_DONTDUMP` are not used: they would need a page allocator for secret blocks (ADR 0197 §5 question
+4).
+
+### 42.4 Checking it: the freed-block scan
+
+`ceesafec test --scan-freed` (and `CEESAFE_SCAN_FREED=1` for a built program) keeps every freed block of every
+CeeSafe allocator in a quarantine, as it was at its free and never reused, and makes growth allocate, copy and free
+for every allocator, so the C library's `realloc` frees no block out of sight. lib/std's
+`Testing.freedHolds(pattern: Slice<u8>) -> bool` is whether a kept block holds the bytes of `pattern`; it is `false`
+while the scan is off. The interpreter keeps its own freed blocks the same way, so `ceesafec test --interp
+--scan-freed` agrees. A test shows that `SystemHeap` leaves a key behind and `SecretHeap` does not:
+
+```ceesafe
+@test
+fn secretVectorsLeaveNothing() -> Result<void, TestFailure> {
+    let key = [0x5Au8, 0xC3, 0x17, 0xE8, 0x42, 0x99, 0x0D, 0x7B];
+    var v = Vector<u8, SecretHeap>.create();
+    for (i in 0..64usize) { v.extend(key[..])!; } // it grows, and each old block is wiped
+    v.clear();
+    return Check.isFalse(Testing.freedHolds(key[..]), "the key in a freed block");
+}
+```

@@ -1511,6 +1511,10 @@ fn emitBuiltin(
         } else {
             e.t(" (void)cee_e;")?;
         }
+        if (isSecretAllocator(c, c.types.info(c.types.info(vectorType).pointee).allocator)) {
+            // The slots given up are wiped, after their elements are destroyed (ADR 0197 §2.3).
+            e.t(" ceesafe_wipe((uint8_t *)&cee_v->ptr[cee_n], (cee_e - cee_n) * (uint64_t)sizeof *cee_v->ptr);")?;
+        }
         e.t(" } }")?;
         return e.emit();
     }

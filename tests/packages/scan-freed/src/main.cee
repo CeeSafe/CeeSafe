@@ -1,0 +1,44 @@
+// The freed-block scan's fixture (ADR 0197 §4.3): CosmoStore's G42, a vector of keys that grows, with the system heap
+// and with SecretHeap. Built and run with CEESAFE_SCAN_FREED=1, it prints whether a freed block holds the key: true
+// for the system heap's old buffers, false for SecretHeap's, which are wiped before they are freed.
+
+struct Key {
+    bytes: [u8; 32];
+
+    drop {
+        Secret.wipe(mut this.bytes);
+    }
+}
+
+/// A key of distinctive bytes, the `n`th: no other block of the program holds them.
+fn keyBytes(n: u8) -> [u8; 32] {
+    var bytes = [0u8; 32];
+    for (i in 0..32usize) {
+        bytes[i] = truncate<u8>(0xA7 + 31 * i) ^ n;
+    }
+    return bytes;
+}
+
+/// 64 keys pushed: the buffer grows from 4 to 64 elements, freeing four old blocks that held the first keys.
+fn systemVector() {
+    var keys = Vector<Key>.create();
+    for (n in 0..64u8) {
+        keys.push(Key { bytes: keyBytes(n) })!;
+    }
+}
+
+fn secretVector() {
+    var keys = Vector<Key, SecretHeap>.create();
+    for (n in 0..64u8) {
+        keys.push(Key { bytes: keyBytes(n + 64) })!;
+    }
+}
+
+fn main() {
+    systemVector();
+    secretVector();
+    let first = keyBytes(0);
+    let secret = keyBytes(64);
+    Console.writeLine(Testing.freedHolds(first[..]));
+    Console.writeLine(Testing.freedHolds(secret[..]));
+}

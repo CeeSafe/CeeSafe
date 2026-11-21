@@ -25,7 +25,7 @@ struct EnumEntry {
 }
 
 /// The built-in items, as the reference declares them first (DeclareAllocError, DeclareIoError,
-/// DeclareAllocatorType): AllocError, IoError, SystemHeap, FailingAllocator. Their names were interned by
+/// DeclareAllocatorType): AllocError, IoError, SystemHeap, FailingAllocator, and SecretHeap (ADR 0197 §2.3). Their names were interned by
 /// declareBuiltinItems.
 fn declareBuiltinTypes(c: borrow mut Checker) -> Result<void, AllocError> {
     let allocName = c.builtinNames[0];
@@ -47,7 +47,7 @@ fn declareBuiltinTypes(c: borrow mut Checker) -> Result<void, AllocError> {
         EnumEntry { item: none(), file: none(), typ: ioError, builtin: 1, environment: emptyRange(), template: none() },
     )?;
     c.coreItems.put(Word { value: ioName as u64 }, Entity.Enum(1))?;
-    for (k in 2..4usize) {
+    for (k in 2..5usize) {
         let name = c.builtinNames[k];
         let t = c.types.createStruct(c.front.symbols.name(Symbol { id: name }), none(), none(), false)?;
         c.structs.push(

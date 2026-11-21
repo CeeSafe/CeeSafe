@@ -13,6 +13,7 @@ struct Allocation {
     what: Vector<u8>;
     live: bool;
     counted: bool; // in the interpreter's `live` count: a heap block from ceesafe_alloc's steps (runtime.cee)
+    secret: bool;  // a SecretHeap block: its bytes are set to zero when it is freed (ADR 0197 §2.3)
 }
 
 /// An ended local of this many bytes or fewer keeps its buffers for `revive`.
@@ -231,8 +232,36 @@ struct Memory {
     allocations: Vector<Allocation>;
     live: i64;  // the bytes of live allocations
     limit: i64; // the most there may be (0: no limit; tooling.md §6.3)
+    /// `--scan-freed` (ADR 0197 §4.3): the bytes of every heap block freed, as they were at the free.
+    scanFreed: bool;
+    freed: Vector<Vector<u8>>;
 
-    fn create(limit: i64) -> Memory => Memory { allocations: Vector<Allocation>.create(), live: 0, limit: limit };
+    fn create(limit: i64) -> Memory => Memory {
+        allocations: Vector<Allocation>.create(),
+        live: 0,
+        limit: limit,
+        scanFreed: false,
+        freed: Vector<Vector<u8>>.create(),
+    };
+
+    /// Whether a freed heap block's bytes, as they were at its free, hold `pattern` (Testing.freedHolds, ADR 0197
+    /// §4.3); never while the scan is off.
+    fn freedHolds(borrow this, pattern: Slice<u8>) -> bool {
+        if (pattern.length == 0) {
+            return this.scanFreed && this.freed.length != 0;
+        }
+        for (block in this.freed.view()) {
+            let bytes = block.view();
+            if (bytes.length >= pattern.length) {
+                for (start in 0..bytes.length - pattern.length + 1) {
+                    if (bytes[start..start + pattern.length] == pattern) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
 
     /// Would `size` more bytes pass the limit? Then the heap reports out of memory instead.
     fn wouldExceed(borrow this, size: u64) -> bool =>
@@ -253,7 +282,15 @@ struct Memory {
             init.push(initialised)!;
         }
         this.allocations.push(
-            Allocation { kind: kind, data: data, init: init, what: copyBytes(what)!, live: true, counted: false },
+            Allocation {
+                kind: kind,
+                data: data,
+                init: init,
+                what: copyBytes(what)!,
+                live: true,
+                counted: false,
+                secret: false,
+            },
         )!;
         return Ok(allocationBase(this.allocations.length - 1));
     }
@@ -470,6 +507,15 @@ struct Memory {
         }
         if (!this.allocations[index].live) {
             return Err(fault("double free"));
+        }
+        if (this.allocations[index].secret) {
+            // A SecretHeap block is wiped before it goes back (ADR 0197 §2.3), as ceesafe_free does.
+            for (i in 0..this.allocations[index].data.length) {
+                this.allocations[index].data[i] = 0;
+            }
+        }
+        if (this.scanFreed) {
+            this.freed.push(copyBytes(this.allocations[index].data.view())!)!;
         }
         this.end(address);
         return Ok();

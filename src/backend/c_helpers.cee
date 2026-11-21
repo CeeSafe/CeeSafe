@@ -117,11 +117,20 @@ fn appendOkValue(
     appendVariantOf(e, c, out, result, "v_Ok", 0, payload);
 
 /// The runtime's id for an allocator type (AllocatorId).
-fn appendAllocatorId(c: borrow Checker, out: borrow mut Vector<u8>, allocator: u32) -> Result<void, AllocError> =>
-    appendText(
-        out,
-        if (sameText(c.types.name(allocator), "FailingAllocator")) "CEE_ALLOC_FAILING" else "CEE_ALLOC_SYSTEM",
-    );
+fn appendAllocatorId(c: borrow Checker, out: borrow mut Vector<u8>, allocator: u32) -> Result<void, AllocError> {
+    let name = c.types.name(allocator);
+    if (sameText(name, "FailingAllocator")) {
+        return appendText(out, "CEE_ALLOC_FAILING");
+    }
+    if (sameText(name, "SecretHeap")) {
+        return appendText(out, "CEE_ALLOC_SECRET"); // ADR 0197 §2.3
+    }
+    return appendText(out, "CEE_ALLOC_SYSTEM");
+}
+
+/// Whether a container's or box's allocator is SecretHeap, whose vacated slots are wiped (ADR 0197 §2.3).
+fn isSecretAllocator(c: borrow Checker, allocator: u32) -> bool =>
+    allocator != none() && sameText(c.types.name(allocator), "SecretHeap");
 
 fn isUserAllocator(c: borrow Checker, allocator: u32) -> bool {
     let s = c.types.info(allocator).structDef;
@@ -1659,7 +1668,17 @@ fn emitContainerHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<voi
         e.line("        map->free = h.index;")?;
         e.line("    }")?;
         var removed = Vector<u8>.create();
-        appendOptionValue(e, c, mut removed, removedType, true, "map->ptr[h.index].value".bytes())?;
+        if (isSecretAllocator(c, c.types.info(t).allocator)) {
+            // The value moves out, then its slot is wiped (ADR 0197 §2.3).
+            e.t("    ")?;
+            appendCTypeName(c, mut e.buf, valueType)?;
+            e.t(" cee_x = map->ptr[h.index].value;")?;
+            e.emit()?;
+            e.line("    ceesafe_wipe((uint8_t *)&map->ptr[h.index].value, (uint64_t)sizeof map->ptr[h.index].value);")?;
+            appendOptionValue(e, c, mut removed, removedType, true, "cee_x".bytes())?;
+        } else {
+            appendOptionValue(e, c, mut removed, removedType, true, "map->ptr[h.index].value".bytes())?;
+        }
         e.t("    return ")?;
         e.b(removed.view())?;
         e.t(";")?;
@@ -1884,7 +1903,17 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.emit()?;
             e.line("    v->len -= 1u;")?;
             var popped = Vector<u8>.create();
-            appendOptionValue(e, c, mut popped, optionType, true, "v->ptr[v->len]".bytes())?;
+            if (isSecretAllocator(c, c.types.info(vector).allocator)) {
+                // The element moves out, then its slot is wiped (ADR 0197 §2.3).
+                e.t("    ")?;
+                appendCTypeName(c, mut e.buf, elementType)?;
+                e.t(" cee_x = v->ptr[v->len];")?;
+                e.emit()?;
+                e.line("    ceesafe_wipe((uint8_t *)&v->ptr[v->len], (uint64_t)sizeof *v->ptr);")?;
+                appendOptionValue(e, c, mut popped, optionType, true, "cee_x".bytes())?;
+            } else {
+                appendOptionValue(e, c, mut popped, optionType, true, "v->ptr[v->len]".bytes())?;
+            }
             e.t("    return ")?;
             e.b(popped.view())?;
             e.t(";")?;
@@ -1910,6 +1939,9 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.line("    }")?;
         } else {
             e.line("    (void)n;")?;
+        }
+        if (isSecretAllocator(c, c.types.info(vector).allocator)) {
+            e.line("    ceesafe_wipe((uint8_t *)v->ptr, n * (uint64_t)sizeof *v->ptr); /* ADR 0197 §2.3 */")?;
         }
         e.line("}")?;
         e.line("")?;
@@ -2050,6 +2082,10 @@ fn emitVectorBulkHelpers(
     e.t(" fill) {")?;
     e.emit()?;
     e.line("    if (n <= v->len) {")?;
+    if (isSecretAllocator(c, c.types.info(vector).allocator)) {
+        // The slots given up are wiped (ADR 0197 §2.3); the elements are Copy.
+        e.line("        ceesafe_wipe((uint8_t *)&v->ptr[n], (v->len - n) * (uint64_t)sizeof *v->ptr);")?;
+    }
     e.line("        v->len = n;")?;
     e.t("        return ((")?;
     e.b(result)?;

@@ -1044,7 +1044,8 @@ fn isHostedOnlyType(c: borrow Checker, typ: u32) -> bool {
 fn isHostedOnlyBuiltin(b: u32) -> bool =>
     !(b == builtinTruncate() ||
         b == builtinFixedBufferAllocator() || b == builtinPtr() || b == builtinSlice() || b == builtinSliceMut() ||
-        b == builtinStringView() || b == builtinCpu() || b == builtinTarget() || b == builtinAsync());
+        b == builtinStringView() || b == builtinCpu() || b == builtinTarget() || b == builtinAsync() ||
+        b == builtinSecret()); // Secret.wipe: the runtime core's first part (ADR 0197 §2.2)
 
 /// N0293 once per place (HostedOnly): `what` is not available in the freestanding profile.
 fn hostedOnly(c: borrow mut Checker, span: Span, what: Slice<u8>) -> Result<void, AllocError> {

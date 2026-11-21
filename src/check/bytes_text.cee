@@ -213,9 +213,7 @@ fn checkVectorPushBytes(
     if (name.length == 0) {
         return c.errorResult(span.start, span.end);
     }
-    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
-        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
-    }
+    appendText(mut name, allocatorSuffix(c, c.types.info(vectorType).allocator))?; // `Failing` or `Secret` (§23.1)
     let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
     let none0 = Vector<u32>.create();
     let function = libraryFunction(c, "VectorBytes", none0.view(), symbol, span)?;

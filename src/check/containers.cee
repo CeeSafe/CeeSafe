@@ -42,7 +42,7 @@ fn resolveContainerType(c: borrow mut Checker, isMap: bool, arguments: Range) ->
         let span = c.front.ast.typeSpans[c.front.ast.at(arguments, 1) as usize];
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, allocator)?;
-        appendText(mut message, " is not an allocator type; use 'SystemHeap' or 'FailingAllocator'")?;
+        appendText(mut message, " is not an allocator type; use 'SystemHeap', 'FailingAllocator' or 'SecretHeap'")?;
         c.error(notAnAllocator(), span.start, span.end, message)?;
         return Ok(c.types.error);
     }

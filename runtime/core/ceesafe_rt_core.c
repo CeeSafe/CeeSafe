@@ -41,6 +41,9 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
 }
 
 /* ADR 0197 §2.1: in the first part, as the freestanding profile and the kernel use it too (Secret.wipe). */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline)) /* a call of its own under LTO too, which tools/wipe_check.py finds in the disassembly */
+#endif
 void ceesafe_wipe(uint8_t *p, uint64_t n) {
     if (n == 0u) return;
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -648,7 +651,7 @@ static _Thread_local cee_budget *cee_budget_now;
 static uint32_t cee_budgets_live; /* records that exist (ceesafe_atomic_*): rt.h's inline path is off while any does */
 
 static bool budget_counts(uint32_t allocator) {
-    return allocator == CEE_ALLOC_SYSTEM || allocator == CEE_ALLOC_FAILING;
+    return allocator == CEE_ALLOC_SYSTEM || allocator == CEE_ALLOC_FAILING || allocator == CEE_ALLOC_SECRET;
 }
 
 /* `bytes` off what `b` and the budgets it is inside hold, never below zero. */
@@ -1014,11 +1017,143 @@ static uint64_t live_dead_reach(void) { return 0u; }
 void ceesafe_alloc_dead_root(const void *block) { (void)block; }
 #endif
 
+/* ---- SecretHeap (ADR 0197 §2.3) and the freed-block scan (§4.3) ----
+ * A secret block is a platform block with a CEE_HEAP_ALIGN header in front, which holds the size asked for, so the
+ * wipe knows its length without the C library's help (none under a host's allocator hook, nor in the kernel). The
+ * pointer CeeSafe holds is past the header, so the block's alignment is the platform's. Before the block goes back,
+ * header and contents are wiped. */
+#define CEE_SECRET_HEADER CEE_HEAP_ALIGN
+
+static size_t secret_size(const void *p) {
+    size_t n;
+    ceesafe_mem_copy(&n, (const uint8_t *)p - CEE_SECRET_HEADER, sizeof n);
+    return n;
+}
+
+/* A fresh secret block of `size` bytes past its header (zeroed or not), under the current budget; NULL if the
+   platform or the budget has no room. Not counted: the callers count. */
+static void *secret_block(size_t size, bool zeroed) {
+    size_t n = size == 0u ? 1u : size;
+    if (n > SIZE_MAX - CEE_SECRET_HEADER) {
+        return NULL;
+    }
+    uint8_t *base = (uint8_t *)(zeroed ? ceesafe_platform_alloc_zeroed(n + CEE_SECRET_HEADER)
+                                       : ceesafe_platform_alloc(n + CEE_SECRET_HEADER));
+    base = (uint8_t *)budget_new_block(base, CEE_ALLOC_SECRET);
+    if (base == NULL) {
+        return NULL;
+    }
+    ceesafe_mem_copy(base, &n, sizeof n);
+    return base + CEE_SECRET_HEADER;
+}
+
+/* The platform block behind a CeeSafe block of `allocator`, and its size in the platform's terms for the budget. */
+static void *platform_base(void *p, uint32_t allocator) {
+    return allocator == CEE_ALLOC_SECRET ? (uint8_t *)p - CEE_SECRET_HEADER : p;
+}
+
+#ifndef CEE_FREESTANDING
+/* The scan's quarantine: freed blocks, never reused, in the C library's memory (as the live table's). */
+typedef struct cee_freed_block {
+    const uint8_t *at;
+    size_t size;
+} cee_freed_block;
+static uint32_t scan_freed;          /* CEESAFE_SCAN_FREED, read by ceesafe_init (config_u32) */
+static cee_freed_block *freed_blocks;
+static size_t freed_count;
+static size_t freed_capacity;
+static uint32_t freed_lock;          /* ceesafe_atomic_*: frees come from every thread */
+
+/* The size of a counted live block, from the live table: what the quarantine keeps of a block that is not secret. */
+static size_t live_size(const void *p) {
+    size_t size = 0u;
+    live_take();
+    if (live_capacity != 0u) {
+        size_t k = live_slot((uintptr_t)p, live_capacity);
+        while (live_table[k].at != 0u) {
+            if (live_table[k].at == (uintptr_t)p) {
+                size = live_table[k].size;
+                break;
+            }
+            k = (k + 1u) & (live_capacity - 1u);
+        }
+    }
+    live_give();
+    return size;
+}
+
+/* Keeps a freed block (its CeeSafe pointer and size) instead of freeing it; false if there is no room, and then the
+   block is freed as usual. */
+static bool freed_keep(const void *p, size_t size) {
+    bool kept = false;
+    while (ceesafe_atomic_cas_u32(&freed_lock, 0u, 1u) != 0u) {
+    }
+    if (freed_count == freed_capacity) {
+        size_t capacity = freed_capacity == 0u ? 256u : freed_capacity * 2u;
+        cee_freed_block *grown = (cee_freed_block *)realloc(freed_blocks, capacity * sizeof(cee_freed_block));
+        if (grown != NULL) {
+            freed_blocks = grown;
+            freed_capacity = capacity;
+        }
+    }
+    if (freed_count < freed_capacity) {
+        freed_blocks[freed_count].at = (const uint8_t *)p;
+        freed_blocks[freed_count].size = size;
+        freed_count += 1u;
+        kept = true;
+    }
+    ceesafe_atomic_store_u32(&freed_lock, 0u);
+    return kept;
+}
+
+uint32_t ceesafe_freed_holds(const uint8_t *p, uint64_t n) {
+    uint32_t found = 0u;
+    if (config_u32(&scan_freed) == 0u) {
+        return 0u;
+    }
+    while (ceesafe_atomic_cas_u32(&freed_lock, 0u, 1u) != 0u) {
+    }
+    for (size_t b = 0u; b < freed_count && found == 0u; b++) {
+        const uint8_t *at = freed_blocks[b].at;
+        size_t size = freed_blocks[b].size;
+        if (n == 0u) {
+            found = 1u;
+            break;
+        }
+        if ((uint64_t)size < n) {
+            continue;
+        }
+        for (size_t i = 0u; i + (size_t)n <= size; i++) {
+            size_t j = 0u;
+            while (j < (size_t)n && at[i + j] == p[j]) j++;
+            if (j == (size_t)n) {
+                found = 1u;
+                break;
+            }
+        }
+    }
+    ceesafe_atomic_store_u32(&freed_lock, 0u);
+    return found;
+}
+
+static bool scan_freed_on(void) { return config_u32(&scan_freed) != 0u; }
+
+/* `ceesafec test --scan-freed` (lib/std's TestRun.begin): the scan from here on, in a run that already counts. */
+void ceesafe_scan_begin(void) {
+    config_set_u32(&scan_freed, 1u);
+}
+#else
+static bool scan_freed_on(void) { return false; }
+uint32_t ceesafe_freed_holds(const uint8_t *p, uint64_t n) { (void)p; (void)n; return 0u; }
+void ceesafe_scan_begin(void) {}
+#endif
+
 void *ceesafe_alloc(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
-    void *p = budget_new_block(ceesafe_platform_alloc(size == 0u ? 1u : size), allocator);
+    void *p = allocator == CEE_ALLOC_SECRET ? secret_block(size, false)
+                                            : budget_new_block(ceesafe_platform_alloc(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
         live_track(p, size, allocator);
@@ -1030,7 +1165,9 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
-    void *p = budget_new_block(ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size), allocator);
+    void *p = allocator == CEE_ALLOC_SECRET
+                  ? secret_block(size, true)
+                  : budget_new_block(ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size), allocator);
     if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
         live_track(p, size, allocator);
@@ -1039,6 +1176,7 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
 }
 
 static void *realloc_block(void *p, size_t size, uint32_t allocator);
+static void release_block(void *p, uint32_t allocator);
 
 void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
     if (p == NULL) {
@@ -1052,10 +1190,45 @@ void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
     return q;
 }
 
+/* Growth by a new block, a copy and a free (ADR 0197 §2.3, §4.3): for SecretHeap always, whose old block is wiped
+   by its free, and for every allocator while the scan is on, so that C's realloc frees nothing out of sight. One
+   attempt, already counted; on failure the old block is live and unchanged. */
+static void *moved_block(void *p, size_t size, uint32_t allocator) {
+    size_t before;
+    if (allocator == CEE_ALLOC_SECRET) {
+        before = secret_size(p);
+    } else {
+#ifndef CEE_FREESTANDING
+        before = live_size(p);
+#else
+        before = 0u;
+#endif
+    }
+    void *q = allocator == CEE_ALLOC_SECRET ? secret_block(size, false)
+                                            : budget_new_block(ceesafe_platform_alloc(size == 0u ? 1u : size), allocator);
+    if (q == NULL) {
+        return NULL;
+    }
+    size_t kept = before < size ? before : size;
+    if (kept != 0u) {
+        ceesafe_mem_copy(q, p, kept);
+    }
+    release_block(p, allocator);
+    return q;
+}
+
 static void *realloc_block(void *p, size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
+    if (allocator == CEE_ALLOC_SECRET) {
+        return moved_block(p, size, allocator);
+    }
+#ifndef CEE_FREESTANDING
+    if (scan_freed_on() && live_size(p) != 0u) { /* a block the table knows the size of: one counted since the start */
+        return moved_block(p, size, allocator);
+    }
+#endif
     cee_budget *b = budget_for(allocator);
     if (b == NULL) {
         return ceesafe_platform_realloc(p, size == 0u ? 1u : size);
@@ -1080,20 +1253,44 @@ static void *realloc_block(void *p, size_t size, uint32_t allocator) {
     return q;
 }
 
+/* A block back to the platform, the budget given its size: a secret one wiped whole first, header included; while
+   the scan is on, kept instead (as it is now: a secret one all zeros). Not counted: ceesafe_free counts. */
+static void release_block(void *p, uint32_t allocator) {
+    void *base = platform_base(p, allocator);
+    cee_budget *b = budget_for(allocator);
+    if (b != NULL) {
+        budget_give_back(b, (uint64_t)ceesafe_platform_block_size(base));
+    }
+    size_t size = 0u;
+    if (allocator == CEE_ALLOC_SECRET) {
+        size = secret_size(p);
+        ceesafe_wipe((uint8_t *)base, (uint64_t)size + (uint64_t)CEE_SECRET_HEADER);
+    }
+#ifndef CEE_FREESTANDING
+    if (scan_freed_on()) {
+        if (allocator != CEE_ALLOC_SECRET) {
+            size = live_size(p);
+        }
+        if (freed_keep(p, size)) {
+            return;
+        }
+    }
+#endif
+    ceesafe_platform_free(base);
+}
+
 void ceesafe_free(void *p, uint32_t allocator) {
     /* every allocator frees to the platform heap */
     if (p == NULL) {
         return; /* C's free(NULL); CeeSafe's own code never frees NULL */
     }
-    cee_budget *b = budget_for(allocator);
-    if (b != NULL) {
-        budget_give_back(b, (uint64_t)ceesafe_platform_block_size(p));
-    }
     if (config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */
+    }
+    release_block(p, allocator); /* reads the live table's size first, while scanning */
+    if (config_u32(&alloc_counting) != 0u) {
         live_untrack(p);
     }
-    ceesafe_platform_free(p);
 }
 
 /* A vector's block changes sides (ADR 0090 §2.3): out of `live` when the host adopts it, into `live` when CeeSafe
@@ -1234,6 +1431,7 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     int32_t error = 0;
     uint64_t fail_at = 0u;
     bool report = false;
+    bool scan = false;
     if (config == NULL || !config_size_known(config->size)) {
         error = CEESAFE_INIT_SIZE;
     } else {
@@ -1253,6 +1451,10 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
                 report = true;
                 environment_asked = true;
             }
+            if (ceesafe_platform_config("CEESAFE_SCAN_FREED") != 0u) {
+                scan = true; /* the freed-block scan (ADR 0197 §4.3), which needs the live table: counting */
+                environment_asked = true;
+            }
         }
         const ceesafe_allocator *hook = given.allocator;
         if (hook != NULL && (hook->alloc == NULL || hook->alloc_zeroed == NULL || hook->realloc == NULL ||
@@ -1263,7 +1465,7 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
                given to the hook's free. Best effort, as for counting: an allocation racing with this call breaks the
                ordering contract and is not seen. */
             error = CEESAFE_INIT_LATE;
-        } else if ((report || fail_at != 0u) && !generated_main && allocated_already() != 0u) {
+        } else if ((report || fail_at != 0u || scan) && !generated_main && allocated_already() != 0u) {
             /* Counting cannot start under live blocks (ADR 0059): a free would subtract what was never added. Without
                counting, an earlier allocation changes nothing, so the hook and argv are taken. A config that asks for
                counting itself gets LATE; when only the environment asks (a variable the host's own environment
@@ -1273,6 +1475,7 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
             } else if (environment_asked) {
                 report = false;
                 fail_at = 0u;
+                scan = false;
                 warn_counting_unavailable();
             }
         }
@@ -1306,7 +1509,8 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     }
     config_set_u64(&alloc_fail_at, fail_at);
     config_set_u32(&alloc_report, report ? 1u : 0u);
-    set_alloc_counting(report || fail_at != 0u ? 1u : 0u);
+    config_set_u32(&scan_freed, scan ? 1u : 0u);
+    set_alloc_counting(report || fail_at != 0u || scan ? 1u : 0u);
     ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
     ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
     return 0;

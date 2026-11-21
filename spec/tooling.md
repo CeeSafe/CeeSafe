@@ -906,6 +906,10 @@ per host binary: two archives built separately each carry the runtime and clash 
   compiling, naming the file, and leaves it as it was. `--emit obj` writes the same headers beside its object, and in a
   freestanding build `ceesafe/rt.h` and `ceesafe/foreign.h` too (ADR 0121, profiles.md §4.3); there a file that does
   not start so is left as it is, with a line saying so, and the build succeeds.
+- **Position-independent on ELF systems** (ADR 0202): for Linux, FreeBSD and Android (`--target`, else the host),
+  `--emit lib` compiles with `-fPIC`, before the user's `--cflag`s, so the archive goes into an executable, a PIE (a
+  Linux distribution's default, and Rust's) and a shared library (a JNI library, a Python extension) alike;
+  `--cflag -fno-pic` still wins. macOS, iOS and Windows are unchanged, as are `--emit obj` and `--emit exe`.
 - `--ar <archiver>` names the archiver, a path or a name looked up on `PATH`; by default it is `llvm-ar` beside an
   LLVM clang (`clang-18` beside `llvm-ar-18`, and a clang named for its target, as the Android NDK's
   `aarch64-linux-android25-clang` beside `llvm-ar`; the C compiler found as for `--emit obj`, on `PATH` when it has no

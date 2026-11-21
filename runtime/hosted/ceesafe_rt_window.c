@@ -1107,30 +1107,46 @@ static pid_t cee_android_program_tid;
 static int cee_window_on_main_thread(void) {
     return cee_android_program_tid != 0 && (pid_t)syscall(SYS_gettid) == cee_android_program_tid;
 }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(_WIN32)
+/* Linux, FreeBSD and Windows (ADR 0201): nothing in the system ties windows to the process's first thread, and a host
+   may not own that thread (a JVM runs Java's main on one of its own). The window thread is the first that opens a
+   window, recorded by that open with a compare-and-set, so of two first opens at once one wins; every later window
+   call is on it. Before any open, no thread is it. */
+#if defined(_WIN32)
+static volatile LONG cee_window_thread_id;
+static long cee_window_this_thread(void) { return (long)GetCurrentThreadId(); }
+static long cee_window_recorded(void) { return (long)InterlockedCompareExchange(&cee_window_thread_id, 0, 0); }
+static long cee_window_record(long me) {
+    return (long)InterlockedCompareExchange(&cee_window_thread_id, (LONG)me, 0);
+}
+#else
+#if defined(__linux__)
 #include <sys/syscall.h>
 #include <unistd.h>
-static int cee_window_on_main_thread(void) { return (pid_t)syscall(SYS_gettid) == getpid(); }
-#elif defined(__FreeBSD__)
-#include <pthread.h>
+static long cee_window_this_thread(void) { return (long)syscall(SYS_gettid); }
+#else
 #include <pthread_np.h>
-static int cee_window_on_main_thread(void) { return pthread_main_np() == 1; }
-#elif defined(_WIN32)
-/* The first thread's id, recorded by a C runtime initializer, which runs on it before main. */
-static DWORD cee_window_main_thread;
-static void __cdecl cee_window_record_main(void) { cee_window_main_thread = GetCurrentThreadId(); }
-#if defined(_MSC_VER)
-#pragma section(".CRT$XCU", read)
-__declspec(allocate(".CRT$XCU")) void(__cdecl *ceesafe_window_record_main)(void) = cee_window_record_main;
-#if defined(_M_IX86)
-#pragma comment(linker, "/include:_ceesafe_window_record_main")
-#else
-#pragma comment(linker, "/include:ceesafe_window_record_main")
+static long cee_window_this_thread(void) { return (long)pthread_getthreadid_np(); }
 #endif
-#else
-__attribute__((constructor)) static void cee_window_constructor(void) { cee_window_record_main(); }
+static long cee_window_thread_id;
+static long cee_window_recorded(void) { return __atomic_load_n(&cee_window_thread_id, __ATOMIC_ACQUIRE); }
+static long cee_window_record(long me) {
+    long expected = 0;
+    __atomic_compare_exchange_n(&cee_window_thread_id, &expected, me, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return expected; /* 0 when this call recorded it, else the thread recorded before */
+}
 #endif
-static int cee_window_on_main_thread(void) { return GetCurrentThreadId() == cee_window_main_thread; }
+static int cee_window_on_main_thread(void) {
+    long recorded = cee_window_recorded();
+    return recorded != 0 && recorded == cee_window_this_thread();
+}
+/* An open's test: the window thread, recording this one when there is none yet. */
+static int cee_window_claim_thread(void) {
+    long me = cee_window_this_thread();
+    long before = cee_window_record(me);
+    return before == 0 || before == me;
+}
+#define CEE_WINDOW_CLAIMS_THREAD 1
 #else
 static int cee_window_on_main_thread(void) { return 1; }
 #endif
@@ -13063,7 +13079,11 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
         *error = CEE_WINDOW_UNSUPPORTED;
         return NULL;
     }
+#if defined(CEE_WINDOW_CLAIMS_THREAD)
+    if (!cee_window_claim_thread()) { /* ADR 0201: the first open makes its thread the window thread */
+#else
     if (!cee_window_on_main_thread()) {
+#endif
         *error = CEE_WINDOW_NOT_MAIN_THREAD;
         return NULL;
     }

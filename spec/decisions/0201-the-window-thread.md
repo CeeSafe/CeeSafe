@@ -1,7 +1,7 @@
 # ADR 0201 — On Linux, FreeBSD and Windows, the window thread is the first that opens a window
 
-- Status: **Proposed**, 2026-11-21, for the owner's acceptance. Found by ClayWind's Kotlin binding on the owner's
-  Fedora 45 PC.
+- Status: **Accepted** by the owner, 2026-11-21 ("I accept ADRs 0201 and 0202"); implemented (§5). Found by
+  ClayWind's Kotlin binding on the owner's Fedora 45 PC.
 - Scope: the hosted window runtime's first-thread test on Linux, FreeBSD and Windows (`cee_window_on_main_thread`),
   type-system.md §36, a window check. macOS, iOS and Android keep their rule. No language or library change.
 
@@ -46,3 +46,15 @@ engine's).
 - type-system.md §36; a window check: a program whose window is opened on a thread it starts (Linux and Windows), and a
   second thread's open refused.
 - ClayWind: the Kotlin binding's example on the Fedora PC.
+
+## 5. As built
+
+- `ceesafe_rt_window.c`: on Linux, FreeBSD and Windows, `cee_window_thread_id` is recorded by the first `open` with a
+  compare-and-set (`__atomic` builtins; `InterlockedCompareExchange` on Windows), and `cee_window_on_main_thread`
+  compares with it; Windows' C runtime initializer that recorded the first thread is gone. macOS, iOS, Android and
+  other systems keep their test.
+- type-system.md §36 (`NotMainThread`). window_check: a window opened first from a spawned thread is refused on macOS
+  and opens elsewhere; once a window is open, another thread's open is refused on every system (64 checks on macOS
+  and on Fedora 45; on the owner's Windows 11 ARM64 VM too, the compiler built there with LLVM's clang).
+- ClayWind's Kotlin binding on the owner's Fedora 45 PC: its window opens from the JVM's main thread, beside the C and
+  Rust ones.

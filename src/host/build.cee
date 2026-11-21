@@ -337,6 +337,13 @@ fn compileIn(
     if (options.debug) {
         pushText(mut flags, "-O0")!;
     }
+    // ADR 0202: a library for an ELF system is position-independent, so it goes into a PIE or a shared library too;
+    // before the user's flags, so a --cflag -fno-pic still wins.
+    let target = manifestTarget();
+    if (archiver.length > 0 && !compilerFound.msvc &&
+        (target == "linux" || target == "freebsd" || target == "android")) {
+        pushText(mut flags, "-fPIC")!;
+    }
     for (flag in options.cflags.view()) {
         pushBytes(mut flags, flag.view())!;
     }

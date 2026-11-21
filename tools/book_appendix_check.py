@@ -231,6 +231,11 @@ def _appendix_a(root, where):
     keywords = re.findall(r'TokenKind\.\w+Keyword => "(\w+)"',
                           between(token, "fn keywordText(", "\n};", "src/syntax/token.cee"))
     at_least(keywords, 30, "the keywords of keywordText (src/syntax/token.cee)")
+    # `class` is in the table but lexed as a name, a keyword only where the parser reads it (ADR 0195 §2.3): the
+    # lexer's skip names it, and the page lists it with the contextual words.
+    lexer = read(root, "src/syntax/lexer.cee")
+    skipped = set(re.findall(r"sameKind\(keyword, TokenKind\.(\w+)Keyword\)", lexer))
+    keywords = [k for k in keywords if k[0].upper() + k[1:] not in skipped]
     problems += both_ways(where, "'Reserved words'", first_spans(first_table(page, "Reserved words"), "Reserved words"),
                           "keywordText (src/syntax/token.cee)", keywords)
 

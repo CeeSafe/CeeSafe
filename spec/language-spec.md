@@ -24,7 +24,8 @@ Legend used in every example heading:
 - Keywords: `namespace import public private internal fn let var struct enum
   interface impl static const if else while for in loop break continue return
   match using defer own borrow mut move unsafe extern true false null this Self
-  as type where drop`. Reserved: `class async await yield macro`.
+  as type where drop`. Reserved: `async await yield macro`. `class` is contextual: a keyword only at the start of
+  an item, where it says to declare a `struct` (ADR 0195 §2.3), and a name everywhere else.
 
 ## 2. Types (MVP)
 
@@ -162,7 +163,7 @@ block, in declaration order.
 
 ### Ex4 — Equivalent of classes: owned heap reference type [MVP-M3]
 
-CeeSafe v0 has **no `class` keyword** (reserved). The C#/TS "object on the heap with
+CeeSafe has **no classes**: `class Name` at the start of an item is N0101, which says so (ADR 0195 §2.3). The C#/TS "object on the heap with
 identity" idiom is written as a `struct` behind `Box`:
 
 ```ceesafe

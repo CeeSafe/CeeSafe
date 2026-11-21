@@ -1,0 +1,19 @@
+// ADR 0195 §2.3 (G38): a reserved word where a field's, variant's or parameter's name goes is one N0100, and the
+// member is parsed as that member; `class` at the start of an item says CeeSafe has no classes (N0101).
+struct T {
+    own: u32; // error[N0100]
+    size: u32;
+}
+
+enum E {
+    move(u32), // error[N0100]
+    Plain,
+}
+
+fn f(own: u32) -> u32 => 1; // error[N0100]
+
+class Foo { // error[N0101]
+    x: u32;
+}
+
+fn g() {}

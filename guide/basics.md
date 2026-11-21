@@ -68,8 +68,10 @@ scope cannot have the same name: there is no shadowing. `let _ = f();` evaluates
 ### Reserved words and built-in names
 
 Some words that look like ordinary names are reserved, so they can't name a variable, parameter or field: `move`,
-`own`, `type`, `namespace`, `macro`, `yield`, `class` and `internal`, among others. The full list is in
-[grammar.md §1.3](../spec/grammar.md). The compiler says so when one is used as a name.
+`own`, `type`, `namespace`, `macro`, `yield` and `internal`, among others. The full list is in
+[grammar.md §1.3](../spec/grammar.md). The compiler says so when one is used as a name. `class` is not reserved: it
+is a name, so a field may be called `class`, and only `class Name { … }` at the start of an item is an error, which
+says to declare a `struct`.
 
 The built-in types' names are taken in every program, so a program can't declare its own `Handle` (a `SlotMap`'s
 handle), `Check` (the test helpers), `TestFailure`, or the lib/core names listed in [the library API](builtins.md).

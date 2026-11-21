@@ -98,14 +98,15 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
         t_10 = (uint32_t)t_9.tag;
         switch (t_10) {
         case ((uint32_t)0):
-            v_p_3 = t_9.u.v_Ok.f__0;
-            t_11 = cee_add_u64((*v_p_3).f_a, (*v_p_3).f_b, &ceeL_0);
-            v_total_1 = cee_add_u64(v_total_1, t_11, &ceeL_1);
-            t_4 = ((uint64_t)(t_4 + ((uint64_t)1)));
-            continue;
+            break;
         default:
             ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 8u, 17u));
         }
+        v_p_3 = t_9.u.v_Ok.f__0;
+        t_11 = cee_add_u64((*v_p_3).f_a, (*v_p_3).f_b, &ceeL_0);
+        v_total_1 = cee_add_u64(v_total_1, t_11, &ceeL_1);
+        t_4 = ((uint64_t)(t_4 + ((uint64_t)1)));
+        continue;
     }
 #if defined(CEE_POLLS)
         if (t_4 != cee_chunk_0 || !(t_4 < t_5)) {

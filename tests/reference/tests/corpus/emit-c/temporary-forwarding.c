@@ -128,15 +128,16 @@ static int32_t ceeF_matchValue(void) {
     t_4 = (uint32_t)t_3.tag;
     switch (t_4) {
     case ((uint32_t)0):
-        v_r_0 = t_3.u.v_Ok.f__0;
-        v_p_1 = v_r_0;
-        t_6 = v_p_1.f_a;
-        return t_6;
+        break;
     case ((uint32_t)1):
         return ((int32_t)-1);
     default:
         ceesafe_panic(CEE_PANIC_UNREACHABLE, CEE_LOC(cee_file_0, 20u, 4u));
     }
+    v_r_0 = t_3.u.v_Ok.f__0;
+    v_p_1 = v_r_0;
+    t_6 = v_p_1.f_a;
+    return t_6;
 }
 
 static int32_t ceeF_ifValue(CEE_UNUSED bool v_c_0) {

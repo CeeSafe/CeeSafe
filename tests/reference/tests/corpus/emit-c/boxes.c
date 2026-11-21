@@ -156,25 +156,27 @@ static int32_t ceeF_main(void) {
     t_7 = (uint32_t)t_6.tag;
     switch (t_7) {
     case ((uint32_t)0):
-        v_l_0 = t_6.u.v_Ok.f__0;
-        t_8 = ((ceeT_FailingAllocator){ .cee_empty = 0 });
-        t_9 = ceeB_Xi32S16FailingAllocator(((int32_t)5));
-        t_10 = t_9;
-        t_11 = (uint32_t)t_10.tag;
-        switch (t_11) {
-        case ((uint32_t)0):
-            v_n_1 = t_10.u.v_Ok.f__0;
-            v_v_2 = (*v_n_1);
-            t_12 = v_v_2;
-            ceeD_Xi32S16FailingAllocator(&v_n_1);
-            ceeD_4List(&v_l_0);
-            return t_12;
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 8u, 13u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 7u, 13u));
     }
+    v_l_0 = t_6.u.v_Ok.f__0;
+    t_8 = ((ceeT_FailingAllocator){ .cee_empty = 0 });
+    t_9 = ceeB_Xi32S16FailingAllocator(((int32_t)5));
+    t_10 = t_9;
+    t_11 = (uint32_t)t_10.tag;
+    switch (t_11) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 8u, 13u));
+    }
+    v_n_1 = t_10.u.v_Ok.f__0;
+    v_v_2 = (*v_n_1);
+    t_12 = v_v_2;
+    ceeD_Xi32S16FailingAllocator(&v_n_1);
+    ceeD_4List(&v_l_0);
+    return t_12;
 }
 
 static void ceeM_3Res_drop(CEE_UNUSED ceeT_Res * v_this_0) {

@@ -103,29 +103,31 @@ static int32_t ceeF_main(void) {
     t_9 = (uint32_t)t_8.tag;
     switch (t_9) {
     case ((uint32_t)0):
-        v_p_1 = t_8.u.v_Ok.f__0;
-        t_10 = &v_arena_0;
-        t_11 = ceeAR_u16(t_10, CEE_REGION_ARENA, ((uint64_t)3), ((uint16_t)7));
-        t_12 = t_11;
-        t_13 = (uint32_t)t_12.tag;
-        switch (t_13) {
-        case ((uint32_t)0):
-            v_s_2 = t_12.u.v_Ok.f__0;
-            t_14 = v_s_2.len;
-            cee_check_index(((uint64_t)2), t_14, &ceeL_0);
-            t_15 = (int32_t)v_s_2.ptr[((uint64_t)2)];
-            v_v_3 = cee_add_i32((*v_p_1).f_x, t_15, &ceeL_1);
-            t_16 = &v_arena_0;
-            ceesafe_arena_reset(t_16);
-            t_17 = v_v_3;
-            ceesafe_arena_drop(&v_arena_0);
-            return t_17;
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 13u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 5u, 13u));
     }
+    v_p_1 = t_8.u.v_Ok.f__0;
+    t_10 = &v_arena_0;
+    t_11 = ceeAR_u16(t_10, CEE_REGION_ARENA, ((uint64_t)3), ((uint16_t)7));
+    t_12 = t_11;
+    t_13 = (uint32_t)t_12.tag;
+    switch (t_13) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 13u));
+    }
+    v_s_2 = t_12.u.v_Ok.f__0;
+    t_14 = v_s_2.len;
+    cee_check_index(((uint64_t)2), t_14, &ceeL_0);
+    t_15 = (int32_t)v_s_2.ptr[((uint64_t)2)];
+    v_v_3 = cee_add_i32((*v_p_1).f_x, t_15, &ceeL_1);
+    t_16 = &v_arena_0;
+    ceesafe_arena_reset(t_16);
+    t_17 = v_v_3;
+    ceesafe_arena_drop(&v_arena_0);
+    return t_17;
 }
 
 static ceeR_QS5PointE10AllocError ceeAA_S5Point(void *r, uint32_t kind, ceeT_Point v) {

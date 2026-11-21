@@ -90,31 +90,33 @@ static void ceeF_main(void) {
     t_5 = (uint32_t)t_4.tag;
     switch (t_5) {
     case ((uint32_t)0):
-        t_6 = v_v_0.len;
-        cee_check_index(((uint64_t)0), t_6, &ceeL_0);
-        v_v_0.ptr[((uint64_t)0)] = ((int32_t)3);
-        v_s_1 = ((ceeV_ZS10SystemHeap){ .ptr = (uint8_t *)(void *)&ceesafe_vec_empty, .len = 0u, .cap = 0u });
-        t_7 = &v_s_1;
-        t_8 = ceeVA_VZS10SystemHeap(t_7, ((cee_str){ .ptr = (const uint8_t *)"hi", .len = 2u }));
-        t_9 = t_8;
-        t_10 = (uint32_t)t_9.tag;
-        switch (t_10) {
-        case ((uint32_t)0):
-            t_11 = v_v_0.len;
-            ceesafe_write_i64((int64_t)v_v_0.ptr[((uint64_t)0)]);
-            ceesafe_write_newline();
-            t_12 = ((cee_str){ .ptr = v_s_1.ptr, .len = v_s_1.len });
-            ceesafe_write_view(t_12);
-            ceesafe_write_newline();
-            ceeD_VZS10SystemHeap(&v_s_1);
-            ceeD_VUi32S10SystemHeap(&v_v_0);
-            return;
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 5u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 3u, 5u));
     }
+    t_6 = v_v_0.len;
+    cee_check_index(((uint64_t)0), t_6, &ceeL_0);
+    v_v_0.ptr[((uint64_t)0)] = ((int32_t)3);
+    v_s_1 = ((ceeV_ZS10SystemHeap){ .ptr = (uint8_t *)(void *)&ceesafe_vec_empty, .len = 0u, .cap = 0u });
+    t_7 = &v_s_1;
+    t_8 = ceeVA_VZS10SystemHeap(t_7, ((cee_str){ .ptr = (const uint8_t *)"hi", .len = 2u }));
+    t_9 = t_8;
+    t_10 = (uint32_t)t_9.tag;
+    switch (t_10) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 5u));
+    }
+    t_11 = v_v_0.len;
+    ceesafe_write_i64((int64_t)v_v_0.ptr[((uint64_t)0)]);
+    ceesafe_write_newline();
+    t_12 = ((cee_str){ .ptr = v_s_1.ptr, .len = v_s_1.len });
+    ceesafe_write_view(t_12);
+    ceesafe_write_newline();
+    ceeD_VZS10SystemHeap(&v_s_1);
+    ceeD_VUi32S10SystemHeap(&v_v_0);
+    return;
 }
 
 static void ceeD_VZS10SystemHeap(ceeV_ZS10SystemHeap *p) {

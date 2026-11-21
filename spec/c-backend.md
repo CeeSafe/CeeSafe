@@ -401,6 +401,12 @@ and a transfer may be dropped only where falling through provably reaches the sa
      `goto`, so this is not expected; it is a fallback.
    - The natural loop of a header `h` is `h` plus every block that reaches a back-edge source
      without passing through `h`.
+   - **A bound** (ADR 0195 §2.1.3): after step 6 the tree is measured, an `if`, a loop, a `switch`
+     and a `case` each one level (an `else` printed as `else if` is at its `if`'s level). A function
+     deeper than **96** levels is emitted flat, so a function's C nests at most 96 levels whatever
+     its source: under C11's minimum of 127 nested blocks (5.2.4.1), with room for a line's
+     parentheses, and under clang's default `-fbracket-depth=256`. Only deeply nested source or an
+     `else if` chain of about 90 arms (each `else` holds its condition's temporary) reaches it.
 2. **Placement.** Each block's code is emitted exactly once, inside the code of its immediate
    dominator `d`, in one of three ways:
    - **Inline**, at the branch to it: when it has one forward predecessor and leaves no loop that
@@ -437,6 +443,27 @@ and a transfer may be dropped only where falling through provably reaches the sa
      ending in a transfer becomes `if (c) { A } B`. Symmetrically, when only `B` ends in a
      transfer it becomes `if (!c) { B } A`. When both arms end in a transfer, the shorter arm is
      the guarded one.
+   - A `switch` completes when some `case` body completes or breaks the switch; a body that ends
+     in `return`, `goto`, `continue` or a `_Noreturn` call (the unreachable `default`'s
+     `ceesafe_panic`) does not (ADR 0195 §2.1.1). So an `if` arm ending in a `match` whose every
+     arm returns ends in a transfer, and the rule above applies to it.
+   - **Switch guard clauses** (ADR 0195 §2.1.2): when exactly one `case` body can reach what
+     follows the switch and the others end in a transfer, that body is moved after the switch and
+     the case becomes `break;` (a last `break` of the body is dropped, since falling off the moved
+     body reaches the same place). When none can, the largest body is moved, if it is larger than
+     every other. A body holding any other `break` of this switch stays: moved out, the `break`
+     would bind to an enclosing loop. `t()?;` thus prints the rest of the function after the
+     switch, not inside its `Ok` case:
+
+     ```c
+     switch (t_2) {
+     case ((uint32_t)0):
+         break;
+     default:
+         return t_3;
+     }
+     ceeD_RvS11TestFailure(&t_1);   /* the rest of the function, at the same depth */
+     ```
    - An empty `then` arm is negated away.
    - An `else` holding a single `if` is printed as `else if`.
 

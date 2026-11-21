@@ -224,6 +224,9 @@ fn structureFunction(
     removeLabels(mut s, tree, targets)?; // before hoisting: an arm holding only a dead label is empty
     s.always = always;
     hoist(mut s, tree)?;
+    if (treeDepth(s, tree) > structuredDepthBound()) {
+        return Ok(null); // flat (ADR 0195 §2.1.3): the C's depth is the backend's, not the program's
+    }
     s.root = tree;
     return Ok(Some(s));
 }
@@ -622,11 +625,151 @@ fn hoist(s: borrow mut Structurer, list: u32) -> Result<void, AllocError> {
                 let body = s.nodes[s.lists[node.first as usize][k] as usize].second;
                 hoist(s, body)?;
             }
+            let moved = hoistCase(s, list, i, id)?;
+            i += 1 + moved; // the moved nodes are hoisted already
+            continue;
         }
         i += 1;
     }
     return Ok();
 }
+
+/// A switch's guard clause (ADR 0195 §2.1.2): when one case body is left to reach what follows the switch and the
+/// others end in a transfer, that body follows the switch and its case breaks. With none reaching it, the largest
+/// body follows, as the larger arm of an `if` does. A body holding a `break` of this switch (but a last one) stays: moved out, the break would bind to an
+/// enclosing loop. How many nodes followed the switch.
+fn hoistCase(s: borrow mut Structurer, list: u32, i: usize, id: u32) -> Result<usize, AllocError> {
+    let cases = s.nodes[id as usize].first;
+    let count = s.lists[cases as usize].length;
+    if (count < 2) {
+        return Ok(0);
+    }
+    var chosen: usize = count; // none
+    var reaching: usize = 0;
+    for (k in 0..count) {
+        let body = s.nodes[s.lists[cases as usize][k] as usize].second;
+        if (completesList(s, body) || breaksList(s, body)) {
+            reaching += 1;
+            chosen = k;
+        }
+    }
+    if (reaching > 1) {
+        return Ok(0);
+    }
+    if (reaching == 0) {
+        // The largest body follows, if one is larger than every other: the rest of a function after `t()?;`.
+        var largest: usize = 0;
+        var tied = false;
+        for (k in 0..count) {
+            let size = sizeOf(s, s.nodes[s.lists[cases as usize][k] as usize].second);
+            if (chosen == count || size > largest) {
+                chosen = k;
+                largest = size;
+                tied = false;
+            } else if (size == largest) {
+                tied = true;
+            }
+        }
+        if (tied) {
+            return Ok(0);
+        }
+    }
+    let case = s.lists[cases as usize][chosen];
+    let body = s.nodes[case as usize].second;
+    var kept = s.lists[body as usize].length;
+    if (kept > 0 && s.nodes[s.lists[body as usize][kept - 1] as usize].kind == nodeBreak()) {
+        kept -= 1; // falling off the moved body reaches what the break did
+    } else if (reaching == 1 && chosen + 1 < count) {
+        return Ok(0); // it would fall into the next case: not made by step 3, and kept as it is
+    }
+    if (kept == 0 || breaksBefore(s, body, kept)) {
+        return Ok(0);
+    }
+    var rebuilt = Vector<u32>.create();
+    for (k in 0..(i + 1)) {
+        rebuilt.push(s.lists[list as usize][k])?;
+    }
+    for (k in 0..kept) {
+        rebuilt.push(s.lists[body as usize][k])?;
+    }
+    for (k in (i + 1)..s.lists[list as usize].length) {
+        rebuilt.push(s.lists[list as usize][k])?;
+    }
+    s.lists[list as usize] = rebuilt;
+    let replacement = newList(s)?;
+    let stop = newNode(s, nodeBreak(), s.nodes[id as usize].start, s.nodes[id as usize].end)?;
+    pushNode(s, replacement, stop)?;
+    s.nodes[case as usize].second = replacement;
+    return Ok(kept);
+}
+
+/// Whether the first `count` nodes of the list hold a break of the loop or switch it is the body of.
+fn breaksBefore(s: borrow Structurer, list: u32, count: usize) -> bool {
+    for (k in 0..count) {
+        let node = s.nodes[s.lists[list as usize][k] as usize];
+        if (node.kind == nodeBreak()) {
+            return true;
+        }
+        if (node.kind == nodeIf() && (breaksList(s, node.first) || breaksList(s, node.second))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// How deep the printed tree nests (ADR 0195 §2.1.3): an `if`, a loop, a switch and a case each one level; an `else`
+/// holding one `if` prints as `else if`, at its `if`'s level.
+fn treeDepth(s: borrow Structurer, list: u32) -> usize {
+    var deepest: usize = 0;
+    for (id in s.lists[list as usize].view()) {
+        let node = s.nodes[id as usize];
+        var depth: usize = 0;
+        if (node.kind == nodeIf()) {
+            depth = ifDepth(s, id);
+        } else if (node.kind == nodeLoop()) {
+            depth = 1 + treeDepth(s, node.first);
+        } else if (node.kind == nodeSwitch()) {
+            for (k in s.lists[node.first as usize].view()) {
+                let inner = 2 + treeDepth(s, s.nodes[k as usize].second);
+                if (inner > depth) {
+                    depth = inner;
+                }
+            }
+        }
+        if (depth > deepest) {
+            deepest = depth;
+        }
+    }
+    return deepest;
+}
+
+fn ifDepth(s: borrow Structurer, id: u32) -> usize {
+    // An `else if` chain is walked, not recursed into: its length is not a depth.
+    var deepest: usize = 0;
+    var current = id;
+    loop {
+        let node = s.nodes[current as usize];
+        let then = 1 + treeDepth(s, node.first);
+        if (then > deepest) {
+            deepest = then;
+        }
+        let otherwise = borrow s.lists[node.second as usize];
+        if (otherwise.length == 1 && s.nodes[otherwise[0] as usize].kind == nodeIf() &&
+            !isCfgText(s.texts[s.nodes[otherwise[0] as usize].text as usize].view())) {
+            current = otherwise[0];
+            continue;
+        }
+        let other = 1 + treeDepth(s, node.second);
+        if (other > deepest) {
+            deepest = other;
+        }
+        return deepest;
+    }
+}
+
+/// The deepest tree printed structured (ADR 0195 §2.1.3): under C11's 127 nested blocks (5.2.4.1), with room for a
+/// line's parentheses.
+fn structuredDepthBound() -> usize => 96;
 
 fn isCIdentifier(text: Slice<u8>) -> bool {
     if (text.length == 0 || (text[0] >= '0' && text[0] <= '9')) {
@@ -706,7 +849,18 @@ fn completesList(s: borrow Structurer, list: u32) -> bool {
     if (node.kind == nodeLoop()) {
         return breaksList(s, node.first);
     }
-    return true; // labels, switches (conservative)
+    if (node.kind == nodeSwitch()) {
+        // Exact (ADR 0195 §2.1.1): some case body completes or breaks the switch; a case ending in return, goto,
+        // continue or a `_Noreturn` call does not.
+        for (k in s.lists[node.first as usize].view()) {
+            let body = s.nodes[k as usize].second;
+            if (completesList(s, body) || breaksList(s, body)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return true; // labels
 }
 
 /// Whether the list contains a break of the loop it is the body of (Breaks).

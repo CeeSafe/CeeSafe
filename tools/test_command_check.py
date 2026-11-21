@@ -16,6 +16,8 @@
 7. On tests/packages/sweep-frame-stack, a stacked await out of memory is set apart (ADR 0147).
 8. On tests/packages/sweep-exit-output, a sweep run that exits says why (spec/tooling.md §10.2): its failure, in the
    text and in the JSON, ends with the run's own standard error, the message the program wrote before its exit.
+9. A package of 300 `@test` functions passes `test --cflag -fbracket-depth=256` (clang's default; ADR 0195 G36): the
+   harness's C nests no deeper with the number of tests. Skipped when the C compiler is not clang.
 
 usage: python3 tools/test_command_check.py --compiler out/ceesafec
 """
@@ -270,7 +272,24 @@ def main():
         if wanted not in p.stdout or p.returncode != 1:
             problems.append(f"sweep-exit-output: exit status {p.returncode}, text {p.stdout[-300:]!r}")
 
-    print(f"test_command_check: {len(expected)} tests, 8 checks; {len(problems)} problems")
+        # 9. 300 tests under clang's default bracket depth (ADR 0195 §2.1): the harness's C does not nest per test
+        cc = os.environ.get("CC", "cc")
+        version = subprocess.run([cc, "--version"], capture_output=True, text=True)
+        if "clang" in version.stdout:
+            many = os.path.join(work, "many-tests")
+            os.makedirs(os.path.join(many, "src"))
+            with open(os.path.join(many, "ceesafe.toml"), "w", encoding="utf-8") as f:
+                f.write('[package]\nname = "many"\nversion = "0.0.1"\nkind = "executable"\n')
+            with open(os.path.join(many, "src", "main.cee"), "w", encoding="utf-8") as f:
+                f.write("fn main() {}\n")
+                for i in range(300):
+                    f.write("@test\nfn t%03d() -> Result<void, TestFailure> {\n    return Ok();\n}\n" % i)
+            p = run(["test", "--cflag", "-fbracket-depth=256"], many)
+            if p.returncode != 0 or "300 passed, 0 failed" not in p.stdout:
+                problems.append(f"300 tests under -fbracket-depth=256: exit status {p.returncode}, "
+                                f"{p.stdout[-200:]!r} {p.stderr[-400:]!r}")
+
+    print(f"test_command_check: {len(expected)} tests, 9 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

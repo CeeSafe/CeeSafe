@@ -58,13 +58,14 @@ static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
     t_4 = (uint32_t)t_3.tag;
     switch (t_4) {
     case ((uint32_t)1):
-        v_h_1 = t_3.u.v_Some.f__0;
-        t_7 = ceeF_half(v_h_1);
-        return t_7;
+        break;
     default:
         t_5 = ((ceeO_i32){ .tag = 0 });
         return t_5;
     }
+    v_h_1 = t_3.u.v_Some.f__0;
+    t_7 = ceeF_half(v_h_1);
+    return t_7;
 }
 
 static void ceeF_main(void) {
@@ -83,12 +84,12 @@ static void ceeF_main(void) {
         t_5 = (uint32_t)t_4.tag;
         switch (t_5) {
         case ((uint32_t)1):
-            ceesafe_write_i64((int64_t)t_4.u.v_Some.f__0);
-            ceesafe_write_newline();
             break;
         default:
             ceesafe_panic(CEE_PANIC_UNWRAP_NULL, CEE_LOC(cee_file_0, 13u, 40u));
         }
+        ceesafe_write_i64((int64_t)t_4.u.v_Some.f__0);
+        ceesafe_write_newline();
     }
     return;
 }

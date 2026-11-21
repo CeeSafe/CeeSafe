@@ -69,15 +69,16 @@ static int64_t ceeF_area(CEE_UNUSED ceeE_Shape v_s_0) {
         t_6 = v_r_1;
         return t_6;
     case ((uint32_t)2):
-        v_w_2 = v_s_0.u.v_Rect.f__0;
-        v_h_3 = v_s_0.u.v_Rect.f__1;
-        t_7 = (int64_t)v_w_2;
-        t_8 = cee_mul_i64(t_7, v_h_3, &ceeL_0);
-        t_9 = t_8;
-        return t_9;
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNREACHABLE, CEE_LOC(cee_file_0, 4u, 4u));
     }
+    v_w_2 = v_s_0.u.v_Rect.f__0;
+    v_h_3 = v_s_0.u.v_Rect.f__1;
+    t_7 = (int64_t)v_w_2;
+    t_8 = cee_mul_i64(t_7, v_h_3, &ceeL_0);
+    t_9 = t_8;
+    return t_9;
 }
 
 static int32_t ceeF_main(void) {

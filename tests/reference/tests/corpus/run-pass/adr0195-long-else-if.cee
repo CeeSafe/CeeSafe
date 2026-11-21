@@ -1,0 +1,915 @@
+// ADR 0195 §2.1.3 (G36): a 300-arm `else if` chain nests in its source, and each `else` holds its condition's
+// temporary, so no guard clause flattens it: past 96 levels the function is emitted flat.
+fn pick(x: i32) -> i32 {
+    var r: i32 = 0;
+    if (x == 0) {
+        r = 0;
+    }
+    else if (x == 1) {
+        r = 2;
+    }
+    else if (x == 2) {
+        r = 4;
+    }
+    else if (x == 3) {
+        r = 6;
+    }
+    else if (x == 4) {
+        r = 8;
+    }
+    else if (x == 5) {
+        r = 10;
+    }
+    else if (x == 6) {
+        r = 12;
+    }
+    else if (x == 7) {
+        r = 14;
+    }
+    else if (x == 8) {
+        r = 16;
+    }
+    else if (x == 9) {
+        r = 18;
+    }
+    else if (x == 10) {
+        r = 20;
+    }
+    else if (x == 11) {
+        r = 22;
+    }
+    else if (x == 12) {
+        r = 24;
+    }
+    else if (x == 13) {
+        r = 26;
+    }
+    else if (x == 14) {
+        r = 28;
+    }
+    else if (x == 15) {
+        r = 30;
+    }
+    else if (x == 16) {
+        r = 32;
+    }
+    else if (x == 17) {
+        r = 34;
+    }
+    else if (x == 18) {
+        r = 36;
+    }
+    else if (x == 19) {
+        r = 38;
+    }
+    else if (x == 20) {
+        r = 40;
+    }
+    else if (x == 21) {
+        r = 42;
+    }
+    else if (x == 22) {
+        r = 44;
+    }
+    else if (x == 23) {
+        r = 46;
+    }
+    else if (x == 24) {
+        r = 48;
+    }
+    else if (x == 25) {
+        r = 50;
+    }
+    else if (x == 26) {
+        r = 52;
+    }
+    else if (x == 27) {
+        r = 54;
+    }
+    else if (x == 28) {
+        r = 56;
+    }
+    else if (x == 29) {
+        r = 58;
+    }
+    else if (x == 30) {
+        r = 60;
+    }
+    else if (x == 31) {
+        r = 62;
+    }
+    else if (x == 32) {
+        r = 64;
+    }
+    else if (x == 33) {
+        r = 66;
+    }
+    else if (x == 34) {
+        r = 68;
+    }
+    else if (x == 35) {
+        r = 70;
+    }
+    else if (x == 36) {
+        r = 72;
+    }
+    else if (x == 37) {
+        r = 74;
+    }
+    else if (x == 38) {
+        r = 76;
+    }
+    else if (x == 39) {
+        r = 78;
+    }
+    else if (x == 40) {
+        r = 80;
+    }
+    else if (x == 41) {
+        r = 82;
+    }
+    else if (x == 42) {
+        r = 84;
+    }
+    else if (x == 43) {
+        r = 86;
+    }
+    else if (x == 44) {
+        r = 88;
+    }
+    else if (x == 45) {
+        r = 90;
+    }
+    else if (x == 46) {
+        r = 92;
+    }
+    else if (x == 47) {
+        r = 94;
+    }
+    else if (x == 48) {
+        r = 96;
+    }
+    else if (x == 49) {
+        r = 98;
+    }
+    else if (x == 50) {
+        r = 100;
+    }
+    else if (x == 51) {
+        r = 102;
+    }
+    else if (x == 52) {
+        r = 104;
+    }
+    else if (x == 53) {
+        r = 106;
+    }
+    else if (x == 54) {
+        r = 108;
+    }
+    else if (x == 55) {
+        r = 110;
+    }
+    else if (x == 56) {
+        r = 112;
+    }
+    else if (x == 57) {
+        r = 114;
+    }
+    else if (x == 58) {
+        r = 116;
+    }
+    else if (x == 59) {
+        r = 118;
+    }
+    else if (x == 60) {
+        r = 120;
+    }
+    else if (x == 61) {
+        r = 122;
+    }
+    else if (x == 62) {
+        r = 124;
+    }
+    else if (x == 63) {
+        r = 126;
+    }
+    else if (x == 64) {
+        r = 128;
+    }
+    else if (x == 65) {
+        r = 130;
+    }
+    else if (x == 66) {
+        r = 132;
+    }
+    else if (x == 67) {
+        r = 134;
+    }
+    else if (x == 68) {
+        r = 136;
+    }
+    else if (x == 69) {
+        r = 138;
+    }
+    else if (x == 70) {
+        r = 140;
+    }
+    else if (x == 71) {
+        r = 142;
+    }
+    else if (x == 72) {
+        r = 144;
+    }
+    else if (x == 73) {
+        r = 146;
+    }
+    else if (x == 74) {
+        r = 148;
+    }
+    else if (x == 75) {
+        r = 150;
+    }
+    else if (x == 76) {
+        r = 152;
+    }
+    else if (x == 77) {
+        r = 154;
+    }
+    else if (x == 78) {
+        r = 156;
+    }
+    else if (x == 79) {
+        r = 158;
+    }
+    else if (x == 80) {
+        r = 160;
+    }
+    else if (x == 81) {
+        r = 162;
+    }
+    else if (x == 82) {
+        r = 164;
+    }
+    else if (x == 83) {
+        r = 166;
+    }
+    else if (x == 84) {
+        r = 168;
+    }
+    else if (x == 85) {
+        r = 170;
+    }
+    else if (x == 86) {
+        r = 172;
+    }
+    else if (x == 87) {
+        r = 174;
+    }
+    else if (x == 88) {
+        r = 176;
+    }
+    else if (x == 89) {
+        r = 178;
+    }
+    else if (x == 90) {
+        r = 180;
+    }
+    else if (x == 91) {
+        r = 182;
+    }
+    else if (x == 92) {
+        r = 184;
+    }
+    else if (x == 93) {
+        r = 186;
+    }
+    else if (x == 94) {
+        r = 188;
+    }
+    else if (x == 95) {
+        r = 190;
+    }
+    else if (x == 96) {
+        r = 192;
+    }
+    else if (x == 97) {
+        r = 194;
+    }
+    else if (x == 98) {
+        r = 196;
+    }
+    else if (x == 99) {
+        r = 198;
+    }
+    else if (x == 100) {
+        r = 200;
+    }
+    else if (x == 101) {
+        r = 202;
+    }
+    else if (x == 102) {
+        r = 204;
+    }
+    else if (x == 103) {
+        r = 206;
+    }
+    else if (x == 104) {
+        r = 208;
+    }
+    else if (x == 105) {
+        r = 210;
+    }
+    else if (x == 106) {
+        r = 212;
+    }
+    else if (x == 107) {
+        r = 214;
+    }
+    else if (x == 108) {
+        r = 216;
+    }
+    else if (x == 109) {
+        r = 218;
+    }
+    else if (x == 110) {
+        r = 220;
+    }
+    else if (x == 111) {
+        r = 222;
+    }
+    else if (x == 112) {
+        r = 224;
+    }
+    else if (x == 113) {
+        r = 226;
+    }
+    else if (x == 114) {
+        r = 228;
+    }
+    else if (x == 115) {
+        r = 230;
+    }
+    else if (x == 116) {
+        r = 232;
+    }
+    else if (x == 117) {
+        r = 234;
+    }
+    else if (x == 118) {
+        r = 236;
+    }
+    else if (x == 119) {
+        r = 238;
+    }
+    else if (x == 120) {
+        r = 240;
+    }
+    else if (x == 121) {
+        r = 242;
+    }
+    else if (x == 122) {
+        r = 244;
+    }
+    else if (x == 123) {
+        r = 246;
+    }
+    else if (x == 124) {
+        r = 248;
+    }
+    else if (x == 125) {
+        r = 250;
+    }
+    else if (x == 126) {
+        r = 252;
+    }
+    else if (x == 127) {
+        r = 254;
+    }
+    else if (x == 128) {
+        r = 256;
+    }
+    else if (x == 129) {
+        r = 258;
+    }
+    else if (x == 130) {
+        r = 260;
+    }
+    else if (x == 131) {
+        r = 262;
+    }
+    else if (x == 132) {
+        r = 264;
+    }
+    else if (x == 133) {
+        r = 266;
+    }
+    else if (x == 134) {
+        r = 268;
+    }
+    else if (x == 135) {
+        r = 270;
+    }
+    else if (x == 136) {
+        r = 272;
+    }
+    else if (x == 137) {
+        r = 274;
+    }
+    else if (x == 138) {
+        r = 276;
+    }
+    else if (x == 139) {
+        r = 278;
+    }
+    else if (x == 140) {
+        r = 280;
+    }
+    else if (x == 141) {
+        r = 282;
+    }
+    else if (x == 142) {
+        r = 284;
+    }
+    else if (x == 143) {
+        r = 286;
+    }
+    else if (x == 144) {
+        r = 288;
+    }
+    else if (x == 145) {
+        r = 290;
+    }
+    else if (x == 146) {
+        r = 292;
+    }
+    else if (x == 147) {
+        r = 294;
+    }
+    else if (x == 148) {
+        r = 296;
+    }
+    else if (x == 149) {
+        r = 298;
+    }
+    else if (x == 150) {
+        r = 300;
+    }
+    else if (x == 151) {
+        r = 302;
+    }
+    else if (x == 152) {
+        r = 304;
+    }
+    else if (x == 153) {
+        r = 306;
+    }
+    else if (x == 154) {
+        r = 308;
+    }
+    else if (x == 155) {
+        r = 310;
+    }
+    else if (x == 156) {
+        r = 312;
+    }
+    else if (x == 157) {
+        r = 314;
+    }
+    else if (x == 158) {
+        r = 316;
+    }
+    else if (x == 159) {
+        r = 318;
+    }
+    else if (x == 160) {
+        r = 320;
+    }
+    else if (x == 161) {
+        r = 322;
+    }
+    else if (x == 162) {
+        r = 324;
+    }
+    else if (x == 163) {
+        r = 326;
+    }
+    else if (x == 164) {
+        r = 328;
+    }
+    else if (x == 165) {
+        r = 330;
+    }
+    else if (x == 166) {
+        r = 332;
+    }
+    else if (x == 167) {
+        r = 334;
+    }
+    else if (x == 168) {
+        r = 336;
+    }
+    else if (x == 169) {
+        r = 338;
+    }
+    else if (x == 170) {
+        r = 340;
+    }
+    else if (x == 171) {
+        r = 342;
+    }
+    else if (x == 172) {
+        r = 344;
+    }
+    else if (x == 173) {
+        r = 346;
+    }
+    else if (x == 174) {
+        r = 348;
+    }
+    else if (x == 175) {
+        r = 350;
+    }
+    else if (x == 176) {
+        r = 352;
+    }
+    else if (x == 177) {
+        r = 354;
+    }
+    else if (x == 178) {
+        r = 356;
+    }
+    else if (x == 179) {
+        r = 358;
+    }
+    else if (x == 180) {
+        r = 360;
+    }
+    else if (x == 181) {
+        r = 362;
+    }
+    else if (x == 182) {
+        r = 364;
+    }
+    else if (x == 183) {
+        r = 366;
+    }
+    else if (x == 184) {
+        r = 368;
+    }
+    else if (x == 185) {
+        r = 370;
+    }
+    else if (x == 186) {
+        r = 372;
+    }
+    else if (x == 187) {
+        r = 374;
+    }
+    else if (x == 188) {
+        r = 376;
+    }
+    else if (x == 189) {
+        r = 378;
+    }
+    else if (x == 190) {
+        r = 380;
+    }
+    else if (x == 191) {
+        r = 382;
+    }
+    else if (x == 192) {
+        r = 384;
+    }
+    else if (x == 193) {
+        r = 386;
+    }
+    else if (x == 194) {
+        r = 388;
+    }
+    else if (x == 195) {
+        r = 390;
+    }
+    else if (x == 196) {
+        r = 392;
+    }
+    else if (x == 197) {
+        r = 394;
+    }
+    else if (x == 198) {
+        r = 396;
+    }
+    else if (x == 199) {
+        r = 398;
+    }
+    else if (x == 200) {
+        r = 400;
+    }
+    else if (x == 201) {
+        r = 402;
+    }
+    else if (x == 202) {
+        r = 404;
+    }
+    else if (x == 203) {
+        r = 406;
+    }
+    else if (x == 204) {
+        r = 408;
+    }
+    else if (x == 205) {
+        r = 410;
+    }
+    else if (x == 206) {
+        r = 412;
+    }
+    else if (x == 207) {
+        r = 414;
+    }
+    else if (x == 208) {
+        r = 416;
+    }
+    else if (x == 209) {
+        r = 418;
+    }
+    else if (x == 210) {
+        r = 420;
+    }
+    else if (x == 211) {
+        r = 422;
+    }
+    else if (x == 212) {
+        r = 424;
+    }
+    else if (x == 213) {
+        r = 426;
+    }
+    else if (x == 214) {
+        r = 428;
+    }
+    else if (x == 215) {
+        r = 430;
+    }
+    else if (x == 216) {
+        r = 432;
+    }
+    else if (x == 217) {
+        r = 434;
+    }
+    else if (x == 218) {
+        r = 436;
+    }
+    else if (x == 219) {
+        r = 438;
+    }
+    else if (x == 220) {
+        r = 440;
+    }
+    else if (x == 221) {
+        r = 442;
+    }
+    else if (x == 222) {
+        r = 444;
+    }
+    else if (x == 223) {
+        r = 446;
+    }
+    else if (x == 224) {
+        r = 448;
+    }
+    else if (x == 225) {
+        r = 450;
+    }
+    else if (x == 226) {
+        r = 452;
+    }
+    else if (x == 227) {
+        r = 454;
+    }
+    else if (x == 228) {
+        r = 456;
+    }
+    else if (x == 229) {
+        r = 458;
+    }
+    else if (x == 230) {
+        r = 460;
+    }
+    else if (x == 231) {
+        r = 462;
+    }
+    else if (x == 232) {
+        r = 464;
+    }
+    else if (x == 233) {
+        r = 466;
+    }
+    else if (x == 234) {
+        r = 468;
+    }
+    else if (x == 235) {
+        r = 470;
+    }
+    else if (x == 236) {
+        r = 472;
+    }
+    else if (x == 237) {
+        r = 474;
+    }
+    else if (x == 238) {
+        r = 476;
+    }
+    else if (x == 239) {
+        r = 478;
+    }
+    else if (x == 240) {
+        r = 480;
+    }
+    else if (x == 241) {
+        r = 482;
+    }
+    else if (x == 242) {
+        r = 484;
+    }
+    else if (x == 243) {
+        r = 486;
+    }
+    else if (x == 244) {
+        r = 488;
+    }
+    else if (x == 245) {
+        r = 490;
+    }
+    else if (x == 246) {
+        r = 492;
+    }
+    else if (x == 247) {
+        r = 494;
+    }
+    else if (x == 248) {
+        r = 496;
+    }
+    else if (x == 249) {
+        r = 498;
+    }
+    else if (x == 250) {
+        r = 500;
+    }
+    else if (x == 251) {
+        r = 502;
+    }
+    else if (x == 252) {
+        r = 504;
+    }
+    else if (x == 253) {
+        r = 506;
+    }
+    else if (x == 254) {
+        r = 508;
+    }
+    else if (x == 255) {
+        r = 510;
+    }
+    else if (x == 256) {
+        r = 512;
+    }
+    else if (x == 257) {
+        r = 514;
+    }
+    else if (x == 258) {
+        r = 516;
+    }
+    else if (x == 259) {
+        r = 518;
+    }
+    else if (x == 260) {
+        r = 520;
+    }
+    else if (x == 261) {
+        r = 522;
+    }
+    else if (x == 262) {
+        r = 524;
+    }
+    else if (x == 263) {
+        r = 526;
+    }
+    else if (x == 264) {
+        r = 528;
+    }
+    else if (x == 265) {
+        r = 530;
+    }
+    else if (x == 266) {
+        r = 532;
+    }
+    else if (x == 267) {
+        r = 534;
+    }
+    else if (x == 268) {
+        r = 536;
+    }
+    else if (x == 269) {
+        r = 538;
+    }
+    else if (x == 270) {
+        r = 540;
+    }
+    else if (x == 271) {
+        r = 542;
+    }
+    else if (x == 272) {
+        r = 544;
+    }
+    else if (x == 273) {
+        r = 546;
+    }
+    else if (x == 274) {
+        r = 548;
+    }
+    else if (x == 275) {
+        r = 550;
+    }
+    else if (x == 276) {
+        r = 552;
+    }
+    else if (x == 277) {
+        r = 554;
+    }
+    else if (x == 278) {
+        r = 556;
+    }
+    else if (x == 279) {
+        r = 558;
+    }
+    else if (x == 280) {
+        r = 560;
+    }
+    else if (x == 281) {
+        r = 562;
+    }
+    else if (x == 282) {
+        r = 564;
+    }
+    else if (x == 283) {
+        r = 566;
+    }
+    else if (x == 284) {
+        r = 568;
+    }
+    else if (x == 285) {
+        r = 570;
+    }
+    else if (x == 286) {
+        r = 572;
+    }
+    else if (x == 287) {
+        r = 574;
+    }
+    else if (x == 288) {
+        r = 576;
+    }
+    else if (x == 289) {
+        r = 578;
+    }
+    else if (x == 290) {
+        r = 580;
+    }
+    else if (x == 291) {
+        r = 582;
+    }
+    else if (x == 292) {
+        r = 584;
+    }
+    else if (x == 293) {
+        r = 586;
+    }
+    else if (x == 294) {
+        r = 588;
+    }
+    else if (x == 295) {
+        r = 590;
+    }
+    else if (x == 296) {
+        r = 592;
+    }
+    else if (x == 297) {
+        r = 594;
+    }
+    else if (x == 298) {
+        r = 596;
+    }
+    else if (x == 299) {
+        r = 598;
+    }
+    return r;
+}
+
+fn main() {
+    Console.writeLine(pick(0));
+    Console.writeLine(pick(299));
+    Console.writeLine(pick(300));
+}
+// expect-stdout: 0
+// expect-stdout: 598
+// expect-stdout: 0

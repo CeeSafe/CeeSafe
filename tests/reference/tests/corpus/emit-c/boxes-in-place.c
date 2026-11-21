@@ -122,25 +122,27 @@ static int32_t ceeF_main(void) {
     t_4 = (uint32_t)t_3.tag;
     switch (t_4) {
     case ((uint32_t)0):
-        v_t_0 = t_3.u.v_Ok.f__0;
-        t_6 = ceeF_holder(((int32_t)3));
-        t_7 = (uint32_t)t_6.tag;
-        switch (t_7) {
-        case ((uint32_t)0):
-            v_h_1 = t_6.u.v_Ok.f__0;
-            t_8 = (int64_t)(*v_t_0).e[((uint64_t)63)];
-            t_9 = cee_as_i32((uint32_t)t_8);
-            t_10 = cee_add_i32(t_9, (*v_h_1).f_id, &ceeL_0);
-            t_11 = t_10;
-            ceeD_XS3ResS10SystemHeap(&v_h_1);
-            ceeD_XA64_u8S10SystemHeap(&v_t_0);
-            return t_11;
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 11u, 13u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 10u, 13u));
     }
+    v_t_0 = t_3.u.v_Ok.f__0;
+    t_6 = ceeF_holder(((int32_t)3));
+    t_7 = (uint32_t)t_6.tag;
+    switch (t_7) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 11u, 13u));
+    }
+    v_h_1 = t_6.u.v_Ok.f__0;
+    t_8 = (int64_t)(*v_t_0).e[((uint64_t)63)];
+    t_9 = cee_as_i32((uint32_t)t_8);
+    t_10 = cee_add_i32(t_9, (*v_h_1).f_id, &ceeL_0);
+    t_11 = t_10;
+    ceeD_XS3ResS10SystemHeap(&v_h_1);
+    ceeD_XA64_u8S10SystemHeap(&v_t_0);
+    return t_11;
 }
 
 static void ceeM_3Res_drop(CEE_UNUSED ceeT_Res * v_this_0) {

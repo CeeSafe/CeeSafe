@@ -1,0 +1,18 @@
+// ADR 0196 §2.3: an encoder and the whole-buffer calls allocate, so code declared with no effect cannot call them
+// (N0295); a decoder's step writes into the caller's slice and allocates nothing, so it can.
+@effects()
+fn encodes(d: borrow mut Deflater, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    return d.update(input, out); // error[N0295]
+}
+
+@effects()
+fn decodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    return Zlib.decompress(input, 100, out); // error[N0295]
+}
+
+@effects()
+fn steps(i: borrow mut Inflater, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError> {
+    return i.step(input, out);
+}
+
+fn main() {}

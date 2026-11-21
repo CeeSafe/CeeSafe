@@ -548,7 +548,10 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   scope's end mentions (it reads its oom operand after resuming). Inside the resume function such a local's C name is
   defined as its field (`#define v_x_3 (cee_frame->v_x_3)`, undefined after the function), so statements are emitted
   as in a sync function, and a pointer to it stays valid while the frame does (type-system.md §40.6). Every other
-  local is a C local of the resume function, zero-initialised as a sync function's.
+  local is a C local of the resume function, declared as a sync function's are (§5): zeroed only when it is written in
+  part or borrowed, else with no initializer, since it is assigned whole before every read in the same resume (it is
+  not live across a suspension point). Before ADR 0204 every one was zeroed, at every entry of the resume function,
+  each with a store of its own.
 - **Waiting storage.** A task waits at one suspension point at a time, so what each needs only while it waits (an
   awaited child's frame `cee_a<k>`, a join `cee_j<site>`, a worker `cee_b<site>`) shares one union `cee_u`. A scope's
   struct is its own field: it must be zero when its first child is spawned.
@@ -790,9 +793,10 @@ Windows runner), and a program of builders over a 5.7 KB struct doubled in size 
 | Pointer arithmetic | Never form out-of-range pointers. Bounds checks compare indices before computing `ptr + i`. Raw-pointer arithmetic (M8a) is done on `uintptr_t`, and raw pointers have no ordering comparisons (`unsafe.md` §4) |
 | Strict aliasing | No type punning. Reinterpretation (`transmute`, unsafe only) goes through `memcpy` (a builtin; supplied by the runtime in freestanding builds) |
 | Uninitialised reads | Definite-init analysis forbids them. A local of aggregate type (struct, enum, array, slice, vector, …) is zero-initialised (`{0}`) in C when any part of it can be written other than by assigning it whole: a write to a field, element or payload, a borrow of it or of a part (`&x`, `x.e + i`, shared or mutable), or being an
-`Unpack` target. So is one whose variant payload is read (a `match` arm, an `Unpack` source): the arm for a variant the
-local never holds reads bytes its assigned variants do not cover, and gcc's `-Wmaybe-uninitialized` (with `-Werror`)
-rejects that at `-O0`, although the tag test means it never runs (found by the M9d fuzz campaign); so indeterminate members or padding are never copied. Every other aggregate local is assigned whole before each read (definite assignment, which the interpreter checks on every run), and is declared without an initializer (M9d: gcc 12 does not remove the zeroing, which was most of `fbvalid`'s gcc gap, `milestone-9.md`). Scalars and references are always zero-initialised; the C compilers drop those stores |
+`Unpack` target. A local whose variant payload is read (a `match` arm, an `Unpack` source) was zeroed too, for gcc's
+`-Wmaybe-uninitialized` (the arm for a variant the local never holds reads bytes its assigned variants do not cover,
+although the tag test means it never runs; found by the M9d fuzz campaign); `rt.h` turns that warning off for gcc,
+and such a local is assigned whole before it is read, so since ADR 0204 it is not. Every other aggregate local is assigned whole before each read (definite assignment, which the interpreter checks on every run), and is declared without an initializer (M9d: gcc 12 does not remove the zeroing, which was most of `fbvalid`'s gcc gap, `milestone-9.md`). Scalars and references are always zero-initialised; the C compilers drop those stores |
 | Null | References are never null (type system). `T?` niche checks are explicit |
 | Alignment | All accesses are through properly typed lvalues. `@packed` fields are accessed via `memcpy` helpers |
 | Lifetime of compound literals / temporaries | Not used across statements. Temporaries are named locals |

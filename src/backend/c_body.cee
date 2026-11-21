@@ -383,45 +383,6 @@ fn partlyWritten(
     return Ok();
 }
 
-fn addPayloadReads(n: borrow NirProgram, r: u32, locals: borrow mut Vector<bool>) -> Result<void, AllocError> {
-    var operands = Vector<u32>.create();
-    rvalueOperands(n, r, mut operands)?;
-    for (o in operands.view()) {
-        let place = operandPlace(n, o);
-        if (place != none()) {
-            addPayloadRead(n, place, false, locals)?;
-        }
-    }
-    return Ok();
-}
-
-/// A place that views the local's own storage (before any dereference) as a variant (AddPayloadRead).
-fn addPayloadRead(
-    n: borrow NirProgram,
-    place: u32,
-    unpack: bool,
-    locals: borrow mut Vector<bool>,
-) -> Result<void, AllocError> {
-    let p = n.places[place as usize];
-    var ownCount: u32 = 0;
-    var downcast = false;
-    while (ownCount < p.projections.count) {
-        let projection = n.projections[(p.projections.start + ownCount) as usize];
-        if (isNirDeref(projection)) {
-            break;
-        }
-        match (projection.kind) {
-            ProjectionKind.Downcast => { downcast = true; }
-            _ => {}
-        }
-        ownCount += 1;
-    }
-    if (if (unpack) ownCount == p.projections.count else downcast) {
-        markType(locals, p.local)?;
-    }
-    return Ok();
-}
-
 fn isNirDeref(p: NirProjection) -> bool => match (p.kind) {
     ProjectionKind.Deref => true,
     _ => false,

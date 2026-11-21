@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.85.1: §2.1, `ceesafe_wipe` in the runtime and the interpreter, and lib/std's key holders on it (`Aes256Gcm`'s drop, ADR 0194's `HmacSha256`); `Secret.wipe` and `SecretHeap` are for 0.86.0. Raised by CosmoStore's CEESAFE_GAPS G42 ("a value with a wiping `drop` leaves its
   bytes behind when moved, and a growing vector frees its old buffer unwiped") and G34 (`HmacSha256` leaves its key in
   freed memory); `~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`. Measured with ceesafec 0.84.1 on an M1 (macOS, Apple
-  clang 21), §1.3.
+  clang 21), §1.3. The rest implemented for 0.86.0: §2.2 `Secret.wipe` (N0365), §2.3 `SecretHeap` (`CEE_ALLOC_SECRET`), §2.6 `--scan-freed` and `Testing.freedHolds`, §4.4 `tools/wipe_check.py`.
 - Scope: the runtime (`runtime/core/ceesafe_rt_core.c`, `runtime/include/ceesafe/rt.h`: one allocator id and one wipe
   function), a third built-in allocator type `SecretHeap` (type-system.md §18.1, §23, §24, §30.2; the checker's
   allocator rules and `src/backend/c_helpers.cee`'s allocator ids), one built-in function `Secret.wipe` in lib/core,
@@ -213,3 +213,16 @@ name); the corpus and the known applications have neither (to be checked by `too
    compiler change if lib/std calls `ceesafe_wipe` as it calls `ceesafe_aes256gcm_*`. Ship them in the next patch
    release ahead of `SecretHeap` and `Secret.wipe`, or all together? Recommended: the fix first, as a patch;
    `SecretHeap` in the next minor release once §4's checks pass on Linux, macOS and Windows.
+
+## As built (0.86.0)
+
+- **`Secret` is not reserved.** It is a built-in name a user item can hide, as `Console` is: the corpus has a `struct
+  Secret` (`run-pass/struct-patterns.cee`) and an `enum Secret`. `SecretHeap` is reserved.
+- **Pools:** a pool's slots are not wiped one by one when a box goes back to it. The pool's block is wiped when it is
+  freed.
+- **The slice form** takes any zeroable element type, not only `u8`.
+- **`ceesafe_wipe`:**
+  - it is in the runtime core's first part, so a freestanding program links it;
+  - it is `noinline`, so `wipe_check` finds the call under LTO.
+- **Not run yet:** the scan and growth tests on Linux and Windows; `wipe_check` under gcc and `cl` (this Mac has only
+  Apple clang); a `--kernel cosmoos` object.

@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's G41 (`CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): a master
   key's words were to live in `[AtomicU64; 4]`, which N0259 refuses outside a static. It finishes what ADR 0075 §2.15
-  left out ("Arrays of non-Copy elements outside statics", its §3).
+  left out ("Arrays of non-Copy elements outside statics", its §3). Phase 1 implemented for 0.86.0.
 - Scope: type-system.md §14.1, §14.5, §16.1 to §16.5, §21.3, §39.4; diagnostics.md N0259 and N0251; the checker
   (`src/check/arrays.cee`, `src/types/types.cee`), NIR (one new rvalue), the C backend's drop glue
   (`src/backend/c_helpers.cee`) and the interpreter's (`src/interpreter/runtime.cee`); the guide's arrays page and
@@ -168,3 +168,15 @@ An array owns its `N` elements, which are always all initialised. Whatever the e
 6. **Unbounded `[T; N]` in generic code waits for phase 2**, with no `NoDrop` bound in between? Recommended: yes.
 7. **Destruction from index 0 upward** (a vector's order), not reverse (locals' order)? Recommended: index 0 upward,
    as `Vector`, `StableVector` and a struct's fields.
+
+## As built (0.86.0, phase 1)
+
+- **No new NIR rvalue.** `arrayFrom` lowers to a zero-filled result and a loop that calls the closure into each
+  element, so the C backend is unchanged. Phase 2 will need a write of an element that does not drop the zero bytes
+  before it.
+- **Effects:** the calls through `arrayFrom`'s closure take the closure literal's effects, as `@effectsOf` does.
+- **A temporary's elements:** a non-Copy element of an array temporary is borrowed in place, so `make()[1].load()`
+  works.
+- **One exception:** an array of C state stays Copy, as before.
+- **One expectation changed:** `check-fail/adr0075-errors.cee`. `[AtomicU64.constant(0); 2]` is accepted now, so
+  that line uses `AtomicU64.create(0)`.

@@ -111,45 +111,49 @@ static int32_t ceeF_main(void) {
     t_7 = (uint32_t)t_6.tag;
     switch (t_7) {
     case ((uint32_t)0):
-        t_8 = &v_secret_0;
-        t_9 = ceeVO_VUu32S10SecretHeap(t_8);
-        t_10 = t_9;
-        t_11 = (uint32_t)t_10.tag;
-        switch (t_11) {
-        case ((uint32_t)1):
-            v_a_1 = t_10.u.v_Some.f__0;
-            v_plain_2 = ((ceeV_Uu32S10SystemHeap){ .ptr = (uint32_t *)(void *)&ceesafe_vec_empty, .len = 0u, .cap = 0u });
-            t_12 = &v_plain_2;
-            t_13 = ceeVP_VUu32S10SystemHeap(t_12, ((uint32_t)5));
-            t_14 = t_13;
-            t_15 = (uint32_t)t_14.tag;
-            switch (t_15) {
-            case ((uint32_t)0):
-                t_16 = &v_plain_2;
-                t_17 = ceeVO_VUu32S10SystemHeap(t_16);
-                t_18 = t_17;
-                t_19 = (uint32_t)t_18.tag;
-                switch (t_19) {
-                case ((uint32_t)1):
-                    v_b_3 = t_18.u.v_Some.f__0;
-                    t_20 = cee_add_u32(v_a_1, v_b_3, &ceeL_0);
-                    t_21 = cee_as_i32((uint32_t)t_20);
-                    t_22 = t_21;
-                    ceeD_VUu32S10SystemHeap(&v_plain_2);
-                    ceeD_VUu32S10SecretHeap(&v_secret_0);
-                    return t_22;
-                default:
-                    ceesafe_panic(CEE_PANIC_UNWRAP_NULL, CEE_LOC(cee_file_0, 10u, 13u));
-                }
-            default:
-                ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 9u, 5u));
-            }
-        default:
-            ceesafe_panic(CEE_PANIC_UNWRAP_NULL, CEE_LOC(cee_file_0, 7u, 13u));
-        }
+        break;
     default:
         ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 6u, 5u));
     }
+    t_8 = &v_secret_0;
+    t_9 = ceeVO_VUu32S10SecretHeap(t_8);
+    t_10 = t_9;
+    t_11 = (uint32_t)t_10.tag;
+    switch (t_11) {
+    case ((uint32_t)1):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP_NULL, CEE_LOC(cee_file_0, 7u, 13u));
+    }
+    v_a_1 = t_10.u.v_Some.f__0;
+    v_plain_2 = ((ceeV_Uu32S10SystemHeap){ .ptr = (uint32_t *)(void *)&ceesafe_vec_empty, .len = 0u, .cap = 0u });
+    t_12 = &v_plain_2;
+    t_13 = ceeVP_VUu32S10SystemHeap(t_12, ((uint32_t)5));
+    t_14 = t_13;
+    t_15 = (uint32_t)t_14.tag;
+    switch (t_15) {
+    case ((uint32_t)0):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP, CEE_LOC(cee_file_0, 9u, 5u));
+    }
+    t_16 = &v_plain_2;
+    t_17 = ceeVO_VUu32S10SystemHeap(t_16);
+    t_18 = t_17;
+    t_19 = (uint32_t)t_18.tag;
+    switch (t_19) {
+    case ((uint32_t)1):
+        break;
+    default:
+        ceesafe_panic(CEE_PANIC_UNWRAP_NULL, CEE_LOC(cee_file_0, 10u, 13u));
+    }
+    v_b_3 = t_18.u.v_Some.f__0;
+    t_20 = cee_add_u32(v_a_1, v_b_3, &ceeL_0);
+    t_21 = cee_as_i32((uint32_t)t_20);
+    t_22 = t_21;
+    ceeD_VUu32S10SystemHeap(&v_plain_2);
+    ceeD_VUu32S10SecretHeap(&v_secret_0);
+    return t_22;
 }
 
 static void ceeD_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *p) {

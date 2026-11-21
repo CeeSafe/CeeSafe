@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.85.0
+## Releases 0.25.0 to 0.86.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.86.0 | 2026-11-21 | A host program opens windows on iOS and Android: `ceesafe_window_start()` in `ceesafe/embed.h` starts the iOS application from a host's `main`, and `ceesafe/android.h` gives a host library the Android activity's VM and Java object (ADR 0200); `--emit lib` finds `llvm-ar` beside the Android NDK's target-named clang | [Appendix E](./appendix-e-ceesafec) |
 | 0.85.1 | 2026-11-21 | `ceesafec test` gives each test a function of its own, so a package of 300 tests no longer passes C's limit of nested brackets (ADR 0195). lib/std's key holders wipe with a call the C compiler keeps: a local `Aes256Gcm` kept its key schedule on the stack at `-O2` (ADR 0197). `HmacSha256` wipes its key when it is dropped and has `clone()`, so `=` moves it (ADR 0194) | - |
 | 0.85.0 | 2026-11-21 | A function that takes or returns a value of more than 1 KiB by value is kept out of line, and `@outOfLine` keeps any function or method so; `--explain-frames` lists them. Some C compilers inlined builders of large structs at every call: ClayWind's hosts had doubled in size and build time (ADR 0199) | [Appendix A](./appendix-a-keywords) |
 | 0.84.1 | 2026-11-21 | With a time slice, `Async.runBound` counts the time a resume ran, measured at each pause, not its slices times the slice: under a small slice on a loaded machine a 250 ms bound had let a task run 1.5 s (ADR 0193) | [Async](./ch17-00-async) |

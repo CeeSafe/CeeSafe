@@ -169,6 +169,9 @@ fn generateC(
                 else "",
         )?,
     )?;
+    if (!freestanding) {
+        out.push(runtimeFile(11, "")?)?; // ceesafe/android.h, a host's activity on Android (ADR 0200)
+    }
     if (freestanding) {
         out.push(
             runtimeFile(

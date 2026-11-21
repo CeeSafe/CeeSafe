@@ -108,6 +108,14 @@ typedef struct ceesafe_config {
 int32_t ceesafe_init(const ceesafe_config *config);   /* 0, or a CEESAFE_INIT_* error; nothing changed on error */
 uint64_t ceesafe_shutdown(void);                      /* prints the report if asked; returns the live blocks */
 
+#if !defined(CEESAFE_EMBED_FREESTANDING)
+/* A host program with windows calls this first in its `main`, before ceesafe_init (ADR 0200): what a windowed build's
+   `main` does first. On iOS its first call runs the application and does not return; the launched application calls
+   the process's `main` again, where it returns at once and the program goes on. On Windows it gives a program without
+   a console its standard streams (ADR 0151). Elsewhere it does nothing. */
+void ceesafe_window_start(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

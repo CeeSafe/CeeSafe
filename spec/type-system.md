@@ -3694,7 +3694,8 @@ Diagnostics: none new.
     (`PointerButton` down, `PointerMoved`, `PointerButton` up when it ends or is cancelled); on, every finger is a
     touch (ADR 0155). The clipboard is
     `UIPasteboard`'s. Text input is the soft keyboard's (ADR 0157). There is no title, cursor, menu or file dialog
-    (`setMenu` and the dialogs are `Unsupported`), and no `Closed`. Without a windowed build, `open` is `NoDisplay`;
+    (`setMenu` and the dialogs are `Unsupported`), and no `Closed`. Without a windowed build, or a host's
+    `ceesafe_window_start()` (§28.6, ADR 0200), `open` is `NoDisplay`;
   - **Android** (ADR 0154): a NativeActivity's library (built with the NDK's clang, `--cflag -shared --cflag -fPIC
     --cflag -landroid --cflag -llog`, `--windowed`, API level 25 or later: ADR 0188; 28 before it). Below API level
     26 the runtime's Java is written to the app's code cache and loaded from there, and below 28 a process is started
@@ -4332,6 +4333,15 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
   was asked for and returns the live blocks. A host that never calls `ceesafe_init` gets what 0.27.0 gave: no program
   arguments, the environment's variables ignored, and the printed panic. The generated `main` calls the same two
   functions, so a CeeSafe `main` and a host start the runtime one way.
+- **A host's windows** (ADR 0200). A host that opens windows calls `ceesafe_window_start()` (`ceesafe/embed.h`) first in
+  its `main`, before `ceesafe_init`: what a windowed build's `main` does first. On iOS its first call runs the
+  application and does not return, and the launched application calls the process's `main` again, where it returns
+  at once (so what `main` does before it happens twice); on Windows it gives a program without a console its standard
+  streams; elsewhere it does nothing. On Android the host's library is the NativeActivity's and defines `main`, which
+  the runtime calls on its thread (§36's Android); `ceesafe/android.h`, which every hosted build writes beside
+  `ceesafe/embed.h`, declares `ceesafe_android_vm()` and `ceesafe_android_activity()`, the activity's VM and Java
+  object (a global reference the runtime keeps), so the host reaches its own classes through the activity's class
+  loader. Both are NULL before the activity is made; the header is empty on other systems.
 - **The host's allocator** (ADR 0088 §2.5). The config's `allocator`, four functions and a context, takes every
   block the runtime allocates: CeeSafe's own, the runtime's buffers, `argv`'s copy and a C library's through
   `ceesafe/foreign.h`. It sits under the accounting, so the report, failure injection and `FailingAllocator` work

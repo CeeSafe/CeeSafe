@@ -891,7 +891,8 @@ fn resolveTool(name: Slice<u8>) -> Vector<u8>? {
 }
 
 /// `build --emit lib`'s archiver when no `--ar` is given (ADR 0088 §2.1): `llvm-ar` beside an LLVM clang (with the
-/// clang's version suffix, `clang-18` beside `llvm-ar-18`), else `ar` on the PATH; null when there is none.
+/// clang's version suffix, `clang-18` beside `llvm-ar-18`), else `ar` on the PATH; null when there is none. A clang
+/// named for its target, as the Android NDK's are (`aarch64-linux-android25-clang` beside `llvm-ar`), is one too.
 fn locateArchiver(compiler: Slice<u8>) -> Vector<u8>? {
     let windows = hostIsWindows();
     var path = Vector<u8>.create();
@@ -913,14 +914,22 @@ fn locateArchiver(compiler: Slice<u8>) -> Vector<u8>? {
         }
     }
     let base = compilerBase(path.view());
-    if (base.length >= 5 && sameText(base[..5], "clang")) {
+    // Where `clang` starts the name: at its start, or after a target's prefix (`aarch64-linux-android25-clang`).
+    var at = base.length;
+    for (k in 0..base.length) {
+        if (base.length - k >= 5 && sameText(base[k..(k + 5)], "clang") && (k == 0 || base[k - 1] == '-')) {
+            at = k;
+            break;
+        }
+    }
+    if (at < base.length) {
         var end = base.length;
         if (end >= 4 && sameText(base[(end - 4)..], ".exe")) {
             end -= 4;
         }
         var archiver = copyBytes(path[..(path.length - base.length)])!;
         appendText(mut archiver, "llvm-ar")!;
-        appendBytes(mut archiver, base[5..end])!; // the version suffix, if any
+        appendBytes(mut archiver, base[(at + 5)..end])!; // the version suffix, if any
         if (windows) {
             appendText(mut archiver, ".exe")!;
         }

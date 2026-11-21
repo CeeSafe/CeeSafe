@@ -10605,6 +10605,15 @@ JavaVM *ceesafe_android_vm(void) {
     return a != NULL ? a->vm : NULL;
 }
 
+/* For a host program (ceesafe/android.h, ADR 0200): the activity's Java object, the global reference NativeActivity
+   holds for the activity's life. */
+jobject ceesafe_android_activity(void);
+
+jobject ceesafe_android_activity(void) {
+    ANativeActivity *a = cee_android.activity;
+    return a != NULL ? a->clazz : NULL;
+}
+
 jclass ceesafe_android_bluetooth(JNIEnv *env, jobject *activity) {
     static jclass loaded;
     ANativeActivity *a = cee_android.activity;

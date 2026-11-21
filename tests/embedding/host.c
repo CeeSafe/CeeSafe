@@ -1,4 +1,5 @@
 /* ADR 0088's stage A contract tests: a C host of the embed package's archive (tools/embed_check.py). */
+#include "ceesafe/android.h" /* empty off Android (ADR 0200) */
 #include "ceesafe/embed.h"
 #include "ceesafe_exports.h"
 
@@ -300,6 +301,14 @@ int main(int argc, char **argv) {
                (unsigned long long)embed_bump(), (unsigned long long)embed_bump());
         uint32_t (*f)(uint32_t) = embed_callback();
         printf("callback=%u\n", f(4));
+        fflush(stdout);
+        printf("live=%llu\n", (unsigned long long)ceesafe_shutdown());
+    } else if (strcmp(what, "window-start") == 0) {
+        /* ADR 0200: a host with windows calls ceesafe_window_start first; off iOS it returns, and the program goes on */
+        ceesafe_window_start();
+        if (init_with(NULL, argc, argv, CEESAFE_INIT_ENVIRONMENT, 0) != 0) return 1;
+        uint8_t bytes[3] = {1, 2, 3};
+        printf("started sum=%llu\n", (unsigned long long)embed_sum(bytes, 3));
         fflush(stdout);
         printf("live=%llu\n", (unsigned long long)ceesafe_shutdown());
     } else if (strcmp(what, "noinit") == 0) {

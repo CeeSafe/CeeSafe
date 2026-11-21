@@ -78,7 +78,13 @@ static void cee_reopen_std(DWORD id, int fd, FILE *stream, const char *device, c
 __attribute__((weak)) void ceesafe_window_app_start(void) {}
 #endif
 
+/* A windowed build's `main` calls ceesafe_rt_windowed first; a host program's calls ceesafe_window_start (embed.h,
+   ADR 0200), which is the same. */
 void ceesafe_rt_windowed(void) {
+    ceesafe_window_start();
+}
+
+void ceesafe_window_start(void) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     ceesafe_window_app_start(); /* the first call does not return; the second, from the launched application, does */
 #endif

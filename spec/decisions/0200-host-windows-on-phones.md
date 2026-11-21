@@ -1,7 +1,7 @@
 # ADR 0200 — A host program's window on iOS and Android
 
-- Status: **Proposed**, 2026-11-21, for the owner's acceptance. Asked for by ClayWind's roadmap (P6: its C API's
-  Swift and Kotlin bindings on phones).
+- Status: **Accepted** by the owner, 2026-11-21 ("I accept ADR 0200"); implemented (§5). Asked for by ClayWind's
+  roadmap (P6: its C API's Swift and Kotlin bindings on phones).
 - Scope: `ceesafe/embed.h` (two functions and one documented entry), the hosted runtime's iOS and Android window
   code (names only: the behaviour exists), type-system.md §28.6 and §36's window section, embed_check. No language or
   library change.
@@ -58,3 +58,19 @@ C API (`claywind_run`) does, and its Swift, Rust and Kotlin bindings run on macO
 - Tests: embed_check, a host's `main` calling `ceesafe_window_start` then opening a window, in the iOS simulator
   (`window_check` has the simulator already) and the Android emulator; ClayWind's Swift and Kotlin bindings on the
   simulator and the emulator, and on the iPhone and the moto by the owner.
+
+## 5. As built
+
+- `ceesafe_window_start` (`embed.h`, defined in `ceesafe_rt_hosted.c`) holds what `ceesafe_rt_windowed` did, which now
+  calls it. `ceesafe/android.h` is runtime file 11; every hosted build writes it (its declarations are under
+  `#if defined(__ANDROID__)`, so it is empty elsewhere), and `--emit lib` and `--emit obj` beside `embed.h`.
+  `ceesafe_android_activity` returns the `ANativeActivity`'s `clazz`, the global reference NativeActivity holds.
+- Found on the way and fixed: `--emit lib`'s archiver was not found beside the NDK's clang, whose name has the target
+  before `clang` (`aarch64-linux-android25-clang`): the system's `ar` was used and, on a Mac, wrote an empty archive of
+  the ELF objects (96 bytes). `locateArchiver` takes `llvm-ar` beside a clang named for its target too (tooling.md).
+- Tests: embed_check's `window-start` (the call before `ceesafe_init`, then exports; 85 passed) and the header beside
+  the archive and the object. ClayWind's bindings: the Swift counter on the iOS 26 simulator (iPhone 17 Pro), built with
+  `swiftc` against the archive for `arm64-apple-ios17.0-simulator`, laid out inside the safe area (input not driven:
+  no Simulator app on the machine); the Kotlin counter on the Android emulator (API 37, arm64), its activity a
+  NativeActivity whose library's `main` calls `claywindMain()`: taps counted, text typed by `adb input text` reached the
+  Kotlin `String`, a checkbox and the theme switched.

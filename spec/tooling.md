@@ -907,7 +907,8 @@ per host binary: two archives built separately each carry the runtime and clash 
   freestanding build `ceesafe/rt.h` and `ceesafe/foreign.h` too (ADR 0121, profiles.md §4.3); there a file that does
   not start so is left as it is, with a line saying so, and the build succeeds.
 - `--ar <archiver>` names the archiver, a path or a name looked up on `PATH`; by default it is `llvm-ar` beside an
-  LLVM clang (`clang-18` beside `llvm-ar-18`; the C compiler found as for `--emit obj`, on `PATH` when it has no
+  LLVM clang (`clang-18` beside `llvm-ar-18`, and a clang named for its target, as the Android NDK's
+  `aarch64-linux-android25-clang` beside `llvm-ar`; the C compiler found as for `--emit obj`, on `PATH` when it has no
   directory), else `ar` on `PATH` (Apple's `ar` indexes bitcode members).
 - Usage errors (status 2): `--ar` or `--lib-main` without `--emit lib`; `--ld` with `--emit lib`, which archives
   instead of linking; `--emit lib` when no archiver is found, or `--ar`'s is not, naming `--ar`.

@@ -1,0 +1,42 @@
+// benchmarks/codecs (ADR 0196 §4.4): lib/std's zlib codec on a file, best of `reps` runs.
+//   main inflate <file.zlib> <size> <reps>   prints the MB/s of output
+//   main deflate <file> <level> <reps>       prints the MB/s of input and the compressed size
+
+fn readAll(path: StringView) -> Vector<u8> {
+    var f = File.open(path)!;
+    var v = Vector<u8>.create();
+    var buffer = Vector<u8>.create();
+    buffer.resize(1 << 20, 0)!;
+    while (true) {
+        let n = f.read(buffer.viewMut())!;
+        if (n == 0) { break; }
+        v.extend(buffer[0..n])!;
+    }
+    return v;
+}
+
+fn number(i: usize) -> u64 => Process.argument(i)!.parseInt<u64>()!;
+
+fn main() {
+    let mode = Process.argument(1)!;
+    let input = readAll(Process.argument(2)!);
+    let reps = number(4);
+    var best: u64 = 0xFFFFFFFFFFFFFFFF;
+    var size: usize = 0;
+    for (r in 0..reps) {
+        var out = Vector<u8>.create();
+        let t = Clock.monotonicNanos();
+        if (mode == "inflate") {
+            Zlib.decompress(input.view(), truncate<usize>(number(3)), mut out)!;
+        } else {
+            Zlib.compress(input.view(), truncate<u32>(number(3)), mut out)!;
+        }
+        let d = Clock.monotonicNanos() - t;
+        if (d < best) { best = d; }
+        size = out.length;
+    }
+    let bytes = if (mode == "inflate") size else input.length;
+    Console.write((bytes as u64 * 1000) / best);
+    Console.write(" ");
+    Console.writeLine(size);
+}

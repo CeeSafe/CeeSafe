@@ -128,6 +128,24 @@ wall-clock time of the whole program in 30 runs of each, on a machine shared wit
 The three print the same sum. This is the smallest possible method, so it shows the cost of the call alone at its
 largest: a method that does real work hides it. It is one machine and one workload, not a rule.
 
+## An `OrderedMap` loaded in key order
+
+`OrderedMap` is a B-tree whose nodes hold up to 31 entries. A put past the last key or before the first splits the
+full nodes on its path 29 entries to 1, the one on the key's side, not in the middle (ADR 0194 §2.4), so the nodes a
+load in key order leaves behind are nearly full, not half empty. Measured 2026-11-21 on an Apple M1 with Apple clang
+21, `ceesafec build`, 1M puts of a `u64` key and a `[u8; 64]` value, peak footprint by `/usr/bin/time -l`, times the
+best of three on a machine shared with other work:
+
+| 1M puts of `u64` → `[u8; 64]` | peak footprint | 1M puts | 1M lookups after them |
+|---|---:|---:|---:|
+| `OrderedMap`, keys ascending or descending, middle splits only (0.85.1) | 184 MB | 168 ms | 101 ms |
+| `OrderedMap`, keys ascending or descending, edge splits | **97 MB** | **127 ms** | 106 ms |
+| `OrderedMap`, keys scrambled (`i * 2654435761 % 4294967311`), either | 128 MB | 0.9 to 1.0 s | 0.37 to 0.54 s |
+| `HashMap`, for comparison | 74 MB | | |
+
+(The times are for ascending keys.) A map built from a sorted source, such as a checkpoint, a snapshot or an import,
+takes about 1.3 times a `HashMap`'s memory instead of 2.5 times.
+
 ## Run it yourself
 
 ```sh

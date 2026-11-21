@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.89.0
+## Releases 0.25.0 to 0.91.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.91.0 | 2026-11-22 | An async function's locals are no longer zeroed at every resume: only one written in part or borrowed is, as in a sync function, so a task resumed often does less work (ADR 0204) | [Appendix E](./appendix-e-ceesafec) |
 | 0.90.0 | 2026-11-21 | Compression in lib/std: `Deflate`, `Zlib` and `Gzip` compress and decompress whole buffers, and `Inflater` and `Deflater` stream; every decoder takes a limit, so a bomb is refused, and no input panics it (`DecodeError`). `Adler32` beside `Crc32` (ADR 0196, phase 1) | [Appendix C](./appendix-c-built-in-types) |
 | 0.89.0 | 2026-11-21 | A task that computes under `Async.runSlice` is paused before its slice ends once its thread has I/O to serve, so a request beside it waits a fraction of a millisecond, not most of a slice (ADR 0203; not on Windows) | [Async](./ch17-00-async) |
 | 0.88.0 | 2026-11-21 | On Linux, FreeBSD and Windows the window thread is the first that opens a window, so a host whose runtime keeps the first thread (a JVM) opens windows (ADR 0201); `--emit lib` compiles position-independent code for Linux, FreeBSD and Android, so its archive goes into a PIE or a shared library (ADR 0202) | [Appendix E](./appendix-e-ceesafec) |

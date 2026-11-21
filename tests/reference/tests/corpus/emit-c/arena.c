@@ -84,11 +84,11 @@ static int32_t ceeF_main(void) {
     CEE_TEMP cee_arena * t_5 = NULL;
     CEE_TEMP ceeT_Point t_6;
     CEE_TEMP ceeR_QS5PointE10AllocError t_7;
-    CEE_TEMP ceeR_QS5PointE10AllocError t_8 = {0};
+    CEE_TEMP ceeR_QS5PointE10AllocError t_8;
     CEE_TEMP uint32_t t_9 = 0;
     CEE_TEMP cee_arena * t_10 = NULL;
     CEE_TEMP ceeR_QUu16E10AllocError t_11;
-    CEE_TEMP ceeR_QUu16E10AllocError t_12 = {0};
+    CEE_TEMP ceeR_QUu16E10AllocError t_12;
     CEE_TEMP uint32_t t_13 = 0;
     CEE_TEMP uint64_t t_14 = 0;
     CEE_TEMP int32_t t_15 = 0;

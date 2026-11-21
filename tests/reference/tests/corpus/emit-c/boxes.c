@@ -113,7 +113,7 @@ static CEE_UNUSED ceeR_Xi32S16FailingAllocatorE10AllocError ceeB_Xi32S16FailingA
 static ceeR_E4ListE10AllocError ceeF_cons(CEE_UNUSED ceeT_Res v_r_0, CEE_UNUSED ceeE_List v_rest_1) {
     CEE_TEMP ceeT_Res t_2;
     CEE_TEMP ceeR_XE4ListS10SystemHeapE10AllocError t_3;
-    CEE_TEMP ceeR_XE4ListS10SystemHeapE10AllocError t_4 = {0};
+    CEE_TEMP ceeR_XE4ListS10SystemHeapE10AllocError t_4;
     CEE_TEMP uint32_t t_5 = 0;
     CEE_TEMP ceeR_E4ListE10AllocError t_6;
     CEE_TEMP ceeE_List t_7;
@@ -143,11 +143,11 @@ static int32_t ceeF_main(void) {
     CEE_UNUSED int32_t v_v_2 = 0;
     CEE_TEMP ceeT_Res t_3;
     CEE_TEMP ceeE_List t_4;
-    CEE_TEMP ceeR_E4ListE10AllocError t_6 = {0};
+    CEE_TEMP ceeR_E4ListE10AllocError t_6;
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP ceeT_FailingAllocator t_8;
     CEE_TEMP ceeR_Xi32S16FailingAllocatorE10AllocError t_9;
-    CEE_TEMP ceeR_Xi32S16FailingAllocatorE10AllocError t_10 = {0};
+    CEE_TEMP ceeR_Xi32S16FailingAllocatorE10AllocError t_10;
     CEE_TEMP uint32_t t_11 = 0;
     CEE_TEMP int32_t t_12 = 0;
     t_3 = ((ceeT_Res){ .f_id = ((int32_t)1) });

@@ -50,13 +50,13 @@ static ceeR_i32i32 ceeF_step(CEE_UNUSED int32_t v_i_0, CEE_UNUSED int32_t v_stop
 
 static ceeR_i32i32 ceeF_all(CEE_UNUSED int32_t v_stop_0) {
     CEE_UNUSED int32_t v_total_1 = 0;
-    CEE_TEMP ceeR_i32i32 t_3 = {0};
+    CEE_TEMP ceeR_i32i32 t_3;
     CEE_TEMP uint32_t t_4 = 0;
     CEE_TEMP ceeR_i32i32 t_5;
-    CEE_TEMP ceeR_i32i32 t_7 = {0};
+    CEE_TEMP ceeR_i32i32 t_7;
     CEE_TEMP uint32_t t_8 = 0;
     CEE_TEMP ceeR_i32i32 t_9;
-    CEE_TEMP ceeR_i32i32 t_11 = {0};
+    CEE_TEMP ceeR_i32i32 t_11;
     CEE_TEMP uint32_t t_12 = 0;
     CEE_TEMP ceeR_i32i32 t_13;
     CEE_TEMP ceeR_i32i32 t_14;
@@ -100,10 +100,10 @@ static ceeR_i32i32 ceeF_all(CEE_UNUSED int32_t v_stop_0) {
 static int32_t ceeF_first(CEE_UNUSED int32_t v_stop_0) {
     CEE_UNUSED int32_t v_e_1 = 0;
     CEE_UNUSED int32_t v_e_2 = 0;
-    CEE_TEMP ceeR_i32i32 t_3 = {0};
+    CEE_TEMP ceeR_i32i32 t_3;
     CEE_TEMP uint32_t t_4 = 0;
     CEE_TEMP int32_t t_5 = 0;
-    CEE_TEMP ceeR_i32i32 t_6 = {0};
+    CEE_TEMP ceeR_i32i32 t_6;
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP int32_t t_8 = 0;
     t_3 = ceeF_step(((int32_t)0), v_stop_0);
@@ -139,12 +139,12 @@ static int32_t ceeF_pick(CEE_UNUSED int32_t v_name_0) {
     CEE_UNUSED int32_t v_v_3 = 0;
     CEE_UNUSED int32_t v_e_4 = 0;
     CEE_TEMP bool t_5 = false;
-    CEE_TEMP ceeR_i32i32 t_6 = {0};
+    CEE_TEMP ceeR_i32i32 t_6;
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP int32_t t_8 = 0;
     CEE_TEMP int32_t t_9 = 0;
     CEE_TEMP bool t_10 = false;
-    CEE_TEMP ceeR_i32i32 t_11 = {0};
+    CEE_TEMP ceeR_i32i32 t_11;
     CEE_TEMP uint32_t t_12 = 0;
     CEE_TEMP int32_t t_13 = 0;
     CEE_TEMP int32_t t_14 = 0;

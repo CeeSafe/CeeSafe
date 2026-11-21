@@ -101,7 +101,7 @@ static void ceeF_main(void) {
     CEE_UNUSED ceeSV_i32S10SystemHeap v_sv_2 = {0};
     CEE_TEMP ceeK_i32S10SystemHeap * t_3 = NULL;
     CEE_TEMP ceeR_Hi32E10AllocError t_4;
-    CEE_TEMP ceeR_Hi32E10AllocError t_5 = {0};
+    CEE_TEMP ceeR_Hi32E10AllocError t_5;
     CEE_TEMP uint32_t t_6 = 0;
     CEE_TEMP const ceeK_i32S10SystemHeap * t_7 = NULL;
     CEE_TEMP ceeO_Pi32 t_8 = {0};
@@ -110,7 +110,7 @@ static void ceeF_main(void) {
     CEE_TEMP bool t_11 = false;
     CEE_TEMP ceeSV_i32S10SystemHeap * t_12 = NULL;
     CEE_TEMP ceeR_usizeE10AllocError t_13;
-    CEE_TEMP ceeR_usizeE10AllocError t_14 = {0};
+    CEE_TEMP ceeR_usizeE10AllocError t_14;
     CEE_TEMP uint32_t t_15 = 0;
     CEE_TEMP uint64_t t_16 = 0;
     v_m_0 = ((ceeK_i32S10SystemHeap){ .ptr = (ceeKS_Ki32S10SystemHeap *)(void *)&ceesafe_vec_empty, .len = 0u, .cap = 0u, .count = 0u, .free = UINT32_MAX });

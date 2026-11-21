@@ -1,7 +1,7 @@
 # ADR 0204 — A resume function's locals are zeroed only when they must be
 
 - Status: **Accepted** by the owner, 2026-11-21 ("Take both in one run", to the CeeSafe side of per-request isolation's
-  cost found by an independent benchmark of httpserver); implemented, released in 0.90.0.
+  cost found by an independent benchmark of httpserver); implemented, released in 0.91.0.
 - Scope: the C backend's declarations of an async function's C locals (`src/backend/c_async.cee`) and its rule for
   which aggregate locals start zeroed (`partlyWritten`, `src/backend/c_body.cee`); c-backend.md §3b and §5. No
   language, library or runtime change.
@@ -56,4 +56,16 @@ The contract suite on Linux x86-64: see §5.
 
 ## 5. Checks
 
-(Filled in from the contract suite's run.)
+The contract suite on Linux x86-64 (Ubuntu 24.04, gcc 13 and clang 18), on this change built on 0.89.0:
+
+- `run -Werror` (429 run-pass, 55 run-fail, 22 ffi), `run asan` (the same under AddressSanitizer and UBSan with leak
+  checks), `run fortify` (gcc -O2 -Wall -Werror -D_FORTIFY_SOURCE=2), `run split`, the three ThreadSanitizer steps,
+  both reactors' async programs, the fault, cancellation, support and hash-map sweeps, the fixed point, and every
+  runtime check (slices, bound, isolated, debugger and the rest): ok.
+- `corpus`: every family passes but `emit-c`, whose 11 snapshots differed by exactly the initializers dropped, 24
+  lines, each `= {0};` become `;`; updated by that edit alone, after which the family passes (38 of 38).
+- `run interp`: `run-pass/ordered-map.cee` fails in the interpreter, as with 0.89.0 on the same machine (428 of 429
+  both); the interpreter does not use the C backend.
+- `packages`: `records` fails ("a cache was made in a home that is not writable"), as with 0.89.0 there: the suite
+  ran as root, whose home is writable.
+- `release chain`: skipped, no stage 0 on that machine.

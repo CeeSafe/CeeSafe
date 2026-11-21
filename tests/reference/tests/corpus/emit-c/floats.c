@@ -33,7 +33,7 @@ static int32_t ceeF_convert(CEE_UNUSED double v_x_0, CEE_UNUSED int64_t v_n_1) {
     CEE_UNUSED int16_t v_v_5 = 0;
     CEE_TEMP double t_6 = 0;
     CEE_TEMP double t_7 = 0;
-    CEE_TEMP ceeO_i16 t_8 = {0};
+    CEE_TEMP ceeO_i16 t_8;
     CEE_TEMP uint32_t t_9 = 0;
     CEE_TEMP int32_t t_10 = 0;
     CEE_TEMP int32_t t_11 = 0;

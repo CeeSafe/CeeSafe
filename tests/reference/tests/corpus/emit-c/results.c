@@ -78,7 +78,7 @@ static ceeR_S3ResE4Code ceeF_make(CEE_UNUSED bool v_ok_0) {
 
 static ceeR_vE4Code ceeF_use2(void) {
     CEE_UNUSED ceeT_Res v_r_0;
-    CEE_TEMP ceeR_S3ResE4Code t_2 = {0};
+    CEE_TEMP ceeR_S3ResE4Code t_2;
     CEE_TEMP uint32_t t_3 = 0;
     CEE_TEMP ceeR_vE4Code t_4;
     CEE_TEMP ceeR_vE4Code t_5;

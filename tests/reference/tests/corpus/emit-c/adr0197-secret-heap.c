@@ -91,7 +91,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP ceeV_Uu32S10SecretHeap * t_8 = NULL;
     CEE_TEMP ceeO_u32 t_9;
-    CEE_TEMP ceeO_u32 t_10 = {0};
+    CEE_TEMP ceeO_u32 t_10;
     CEE_TEMP uint32_t t_11 = 0;
     CEE_TEMP ceeV_Uu32S10SystemHeap * t_12 = NULL;
     CEE_TEMP ceeR_vE10AllocError t_13;
@@ -99,7 +99,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP uint32_t t_15 = 0;
     CEE_TEMP ceeV_Uu32S10SystemHeap * t_16 = NULL;
     CEE_TEMP ceeO_u32 t_17;
-    CEE_TEMP ceeO_u32 t_18 = {0};
+    CEE_TEMP ceeO_u32 t_18;
     CEE_TEMP uint32_t t_19 = 0;
     CEE_TEMP uint32_t t_20 = 0;
     CEE_TEMP int32_t t_21 = 0;

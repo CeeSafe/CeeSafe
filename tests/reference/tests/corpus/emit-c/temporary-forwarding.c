@@ -121,7 +121,7 @@ static ceeT_Pair ceeF_twice(CEE_UNUSED ceeT_Pair v_p_0) {
 static int32_t ceeF_matchValue(void) {
     CEE_UNUSED ceeT_Pair v_r_0;
     CEE_UNUSED ceeT_Pair v_p_1;
-    CEE_TEMP ceeR_S4PairE10AllocError t_3 = {0};
+    CEE_TEMP ceeR_S4PairE10AllocError t_3;
     CEE_TEMP uint32_t t_4 = 0;
     CEE_TEMP int32_t t_6 = 0;
     t_3 = ceeF_make(((int32_t)1));

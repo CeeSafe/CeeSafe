@@ -110,9 +110,9 @@ static ceeR_XS3ResS10SystemHeapE10AllocError ceeF_holder(CEE_UNUSED int32_t v_id
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeA64_u8 * v_t_0 = NULL;
     CEE_UNUSED ceeT_Res * v_h_1 = NULL;
-    CEE_TEMP ceeR_XA64_u8S10SystemHeapE10AllocError t_3 = {0};
+    CEE_TEMP ceeR_XA64_u8S10SystemHeapE10AllocError t_3;
     CEE_TEMP uint32_t t_4 = 0;
-    CEE_TEMP ceeR_XS3ResS10SystemHeapE10AllocError t_6 = {0};
+    CEE_TEMP ceeR_XS3ResS10SystemHeapE10AllocError t_6;
     CEE_TEMP uint32_t t_7 = 0;
     CEE_TEMP int64_t t_8 = 0;
     CEE_TEMP int32_t t_9 = 0;

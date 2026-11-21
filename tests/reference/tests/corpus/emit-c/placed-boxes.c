@@ -66,7 +66,7 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
     CEE_TEMP uint64_t t_5 = 0;
     CEE_TEMP bool t_6 = false;
     CEE_TEMP ceeR_XS4PairS10SystemHeapE10AllocError t_8;
-    CEE_TEMP ceeR_XS4PairS10SystemHeapE10AllocError t_9 = {0};
+    CEE_TEMP ceeR_XS4PairS10SystemHeapE10AllocError t_9;
     CEE_TEMP uint32_t t_10 = 0;
     CEE_TEMP uint64_t t_11 = 0;
     CEE_TEMP uint64_t t_12 = 0;

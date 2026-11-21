@@ -114,10 +114,12 @@ public struct Aes256Gcm {
         return true;
     }
 
+    /// The schedule and the GHASH key wiped, in a way the C compiler keeps (ADR 0197 §2.1): plain stores to a value
+    /// about to die are dead to the optimiser, and a local cipher kept its schedule (CosmoStore's G43).
     drop {
-        for (i in 0..304) { this.schedule[i] = 0; }
         this.h0 = 0;
         this.h1 = 0;
+        wipeSecret(mut this.schedule[..]);
     }
 }
 

@@ -1027,6 +1027,18 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
 
 static void *realloc_block(void *p, size_t size, uint32_t allocator);
 
+void ceesafe_wipe(uint8_t *p, uint64_t n) {
+    if (n == 0u) return;
+#if defined(_MSC_VER) && !defined(__clang__)
+    /* cl has no inline assembly on x64: a volatile store is one it may not remove (SecureZeroMemory's own way). */
+    volatile uint8_t *v = p;
+    for (uint64_t i = 0u; i < n; i++) v[i] = 0u;
+#else
+    ceesafe_mem_set(p, 0, (size_t)n);
+    __asm__ __volatile__("" : : "r"(p) : "memory");
+#endif
+}
+
 void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
     if (p == NULL) {
         return ceesafe_alloc(size, allocator); /* C's realloc(NULL, n), for CEE_ALLOC_FOREIGN's callers */

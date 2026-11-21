@@ -1668,6 +1668,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_random_fill")) {
         return "Ps:l";
     }
+    if (sameText(name, "ceesafe_wipe")) {
+        return "Ps:-";
+    }
     if (sameText(name, "ceesafe_crc32c_available")) {
         return ":u";
     }
@@ -2044,6 +2047,17 @@ fn callC(
             }
         }
         freeMemory(it, address)?;
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_wipe")) {
+        // A wipe (ADR 0197 §2.1): the bytes set to zero, as the C build does.
+        let at = arguments[0].bits(0, 8)?;
+        let length = arguments[1].bits(0, 8)?;
+        var k: u64 = 0;
+        while (k < length) {
+            it.memory.storeBits(at + k, 0, 1)?;
+            k += 1;
+        }
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_crc32c_available")) {

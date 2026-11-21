@@ -100,61 +100,87 @@ fn harnessSource(tests: borrow Vector<TestEntry>) -> Result<Vector<u8>, AllocErr
     appendText(mut s, "        null => { return TestRun.unknown(); },\n")?;
     appendText(mut s, "    };\n")?;
     appendText(mut s, "    TestRun.begin();\n")?;
+    // Each test's dispatch is a function of its own (ADR 0195 §2.1.4): the harness stays flat in C however many tests
+    // there are, and each test's temporaries live in its own frame.
+    var index: usize = 0;
     for (t in tests.view()) {
         appendText(mut s, "    if (name == \"")?;
         appendBytes(mut s, t.name.view())?;
-        appendText(mut s, "\") {\n")?;
-        var call = Vector<u8>.create();
-        if (t.isAsync) {
-            appendText(mut call, "Async.run(")?;
-        }
-        appendBytes(mut call, t.name.view())?;
-        appendText(mut call, "()")?;
-        if (t.isAsync) {
-            appendText(mut call, ")")?;
-        }
-        if (t.errorKind == 0) {
-            appendText(mut s, "        ")?;
-            appendBytes(mut s, call.view())?;
-            appendText(mut s, ";\n        return TestRun.passed();\n")?;
-        } else if (t.errorKind == 4 && t.variants.length > 0) {
-            // Its own enum: the variant returned, by name (ADR 0049 §3.2).
-            appendText(mut s, "        match (")?;
-            appendBytes(mut s, call.view())?;
-            appendText(mut s, ") {\n            Ok() => { return TestRun.passed(); }\n")?;
-            for (pattern in t.variants.view()) {
-                appendText(mut s, "            Err(")?;
-                appendBytes(mut s, pattern.view())?;
-                appendText(mut s, ") => { return TestRun.failedWith(\"returned Err(")?;
-                for (b in pattern.view()) {
-                    if (b == '(') {
-                        break; // the name without its payload's placeholders
-                    }
-                    s.push(b)?;
-                }
-                appendText(mut s, ")\"); }\n")?;
-            }
-            appendText(mut s, "        }\n")?;
-        } else {
-            appendText(mut s, "        match (")?;
-            appendBytes(mut s, call.view())?;
-            appendText(mut s, ") {\n            Ok() => { return TestRun.passed(); }\n")?;
-            appendText(
-                mut s,
-                match (t.errorKind) {
-                    1 => "            Err(f) => { return TestRun.failed(f.message.view()); }\n",
-                    2 => "            Err(e) => { return TestRun.failedWith(e.message()); }\n",
-                    3 =>
-                        "            Err(AsyncError.Io(e)) => { return TestRun.failedWith(e.message()); }\n            Err(AsyncError.Cancelled) => { return TestRun.failedWith(\"cancelled\"); }\n            Err(AsyncError.TimedOut) => { return TestRun.failedWith(\"timed out\"); }\n            Err(AsyncError.Closed) => { return TestRun.failedWith(\"closed\"); }\n",
-                    _ => "            Err(_) => { return TestRun.failedWith(\"returned Err\"); }\n",
-                },
-            )?;
-            appendText(mut s, "        }\n")?;
-        }
-        appendText(mut s, "    }\n")?;
+        appendText(mut s, "\") { return ceesafeTest")?;
+        appendDecimalText(mut s, index)?;
+        appendText(mut s, "(); }\n")?;
+        index += 1;
     }
     appendText(mut s, "    return TestRun.unknown();\n}\n")?;
+    index = 0;
+    for (t in tests.view()) {
+        appendText(mut s, "\nfn ceesafeTest")?;
+        appendDecimalText(mut s, index)?;
+        appendText(mut s, "() -> i32 {\n")?;
+        index += 1;
+        appendTestDispatch(mut s, t)?;
+        appendText(mut s, "}\n")?;
+    }
     return Ok(s);
+}
+
+/// `n` in decimal.
+fn appendDecimalText(s: borrow mut Vector<u8>, n: usize) -> Result<void, AllocError> {
+    if (n >= 10) { appendDecimalText(s, n / 10)?; }
+    s.push(truncate<u8>(n % 10) + '0')?;
+    return Ok();
+}
+
+/// One test's call and what it answers, as the body of its function: every path returns.
+fn appendTestDispatch(s: borrow mut Vector<u8>, t: borrow TestEntry) -> Result<void, AllocError> {
+    var call = Vector<u8>.create();
+    if (t.isAsync) {
+        appendText(mut call, "Async.run(")?;
+    }
+    appendBytes(mut call, t.name.view())?;
+    appendText(mut call, "()")?;
+    if (t.isAsync) {
+        appendText(mut call, ")")?;
+    }
+    if (t.errorKind == 0) {
+        appendText(s, "        ")?;
+        appendBytes(s, call.view())?;
+        appendText(s, ";\n        return TestRun.passed();\n")?;
+    } else if (t.errorKind == 4 && t.variants.length > 0) {
+        // Its own enum: the variant returned, by name (ADR 0049 §3.2).
+        appendText(s, "        match (")?;
+        appendBytes(s, call.view())?;
+        appendText(s, ") {\n            Ok() => { return TestRun.passed(); }\n")?;
+        for (pattern in t.variants.view()) {
+            appendText(s, "            Err(")?;
+            appendBytes(s, pattern.view())?;
+            appendText(s, ") => { return TestRun.failedWith(\"returned Err(")?;
+            for (b in pattern.view()) {
+                if (b == '(') {
+                    break; // the name without its payload's placeholders
+                }
+                s.push(b)?;
+            }
+            appendText(s, ")\"); }\n")?;
+        }
+        appendText(s, "        }\n")?;
+    } else {
+        appendText(s, "        match (")?;
+        appendBytes(s, call.view())?;
+        appendText(s, ") {\n            Ok() => { return TestRun.passed(); }\n")?;
+        appendText(
+            s,
+            match (t.errorKind) {
+                1 => "            Err(f) => { return TestRun.failed(f.message.view()); }\n",
+                2 => "            Err(e) => { return TestRun.failedWith(e.message()); }\n",
+                3 =>
+                    "            Err(AsyncError.Io(e)) => { return TestRun.failedWith(e.message()); }\n            Err(AsyncError.Cancelled) => { return TestRun.failedWith(\"cancelled\"); }\n            Err(AsyncError.TimedOut) => { return TestRun.failedWith(\"timed out\"); }\n            Err(AsyncError.Closed) => { return TestRun.failedWith(\"closed\"); }\n",
+                _ => "            Err(_) => { return TestRun.failedWith(\"returned Err\"); }\n",
+            },
+        )?;
+        appendText(s, "        }\n")?;
+    }
+    return Ok();
 }
 
 /// The directory of the harness and the test list: `out/ceesafe-test` beside the package's output.

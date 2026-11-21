@@ -1,6 +1,6 @@
 # ADR 0195 — A `match` that does not nest what follows it, and three messages
 
-- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G36 to G39 (G36 P1, G39 P2, G37 and G38
+- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.84.2: §2.1.4, one function per test in the harness (with the checker's N0348 allowing the harness's `ceesafeTest…` functions); §2.1.1 to §2.1.3 and §2.2 to §2.4 are for 0.85.0. Raised by CosmoStore's CEESAFE_GAPS G36 to G39 (G36 P1, G39 P2, G37 and G38
   P3), found with 0.54.0 to 0.79.0 and reproduced with 0.84.1 for this ADR.
 - Scope: the C structurer (`src/backend/c_structurer.cee`, c-backend.md §3 steps 2 and 6); the test harness
   (`src/host/test_runner.cee`, `harnessSource`; ADR 0049 §3.4); the pattern checker (`src/check/patterns.cee`); the

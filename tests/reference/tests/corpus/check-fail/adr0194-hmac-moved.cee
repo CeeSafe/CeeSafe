@@ -1,0 +1,9 @@
+// HmacSha256 wipes its key when it is dropped, so `=` moves it rather than copying it (ADR 0194 §2.1, CosmoStore's
+// G34): a code used after it was moved is N0250. `clone()` is the way to feed two apart.
+
+fn main() {
+    var a = HmacSha256.create("key".bytes());
+    let b = a;
+    a.update("x".bytes()); // error[N0250]
+    let _ = b.finish();
+}

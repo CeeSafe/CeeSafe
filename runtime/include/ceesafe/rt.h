@@ -1905,6 +1905,10 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length);
 uint32_t ceesafe_crc32c_available(void);
 uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t length);
 
+/* A wipe the C compiler keeps (ADR 0197 §2.1): `n` bytes at `p` set to zero, then a barrier that takes `p`, so the
+ * stores are not removed as dead, with or without LTO. On every target, with no C library needed. */
+void ceesafe_wipe(uint8_t *p, uint64_t n);
+
 /* AES-256-GCM on the CPU's instructions (ADR 0135), for lib/std's Aes256Gcm. `available` is 1 when the CPU has AES
  * and carry-less multiply instructions; the other three are called only then. `schedule` is 304 bytes that `expand`
  * fills from a 32-byte key; `nonce` is 12 bytes and `tag` 16. Each reads and writes only the lengths it is given,

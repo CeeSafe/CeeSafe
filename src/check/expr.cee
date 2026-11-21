@@ -1032,8 +1032,10 @@ fn synthCall(
             checkPrivateName(c, name)?;
             match (c.lookup(id.symbol)?) {
                 Entity.Function(function) => {
+                    // The harness's entry, and its function of each test (ADR 0195 §2.1.4): `ceesafeTest…`, in a
+                    // `ceesafec test` build only.
                     let inHarness = !sameText(c.entryName.view(), "main") && c.function != none() &&
-                        sameBytes(c.name(c.hir.functions[c.function as usize].name), c.entryName.view());
+                        isHarnessFunction(c.name(c.hir.functions[c.function as usize].name), c.entryName.view());
                     if (containsU32(c.testFunctions, function) && !inHarness) {
                         // `build` leaves tests out, so nothing else may call one (ADR 0049 §3.1).
                         var message = Vector<u8>.create();
@@ -2223,4 +2225,11 @@ fn cannotFind(c: borrow mut Checker, symbol: u32, span: Span) -> Result<void, Al
         appendTypeDidYouMean(c, mut message, symbol)?;
     }
     return c.error(undefinedName(), span.start, span.end, message);
+}
+
+/// Whether a function is the test harness's (ADR 0049 §3.4, ADR 0195 §2.1.4): its entry, or one of `ceesafeTest…`.
+fn isHarnessFunction(name: Slice<u8>, entry: Slice<u8>) -> bool {
+    if (sameBytes(name, entry)) { return true; }
+    let head = "ceesafeTest".bytes();
+    return name.length > head.length && name[0..head.length] == head;
 }

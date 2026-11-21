@@ -1406,7 +1406,9 @@ The digest of `bytes`, in one call.
 ## struct HmacSha256
 
 ```ceesafe
-public struct HmacSha256
+public struct HmacSha256 {
+    drop { … }
+}
 ```
 
 HMAC-SHA-256 (RFC 2104, FIPS 198-1): a 32-byte message authentication code under a key of any length. A key longer
@@ -1420,6 +1422,15 @@ public fn create(key: Slice<u8>) -> HmacSha256
 ```
 
 A code under `key` of no bytes yet.
+
+### HmacSha256.clone
+
+```ceesafe
+public fn clone(borrow this) -> HmacSha256
+```
+
+A second code with the same key and the bytes fed so far, to feed apart. A code is not copied by `=`, since
+its drop wipes its key (ADR 0194 §2.1).
 
 ### HmacSha256.update
 

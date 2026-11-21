@@ -1,6 +1,6 @@
 # ADR 0194 — HMAC wipes its key; Crc32 and Sha1; an OrderedMap full after in-order puts
 
-- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G34, G26 and G29
+- Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Implemented in part for 0.84.2: §2.1, G34 (`HmacSha256`'s wiping `drop`, `clone()`, its temporaries wiped) on ADR 0197's wipe; `Crc32`, `Sha1` and the edge splits are for 0.85.0. Raised by CosmoStore's CEESAFE_GAPS G34, G26 and G29
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): three small library gaps, one ADR because each is a few lines of
   lib/std and they can ship together. Measured on `origin/main` at v0.84.1 (§1.4); nothing here is built yet. G34's
   wipe is ADR 0197's `ceesafe_wipe` and `Secret.wipe` (proposed the same day, for G42 and G34): this ADR uses them

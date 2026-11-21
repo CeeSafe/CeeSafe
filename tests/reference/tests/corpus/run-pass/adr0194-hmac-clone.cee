@@ -1,0 +1,25 @@
+// HmacSha256.clone (ADR 0194 §2.1): a second code with the same key and the bytes fed so far, fed apart; each gives
+// the code of everything it was fed, as one call does. The codes are wiped when they are dropped, which does not
+// change them.
+
+fn same(a: [u8; 32], b: [u8; 32]) -> bool {
+    for (i in 0..32usize) {
+        if (a[i] != b[i]) { return false; }
+    }
+    return true;
+}
+
+fn main() {
+    let key = "a key longer than nothing".bytes();
+    var first = HmacSha256.create(key);
+    first.update("ab".bytes());
+    var second = first.clone();
+    first.update("c".bytes());
+    second.update("d".bytes());
+    Console.writeLine(same(first.finish(), HmacSha256.of(key, "abc".bytes())));
+    Console.writeLine(same(second.finish(), HmacSha256.of(key, "abd".bytes())));
+    Console.writeLine(same(first.finish(), second.finish()));
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false

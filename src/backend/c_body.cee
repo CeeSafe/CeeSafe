@@ -364,11 +364,9 @@ fn partlyWritten(
                         markType(locals, placeLocal(n, target))?;
                     }
                     addBorrowed(n, r, locals)?;
-                    addPayloadReads(n, r, locals)?;
                 }
                 NirStatement.Eval(r) => {
                     addBorrowed(n, r, locals)?;
-                    addPayloadReads(n, r, locals)?;
                 }
                 NirStatement.Unpack(source, _, targets) => {
                     for (k in 0..targets.count) {
@@ -377,21 +375,8 @@ fn partlyWritten(
                             markType(locals, target)?;
                         }
                     }
-                    addPayloadRead(n, source, true, locals)?;
                 }
                 _ => {}
-            }
-        }
-        let operand = match (n.terminators[block.terminator as usize]) {
-            NirTerminator.Branch(condition, _, _) => condition,
-            NirTerminator.Switch(value, _, _) => value,
-            NirTerminator.Return(value) => value,
-            _ => none(),
-        };
-        if (operand != none()) {
-            let place = operandPlace(n, operand);
-            if (place != none()) {
-                addPayloadRead(n, place, false, locals)?;
             }
         }
     }

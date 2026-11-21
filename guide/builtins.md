@@ -312,6 +312,7 @@ Medium
 | `x as T` | only conversions that never lose information; `a as u64 < b` compares |
 | `*r` | the Copy value `r` refers to; `*r = v` writes through a `borrow mut` |
 | `replace(mut place, v)`, `swap(mut a, mut b)` | the old value, which nothing is left without; exchange two places |
+| `arrayFrom(f)` | an array `[T; N]` whose element `i` is `f(i)`, called for `i` from 0 to `N - 1`; `T` and `N` come from the expected type or `arrayFrom<T, N>(f)` ([Arrays](collections.md#arrays-of-atomics-and-other-move-types)) |
 | `assert(cond)`, `assert(cond, message)`, `panic(message)` | panic when false; always (`never`) |
 | `debugAssert(cond)`, `debugAssert(cond, message)` | as `assert`, but only in debug builds, tests and the interpreter; may change nothing that exists before it ([Debugging](debugging.md#debug-assertions)) |
 | `embed("path")`, `embedText("path")` | a file's bytes as a `Slice<u8>`, or as UTF-8 text, read when the package is checked; the path is relative to the source file and stays inside the package ([Constants](basics.md#embedded-files)) |

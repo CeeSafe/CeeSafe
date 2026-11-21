@@ -205,6 +205,11 @@ Lowering rules (HIR → NIR, `NirBuilder`):
     `BoundsCheck(j, Length(d))`, then the built-in `SliceSwap(d, i, j)`. `v.retain(keep)` lowers the vector
     reference and the closure, then a temporary `SliceMut` reborrowed from the vector's elements, a call of
     lib/core's `SliceAlgorithms<T>.retain` on it and the closure, and `VectorTruncate(v, kept)` (type-system §36.4).
+  - **`arrayFrom(f)`** (ADR 0198 §2.2) has no rvalue of its own: it lowers `f` into a temporary, assigns the result
+    temporary `Use(Zero)` (the array's bytes zeroed, as a C local's are), then loops a `usize` counter `i` from 0 to
+    `N - 1`, each pass assigning `CallClosure(&mut *f, i)` to a temporary and moving it into `result[i]`. No bounds
+    check is needed (`i < N` is the loop's test), the zero bytes are never read (every element is written before the
+    loop exits, and a panic in `f` aborts), and in phase 1 an element needs no drop, so the write destroys nothing.
   - `for` evaluates its bounds, or its sequence place and length, once into locals that live until
     the loop exits. A `usize` counter is compared with the end at the head. The body binds the
     variable in its own scope; `continue` jumps to the counter's increment, and `break` to the

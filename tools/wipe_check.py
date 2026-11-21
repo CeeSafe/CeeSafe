@@ -96,7 +96,11 @@ ZEROING = re.compile(r"\bst(?:r|p|ur)[a-z]*\s+(?:[xw]zr|.*,\s*[xw]zr)|\bmovi?\s+
 
 
 def bare(name):
-    return name[1:] if name.startswith("_") else name
+    """A function's name as the source has it: without the leading `_` of Mach-O, and without the suffix of a clone gcc
+    makes (`ceesafe_wipe.constprop.0` under -O2 -flto, its length folded in; `.isra.N`, `.part.N`, `.lto_priv.N`,
+    `.cold`), which is the same function."""
+    name = name[1:] if name.startswith("_") else name
+    return re.sub(r"(\.(constprop|isra|part|lto_priv|cold)(\.\d+)?)+$", "", name)
 
 
 def compilers():

@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.88.0
+## Releases 0.25.0 to 0.89.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.89.0 | 2026-11-21 | A task that computes under `Async.runSlice` is paused before its slice ends once its thread has I/O to serve, so a request beside it waits a fraction of a millisecond, not most of a slice (ADR 0203; not on Windows) | [Async](./ch17-00-async) |
 | 0.88.0 | 2026-11-21 | On Linux, FreeBSD and Windows the window thread is the first that opens a window, so a host whose runtime keeps the first thread (a JVM) opens windows (ADR 0201); `--emit lib` compiles position-independent code for Linux, FreeBSD and Android, so its archive goes into a PIE or a shared library (ADR 0202) | [Appendix E](./appendix-e-ceesafec) |
 | 0.87.0 | 2026-11-21 | `Secret.wipe` zeroes a place so the C compiler keeps it (N0365 for a type that is not zeroable), and `SecretHeap` wipes every block it frees or outgrows; `ceesafec test --scan-freed` and `Testing.freedHolds` check it (ADR 0197). `arrayFrom` and arrays of atomics and other types without drop glue, in fields and locals (ADR 0198). `Crc32` on the CPU's CRC instructions, and `Sha1` (ADR 0194). `OrderedMap` keeps in-order loads about twice as dense (ADR 0194). The C backend flattens a `match` whose cases return, so long chains of `?` no longer nest past C's limit; `class` is a name; a borrowed optional is accepted at a `borrow T?` parameter (ADR 0195) | [Appendix C](./appendix-c-built-in-types) |
 | 0.86.0 | 2026-11-21 | A host program opens windows on iOS and Android: `ceesafe_window_start()` in `ceesafe/embed.h` starts the iOS application from a host's `main`, and `ceesafe/android.h` gives a host library the Android activity's VM and Java object (ADR 0200); `--emit lib` finds `llvm-ar` beside the Android NDK's target-named clang | [Appendix E](./appendix-e-ceesafec) |

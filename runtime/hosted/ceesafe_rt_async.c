@@ -2256,6 +2256,10 @@ typedef struct cee_bound_slot {
     uint32_t depth;         /* this thread's own: its executor loops running (a nested Async.run is one more) */
     uint64_t slice;         /* this thread's own: the slice of the resume it runs (ADR 0189), 0 for none */
     uint32_t *word;         /* this thread's ceesafe_poll_word, which the monitor sets */
+    uint32_t io_reactor;    /* atomic: the reactor of the sliced resume running, for the monitor's poll (ADR 0203) */
+    uint32_t io_epoch;      /* atomic: that resume's epoch, 0 while no sliced resume runs */
+    uint32_t io_flagged;    /* the monitor's, under cee_bound_lock: the epoch it last ended for readiness */
+    uint32_t io_seen;       /* the monitor's, under cee_bound_lock: the sliced epoch it saw on its last look */
     struct cee_bound_slot *next; /* the registry, under cee_bound_lock */
 } cee_bound_slot;
 
@@ -2746,10 +2750,107 @@ static void cee_bound_sleep(uint64_t ms) {
 #endif
 }
 
+#if !defined(_WIN32) && !defined(CEE_NO_REACTOR) && !defined(CEE_FREESTANDING)
+#define CEE_IO_SLICE 1
+#define CEE_IO_WATCH 64u /* the threads whose sliced resumes one wait watches; more wait for the time alone */
+
+/* Readiness ends a slice (ADR 0203): instead of sleeping, the monitor waits on the reactors of the threads whose sliced
+   resume has run since its last look, with poll, which takes no event from them, and a reactor that has events gets
+   its thread's word set for that resume, once: the task pauses at its next poll that may pause, and the executor
+   serves what came. A resume is watched only from the monitor's second look at it, CEE_IO_NAP_NS or more after it
+   began: most resumes (a request read, answered and waiting again) end sooner, and are never paused for readiness,
+   which under load is almost always there. While some resume has lately run past a look (a task that computes), the
+   monitor looks every CEE_IO_NAP_NS; otherwise, idle or serving only short resumes, it sleeps its period, as before.
+   The executor's thread only stores the resume's reactor and epoch. */
+#define CEE_IO_NAP_NS 200000 /* how often a resume just begun is looked at again */
+#define CEE_IO_RECENT 50u    /* ms: how long after a resume last ran past a look the monitor keeps looking so often */
+
+static void cee_bound_wait_io(uint64_t ms) {
+    static uint64_t active_at; /* the monitor's own: when a resume last ran past one of its looks */
+    struct pollfd fds[CEE_IO_WATCH];
+    const cee_bound_slot *who[CEE_IO_WATCH];
+    uint32_t epochs[CEE_IO_WATCH];
+    nfds_t n = 0;
+    bool begun = false;
+    cee_bound_lock_take();
+    for (cee_bound_slot *s = cee_bound_slots; s != NULL; s = s->next) {
+        uint32_t epoch = ceesafe_atomic_load_ord_u32(&s->io_epoch, 0);
+        if (epoch == 0u) {
+            continue;
+        }
+        if (epoch != s->io_seen) {
+            s->io_seen = epoch; /* begun since the last look: watched from the next, if it still runs */
+            begun = true;
+        } else if (epoch != s->io_flagged && n < CEE_IO_WATCH) {
+            fds[n].fd = (int)ceesafe_atomic_load_ord_u32(&s->io_reactor, 0);
+            fds[n].events = POLLIN;
+            fds[n].revents = 0;
+            who[n] = s;
+            epochs[n] = epoch;
+            n += 1;
+        }
+    }
+    cee_bound_lock_give();
+    uint64_t now = ceesafe_async_now();
+    if (n > 0u) {
+        active_at = now;
+    }
+    bool active = active_at != 0u && now - active_at < CEE_IO_RECENT;
+    if (n == 0u) {
+        if (active) {
+            struct timespec nap = {0, CEE_IO_NAP_NS};
+            (void)nanosleep(&nap, NULL);
+        } else {
+            cee_bound_sleep(ms);
+        }
+        return;
+    }
+    /* A resume watched: up to the period, or one nap while others begin, which are looked at again after it. */
+    int wait = begun ? 0 : (int)(ms > 1000u ? 1000u : ms);
+    int r;
+    if (wait == 0) {
+        struct timespec nap = {0, CEE_IO_NAP_NS};
+        r = poll(fds, n, 0);
+        if (r == 0) {
+            (void)nanosleep(&nap, NULL);
+            r = poll(fds, n, 0);
+        }
+    } else {
+        r = poll(fds, n, wait);
+    }
+    if (r <= 0) {
+        return;
+    }
+    bool readable = false;
+    for (nfds_t k = 0; k < n; k++) {
+        readable = readable || (fds[k].revents & POLLIN) != 0;
+    }
+    if (!readable) {
+        cee_bound_sleep(ms); /* POLLNVAL or POLLERR alone (a reactor closed meanwhile): no faster than the time */
+        return;
+    }
+    cee_bound_lock_take();
+    for (cee_bound_slot *s = cee_bound_slots; s != NULL; s = s->next) {
+        for (nfds_t k = 0; k < n; k++) {
+            /* Still registered (a slot leaves under the lock), still in that resume, and its reactor has events. */
+            if (who[k] == s && (fds[k].revents & POLLIN) != 0 && ceesafe_atomic_load_ord_u32(&s->io_epoch, 0) == epochs[k]) {
+                s->io_flagged = epochs[k];
+                ceesafe_poll_set(s->word, epochs[k]);
+            }
+        }
+    }
+    cee_bound_lock_give();
+}
+#endif
+
 static void cee_bound_watch(void) {
     for (;;) {
         uint64_t period = ceesafe_atomic_load_u64(&cee_bound_min) / 4u;
+#if defined(CEE_IO_SLICE)
+        cee_bound_wait_io(period == 0u ? 1u : period);
+#else
         cee_bound_sleep(period == 0u ? 1u : period);
+#endif
         uint64_t now = ceesafe_async_now();
         cee_bound_lock_take();
         for (cee_bound_slot *s = cee_bound_slots; s != NULL; s = s->next) {
@@ -2849,10 +2950,25 @@ static uint64_t cee_bound_threshold(uint64_t slice, uint64_t bound) {
 static void cee_bound_resume(const cee_task *t, uint64_t slice) {
     cee_bound.slice = slice;
     cee_bound_begin(cee_bound_threshold(slice, cee_bound_of(t)));
+#if defined(CEE_IO_SLICE)
+    /* A sliced resume runs on a stack of its own, so a word set early only pauses it (ADR 0203): its reactor and
+       epoch for the monitor's poll. */
+    if (slice != 0u && cee_exec.reactor >= 0) {
+        ceesafe_atomic_store_ord_u32(&cee_bound.io_reactor, (uint32_t)cee_exec.reactor, 0);
+        ceesafe_atomic_store_ord_u32(&cee_bound.io_epoch, ceesafe_atomic_load_ord_u32(&cee_bound.epoch, 0), 0);
+    } else if (cee_bound.io_epoch != 0u) {
+        ceesafe_atomic_store_ord_u32(&cee_bound.io_epoch, 0u, 0);
+    }
+#endif
 }
 
 static void cee_bound_waited(void) {
     ceesafe_atomic_store_ord_u64(&cee_bound.running_bound, 0u, 0);
+#if defined(CEE_IO_SLICE)
+    if (cee_bound.io_epoch != 0u) {
+        ceesafe_atomic_store_ord_u32(&cee_bound.io_epoch, 0u, 0);
+    }
+#endif
     ceesafe_poll_clear();
 }
 

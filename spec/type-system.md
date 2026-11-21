@@ -6537,6 +6537,9 @@ scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend
   not the time it waited paused (ADR 0193): a unit past it is ended with `PanicKind.Overran` as before, at most about
   a slice late. A slice alone lets a unit compute without end,
   sharing its thread.
+- **Readiness ends a slice** (ADR 0203): a resume that has run 200 µs or more is also paused, at its next poll that
+  may pause, once its thread's reactor has events to collect (a request, a reply, a wake), so the tasks they wake do
+  not wait for the rest of the slice. Windows keeps the time alone.
 - **`Async.pauses()`** (`u64`) is how many times a task has been paused. A pause writes nothing to standard error.
 - **The interpreter** takes a slice and pauses nothing: its clock does not move while a task computes (§40.8), so a
   pause would change nothing a program can see. `Async.runSlice` is `true` there, and `Async.pauses()` is 0.

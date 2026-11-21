@@ -104,7 +104,7 @@ Async.pauses()   // u64: how many times a task has been paused (§2.4)
 ### 2.3 How a task is paused
 
 The monitor sets the word when a resume has run past the slice, as it does for the bound (its period becomes a
-quarter of the smallest slice or bound). `cee_bound_poll_slow` then, for a task of a unit:
+quarter of the smallest slice or bound). *ADR 0203 also sets it when the resume's thread has I/O to serve.* `cee_bound_poll_slow` then, for a task of a unit:
 
 1. **May it pause here?** Only if all of these hold, else the word stays set and a later poll asks again:
    - the unit is in no `Critical` (`t->unit->critical == 0`), as for ending it;

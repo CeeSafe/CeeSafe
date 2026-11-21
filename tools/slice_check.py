@@ -25,6 +25,9 @@ Checks the corpus cannot make, since they need the clock, the threads' interleav
      beside a task that waits on 1 ms timers: its longest wait stays far below the 300 ms, with or without a slice;
    - `measured` (ADR 0193): under a 1 ms slice and a 200 ms bound, a unit alone that never ends is ended after about
      200 ms, the time it ran measured at each pause, where counting its pauses times the slice let it run twice that;
+   - `readiness` (ADR 0203): beside a unit computing 500 ms under a 20 ms slice, a task reading what another thread
+     writes over TCP every 13 ms gets each write within a few ms (mean <= 3, longest <= 8), where the slice ended by
+     the clock alone made it wait for the slice's rest (about 10 ms on average); without a slice it waits for the unit;
    - `workers`: under Async.runWorkers(4), units started by tasks on every worker compute and are paused, each on its
      own worker's stacks, and finish with the right numbers (each unit computes for well over a slice, more than
      Windows' clock tick of about 15.6 ms, or it may end before a slice runs out);
@@ -458,6 +461,87 @@ async fn one(
     return Ok();
 }
 
+/// On a thread of its own: connects to `port` and writes its clock (8 bytes) `count` times, `gap` ms apart.
+async fn sender(port: u16, count: u32, gap: u64) -> Result<void, Fail> {
+    let stream = match (await AsyncTcpStream.connect("127.0.0.1", port)) {
+        Ok(s) => s,
+        Err(_) => { return Err(Fail.Other); },
+    };
+    var k: u32 = 0;
+    while (k < count) {
+        await nap(gap)?;
+        var clock = [0u8; 8];
+        let now = Timer.now();
+        for (i in 0..8) {
+            clock[i] = truncate<u8>(now >> (i as u64 * 8));
+        }
+        match (await stream.write(clock[..])) {
+            Ok() => {}
+            Err(_) => { return Err(Fail.Other); }
+        }
+        k += 1;
+    }
+    return Ok();
+}
+
+/// Reads the sender's clocks: the longest wait from a write to its read in `longest`, their mean in `mean`.
+async fn receiver(stream: AsyncTcpStream, count: u32, longest: Arc<AtomicU64>, mean: Arc<AtomicU64>)
+    -> Result<void, Fail> {
+    var clock = [0u8; 8];
+    var have: usize = 0;
+    var most: u64 = 0;
+    var sum: u64 = 0;
+    var k: u32 = 0;
+    while (k < count) {
+        let n = match (await stream.read(mut clock[have..])) {
+            Ok(n) => n,
+            Err(_) => { return Err(Fail.Other); },
+        };
+        if (n == 0) {
+            return Err(Fail.Other);
+        }
+        have += n;
+        if (have == 8) {
+            var sent: u64 = 0;
+            for (i in 0..8) {
+                sent = sent | ((clock[i] as u64) << (i as u64 * 8));
+            }
+            let now = Timer.now();
+            let waited = if (now > sent) now - sent else 0;
+            if (waited > most) {
+                most = waited;
+            }
+            sum += waited;
+            have = 0;
+            k += 1;
+        }
+    }
+    longest.get().store(most);
+    mean.get().store(sum / (count as u64));
+    return Ok();
+}
+
+/// ADR 0203: a unit computes 500 ms under the slice beside a task that reads what another thread writes.
+async fn readiness(listener: AsyncTcpListener, a: Arc<AtomicU64>, c: Arc<AtomicU64>, d: Arc<AtomicU64>, crashes: Channel<TaskCrash>)
+    -> Result<void, Fail> {
+    let r = await Async.tasks(4, Fail.NoMemory, async (set) => {
+        if (!Isolation.watch(set, crashes)) {
+            return Err(Fail.NoMemory);
+        }
+        let stream = match (await listener.accept()) {
+            Ok(s) => s,
+            Err(_) => { return Err(Fail.Other); },
+        };
+        let done = a.clone();
+        let longest = c.clone();
+        let mean = d.clone();
+        await set.spawnIsolated(Fail.Crashed, async move () => await computes(500, done))?;
+        await set.spawn(async move () => await receiver(stream, 15, longest, mean))?;
+        return Ok();
+    });
+    return r;
+}
+
 /// Under Async.runWorkers(4): four tasks any worker may take, each with a task set of two units.
 async fn onWorkers(x: Arc<AtomicU64>, y: Arc<AtomicU64>) -> Result<void, Fail> {
     let r = await Async.scope(Fail.NoMemory, (s) => {
@@ -486,8 +570,10 @@ fn main() {
         else if (how == "mutex") 3 else if (how == "critical") 4 else if (how == "callback") 5
         else if (how == "endonly") 6 else if (how == "endbound") 7 else if (how == "trap") 8
         else if (how == "dies") 9 else if (how == "cancel") 10 else if (how == "workers") 11
-        else if (how == "handoff") 12 else if (how == "busy") 13 else if (how == "measured") 14 else 99;
-    let slice: u64 = if (none) 0 else if (which == 1 || which == 14) 1 else if (which == 8 || which == 9) 5 else 10;
+        else if (how == "handoff") 12 else if (how == "busy") 13 else if (how == "measured") 14
+        else if (how == "readiness") 15 else 99;
+    let slice: u64 = if (none) 0 else if (which == 1 || which == 14) 1 else if (which == 8 || which == 9) 5
+        else if (which == 15) 20 else 10;
     let sliced = Async.runSlice(slice);
     Console.writeLine(if (sliced) "sliced" else "no slice");
     if (which == 2) {
@@ -506,6 +592,16 @@ fn main() {
     if (which == 11) {
         let w = Async.runWorkers(4, onWorkers(a.clone(), c.clone()));
         let _ = w;
+    } else if (which == 15) {
+        let listener = AsyncTcpListener.bind("127.0.0.1", 0)!;
+        let port = listener.port()!;
+        let writer = Thread.spawn(move () => Async.run(sender(port, 15, 13)))!;
+        match (Async.run(readiness(listener, a.clone(), c.clone(), d.clone(), crashes.clone()))) {
+            Ok() => {}
+            Err(_) => { Console.writeLine("failed"); }
+        }
+        let sent = writer.join();
+        let _ = sent;
     } else {
         match (Async.run(one(which, small, a.clone(), b.clone(), c.clone(), d.clone(), crashes.clone()))) {
             Ok() => {}
@@ -642,6 +738,20 @@ def main():
     expect("measured: paused before it was ended", v.get("pauses", 0) >= 20, str(v))
     expect("measured: ended near its bound of 200 ms, not past it by its slices' lateness",
            200 <= v.get("ms", 0) < 300, str(v))
+
+    # readiness (ADR 0203): beside a unit computing 500 ms under a 20 ms slice, a task reading what another thread
+    # writes every 13 ms gets each write within a few ms: the monitor saw the socket ready and ended the slice. With
+    # the slice ended by the clock alone, a write waited for the rest of the slice: about 10 ms on average.
+    for extra in ([], ["none"]):
+        v = case("readiness", extra)
+        label = "readiness" + (" none" if extra else "")
+        expect(f"{label}: the unit finished", v.get("a") == 1, str(v))
+        if extra:
+            expect(f"{label}: without a slice the reader waits for the unit", v.get("c", 0) >= 300, str(v))
+        else:
+            expect(f"{label}: paused for what came", v.get("pauses", 0) >= 15, str(v))
+            expect(f"{label}: each write read within a few ms, not the slice's rest",
+                   v.get("d", 99) <= 3 and v.get("c", 99) <= 8, str(v))
 
     # Where a task is not paused: a Mutex, a Critical, C's frames, a function that calls C.
     for name in ("mutex", "critical", "callback", "endonly"):

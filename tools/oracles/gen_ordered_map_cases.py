@@ -5,8 +5,8 @@ this file, a sorted list of keys beside a dict.
 The program and this file draw the same operations from the same xorshift64 (13, 7, 17; seed 0x9E3779B97F4A7C15), and
 the expected lines are the model's:
 
-1. fill: 10,000 ascending keys (0, 4, 8, …), so every split leaves half-full nodes and the tree is four levels deep
-   (at most 32 × 32 × 31 + … = 32,767 entries fit in three).
+1. fill: 10,000 ascending keys (0, 4, 8, …), each past the last, so every split is an edge split (29 entries to 1,
+   ADR 0194 §2.4) and the tree is three levels deep.
 2. mixed: 8,000 random puts, removals, gets, seeks, seekAfters and contains over keys below 40,000; each result is
    folded into an FNV-1a hash, printed with the length and the first and last keys every 1,000 operations.
 3. scans: every entry forward (first, next) and backward (last, previous); 30 range scans (seek, then next until a key
@@ -17,6 +17,9 @@ the expected lines are the model's:
 6. refill after the drain (the freed nodes are reused), clear, and a put after the clear.
 7. String keys (bytewise: "" first, a prefix before a longer key, uppercase before lowercase), Vector<u8> keys
    (bytewise, a prefix first), i8 and i64 keys (negative before positive) and bool keys, each against `sorted`.
+8. edges (ADR 0194 §2.4), after the others: 2,000 keys loaded ascending, then descending (three levels); 400
+   removals from the two ends in turn; a queue of 600 puts past the last key each followed by the first's removal,
+   and 600 puts before the first key each followed by the last's removal; scans both ways; then every entry removed from the ends in turn.
 
 usage: python3 tools/oracles/gen_ordered_map_cases.py   (formats with $CEESAFEC, default out/ceesafec)
 """
@@ -148,6 +151,42 @@ def u64_cases(lines):
     lines.append(f"refill {len(m.keys)} {m.keys[0]} {m.keys[-1]} {m.values[m.seek(500)]}")
     lines.append("cleared 0 true null")
     lines.append("after clear 1 7")
+
+
+def whole(keys, values):
+    h = FNV_START
+    for k in keys:
+        h = fnv(fnv(h, k), values[k])
+    return h
+
+
+def edge_cases(lines):
+    for order in ("ascending", "descending"):
+        m = Model()
+        n = 2000
+        for i in range(n):
+            k = 3 * i + 3 if order == "ascending" else 3 * (n - i)
+            m.put(k, k ^ 0xABCD)
+        lines.append(f"edges {order} {len(m.keys)} {m.keys[0]} {m.keys[-1]} {whole(m.keys, m.values)}")
+        h = FNV_START
+        for i in range(400):
+            h = some(h, m.remove(m.keys[0] if i % 2 == 0 else m.keys[-1]))
+        lines.append(f"ends {h} {len(m.keys)} {m.keys[0]} {m.keys[-1]}")
+        h = FNV_START
+        for i in range(600):
+            h = some(h, m.put(m.keys[-1] + 1, i))
+            h = some(h, m.remove(m.keys[0]))
+        for i in range(600):
+            h = some(h, m.put(m.keys[0] - 1, i))
+            h = some(h, m.remove(m.keys[-1]))
+        lines.append(f"queue {h} {len(m.keys)} {m.keys[0]} {m.keys[-1]}")
+        lines.append(f"scans {whole(m.keys, m.values)} {whole(list(reversed(m.keys)), m.values)} {len(m.keys)}")
+        h = FNV_START
+        i = 0
+        while m.keys:
+            h = some(h, m.remove(m.keys[0] if i % 2 == 0 else m.keys[-1]))
+            i += 1
+        lines.append(f"emptied {h} {i} true")
 
 
 def text_cases(lines):
@@ -522,11 +561,89 @@ fn intCases() {
     Console.writeLine(flags.valueAt(second));
 }
 
+fn firstKey(map: borrow OrderedMap<u64, u64>) -> u64 => map.keyAt(map.first()!);
+
+fn lastKey(map: borrow OrderedMap<u64, u64>) -> u64 => map.keyAt(map.last()!);
+
+fn backHash(map: borrow OrderedMap<u64, u64>) -> u64 {
+    var h: u64 = 0xCBF29CE484222325;
+    var c = map.last();
+    while (c != null) {
+        let at = c!;
+        h = fnv(fnv(h, map.keyAt(at)), map.valueAt(at));
+        c = map.previous(at);
+    }
+    return h;
+}
+
+/// Section 8: loads in key order each way, then removals and puts at the ends (ADR 0194 §2.4).
+fn edgeCases() {
+    for (order in 0..2) {
+        var map = OrderedMap<u64, u64>.create();
+        let n: u64 = 2000;
+        for (i in 0..n) {
+            let k = if (order == 0) 3 * i + 3 else 3 * (n - i);
+            let old = map.put(k, k ^ 0xABCD)!;
+        }
+        Console.write(if (order == 0) "edges ascending" else "edges descending");
+        showLength(borrow map);
+        ends(borrow map);
+        Console.write(" ");
+        Console.writeLine(wholeHash(borrow map));
+        var h: u64 = 0xCBF29CE484222325;
+        for (i in 0..400) {
+            let k = if (i % 2 == 0) firstKey(borrow map) else lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        Console.write("ends ");
+        Console.write(h);
+        showLength(borrow map);
+        ends(borrow map);
+        Console.writeLine("");
+        h = 0xCBF29CE484222325;
+        for (i in 0..600u64) {
+            h = some(h, map.put(lastKey(borrow map) + 1, i)!);
+            let k = firstKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        for (i in 0..600u64) {
+            h = some(h, map.put(firstKey(borrow map) - 1, i)!);
+            let k = lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+        }
+        Console.write("queue ");
+        Console.write(h);
+        showLength(borrow map);
+        ends(borrow map);
+        Console.writeLine("");
+        Console.write("scans ");
+        Console.write(wholeHash(borrow map));
+        Console.write(" ");
+        Console.write(backHash(borrow map));
+        showLength(borrow map);
+        Console.writeLine("");
+        h = 0xCBF29CE484222325;
+        var removed: u64 = 0;
+        while (!map.isEmpty()) {
+            let k = if (removed % 2 == 0) firstKey(borrow map) else lastKey(borrow map);
+            h = some(h, map.remove(borrow k));
+            removed += 1;
+        }
+        Console.write("emptied ");
+        Console.write(h);
+        Console.write(" ");
+        Console.write(removed);
+        Console.write(" ");
+        Console.writeLine(map.first() == null);
+    }
+}
+
 fn main() {
     u64Cases();
     textCases();
     byteCases();
     intCases();
+    edgeCases();
 }
 """
 
@@ -537,6 +654,7 @@ def main():
     text_cases(lines)
     byte_cases(lines)
     int_cases(lines)
+    edge_cases(lines)
     puts = []
     for i, k in enumerate(BYTE_KEYS):
         puts.append(f"    var key{i} = Vector<u8>.create();")

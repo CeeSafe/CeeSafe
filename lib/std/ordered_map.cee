@@ -142,7 +142,9 @@ public struct OrderedCursor {
 }
 
 /// A map whose iteration order is its keys' order (ADR 0075 §2.4): a B-tree of minimum degree 16 (at most 31 entries
-/// a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. Ordered access is through
+/// a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. A put past the last key or
+/// before the first splits the full nodes on its path unevenly, 29 entries to 1 with the one on the key's side (ADR
+/// 0194 §2.4), so a map loaded in key order, either way, ends up nearly full rather than half empty. Ordered access is through
 /// cursors (`first`, `last`, `seek`, `seekAfter`, `next`, `previous`); a put, a removal or a clear changes the map's
 /// version, and a cursor made before it panics when used ("ordered map changed under a cursor"). Only `put`
 /// allocates; a failed `put` leaves the map as it was.
@@ -170,8 +172,9 @@ public struct OrderedMap<K: OrderKey<K>, V> {
     /// Whether there are none.
     public fn isEmpty(borrow this) -> bool => this.count == 0;
 
-    // The most entries a node holds (2B − 1, B = 16), the fewest a node other than the root holds (B − 1), and the
-    // room each node's vectors are made with: one entry and one child more, for the shifts.
+    // The most entries a node holds (2B − 1, B = 16), the fewest a node holds (B − 1) other than the root and the
+    // nodes on the tree's first and last paths, which hold at least one (ADR 0194 §2.4), and the room each node's
+    // vectors are made with: one entry and one child more, for the shifts.
     fn most() -> usize => 31;
     fn fewest() -> usize => 15;
 
@@ -273,12 +276,12 @@ public struct OrderedMap<K: OrderKey<K>, V> {
         this.spare += 1;
     }
 
-    /// Splits `parent`'s full child `i`: its upper B − 1 entries (and B children) go to a new node, child `i + 1`, and
-    /// its middle entry up into `parent` at `i`, which has room.
-    fn split(borrow mut this, parent: usize, i: usize) {
+    /// Splits `parent`'s full child `i`: it keeps its first `keep` entries (and `keep + 1` children), the next goes up
+    /// into `parent` at `i`, which has room, and the rest (2B − 2 − `keep` entries) go to a new node, child `i + 1`.
+    /// `keep` is B − 1 for a middle split, and 2B − 3 or 1 for a put past the last key or before the first.
+    fn split(borrow mut this, parent: usize, i: usize, keep: usize) {
         let left = this.nodes[parent].children[i];
         let right = this.take();
-        let keep = OrderedMap<K, V>.fewest(); // entries left keeps, and right gets
         while (this.nodes[left].keys.length > keep + 1) {
             let key = this.nodes[left].keys.pop()!;
             this.nodes[right].keys.push(key)!;
@@ -310,8 +313,12 @@ public struct OrderedMap<K: OrderKey<K>, V> {
             this.grow()?;
             this.root = this.take();
         }
-        // The key's path: the entry if it is there, else how many full nodes the descent splits.
+        // The key's path: the entry if it is there, else how many full nodes the descent splits, and whether the key
+        // is past the last key (its slot is the node's length at every level) or before the first (slot 0 at every
+        // level).
         var needed: usize = 0;
+        var pastLast = true;
+        var beforeFirst = true;
         var node = this.root;
         loop {
             var found = false;
@@ -320,6 +327,12 @@ public struct OrderedMap<K: OrderKey<K>, V> {
                 orderedExchange(mut this.nodes[node].values, slot, value);
                 this.version += 1;
                 return Ok(this.nodes[node].values.pop());
+            }
+            if (slot != this.nodes[node].keys.length) {
+                pastLast = false;
+            }
+            if (slot != 0) {
+                beforeFirst = false;
             }
             if (this.nodes[node].keys.length == OrderedMap<K, V>.most()) {
                 needed += 1;
@@ -336,14 +349,18 @@ public struct OrderedMap<K: OrderKey<K>, V> {
             this.grow()?;
         }
         // Nothing allocates from here on. A full root gets a new root above it, then each full node on the path is
-        // split before the descent enters it, so a split always has room in its parent (CLRS's B-TREE-INSERT).
+        // split before the descent enters it, so a split always has room in its parent (CLRS's B-TREE-INSERT). At the
+        // tree's edges the split leaves the key's side one entry and the other side 2B − 3 (ADR 0194 §2.4): keys put
+        // in order then leave full nodes behind them, not half-full ones.
+        let keep: usize =
+            if (pastLast) OrderedMap<K, V>.most() - 2 else if (beforeFirst) 1 else OrderedMap<K, V>.fewest();
         if (this.nodes[this.root].keys.length == OrderedMap<K, V>.most()) {
             let old = this.root;
             let top = this.take();
             this.nodes[top].children.push(old)!;
             this.nodes[old].parent = top;
             this.root = top;
-            this.split(top, 0);
+            this.split(top, 0, keep);
         }
         node = this.root;
         loop {
@@ -356,7 +373,7 @@ public struct OrderedMap<K: OrderKey<K>, V> {
             }
             let child = this.nodes[node].children[slot];
             if (this.nodes[child].keys.length == OrderedMap<K, V>.most()) {
-                this.split(node, slot);
+                this.split(node, slot, keep);
                 if (this.nodes[node].keys[slot].compareKey(borrow key) < 0) {
                     slot += 1;
                 }
@@ -368,8 +385,9 @@ public struct OrderedMap<K: OrderKey<K>, V> {
         return Ok(null);
     }
 
-    /// Merges `parent`'s child `i + 1` and the entry between them into child `i`, which then holds 2B − 1 entries; the
-    /// emptied node is freed, and so is `parent` if it was the root and is now empty, child `i` becoming the root.
+    /// Merges `parent`'s child `i + 1` and the entry between them into child `i`, which then holds at most 2B − 1
+    /// entries; the emptied node is freed, and so is `parent` if it was the root and is now empty, child `i` becoming
+    /// the root.
     fn merge(borrow mut this, parent: usize, i: usize) {
         let left = this.nodes[parent].children[i];
         let right = this.nodes[parent].children[i + 1];
@@ -403,8 +421,10 @@ public struct OrderedMap<K: OrderKey<K>, V> {
         }
     }
 
-    /// Makes `parent`'s child `i` hold at least B entries before a removal descends into it: it borrows an entry
-    /// through `parent` from a sibling that can spare one, else merges with a sibling. The node to descend into.
+    /// Makes `parent`'s child `i` hold more than the fewest it may before a removal descends into it: a child of
+    /// B − 1 or fewer entries (fewer only on the first and last paths) borrows an entry through `parent` from a sibling
+    /// that can spare one, else merges with a sibling, which stays within 2B − 1 since neither holds more than B − 1.
+    /// The node to descend into.
     fn fill(borrow mut this, parent: usize, i: usize) -> usize {
         let child = this.nodes[parent].children[i];
         let fewest = OrderedMap<K, V>.fewest();

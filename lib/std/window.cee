@@ -400,6 +400,24 @@ public enum WindowAccessRole {
     /// A button that opens a list of choices and shows the chosen one.
     Dropdown,
     Image,
+    /// Containers (ADR 0207): elements that hold others, which give it as their `parent`.
+    /// Elements that belong together under a name: a toolbar, a form's section.
+    Group,
+    /// A list's rows (`ListItem`s).
+    List,
+    /// A menu's items (`MenuItem`s), open.
+    Menu,
+    /// A menu bar's menus.
+    MenuBar,
+    /// A row of `Tab`s.
+    TabList,
+    /// A table's `Row`s, which hold its `Cell`s and `ColumnHeader`s.
+    Table,
+    Row,
+    /// A table's cell: its text, or the elements in it.
+    Cell,
+    /// The title of a table's column, in its first row.
+    ColumnHeader,
 }
 
 /// An element of a window as a screen reader is told of it (§26.13, ADR 0164): `Window.setAccessNodes`.
@@ -432,6 +450,17 @@ public struct WindowAccessNode {
     /// layer the latest in the list: the list stays in reading order while a popup read before the page it covers
     /// still takes the point (ADR 0164 §10).
     public layer: u32;
+    /// The `id` of the container the element is in (ADR 0207), 0 for the window itself. The container comes before
+    /// it in the list.
+    public parent: u64;
+    /// The element's place in its container, from 1: an item's `row`; a table row's `row`; a cell's or a column
+    /// header's `row` and `column`. 0: the runtime counts it from the list.
+    public row: u32;
+    public column: u32;
+    /// A container's items, or a table's rows and columns, those not in the list too (a virtual list's rows off
+    /// the screen). 0: the runtime counts them from the list.
+    public rows: u32;
+    public columns: u32;
 
     public fn checked() -> u32 => 1;
     public fn selected() -> u32 => 2;
@@ -708,14 +737,16 @@ public struct Window {
     /// The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
     /// holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
     /// last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
-    /// A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
-    /// there yet, and when memory runs out, the last list stays.
-    /// Safety: the runtime reads eleven words for each node and `text.length` bytes during the call.
+    /// A range outside `text`, a caret or anchor outside its value, an `id` of 0, an `id` given twice, and a
+    /// `parent` that is not a container before the element in the list (ADR 0207) are panics. Where the system's
+    /// part is not there yet, and when memory runs out, the last list stays; where it has no containers yet, they
+    /// are left out and what they hold is the window's.
+    /// Safety: the runtime reads fourteen words for each node and `text.length` bytes during the call.
     public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: Slice<u8>) {
         if (nodes.length > 0x7FFFFFFF || text.length > 0x7FFFFFFF) {
             panic("Window.setAccessNodes: a list or a text longer than 2^31");
         }
-        var raw = match (Vector<u64>.withCapacity(nodes.length * 11)) {
+        var raw = match (Vector<u64>.withCapacity(nodes.length * 14)) {
             Ok(v) => v,
             Err(_) => { return; }
         };
@@ -743,8 +774,17 @@ public struct Window {
                 WindowAccessRole.MenuItem => 8,
                 WindowAccessRole.Dropdown => 9,
                 WindowAccessRole.Image => 10,
+                WindowAccessRole.Group => 11,
+                WindowAccessRole.List => 12,
+                WindowAccessRole.Menu => 13,
+                WindowAccessRole.MenuBar => 14,
+                WindowAccessRole.TabList => 15,
+                WindowAccessRole.Table => 16,
+                WindowAccessRole.Row => 17,
+                WindowAccessRole.Cell => 18,
+                WindowAccessRole.ColumnHeader => 19,
             };
-            // Eleven words a node, as the runtime reads them.
+            // Fourteen words a node, as the runtime reads them.
             let words = [
                 n.id,
                 n.min.bits(),
@@ -757,6 +797,9 @@ public struct Window {
                 (n.valueStart as u64) | ((n.valueLength as u64) << 32),
                 (n.caret as u64) | ((n.anchor as u64) << 32),
                 n.layer as u64,
+                n.parent,
+                (n.row as u64) | ((n.column as u64) << 32),
+                (n.rows as u64) | ((n.columns as u64) << 32),
             ];
             for (word in words) {
                 match (raw.push(word)) {
@@ -773,8 +816,11 @@ public struct Window {
             text.ptr,
             truncate<u32>(text.length),
         ) };
-        if (result < 0) {
+        if (result == -1) {
             panic("Window.setAccessNodes: an element's id is given twice");
+        }
+        if (result < 0) {
+            panic("Window.setAccessNodes: an element's parent is not a container before it in the list");
         }
     }
 

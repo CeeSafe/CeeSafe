@@ -40,6 +40,11 @@ fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], va
         caret: if (id == 5) 1 else 0,
         anchor: if (id == 5) 2 else 0,
         layer: 0,
+        parent: 0,
+        row: 0,
+        column: 0,
+        rows: 0,
+        columns: 0,
     };
 
 fn give(window: borrow mut Window, volume: f64, focusField: bool) {

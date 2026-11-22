@@ -242,7 +242,14 @@ struct cee_access_node {
     uint32_t label_start, label_length, value_start, value_length;
     uint32_t caret, anchor; /* a text field's, as byte offsets into its value */
     uint32_t layer;         /* 0 the page; higher is drawn over it (ADR 0164 §10) */
+    /* Containers (ADR 0207): the container's id (0 the window) and its index in the list (CEE_ACCESS_TOP for the
+       window); the element's place in it, from 1, and a container's counts, numbered by the runtime where the
+       program gave 0. */
+    uint64_t parent;
+    uint32_t up;
+    uint32_t row, column, rows, columns;
 };
+#define CEE_ACCESS_TOP 0xFFFFFFFFu
 
 /* The element at point (x, y) of the content, in points, among the first `count` of `nodes`: of those that hold it,
    the highest layer's, and of one layer the latest in the list (drawn later, so on top); -1 for none. The list is in
@@ -268,7 +275,19 @@ static inline int64_t cee_access_at(const struct cee_access_node *nodes, uint32_
 #define CEE_ACCESS_DISABLED 8u
 #define CEE_ACCESS_EXPANDED 16u
 #define CEE_ACCESS_SECURE 32u
-#define CEE_ACCESS_ROLES 11u
+#define CEE_ACCESS_ROLES 20u
+/* ADR 0207's roles: Group 11, List 12, Menu 13, MenuBar 14, TabList 15, Table 16, Row 17, Cell 18, ColumnHeader 19.
+   A container holds others: all but ColumnHeader. */
+#define CEE_ACCESS_GROUP 11u
+#define CEE_ACCESS_LIST 12u
+#define CEE_ACCESS_MENU 13u
+#define CEE_ACCESS_MENU_BAR 14u
+#define CEE_ACCESS_TAB_LIST 15u
+#define CEE_ACCESS_TABLE 16u
+#define CEE_ACCESS_ROW 17u
+#define CEE_ACCESS_CELL 18u
+#define CEE_ACCESS_COLUMN_HEADER 19u
+#define CEE_ACCESS_CONTAINER(role) ((role) >= CEE_ACCESS_GROUP && (role) <= CEE_ACCESS_CELL)
 #define CEE_ACCESS_PRESS 0
 #define CEE_ACCESS_FOCUS 1
 #define CEE_ACCESS_INCREMENT 2
@@ -3561,6 +3580,8 @@ struct cee_mac {
     /* Accessibility (ADR 0164): the element of each node of the window's list, in its order, each retained. */
     cee_id *access_elements;
     uint32_t access_count;
+    /* The view's own accessibility children, the top level of the tree (ADR 0207), retained. */
+    cee_id access_top;
     /* A title bar the program draws (ADR 0206): the traffic lights' row, in points from the content's top left, and
        the bar's height they were centered in. */
     float lights[4];
@@ -4140,8 +4161,10 @@ static signed char cee_mac_periodic_drags(cee_id self, cee_sel cmd) {
 /* ---- Accessibility on macOS (ADR 0164) --------------------------------------------------------------------------
    Each node of the window's list is an NSAccessibilityElement whose parent is the content view. An element is kept
    from one list to the next while its id is in both, so a reader's cursor stays on it. The elements answer their
-   frame from the list as it is now, in screen coordinates, so a moved window needs no telling. */
+   frame from the list as it is now, in screen coordinates, so a moved window needs no telling. Containers (ADR
+   0207) are elements too: a container's element is its children's parent, the view only the top level's. */
 #define CEE_WINDOW_ACCESS 1
+#define CEE_ACCESS_TREE 1
 
 static cee_id cee_mac_string(const char *text, size_t length);
 
@@ -4335,9 +4358,7 @@ static cee_id cee_mac_access_children(cee_id self, cee_sel cmd) {
     }
     w->access_active = 1;
     struct cee_mac *m = (struct cee_mac *)w->native;
-    return ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_objc.send)(
-        cee_mac_cls("NSArray"), cee_mac_sel("arrayWithObjects:count:"), m->access_elements,
-        (unsigned long)(m->access_count < w->access_count ? m->access_count : w->access_count));
+    return m->access_top != NULL ? m->access_top : cee_send(cee_mac_cls("NSArray"), "array");
 }
 
 static signed char cee_mac_access_view_is_element(cee_id self, cee_sel cmd) {
@@ -4390,8 +4411,10 @@ static cee_id cee_mac_number(double value) {
 /* Gives `element` what node `n` says: its role, name, value and state. Its frame it answers itself. */
 static void cee_mac_access_apply(cee_id element, const struct cee_access_node *n, const char *text) {
     static const char *const roles[CEE_ACCESS_ROLES] = {
-        "AXStaticText", "AXButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXSlider",
-        "AXRadioButton", "AXButton", "AXMenuItem", "AXPopUpButton", "AXImage"};
+        "AXStaticText", "AXButton", "AXCheckBox", "AXRadioButton", "AXTextField", "AXSlider", "AXRadioButton",
+        "AXButton", "AXMenuItem", "AXPopUpButton", "AXImage",
+        /* ADR 0207's containers; a column header is a cell of the table's first row, named its column's header */
+        "AXGroup", "AXList", "AXMenu", "AXMenuBar", "AXTabGroup", "AXTable", "AXRow", "AXCell", "AXCell"};
     cee_id label = cee_mac_string(text + n->label_start, n->label_length);
     cee_id value = NULL;
     const char *subrole = NULL;
@@ -4440,6 +4463,85 @@ static void cee_mac_access_apply(cee_id element, const struct cee_access_node *n
     if (n->role == 8 || n->role == 9) {
         cee_send_v_bool(element, "setAccessibilityExpanded:", (n->flags & CEE_ACCESS_EXPANDED) != 0);
     }
+    /* Places and counts (ADR 0207): a reader says "3 of 40", "row 2, column 3". */
+    if (n->role == CEE_ACCESS_TABLE || n->role == CEE_ACCESS_LIST) {
+        cee_send_v_long(element, "setAccessibilityRowCount:", (long)n->rows);
+    }
+    if (n->role == CEE_ACCESS_TABLE) {
+        cee_send_v_long(element, "setAccessibilityColumnCount:", (long)n->columns);
+    }
+    if (n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER) {
+        cee_range rows = {n->row > 0 ? n->row - 1u : 0u, 1u}, columns = {n->column > 0 ? n->column - 1u : 0u, 1u};
+        ((void (*)(cee_id, cee_sel, cee_range))cee_objc.send)(element, cee_mac_sel("setAccessibilityRowIndexRange:"),
+                                                              rows);
+        ((void (*)(cee_id, cee_sel, cee_range))cee_objc.send)(
+            element, cee_mac_sel("setAccessibilityColumnIndexRange:"), columns);
+    } else if (n->up != CEE_ACCESS_TOP && n->row > 0 && n->column == 0) {
+        /* an item's place in its list, menu or table; what is in a table's row has a column, not an index */
+        cee_send_v_long(element, "setAccessibilityIndex:", (long)n->row - 1);
+    }
+}
+
+static cee_id cee_mac_array(const cee_id *items, unsigned long count) {
+    return ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_objc.send)(
+        cee_mac_cls("NSArray"), cee_mac_sel("arrayWithObjects:count:"), items, count);
+}
+
+/* The tree (ADR 0207): each element's parent (its container's element, or the view), each container's children, a
+   table's rows and column headers, a tab list's tabs; and the view's own children, the top level's, kept in
+   `m->access_top`. Called when the list's shape may have changed. */
+static void cee_mac_access_tree(struct cee_window *w, cee_id *elements, uint32_t count) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    cee_id *items = count > 0 ? (cee_id *)ceesafe_platform_alloc((size_t)count * sizeof *items) : NULL;
+    cee_id *headers = count > 0 ? (cee_id *)ceesafe_platform_alloc((size_t)count * sizeof *headers) : NULL;
+    if (count > 0 && (items == NULL || headers == NULL)) {
+        ceesafe_platform_free(items);
+        ceesafe_platform_free(headers);
+        return;
+    }
+    unsigned long top = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        if (elements[k] == NULL) {
+            continue;
+        }
+        cee_send_v_id(elements[k], "setAccessibilityParent:", n->up == CEE_ACCESS_TOP ? m->view : elements[n->up]);
+        if (n->up == CEE_ACCESS_TOP) {
+            items[top++] = elements[k];
+        }
+    }
+    cee_id view_children = cee_mac_array(items, top);
+    if (m->access_top != NULL) {
+        cee_send_v(m->access_top, "release");
+    }
+    m->access_top = cee_send(view_children, "retain");
+    for (uint32_t c = 0; c < count; c++) { /* each container: its children, in list order */
+        const struct cee_access_node *p = &w->access[c];
+        if (!CEE_ACCESS_CONTAINER(p->role) || elements[c] == NULL) {
+            continue;
+        }
+        unsigned long held = 0, heads = 0;
+        for (uint32_t k = c + 1; k < count; k++) {
+            if (w->access[k].up == c && elements[k] != NULL) {
+                items[held++] = elements[k];
+            }
+            if (p->role == CEE_ACCESS_TABLE && w->access[k].role == CEE_ACCESS_COLUMN_HEADER &&
+                w->access[k].up != CEE_ACCESS_TOP && w->access[w->access[k].up].up == c && elements[k] != NULL) {
+                headers[heads++] = elements[k];
+            }
+        }
+        cee_id children = cee_mac_array(items, held);
+        cee_send_v_id(elements[c], "setAccessibilityChildren:", children);
+        if (p->role == CEE_ACCESS_TABLE) {
+            cee_send_v_id(elements[c], "setAccessibilityRows:", children);
+            cee_send_v_id(elements[c], "setAccessibilityVisibleRows:", children);
+            cee_send_v_id(elements[c], "setAccessibilityColumnHeaderUIElements:", cee_mac_array(headers, heads));
+        } else if (p->role == CEE_ACCESS_TAB_LIST) {
+            cee_send_v_id(elements[c], "setAccessibilityTabs:", children);
+        }
+    }
+    ceesafe_platform_free(items);
+    ceesafe_platform_free(headers);
 }
 
 static int cee_access_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
@@ -4487,11 +4589,15 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
             elements[k] = element;
             int named = !cee_access_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
                                               o->label_length);
+            if (n->parent != o->parent || n->row != o->row || n->column != o->column) {
+                layout = 1; /* the tree is laid out again below */
+            }
             int valued = n->now != o->now || n->min != o->min || n->max != o->max ||
                          ((n->flags ^ o->flags) & (CEE_ACCESS_CHECKED | CEE_ACCESS_SELECTED | CEE_ACCESS_EXPANDED)) != 0 ||
                          !cee_access_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
                                                o->value_length);
-            if (named || valued || n->role != o->role || n->flags != o->flags) {
+            if (named || valued || n->role != o->role || n->flags != o->flags || n->row != o->row ||
+                n->column != o->column || n->rows != o->rows || n->columns != o->columns || n->up != o->up) {
                 cee_mac_access_apply(element, n, w->access_text);
             }
             if (w->access_active && cee_objc.access_post != NULL) {
@@ -4532,6 +4638,9 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
     ceesafe_platform_free(m->access_elements);
     m->access_elements = elements;
     m->access_count = count;
+    if (layout || m->access_top == NULL) {
+        cee_mac_access_tree(w, elements, count);
+    }
     if (layout && w->access_active && cee_objc.access_post != NULL) {
         cee_objc.access_post(m->view, cee_nsstring("AXLayoutChanged"));
     }
@@ -4878,6 +4987,10 @@ static void cee_native_close(struct cee_window *w) {
     ceesafe_platform_free(m->access_elements);
     m->access_elements = NULL;
     m->access_count = 0;
+    if (m->access_top != NULL) {
+        cee_send_v(m->access_top, "release");
+        m->access_top = NULL;
+    }
     for (int k = 0; k < CEE_MAC_WINDOWS; k++) {
         if (cee_mac_windows[k].window == w) {
             cee_mac_windows[k].nswindow = NULL;
@@ -18146,30 +18259,150 @@ int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *
 
 /* ---- Accessibility (ADR 0164) ------------------------------------------------------------------------------------ */
 
+struct cee_access_key {
+    uint64_t id;
+    uint32_t index;
+};
+
 static int cee_access_id_order(const void *a, const void *b) {
-    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    uint64_t x = ((const struct cee_access_key *)a)->id, y = ((const struct cee_access_key *)b)->id;
     return x < y ? -1 : x > y ? 1 : 0;
 }
 
+/* Containers (ADR 0207): each node's container found by id in the sorted keys, and what the program left at 0
+   numbered. A container comes before what it holds, so one pass in list order sees a container's place before its
+   children's. An item's `row` is its place among its container's children; a cell's or a column header's `column`
+   its place in its row, and its `row` its row's; a container's `rows` its children (a table's, its rows) and a
+   table's `columns` its longest row. 0, or -2 when a node's container is not in the list, comes after it, or holds
+   nothing (lib/std panics). */
+static int32_t cee_access_tree(struct cee_access_node *nodes, uint32_t count, const struct cee_access_key *keys,
+                               uint32_t *children) {
+    for (uint32_t k = 0; k < count; k++) {
+        children[k] = 0;
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        struct cee_access_node *n = &nodes[k];
+        n->up = CEE_ACCESS_TOP;
+        if (n->parent == 0) {
+            continue;
+        }
+        uint32_t lo = 0, hi = count;
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo) / 2u;
+            if (keys[mid].id < n->parent) {
+                lo = mid + 1u;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo == count || keys[lo].id != n->parent || keys[lo].index >= k ||
+            !CEE_ACCESS_CONTAINER(nodes[keys[lo].index].role)) {
+            return -2;
+        }
+        struct cee_access_node *p = &nodes[keys[lo].index];
+        n->up = keys[lo].index;
+        uint32_t place = ++children[n->up];
+        if (p->role == CEE_ACCESS_ROW) {
+            if (n->column == 0) {
+                n->column = place;
+            }
+            if (n->row == 0) {
+                n->row = p->row;
+            }
+        } else if (n->row == 0) {
+            n->row = place;
+        }
+    }
+    /* Counts: a container's children; a table's longest row. A table's explicit columns stay. */
+    for (uint32_t k = 0; k < count; k++) {
+        struct cee_access_node *n = &nodes[k];
+        if (CEE_ACCESS_CONTAINER(n->role) && n->rows == 0 && n->role != CEE_ACCESS_ROW && n->role != CEE_ACCESS_CELL) {
+            n->rows = children[k];
+        }
+    }
+    uint32_t *widest = children; /* reused: a table's longest row so far, by the table's index */
+    for (uint32_t k = 0; k < count; k++) {
+        if (nodes[k].role == CEE_ACCESS_TABLE) {
+            widest[k] = 0;
+        }
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        const struct cee_access_node *n = &nodes[k];
+        if ((n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER) && n->up != CEE_ACCESS_TOP &&
+            nodes[n->up].role == CEE_ACCESS_ROW && nodes[n->up].up != CEE_ACCESS_TOP) {
+            uint32_t t = nodes[n->up].up;
+            if (nodes[t].role == CEE_ACCESS_TABLE && n->column > widest[t]) {
+                widest[t] = n->column;
+            }
+        }
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        if (nodes[k].role == CEE_ACCESS_TABLE && nodes[k].columns == 0) {
+            nodes[k].columns = widest[k];
+        }
+    }
+    return 0;
+}
+
+/* Where a system's part has no containers yet (ADR 0207 §2.4: each system's step), the list it is given is as ADR
+   0164's was. Containers are left out and what they hold is the window's. A table's row, which a program makes
+   pressable and selected as a list's row was, reads as a list item, and a column header, which sorts, as a button.
+   A row with a name holds what is in it, as a control holds its text: its cells and their text are left out (the
+   row says them, as a list's row did); in a row with none, only the cells are left out, their text read where it
+   is. */
+#if !defined(CEE_ACCESS_TREE)
+static uint32_t cee_access_flatten(struct cee_access_node *nodes, uint32_t count) {
+    unsigned char *gone = (unsigned char *)ceesafe_platform_alloc_zeroed(count > 0 ? count : 1u);
+    for (uint32_t k = 0; k < count && gone != NULL; k++) { /* a container is before what it holds */
+        const struct cee_access_node *n = &nodes[k];
+        uint32_t up = n->up;
+        int in_named_row = up != CEE_ACCESS_TOP && nodes[up].role == CEE_ACCESS_ROW && nodes[up].label_length > 0;
+        gone[k] = (unsigned char)((up != CEE_ACCESS_TOP && gone[up] == 2) || in_named_row ? 2 : 0);
+    }
+    uint32_t kept = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        struct cee_access_node n = nodes[k];
+        if (gone != NULL && gone[k] == 2) {
+            continue;
+        }
+        if (n.role == CEE_ACCESS_ROW) {
+            n.role = 7; /* ListItem */
+        } else if (n.role == CEE_ACCESS_COLUMN_HEADER) {
+            n.role = 1; /* Button */
+        } else if (CEE_ACCESS_CONTAINER(n.role)) {
+            continue;
+        }
+        n.parent = 0;
+        n.up = CEE_ACCESS_TOP;
+        nodes[kept++] = n;
+    }
+    ceesafe_platform_free(gone);
+    return kept;
+}
+#endif
+
 /* The window's elements, replacing the last list: 1, 0 when memory ran out (the last list stays), -1 when an id is
-   given twice (lib/std panics). lib/std has checked the ranges and that no id is 0. The system is told what
-   changed where its part is implemented (CEE_WINDOW_ACCESS). */
+   given twice and -2 when a container is not before what it holds (lib/std panics). lib/std has checked the ranges
+   and that no id is 0. The system is told what changed where its part is implemented (CEE_WINDOW_ACCESS). */
 int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t count, const uint8_t *text, uint32_t length) {
     struct cee_window *w = (struct cee_window *)window;
     struct cee_access_node *copy = NULL;
     char *text_copy = NULL;
     if (count > 0) {
-        uint64_t *ids = (uint64_t *)ceesafe_platform_alloc((size_t)count * sizeof *ids);
-        copy = (struct cee_access_node *)ceesafe_platform_alloc((size_t)count * sizeof *copy);
-        if (ids == NULL || copy == NULL) {
+        struct cee_access_key *ids = (struct cee_access_key *)ceesafe_platform_alloc((size_t)count * sizeof *ids);
+        uint32_t *children = (uint32_t *)ceesafe_platform_alloc((size_t)count * sizeof *children);
+        copy = (struct cee_access_node *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *copy);
+        if (ids == NULL || copy == NULL || children == NULL) {
             ceesafe_platform_free(ids);
+            ceesafe_platform_free(children);
             ceesafe_platform_free(copy);
             return 0;
         }
         const uint64_t *words = (const uint64_t *)nodes;
-        for (uint32_t k = 0; k < count; k++, words += 11) {
+        for (uint32_t k = 0; k < count; k++, words += 14) {
             /* id; min, max, now as f64 bits; x|y, width|height as f32 bits; role|flags; the label's and the
-               value's start|length; caret|anchor; the layer. */
+               value's start|length; caret|anchor; the layer; the container's id (ADR 0207); row|column;
+               rows|columns. */
             uint32_t halves[12];
             for (int j = 0; j < 6; j++) {
                 halves[2 * j] = (uint32_t)words[4 + j];
@@ -18192,7 +18425,13 @@ int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t coun
             copy[k].caret = halves[10] <= halves[9] ? halves[10] : halves[9];
             copy[k].anchor = halves[11] <= halves[9] ? halves[11] : halves[9];
             copy[k].layer = (uint32_t)words[10];
-            ids[k] = copy[k].id;
+            copy[k].parent = words[11];
+            copy[k].row = (uint32_t)words[12];
+            copy[k].column = (uint32_t)(words[12] >> 32);
+            copy[k].rows = (uint32_t)words[13];
+            copy[k].columns = (uint32_t)(words[13] >> 32);
+            ids[k].id = copy[k].id;
+            ids[k].index = k;
             if (copy[k].role >= CEE_ACCESS_ROLES) {
                 copy[k].role = 0;
             }
@@ -18200,13 +18439,18 @@ int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t coun
         qsort(ids, count, sizeof *ids, cee_access_id_order);
         int twice = 0;
         for (uint32_t k = 1; k < count; k++) {
-            twice = twice || ids[k] == ids[k - 1];
+            twice = twice || ids[k].id == ids[k - 1].id;
         }
+        int32_t tree = twice ? 0 : cee_access_tree(copy, count, ids, children);
         ceesafe_platform_free(ids);
-        if (twice) {
+        ceesafe_platform_free(children);
+        if (twice || tree < 0) {
             ceesafe_platform_free(copy);
-            return -1;
+            return twice ? -1 : -2;
         }
+#if !defined(CEE_ACCESS_TREE)
+        count = cee_access_flatten(copy, count);
+#endif
     }
     if (length > 0) {
         text_copy = (char *)ceesafe_platform_alloc(length);

@@ -1810,7 +1810,57 @@ fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], va
         caret: if (id == 5) 1 else 0,
         anchor: if (id == 5) 2 else 0,
         layer: if (id == 2) 1 else 0,
+        parent: 0,
+        row: 0,
+        column: 0,
+        rows: 0,
+        columns: 0,
     };
+
+/// An element of the tree (ADR 0207): its container, its place, its counts.
+fn held(id: u64, role: WindowAccessRole, parent: u64, label: [u32; 2], place: [u32; 2], counts: [u32; 2]) ->
+    WindowAccessNode {
+    var n = node(id, role, 0, 0.0, label, [0, 0]);
+    n.y = round<f32>(id % 100) * 20.0;
+    n.x = round<f32>(id / 100) * 10.0;
+    n.parent = parent;
+    n.row = place[0];
+    n.column = place[1];
+    n.rows = counts[0];
+    n.columns = counts[1];
+    return n;
+}
+
+fn tree(window: borrow mut Window) {
+    let text = "FruitApplePearPlumEditCutCopyViewsOneTwoGridNameSizeKindA1xToolsGo";
+    let none = [0u32, 0];
+    let nodes = [
+        // A list of 40 rows of which three are given, the program numbering them; the runtime numbers the rest.
+        held(100, WindowAccessRole.List, 0, [0, 5], none, [40, 0]),
+        held(101, WindowAccessRole.ListItem, 100, [5, 5], [3, 0], none),
+        held(102, WindowAccessRole.ListItem, 100, [10, 4], [4, 0], none),
+        held(103, WindowAccessRole.ListItem, 100, [14, 4], [5, 0], none),
+        held(200, WindowAccessRole.Menu, 0, [18, 4], none, none),
+        held(201, WindowAccessRole.MenuItem, 200, [22, 3], none, none),
+        held(202, WindowAccessRole.MenuItem, 200, [25, 4], none, none),
+        held(300, WindowAccessRole.TabList, 0, [29, 5], none, none),
+        held(301, WindowAccessRole.Tab, 300, [34, 3], none, none),
+        held(302, WindowAccessRole.Tab, 300, [37, 3], none, none),
+        // A table of two rows and three columns, its first row the headers: all counted by the runtime.
+        held(400, WindowAccessRole.Table, 0, [40, 4], none, none),
+        held(410, WindowAccessRole.Row, 400, [0, 0], none, none),
+        held(411, WindowAccessRole.ColumnHeader, 410, [44, 4], none, none),
+        held(412, WindowAccessRole.ColumnHeader, 410, [48, 4], none, none),
+        held(413, WindowAccessRole.ColumnHeader, 410, [52, 4], none, none),
+        held(420, WindowAccessRole.Row, 400, [0, 0], none, none),
+        held(421, WindowAccessRole.Cell, 420, [56, 1], none, none),
+        held(422, WindowAccessRole.Cell, 420, [57, 1], none, none),
+        held(423, WindowAccessRole.Cell, 420, [58, 1], none, none),
+        held(500, WindowAccessRole.Group, 0, [59, 5], none, none),
+        held(501, WindowAccessRole.Button, 500, [64, 2], none, none),
+    ];
+    window.setAccessNodes(nodes[..], text.bytes());
+}
 
 fn give(window: borrow mut Window, volume: f64, focusField: bool) {
     //          0123456789012345678901234567890123456789012345678901234
@@ -1874,6 +1924,51 @@ fn main() -> i32 {
         window.setAccessNodes(one[..], "x".bytes());
         return 0;
     }
+    // A parent that is not in the list, comes after its child, or is no container (ADR 0207): panics.
+    let none = [0u32, 0];
+    if (Process.argument(1) == Some("unknown")) {
+        let one = [held(7, WindowAccessRole.Button, 9, [0, 1], none, none)];
+        window.setAccessNodes(one[..], "x".bytes());
+        return 0;
+    }
+    if (Process.argument(1) == Some("later")) {
+        let pair = [
+            held(7, WindowAccessRole.ListItem, 8, [0, 1], none, none),
+            held(8, WindowAccessRole.List, 0, [0, 1], none, none),
+        ];
+        window.setAccessNodes(pair[..], "x".bytes());
+        return 0;
+    }
+    if (Process.argument(1) == Some("leaf")) {
+        let pair = [
+            held(7, WindowAccessRole.Button, 0, [0, 1], none, none),
+            held(8, WindowAccessRole.ListItem, 7, [0, 1], none, none),
+        ];
+        window.setAccessNodes(pair[..], "x".bytes());
+        return 0;
+    }
+    if (Process.argument(1) == Some("tree")) {
+        tree(mut window);
+        for (frame in 0..3) {
+            loop {
+                match (window.nextEvent()) {
+                    Some(_) => {}
+                    null => { break; }
+                }
+            }
+            match (window.present(pixels[..], 320, 240)) {
+                Ok() => {}
+                Err(_) => { Console.writeLine("present failed"); return 1; }
+            }
+            if (frame == 1) {
+                let top = unsafe { access_inspect(2) }; // its lines first: the C helper writes them itself
+                Console.write("tree ");
+                Console.writeLine(top);
+            }
+            window.waitFrame();
+        }
+        return 0;
+    }
     Console.write("active ");
     Console.writeLine(window.accessActive());
     give(mut window, 4.0, false);
@@ -1928,6 +2023,30 @@ static const char *text(id s) {
     return ((const char *(*)(id, SEL))objc_msgSend)(s, sel_registerName("UTF8String"));
 }
 static void *seen[32];
+typedef struct { unsigned long location, length; } nsrange;
+static long count_of(id array) { return array == NULL ? 0 : ((long (*)(id, SEL))objc_msgSend)(array, sel_registerName("count")); }
+static id item(id array, long k) { return ((id(*)(id, SEL, unsigned long))objc_msgSend)(array, sel_registerName("objectAtIndex:"), (unsigned long)k); }
+static long number(id e, const char *s) { return ((long (*)(id, SEL))objc_msgSend)(e, sel_registerName(s)); }
+/* The tree under `up` (ADR 0207): each element's role, label, place and counts, and whether its parent is `up`. */
+static void walk(id up, int depth) {
+    id children = send0(up, "accessibilityChildren");
+    for (long k = 0; k < count_of(children); k++) {
+        id e = item(children, k);
+        const char *role = text(send0(e, "accessibilityRole"));
+        nsrange r = ((nsrange(*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityRowIndexRange"));
+        nsrange c = ((nsrange(*)(id, SEL))objc_msgSend)(e, sel_registerName("accessibilityColumnIndexRange"));
+        printf("  %*s%s %s index=%ld rows=%ld columns=%ld cell=%lu,%lu up=%d", depth * 2, "", role,
+               text(send0(e, "accessibilityLabel")), number(e, "accessibilityIndex"), number(e, "accessibilityRowCount"),
+               number(e, "accessibilityColumnCount"), r.location, c.location, send0(e, "accessibilityParent") == up);
+        id headers = send0(e, "accessibilityColumnHeaderUIElements");
+        if (count_of(headers) > 0) {
+            printf(" headers=");
+            for (long h = 0; h < count_of(headers); h++) printf("%s%s", h ? "," : "", text(send0(item(headers, h), "accessibilityLabel")));
+        }
+        printf("\n");
+        walk(e, depth + 1);
+    }
+}
 int32_t access_inspect(int32_t act);
 int32_t access_inspect(int32_t act) {
     id app = send0((id)objc_getClass("NSApplication"), "sharedApplication");
@@ -1936,6 +2055,11 @@ int32_t access_inspect(int32_t act) {
     id view = send0(window, "contentView");
     id children = send0(view, "accessibilityChildren");
     unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(children, sel_registerName("count"));
+    if (act == 2) {
+        walk(view, 0);
+        fflush(stdout);
+        return (int32_t)n;
+    }
     rect wf = ((rect(*)(id, SEL))objc_msgSend)(window, sel_registerName("frame"));
     rect cr = ((rect(*)(id, SEL, rect))objc_msgSend)(window, sel_registerName("contentRectForFrameRect:"), wf);
     int same = 0;
@@ -2081,6 +2205,34 @@ int32_t resize_later(double width, double height) {
 int32_t resize_later(double width, double height) { (void)width; (void)height; return 0; }
 #endif
 """
+
+
+# What ACCESS prints with "tree" on macOS (ADR 0207): the containers with their children, places and counts, as
+# AppKit reports them. A list's item says its place from the program (3 of 40); the rest are numbered by the runtime.
+def _tree_line(depth, role, label, index=0, rows=0, columns=0, cell=(0, 0), headers=None):
+    line = f"  {'  ' * depth}{role} {label} index={index} rows={rows} columns={columns} cell={cell[0]},{cell[1]} up=1"
+    return line + (f" headers={headers}" if headers else "")
+
+
+ACCESS_TREE_EXPECTED = [
+    _tree_line(0, "AXList", "Fruit", rows=40),
+    _tree_line(1, "AXButton", "Apple", index=2), _tree_line(1, "AXButton", "Pear", index=3),
+    _tree_line(1, "AXButton", "Plum", index=4),
+    _tree_line(0, "AXMenu", "Edit"),
+    _tree_line(1, "AXMenuItem", "Cut", index=0), _tree_line(1, "AXMenuItem", "Copy", index=1),
+    _tree_line(0, "AXTabGroup", "Views"),
+    _tree_line(1, "AXRadioButton", "One", index=0), _tree_line(1, "AXRadioButton", "Two", index=1),
+    _tree_line(0, "AXTable", "Grid", rows=2, columns=3, headers="Name,Size,Kind"),
+    _tree_line(1, "AXRow", "", index=0),
+    _tree_line(2, "AXCell", "Name", cell=(0, 0)), _tree_line(2, "AXCell", "Size", cell=(0, 1)),
+    _tree_line(2, "AXCell", "Kind", cell=(0, 2)),
+    _tree_line(1, "AXRow", "", index=1),
+    _tree_line(2, "AXCell", "A", cell=(1, 0)), _tree_line(2, "AXCell", "1", cell=(1, 1)),
+    _tree_line(2, "AXCell", "x", cell=(1, 2)),
+    _tree_line(0, "AXGroup", "Tools"),
+    _tree_line(1, "AXButton", "Go", index=0),
+    "tree 5",
+]
 
 
 def access_real_expected():
@@ -3547,7 +3699,10 @@ def main():
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
                                 "\n  ".join(got) + "\n" + r.stderr)
         for argument, message in (("twice", "an element's id is given twice"),
-                                  ("outside", "an element's label or value is outside the text")):
+                                  ("outside", "an element's label or value is outside the text"),
+                                  ("unknown", "an element's parent is not a container before it in the list"),
+                                  ("later", "an element's parent is not a container before it in the list"),
+                                  ("leaf", "an element's parent is not a container before it in the list")):
             r = run([access, argument], {"CEESAFE_WINDOW_SCRIPT": access_scripts["none"]}, work)
             if r.returncode == 0 or message not in r.stderr:
                 problems.append(f"setAccessNodes, {argument}: expected a panic saying {message!r}, got status "
@@ -3603,7 +3758,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 2 + 1 + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 5 + 1 + 8)
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1
@@ -3664,6 +3819,12 @@ def main():
                 if r.returncode != 0 or r.stdout.splitlines() != want:
                     problems.append("a real window's elements, as AppKit reports them: expected\n" + "\n".join(want) +
                                     f"\ngot (status {r.returncode})\n{r.stdout}{r.stderr}")
+                r = run([access, "tree"], {}, work)
+                checks += 1
+                want = ACCESS_TREE_EXPECTED
+                if r.returncode != 0 or r.stdout.splitlines() != want:
+                    problems.append("a real window's containers (ADR 0207), as AppKit reports them: expected\n" +
+                                    "\n".join(want) + f"\ngot (status {r.returncode})\n{r.stdout}{r.stderr}")
             r = run([any_program, "real"], {}, work)
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake of the second ok":

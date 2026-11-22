@@ -1,6 +1,7 @@
 # ADR 0207 — Containers for screen readers: lists, menus, tab bars and tables
 
-- Status: **Proposed**, 2026-11-22, for the owner's acceptance (§6).
+- Status: **Accepted** by the owner, 2026-11-22, the three proposals of §6: a parent with positions the program gives
+  or leaves to the runtime; the nine roles; one system per release, ClayWind following each.
 - Scope: `lib/std/window.cee` (`WindowAccessNode` gains a parent and a position, `WindowAccessRole` container roles),
   `runtime/hosted/ceesafe_rt_window.c` (each system's accessibility part), type-system.md §26.13,
   `tools/window_check.py`, `tools/atspi_check.py`. No language or compiler change. ADR 0164's "later ADR" (§2.3: "No
@@ -28,7 +29,8 @@ containers, though, and the flat list shows it:
 
 ### 2.1 The node
 
-`WindowAccessNode` gains five fields, each 0 by default, so that a program that sets none has what it has now:
+`WindowAccessNode` gains five fields. A program that gives each 0 has what it has now; struct literals name them, as
+they named `caret`, `anchor` and `layer` when ADR 0164 added those:
 
 - **`parent: u64`**: the `id` of the container the element is in, 0 for the window itself. The container comes
   before it in the list (the list stays in reading order, a container before what it holds). A parent that is not
@@ -39,7 +41,8 @@ containers, though, and the flat list shows it:
 - **`rows: u32`, `columns: u32`**: on a container, how many items, rows and columns it has, the ones not in the
   list too (a virtual list's rows off the screen). 0 is "count them".
 
-A node is fifteen words to the runtime (ADR 0164 §10 made it eleven).
+A node is fourteen words to the runtime (ADR 0164 §10 made it eleven): the parent, `row` and `column` in one,
+`rows` and `columns` in one.
 
 ### 2.2 The roles
 
@@ -105,7 +108,8 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
 
 - A screen reader hears lists, menus, tab bars and tables as such, with positions and counts, on every system, and
   ClayWind's data grid becomes a table a reader moves through by row and column.
-- `WindowAccessNode` is larger (fifteen words); a program that sets none of the new fields is unchanged.
+- `WindowAccessNode` is larger (fourteen words); a program that gives the new fields 0 is unchanged, but its
+  struct literals must name them.
 - Each system's backend grows a tree walk and its table interfaces: the largest part is Windows' and AT-SPI's table
   interfaces.
 
@@ -125,3 +129,35 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
    or also `Tree` and `TreeItem` now?
 3. **The order**: macOS, Windows, Linux, iOS, Android, one release each, with ClayWind following each (proposed),
    or the three desktops in one release?
+
+## 7. Step 1 as implemented: the API and macOS (2026-11-22)
+
+`lib/std/window.cee`, `runtime/hosted/ceesafe_rt_window.c`, type-system.md §26.13, `tools/window_check.py`,
+`tools/atspi_check.py` (its node literal).
+
+- **The list**: fourteen words a node (§2.1). The runtime sorts the ids once (the duplicate check), finds each
+  parent by binary search, and refuses a parent not in the list, not before its child, or not a container (-2;
+  lib/std panics "an element's parent is not a container before it in the list"). It numbers what is 0 in one pass
+  in list order (an item's place among its container's children; a cell's or header's column in its row and its
+  row its row's) and then the counts (a container's children, a table's widest row).
+- **Systems without containers yet** (`CEE_ACCESS_TREE` undefined: Windows, Linux, iOS, Android until their steps):
+  the runtime flattens the list before the backend sees it: containers are left out, a `Row` becomes a `ListItem`
+  (a program makes a table's row pressable and selected as it did a list's) and a `ColumnHeader` a `Button` (a
+  header sorts); a row with a name holds what is in it, as a control holds its text, so its cells and their
+  contents are left out (the row says them, as a list's row did); in a row with none only the cells are. So a program that gives containers reads as it did on
+  those systems.
+- **macOS**: the roles are `AXGroup`, `AXList`, `AXMenu`, `AXMenuBar`, `AXTabGroup`, `AXTable`, `AXRow` and `AXCell`
+  (a column header is a cell of the first row, and the table's `accessibilityColumnHeaderUIElements`). Each element's
+  `accessibilityParent` is its container's element or the view; each container's `accessibilityChildren` are its
+  children in list order, and the view's (kept, retained) only the top level's. An item's `accessibilityIndex` is
+  its `row` less one; a list's and a table's `accessibilityRowCount` their `rows`, a table's
+  `accessibilityColumnCount` its `columns`; a cell's `accessibilityRowIndexRange` and
+  `accessibilityColumnIndexRange` its place. The tree is laid out again when the list's shape or a place changed.
+  Hit tests are unchanged: the latest element of the highest layer at the point, which, children coming after their
+  container, is the deepest.
+- **Checked** (macOS 26, `window_check --display`, 84 checks): a list of 40 of which three are given at rows 3 to
+  5, a menu, a tab bar, a two-by-three table whose first row is its headers, and a group, all numbered by the
+  runtime but the list's items; AppKit reports the tree, each element's parent, the places and counts, and the
+  table's headers. A parent not in the list, after its child, or not a container: three panics.
+- **Not yet**: VoiceOver with ClayWind's demo, once ClayWind gives its lists, grid, menus and tabs as containers
+  (step 6, which follows this release).

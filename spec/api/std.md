@@ -4137,6 +4137,15 @@ public enum WindowAccessRole {
     MenuItem,
     Dropdown,
     Image,
+    Group,
+    List,
+    Menu,
+    MenuBar,
+    TabList,
+    Table,
+    Row,
+    Cell,
+    ColumnHeader,
 }
 ```
 
@@ -4163,6 +4172,11 @@ public struct WindowAccessNode {
     public caret: u32;
     public anchor: u32;
     public layer: u32;
+    public parent: u64;
+    public row: u32;
+    public column: u32;
+    public rows: u32;
+    public columns: u32;
 }
 ```
 
@@ -4425,9 +4439,11 @@ public fn setAccessNodes(borrow mut this, nodes: Slice<WindowAccessNode>, text: 
 The window's elements for a screen reader, in reading order, replacing the last list whole (ADR 0164). `text`
 holds the names and values the nodes' ranges point into. The runtime copies both, compares the list with the
 last by `id`, and tells the system what was added, removed, renamed, moved, or changed value, state or focus.
-A range outside `text`, a caret or anchor outside its value, an `id` of 0 and an `id` given twice are panics. Where the system's part is not
-there yet, and when memory runs out, the last list stays.
-Safety: the runtime reads eleven words for each node and `text.length` bytes during the call.
+A range outside `text`, a caret or anchor outside its value, an `id` of 0, an `id` given twice, and a
+`parent` that is not a container before the element in the list (ADR 0207) are panics. Where the system's
+part is not there yet, and when memory runs out, the last list stays; where it has no containers yet, they
+are left out and what they hold is the window's.
+Safety: the runtime reads fourteen words for each node and `text.length` bytes during the call.
 
 ### Window.takeAccessAction
 

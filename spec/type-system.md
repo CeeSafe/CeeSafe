@@ -3644,9 +3644,24 @@ Diagnostics: none new.
     the element at a point (macOS's `accessibilityHitTest:`, UI Automation's `ElementProviderFromPoint`, TalkBack's
     exploring finger) is the highest layer's, and of one layer the latest in the list. The runtime copies both, compares the list with the last by `id`, and tells the system what was added,
     removed, renamed or changed value, state or focus; an element whose `id` is in both lists is the same element
-    to the system. A range outside `text`, a caret or anchor past its value's end, an `id` of 0 and an `id` given
-    twice are panics. When memory runs out
+    to the system. A range outside `text`, a caret or anchor past its value's end, an `id` of 0, an `id` given
+    twice, and a `parent` that is not a container before the element are panics. When memory runs out
     the last list stays.
+  - **Containers** (ADR 0207). `WindowAccessRole` also has `Group`, `List`, `Menu`, `MenuBar`, `TabList`, `Table`,
+    `Row`, `Cell` and `ColumnHeader`; all but `ColumnHeader` are containers. A node's `parent: u64` is the `id` of
+    the container it is in (0 for the window), which comes before it in the list; `row` and `column: u32` are its
+    place in its container from 1 (an item's or a table row's `row`, a cell's or a column header's `row` and
+    `column`), and a container's `rows` and `columns: u32` how many items, or rows and columns, it has, those not in
+    the list too (a virtual list's rows off the screen). The runtime numbers what is 0: an item's place among its
+    container's children, a cell's column among its row's and its row its row's, a container's children, a table's
+    longest row. Each system hears the tree: its readers say "3 of 40", "row 2, column 3" and a cell's column
+    header. On macOS a container is an element whose `accessibilityChildren` are its children (the content view's
+    are the top level's), with `accessibilityIndex`, `accessibilityRowCount`, `accessibilityColumnCount`, a
+    table's `accessibilityRows` and `accessibilityColumnHeaderUIElements`, and a cell's row and column index
+    ranges. Where a system's part has no containers yet (ADR 0207 §2.4: Windows, Linux, iOS and Android so far),
+    its list is ADR 0164's: containers are left out and what they hold is the window's, a table's `Row` is a
+    `ListItem` and a `ColumnHeader` a `Button`; a `Row` with a name holds what is in it (left out), and in one with
+    none only the `Cell`s are left out.
   - **`w.takeAccessAction() -> WindowAccessRequest?`** (`borrow mut`) is the oldest request not yet taken, or
     null; it never blocks. A `WindowAccessRequest` is `id: u64` and `action: WindowAccessAction` (`Press`, `Focus`,
     `Increment`, `Decrement`). A request is queued when something asks it of an element of the current list (not

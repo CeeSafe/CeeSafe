@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.93.2
+## Releases 0.25.0 to 0.93.3
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.93.3 | 2026-11-22 | A title bar the program draws on Windows too: Windows keeps the frame, its shadow, snapping and resizing, the bar is the caption and its maximize box Windows' maximize button (snap layouts), and `minimize`, `toggleMaximized` and `maximized` act on the window (ADR 0206 step 2) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.2 | 2026-11-22 | A window can have a title bar its program draws (`Window.openStyled` with `WindowStyle.ProgramTitleBar`): the runtime moves, maximizes and resizes it from the bar's layout, and `minimize`, `toggleMaximized` and `maximized` act on it; on Wayland first (ADR 0206) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.1 | 2026-11-22 | On a Wayland desktop, Linux and FreeBSD windows are Wayland's by default, with the input method, the clipboard and file drops; an X11 window is no longer ended by another program's vanished window (ADR 0205) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.0 | 2026-11-22 | Linux and FreeBSD windows can run on Wayland, chosen with `CEESAFE_WINDOW_SYSTEM=wayland`: sharp at any scale, keys in the user's layout, read by Orca; X11 stays the default for now (ADR 0205) | [Appendix E](./appendix-e-ceesafec) |

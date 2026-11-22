@@ -121,3 +121,43 @@
   check alone, the probe logging a size only when its width changed, which its log never shows but for maximizing. `window_check`: the scripted case, and a real window
   says `bar true false` on Wayland and `bar false false` elsewhere.
 - **Not yet**: steps 2 to 4 (Windows, macOS and X11, ClayWind's `TitleBar`).
+
+## 8. Step 2 as implemented: Windows (2026-11-22)
+
+`runtime/hosted/ceesafe_rt_window.c` (the Win32 part), type-system.md §26.13, `tools/window_check.py`.
+
+- **The frame stays Windows'.** The window keeps `WS_OVERLAPPEDWINDOW`; `WM_NCCALCSIZE` takes the caption away, the
+  client area keeping the frame's left, right and bottom borders (`GetSystemMetricsForDpi`'s frame and padding at the
+  window's DPI) and reaching the window's top; a maximized window, which overhangs the screen by the frame, keeps
+  its top off too, and a minimized one is left to Windows. So Windows still draws the borders, the shadow and
+  Windows 11's rounded corners, and still resizes and snaps the window. The window is opened at the content's size
+  plus those borders, with `SWP_FRAMECHANGED`.
+- **`WM_NCHITTEST`** answers from the layout: Windows' own answer for the borders; the top border, which the
+  caption's removal gave the client, as `HTTOP` (and its corners); in the bar, the maximize box as `HTMAXBUTTON`,
+  the other boxes as the client's, the rest as `HTCAPTION`, so Windows moves the window by it, maximizes it on a
+  double click, shows its menu on a secondary press and snaps it.
+- **The maximize box is the frame's** to Windows, so the program would not see the pointer there: `WM_NCMOUSEMOVE`
+  and `WM_NCLBUTTONDOWN`/`UP` over it are given to the program as moves and presses (Windows' classic button is
+  not drawn), and leaving it (`WM_NCMOUSELEAVE`, tracked) as a move off it.
+- **The actions**: `minimize` is `ShowWindow(SW_MINIMIZE)`, `toggleMaximized` `SW_MAXIMIZE` or `SW_RESTORE`;
+  `maximized()` follows `WM_SIZE`'s `SIZE_MAXIMIZED`, for every window. A minimized window's `WM_SIZE` is not a
+  resize: the content keeps its size (with the caption gone, the minimized frame had a client area of its own, and
+  a program saw 144 by 20).
+- **Checked on Windows 11 (ARM64, Parallels), in the desktop session**, by a probe drawing a 36-point bar with three
+  buttons and a script asking its window and pressing with real mouse events: the client 480 by 320 in a 496 by 328
+  window (no caption); hit tests in the bar 2 (`HTCAPTION`), on the maximize box 9 (`HTMAXBUTTON`), on the minimize
+  and close boxes and the content 1, at the top edge 12 (`HTTOP`); the maximize box's press reached the program,
+  which maximized the window (1440 by 852) and, pressed again, restored it; minimize minimized it; close ended it.
+  The screenshots show Windows 11's corners and shadow around the program's bar. `window_check --display`: a real
+  window says `bar true false`.
+- **ClayWind's demo** on the VM, built with this runtime, with its own bar (ClayWind's `TitleBar`), checked by the
+  owner ("Perfect!"): moved and maximized by the bar, the snap layouts over its maximize button, its three buttons,
+  resized by the edges.
+- **`window_check --display`**: on the owner's x64 laptop (MinGW gcc) 78 checks, 0 problems; on the ARM64 VM (LLVM
+  clang) its drop case's helper, a C program, did not build: `window_check` ran `clang` outside Visual Studio's
+  environment, where `windows.h` is not found (ceesafec sets that environment up itself, tooling.md §8.2), and did
+  not name `user32`, which MinGW links by itself. It now sets the environment up as ceesafec does (vswhere,
+  vcvarsall.bat for the machine), asks Windows for the machine (`IsWow64Process2`: an x64 Python emulated on ARM64
+  is told AMD64, and took x64's libraries; the process's pseudo-handle is passed as a pointer, not ctypes' default
+  32-bit int, or the call fails), and names `-luser32`. On the VM then: 78 checks, 0 problems.
+- **Not checked**: a second monitor at another DPI; Windows 10.

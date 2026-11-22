@@ -3301,7 +3301,8 @@ Diagnostics: none new.
   draws the title bar: `WindowStyle.System` (what `open` and `openWith` give) or `WindowStyle.ProgramTitleBar`, a
   window with no title bar of the system's, whose program draws one at the top of its content. Where the system does
   not allow it the window is `System`'s, and `w.programTitleBar()` says which it got: true on Wayland (where the
-  compositor, asked, draws none), false so far elsewhere and in script runs (ADR 0206 §2.4's later steps).
+  compositor, asked, draws none) and on Windows (the caption taken away, the frame's borders, shadow and snapping
+  kept), false so far on macOS and X11 and in script runs (ADR 0206 §2.4's later steps).
   - `w.setTitleBar(WindowTitleBar)` gives the bar's layout whenever it changes: its `height` from the content's top
     and its `minimize`, `maximize`, `close` and `menu` buttons as `WindowArea`s (x, y, width, height in points; one
     of 0 by 0 is none). For a window with the program's title bar, a primary press in the bar but in none of the
@@ -3310,8 +3311,10 @@ Diagnostics: none new.
     the resize shape there, but while the window is maximized, fullscreen or tiled. Those presses are the window's,
     not the program's: no `PointerButton` comes of them. The program draws the buttons and acts on their presses.
   - `w.minimize()` and `w.toggleMaximized()` ask the system; `w.maximized()` is whether the window is maximized, and
-    a change of it is a `Resized`. Where the system does not implement them (so far: all but Wayland), they do
-    nothing and `maximized()` is false.
+    a change of it is a `Resized`. On Windows the maximize box is Windows' maximize button to the system (so Windows
+    11's snap layouts open over it), and the pointer's moves and presses over it are given to the program as any
+    other's. Where the system does not implement them (so far: macOS and X11), they do nothing and `maximized()` is
+    false.
 - **Native handles** (ADR 0137). `w.nativeHandle()` is a `WindowHandle`:
   - `AppKit(window, view)`: macOS's `NSWindow` and its content `NSView`, which is layer-backed;
   - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;

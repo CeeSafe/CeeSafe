@@ -5641,6 +5641,7 @@ struct cee_win32 {
     unsigned uia_asked_count;
     int uia_active;
     int uia_focus_told; /* whether clients were told where the focus is since the provider was first given out */
+    int nc_tracked; /* ADR 0206: the pointer is over the program's maximize box, a frame area: its leaving is tracked */
 };
 
 static void cee_win32_drop_open(struct cee_window *w);
@@ -7142,6 +7143,92 @@ static void cee_uia_pump(struct cee_window *w) {
     }
 }
 
+/* ---- A title bar the program draws (ADR 0206 step 2) -----------------------------------------------------------
+   The window keeps WS_OVERLAPPEDWINDOW, so Windows still frames it (its borders, its shadow, Windows 11's corners)
+   and moves, snaps and resizes it; WM_NCCALCSIZE takes the caption away, the client area reaching the window's top,
+   and WM_NCHITTEST answers from the program's layout (Window.setTitleBar): the bar outside the buttons is the
+   caption (a drag moves the window, a double click maximizes it, a secondary press shows the window menu, Aero Snap),
+   the maximize box Windows' maximize button (which opens Windows 11's snap layouts), the other boxes the client's.
+   The pointer over the maximize box is then the frame's: its moves and presses are given to the program as the
+   client's are, so the program's button lights and works as the others do. */
+
+/* The frame's thickness across and down, in pixels at the window's DPI (the resize border and its padding). */
+static int cee_win32_frame(HWND hwnd, int across) {
+    typedef int(WINAPI * metrics_for_dpi)(int, UINT);
+    static metrics_for_dpi f;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        FARPROC p = user32 != NULL ? GetProcAddress(user32, "GetSystemMetricsForDpi") : NULL;
+        if (p != NULL) {
+            memcpy(&f, &p, sizeof f);
+        }
+    }
+    UINT dpi = (UINT)(cee_win32_scale(hwnd) * 96.0f + 0.5f);
+    int frame = across ? 32 /* SM_CXFRAME */ : 33 /* SM_CYFRAME */;
+    if (f != NULL) {
+        return f(frame, dpi) + f(92 /* SM_CXPADDEDBORDER */, dpi);
+    }
+    return GetSystemMetrics(frame) + GetSystemMetrics(92);
+}
+
+/* Whether (x, y), in points from the content's top left, is in box `k` of the program's layout (0 minimize, 1
+   maximize, 2 close, 3 menu). */
+static int cee_win32_in_box(const struct cee_window *w, int k, float x, float y) {
+    const float *b = &w->bar[1 + 4 * k];
+    return b[2] > 0.0f && b[3] > 0.0f && x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3];
+}
+
+/* A frame message's screen point, in points from the content's top left. */
+static void cee_win32_client_point(HWND hwnd, LPARAM lparam, float scale, float *x, float *y) {
+    POINT pt = {(short)LOWORD(lparam), (short)HIWORD(lparam)};
+    ScreenToClient(hwnd, &pt);
+    *x = (float)pt.x / scale;
+    *y = (float)pt.y / scale;
+}
+
+/* WM_NCHITTEST for a window with the program's title bar. */
+static LRESULT cee_win32_hit(struct cee_window *w, HWND hwnd, WPARAM wparam, LPARAM lparam, float scale) {
+    LRESULT hit = DefWindowProcW(hwnd, WM_NCHITTEST, wparam, lparam); /* the left, right and bottom borders */
+    if (hit != HTCLIENT) {
+        return hit;
+    }
+    POINT pt = {(short)LOWORD(lparam), (short)HIWORD(lparam)};
+    ScreenToClient(hwnd, &pt);
+    RECT client;
+    GetClientRect(hwnd, &client);
+    int fy = cee_win32_frame(hwnd, 0), fx = cee_win32_frame(hwnd, 1);
+    if (!IsZoomed(hwnd) && pt.y < fy) { /* the top border, which the caption's removal took into the client */
+        return pt.x < fx ? HTTOPLEFT : pt.x >= client.right - fx ? HTTOPRIGHT : HTTOP;
+    }
+    float x = (float)pt.x / scale, y = (float)pt.y / scale;
+    if (y >= w->bar[0]) {
+        return HTCLIENT;
+    }
+    if (cee_win32_in_box(w, 1, x, y)) {
+        return HTMAXBUTTON;
+    }
+    if (cee_win32_in_box(w, 0, x, y) || cee_win32_in_box(w, 2, x, y) || cee_win32_in_box(w, 3, x, y)) {
+        return HTCLIENT;
+    }
+    return HTCAPTION;
+}
+
+static void cee_win32_minimize(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (n != NULL) {
+        ShowWindow(n->hwnd, SW_MINIMIZE);
+    }
+}
+
+static void cee_win32_toggle_maximized(struct cee_window *w) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (n != NULL) {
+        ShowWindow(n->hwnd, IsZoomed(n->hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+    }
+}
+
 static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     struct cee_window *w = (struct cee_window *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (w == NULL) {
@@ -7162,7 +7249,63 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     case WM_CLOSE:
         cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
         return 0;
+    case WM_NCCALCSIZE:
+        if (w->program_bar && wparam && !IsIconic(hwnd)) { /* minimized, the frame is Windows' own */
+            /* No caption: the client area keeps the frame's left, right and bottom borders and reaches the top. A
+               maximized window overhangs the screen by the frame, so its top is kept off too. */
+            NCCALCSIZE_PARAMS *params = (NCCALCSIZE_PARAMS *)lparam;
+            int fx = cee_win32_frame(hwnd, 1), fy = cee_win32_frame(hwnd, 0);
+            params->rgrc[0].left += fx;
+            params->rgrc[0].right -= fx;
+            params->rgrc[0].bottom -= fy;
+            if (IsZoomed(hwnd)) {
+                params->rgrc[0].top += fy;
+            }
+            return 0;
+        }
+        break;
+    case WM_NCHITTEST:
+        if (w->program_bar) {
+            return cee_win32_hit(w, hwnd, wparam, lparam, scale);
+        }
+        break;
+    case WM_NCMOUSEMOVE:
+        if (w->program_bar && wparam == HTMAXBUTTON) {
+            float px = 0.0f, py = 0.0f;
+            cee_win32_client_point(hwnd, lparam, scale, &px, &py);
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, px, py);
+            if (!n->nc_tracked) {
+                TRACKMOUSEEVENT t = {sizeof t, TME_LEAVE | TME_NONCLIENT, hwnd, 0};
+                n->nc_tracked = TrackMouseEvent(&t) != 0;
+            }
+            return 0;
+        }
+        break;
+    case WM_NCMOUSELEAVE:
+        if (n->nc_tracked) {
+            n->nc_tracked = 0;
+            cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, -1.0f, -1.0f); /* off the maximize box: no hover */
+        }
+        break;
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONUP:
+        if (w->program_bar && wparam == HTMAXBUTTON) {
+            /* The program's button, not Windows' (which would draw a classic one): the press is the program's. */
+            float px = 0.0f, py = 0.0f;
+            cee_win32_client_point(hwnd, lparam, scale, &px, &py);
+            cee_window_push(w, CEE_EVENT_BUTTON, 0, message == WM_NCLBUTTONDOWN, 0, 0, px, py);
+            return 0;
+        }
+        break;
     case WM_SIZE: {
+        int maximized = wparam == SIZE_MAXIMIZED;
+        if (wparam == SIZE_MINIMIZED) {
+            return 0; /* the content keeps its size while the window is minimized */
+        }
+        if (maximized != w->maximized) {
+            w->maximized = maximized; /* ADR 0206: a change is a Resized, even at the same size */
+            cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+        }
         if (n->menu_sizing) {
             return 0; /* setMenu reports the size it ends with (ADR 0146) */
         }
@@ -7366,10 +7509,17 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     n->hwnd = hwnd;
     w->native = n;
     w->scale = cee_win32_scale(hwnd);
+    w->program_bar = w->wants_bar; /* ADR 0206: the caption goes at WM_NCCALCSIZE */
     RECT r = {0, 0, (LONG)((float)w->width * w->scale + 0.5f), (LONG)((float)w->height * w->scale + 0.5f)};
     AdjustWindowRectEx(&r, style, FALSE, 0);
+    if (w->program_bar) {
+        /* The content and the frame's left, right and bottom borders: no caption above it. */
+        r.top = 0;
+        r.bottom = (LONG)((float)w->height * w->scale + 0.5f) + cee_win32_frame(hwnd, 0);
+    }
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)w);
-    SetWindowPos(hwnd, NULL, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER);
+    SetWindowPos(hwnd, NULL, 0, 0, r.right - r.left, r.bottom - r.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED); /* the frame asked again: WM_NCCALCSIZE */
     ShowWindow(hwnd, SW_SHOW);
     SetForegroundWindow(hwnd);
     UpdateWindow(hwnd);
@@ -17222,6 +17372,10 @@ void ceesafe_window_minimize(void *window) {
     if (!w->scripted && cee_wl_of(w) != NULL) {
         cee_wl_minimize(w);
     }
+#elif defined(_WIN32)
+    if (!w->scripted) {
+        cee_win32_minimize(w);
+    }
 #else
     (void)w;
 #endif
@@ -17232,6 +17386,10 @@ void ceesafe_window_toggle_maximized(void *window) {
 #if (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
     if (!w->scripted && cee_wl_of(w) != NULL) {
         cee_wl_toggle_maximized(w);
+    }
+#elif defined(_WIN32)
+    if (!w->scripted) {
+        cee_win32_toggle_maximized(w);
     }
 #else
     (void)w;

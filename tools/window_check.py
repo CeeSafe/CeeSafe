@@ -3255,6 +3255,49 @@ WAYLAND = sys.platform.startswith(("linux", "freebsd")) and (
      bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET"))))
 
 
+def native_arm64():
+    """Whether Windows runs on ARM64, asked of the system: an x64 Python emulated there is told AMD64 by its
+    environment (PROCESSOR_ARCHITECTURE), and would take x64's libraries for an ARM64 compiler."""
+    try:
+        import ctypes
+        process, native = ctypes.c_ushort(0), ctypes.c_ushort(0)
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p  # a pseudo-handle, 64 bits: not ctypes' default int
+        current = ctypes.c_void_p(kernel32.GetCurrentProcess())
+        if kernel32.IsWow64Process2(current, ctypes.byref(process), ctypes.byref(native)):
+            return native.value == 0xAA64  # IMAGE_FILE_MACHINE_ARM64
+    except (AttributeError, OSError):
+        pass
+    return os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "ARM64"
+
+
+def msvc_environment(cc):
+    """For clang or cl on Windows outside Visual Studio's developer prompt (INCLUDE unset): the environment its
+    vcvarsall.bat leaves, found as ceesafec finds it (vswhere, the C++ tools for this machine; tooling.md §8.2), so a
+    helper compiled here finds windows.h and the SDK's libraries; else None (this environment as it is)."""
+    if os.environ.get("INCLUDE") or "gcc" in os.path.basename(cc).lower():
+        return None
+    base = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    vswhere = os.path.join(base, "Microsoft Visual Studio", "Installer", "vswhere.exe")
+    if not os.path.exists(vswhere):
+        return None
+    arm = native_arm64()
+    tools = "Microsoft.VisualStudio.Component.VC.Tools." + ("ARM64" if arm else "x86.x64")
+    found = subprocess.run([vswhere, "-latest", "-products", "*", "-requires", tools, "-property",
+                            "installationPath"], capture_output=True, text=True).stdout.strip()
+    vcvars = os.path.join(found, "VC", "Auxiliary", "Build", "vcvarsall.bat") if found else ""
+    if not vcvars or not os.path.exists(vcvars):
+        return None
+    shown = subprocess.run(f'"{vcvars}" {"arm64" if arm else "x64"} >nul && set', shell=True, capture_output=True,
+                           text=True)
+    env = dict(os.environ)
+    for line in shown.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            env[key] = value
+    return env if "INCLUDE" in env else None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -3562,7 +3605,7 @@ def main():
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1
-            bar = "bar true false" if WAYLAND else "bar false false"  # ADR 0206: Wayland's first
+            bar = "bar true false" if WAYLAND or os.name == "nt" else "bar false false"  # ADR 0206: Wayland, Windows
             if r.returncode != 0 or r.stdout.strip() != bar:
                 problems.append(f"a real window asking for its own title bar: expected {bar!r}, got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
@@ -3669,8 +3712,9 @@ def main():
             cc = os.environ.get("CC", "gcc" if windows else "cc")
             command = ([cc, "-fobjc-arc", "-o", helper, helper + ".m", "-framework", "AppKit"] if mac else
                        [cc, "-municode", "-o", helper + ".exe", helper + ".c", "-lole32", "-lshell32", "-luuid",
-                        "-lgdi32"] if windows else [cc, "-o", helper, helper + ".c", "-lX11"])
-            r = subprocess.run(command, capture_output=True, text=True)
+                        "-lgdi32", "-luser32"] if windows else [cc, "-o", helper, helper + ".c", "-lX11"])
+            r = subprocess.run(command, capture_output=True, text=True,
+                               env=msvc_environment(cc) if windows else None)
             if r.returncode != 0:
                 problems.append(f"a real window's drops: building the drag source failed:\n{r.stderr}")
             elif not WAYLAND:  # drops on Wayland are ADR 0205's step 2; this source speaks X11's XDND

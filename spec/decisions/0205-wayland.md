@@ -53,11 +53,11 @@
 | Frames | `XPutImage` | `wl_shm` buffers in a `memfd`, two a window; `presentChanged`'s boxes as `damage_buffer`; a commit |
 | `waitFrame` | a timer | the surface's frame callback, so a hidden window does not draw |
 | Scale | 1 | `wp_fractional_scale_v1` with `wp_viewporter` (else `wl_surface` 6's preferred buffer scale, else the output's); `scale()` the fraction, sizes in points, buffers in pixels, as on macOS |
-| Title bar | the window manager's | `zxdg_decoration_manager_v1` server-side where there is one (KDE, wlroots); else `libdecor-0.so.0` (GNOME); without either, none (the window still moves with Super and a drag) |
+| Title bar | the window manager's | `zxdg_decoration_manager_v1` server-side where there is one (KDE, wlroots); else `libdecor-0.so.0` with its cairo plugin (GNOME; §7); without either, none (the window still moves with Super and a drag); CeeSafe's own in step 3 |
 | Keys | Xlib's keysyms | xkbcommon over the compositor's keymap; repeat by the runtime at the seat's `repeat_info` |
 | Text input | XIM | `zwp_text_input_v3`: the composition, the commit, the caret area from `setTextInputArea` (ADRs 0141, 0157) |
 | Pointer, scroll | core events | `wl_pointer` frames; `axis_value120` for wheels, pixels for touchpads |
-| Touch | XInput 2 | `wl_touch` (ADR 0155) |
+| Touch | none | `wl_touch` (ADR 0155) |
 | Cursor | font cursors | `wp_cursor_shape_v1`; without it, the compositor's arrow |
 | Clipboard | `CLIPBOARD` selection | `wl_data_device`, `text/plain;charset=utf-8`, with the keyboard focus's serial |
 | Drops | XDND | `wl_data_device` offers of `text/uri-list` (ADR 0150) |
@@ -80,6 +80,8 @@
    default.
 2. **Text and data**: `text-input-v3`, the clipboard, drops. Then **Wayland becomes the default** where §2.1 finds
    one.
+3. **CeeSafe's own title bar** where the compositor draws none (the owner, 2026-11-22: "I prefer the cairo plugin.
+   Then we draw CeeSafe's own title bar"), in place of libdecor's, with its own ADR section.
 
 ## 3. Alternatives considered
 
@@ -119,3 +121,41 @@
 1. **The default**: X11 until step 2 (proposed), or Wayland from step 1?
 2. **The title bar on GNOME**: libdecor (proposed), or a CeeSafe-drawn one now?
 3. **Releases**: one per step (proposed), or both steps in one?
+
+## 7. Step 1 as implemented (2026-11-22)
+
+`runtime/hosted/ceesafe_rt_window.c` (a Wayland part in the Linux and FreeBSD section), `lib/std/window.cee`
+(`WindowHandle.Wayland`, the errors' notes), type-system.md §26.13, `tools/window_check.py`.
+
+- **As §2 has it**, chosen by `CEESAFE_WINDOW_SYSTEM=wayland`; X11 is the default. A Wayland window keeps the X11 one's
+  record for what both have (its title, its AT-SPI serial and focus), with a display of NULL, so AT-SPI, the file
+  dialogs and the rest serve both. One connection serves the process; the waits poll it with the wake pipes and
+  the accessibility bus.
+- **The title bar on GNOME is libdecor's cairo plugin** (the owner, 2026-11-22: "I prefer the cairo plugin. Then we
+  draw CeeSafe's own title bar"). libdecor chose its GTK plugin, which runs GTK 3 in the program, and GTK aborts a
+  program whose icons it cannot load: Fedora 45's GTK loads them through a program it finds on `PATH`, so with an
+  empty `PATH` (`window_check`'s dialog case) the program stopped in `Gtk:ERROR`. libdecor takes the plugins of
+  `LIBDECOR_PLUGIN_DIR`; the runtime points it at `$XDG_RUNTIME_DIR/ceesafe-libdecor`, which holds a link to the
+  cairo plugin beside libdecor's own, unless the environment names a folder or there is no cairo plugin. The cairo
+  plugin draws a plain title bar with cairo and pango, and no GTK is loaded. `NO_AT_BRIDGE=1` is set too, should
+  libdecor still take the GTK one, whose accessibility bridge would be a second application for readers.
+- **Found on the way**, each fixed:
+  - **A new window did not get the keyboard** under GNOME, which gives it only to a window its launcher vouches for:
+    the runtime passes `XDG_ACTIVATION_TOKEN` to `xdg_activation_v1` and removes it from the environment.
+  - **`Focus(true)` never came**: every window starts focused (as on the other systems, where it is true); a
+    Wayland one starts without the focus, and the compositor's `wl_keyboard.enter` gives it.
+  - A frame's pixels are R, G, B, A in memory, which is `XBGR8888`; the runtime uses it when the compositor offers it
+    (mutter does) and swaps R and B into `XRGB8888` when not.
+- **Checked on Fedora 45** (GNOME 51 on Wayland, mutter's protocols as §1 lists them):
+  - `window_check --display` with `CEESAFE_WINDOW_SYSTEM=wayland`: 77 checks, 0 problems (the clipboard's and XDND's
+    are not run: step 2); without it, on X11: 77, 0. `atspi_check` on Wayland: 53, 0, the registry's ping included.
+  - Scale, a 300 by 200 window: at the display's 1.25 and 2, `scale()` is 1.25 and 2 on Wayland and 1 on X11
+    (Xwayland stretches it); the size in points is 300 by 200 in each.
+  - Keys, pressed through mutter's remote desktop (`xdotool`'s XTEST reaches X windows only): one held for 1.5 s
+    gives 1 down and 34 repeats, at GNOME's 500 ms delay and 30 ms interval; the key that is Y on a US layout types
+    `y`, and on the German layout `z`.
+  - ClayWind's component demo and C example: 81 elements read through AT-SPI; Orca 51, Tab by Tab: "Dark not
+    selected radio button", "Open in a window button", "Subscribe to updates check box not checked", "Email
+    notifications check box checked", "System selected radio button".
+- **Not checked**: KDE and wlroots compositors, where the title bar is the compositor's; FreeBSD; touch (no touch
+  screen); two monitors of different scale.

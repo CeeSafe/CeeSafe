@@ -3848,6 +3848,7 @@ public enum WindowHandle {
     AppKit(u64, u64),
     Win32(u64, u64),
     Xlib(u64, u64),
+    Wayland(u64, u64),
     UIKit(u64, u64),
     Android(u64, u64),
     Scripted,

@@ -119,9 +119,11 @@ extern "C" {
 public enum WindowError {
     /// No backend for this system, the interpreter, a size of 0 or over 16384, a `present` to a window opened with
     /// `WindowSurface.External`, a menu on X11 or one with an item before its first `addMenu` or over 4096 entries,
-    /// a file dialog on a Linux system without `zenity` or `kdialog`, or a dialog's path that is not UTF-8.
+    /// a file dialog on a Linux system without `zenity` or `kdialog`, a dialog's path that is not UTF-8, or
+    /// `setClipboardText` on Wayland until ADR 0205's step 2.
     Unsupported,
-    /// No window server: no `DISPLAY`, no X11 library, or a session without one.
+    /// No window server: no `DISPLAY`, no X11 library, or a session without one; with `CEESAFE_WINDOW_SYSTEM=wayland`,
+    /// no Wayland compositor or no `libwayland-client` and `libxkbcommon` (ADR 0205).
     NoDisplay,
     /// Called on a thread other than the program's first.
     NotMainThread,
@@ -147,6 +149,8 @@ public enum WindowHandle {
     Win32(u64, u64),
     /// Linux: the X11 `Display *` and the `Window` XID.
     Xlib(u64, u64),
+    /// Linux and FreeBSD on Wayland (ADR 0205): the `wl_display *` and the window's `wl_surface *`.
+    Wayland(u64, u64),
     /// iOS (ADR 0154): the `UIWindow` and its view, whose layer is the content.
     UIKit(u64, u64),
     /// Android (ADR 0154): the activity's `ANativeWindow` (0 while it has none, in the background) and the
@@ -490,6 +494,7 @@ public struct Window {
             3 => WindowHandle.Xlib(first, second),
             4 => WindowHandle.UIKit(first, second),
             5 => WindowHandle.Android(first, second),
+            6 => WindowHandle.Wayland(first, second),
             _ => WindowHandle.Scripted,
         };
     }

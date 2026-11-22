@@ -3736,7 +3736,22 @@ Diagnostics: none new.
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
   - **Windows:** Win32 and GDI;
-  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`;
+  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`; or Wayland (ADR 0205), chosen at the first `open` when
+    `CEESAFE_WINDOW_SYSTEM=wayland` is in the environment (X11 is the default until ADR 0205's step 2):
+    `libwayland-client.so.0` and `libxkbcommon.so.0` loaded with `dlopen`, and `libdecor-0.so.0` for the title bar
+    when the compositor draws none (GNOME), with libdecor's cairo plugin, given to it in
+    `$XDG_RUNTIME_DIR/ceesafe-libdecor` unless the environment names `LIBDECOR_PLUGIN_DIR`. Without a compositor
+    or the two libraries `open` is `NoDisplay`. One connection serves the process's windows. A window shows
+    shared-memory frames over its size in points (`wp_viewporter`), and `scale()` is the compositor's fractional
+    scale (`wp_fractional_scale_v1`, else its integral buffer scale); keys come from xkbcommon over the
+    compositor's keymap, repeated by the runtime at the seat's rate; the pointer, the wheel (a notch is a line,
+    `axis_value120`), touches (`wl_touch`) and the cursor's shape (`wp_cursor_shape_v1`) as on X11. `nativeHandle`
+    is `Wayland(display, surface)`. Not yet (step 2): an input method, the clipboard (`setClipboardText` is
+    `Unsupported`, `clipboardText` null) and drops. AT-SPI is as on X11, but a frame's screen coordinates are the
+    window's: a Wayland window does not know where it is. A Wayland window has the focus when the compositor gives
+    it the keyboard, which it reports with `Focus(true)`; one opened without the launcher's activation token
+    (`XDG_ACTIVATION_TOKEN`, which the runtime passes on and removes from the environment) may not have it until
+    clicked;
   - **iOS** (ADR 0154): UIKit through the Objective-C runtime, loaded with `dlopen`, for a windowed build
     (`windowed = true` or `--windowed`, ADR 0151). The build's start runs `UIApplicationMain`, with the scene life
     cycle (configured from code, so Info.plist needs no scene manifest; iOS 27 requires it); once the application

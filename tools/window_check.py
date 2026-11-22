@@ -596,6 +596,7 @@ fn click(window: borrow Window) -> bool {
         WindowHandle.Xlib(p, q) => { kind = 3; x = p; y = q; }
         WindowHandle.UIKit(p, q) => { kind = 4; x = p; y = q; }
         WindowHandle.Android(p, q) => { kind = 5; x = p; y = q; }
+        WindowHandle.Wayland(p, q) => { kind = 6; x = p; y = q; }
         WindowHandle.Scripted => {}
     }
     return unsafe { window_check_post_click(kind, x, y) } != 0;
@@ -2926,6 +2927,7 @@ fn kind(h: WindowHandle) -> u32 => match (h) {
     WindowHandle.Xlib(a, b) => if (a != 0 && b != 0) 3 else 9,
     WindowHandle.UIKit(a, b) => if (a != 0 && b != 0) 4 else 9,
     WindowHandle.Android(a, b) => if (a != 0 && b != 0) 5 else 9,
+    WindowHandle.Wayland(a, b) => if (a != 0 && b != 0) 6 else 9,
 };
 
 fn code(r: Result<void, WindowError>) -> u32 => match (r) {
@@ -3221,6 +3223,10 @@ def run(command, env, cwd):
         def text(b):
             return b.decode("utf-8", "replace") if isinstance(b, bytes) else (b or "")
         return subprocess.CompletedProcess(command, -1, text(e.stdout), text(e.stderr) + "\n(killed after 120 s)")
+
+
+# Linux windows on Wayland (ADR 0205), when the environment asks for them.
+WAYLAND = sys.platform.startswith(("linux", "freebsd")) and os.environ.get("CEESAFE_WINDOW_SYSTEM") == "wayland"
 
 
 def main():
@@ -3528,13 +3534,15 @@ def main():
         if args.display:
             r = run([surface, "external"], {}, work)
             checks += 1
-            kind = "1" if sys.platform == "darwin" else "2" if os.name == "nt" else "3"
+            kind = "1" if sys.platform == "darwin" else "2" if os.name == "nt" else "6" if WAYLAND else "3"
             if r.returncode != 0 or r.stdout.strip() != f"{kind} 1 1":
                 problems.append(f"a real External window: expected '{kind} 1 1', got {r.stdout.strip()!r} "
                                 f"(status {r.returncode}) {r.stderr.strip()}")
             r = run([text, "real"], {}, work)
             checks += 1
-            if r.returncode != 0 or r.stdout.strip() != "clipboard [CeeSafe ✓ clipboard]":
+            if WAYLAND:
+                pass  # the clipboard on Wayland is ADR 0205's step 2
+            elif r.returncode != 0 or r.stdout.strip() != "clipboard [CeeSafe ✓ clipboard]":
                 problems.append(f"a real window's clipboard: expected 'clipboard [CeeSafe ✓ clipboard]', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             r = run([wake, "real"], {}, work)
@@ -3631,7 +3639,7 @@ def main():
             r = subprocess.run(command, capture_output=True, text=True)
             if r.returncode != 0:
                 problems.append(f"a real window's drops: building the drag source failed:\n{r.stderr}")
-            else:
+            elif not WAYLAND:  # drops on Wayland are ADR 0205's step 2; this source speaks X11's XDND
                 problems.extend(real_drop(drop, work, helper + (".exe" if windows else "")))
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)

@@ -151,6 +151,7 @@
 #define CEE_HANDLE_APPKIT 1
 #define CEE_HANDLE_WIN32 2
 #define CEE_HANDLE_XLIB 3
+#define CEE_HANDLE_WAYLAND 6 /* ADR 0205 */
 
 /* Key numbers: 1-14 the named keys, 100 + n F(n), 0x10000 + c a character, 0x20000 + code any other key. */
 #define CEE_KEY_TAB 1
@@ -11840,6 +11841,8 @@ struct cee_x11 {
     char *title;
     uint32_t atspi_serial;
     int atspi_active;
+    /* A Wayland window's own record (ADR 0205): this one then has no display, and only the fields above. */
+    void *wl;
 };
 
 typedef void (*cee_x_fn)(void);
@@ -12286,6 +12289,9 @@ static void cee_atspi_origin(struct cee_window *w, int *x, int *y) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     cee_xid child = 0;
     *x = *y = 0;
+    if (n->wl != NULL) {
+        return; /* a Wayland window does not know where it is: screen coordinates are the window's (ADR 0205) */
+    }
     cee_x.translate_coordinates(n->display, n->window, cee_x.root_window(n->display, n->screen), 0, 0, x, y, &child);
 }
 
@@ -13374,7 +13380,1385 @@ static void cee_x_title(cee_x_display *display, cee_xid window, unsigned long ut
                           0 /* PropModeReplace */, (const unsigned char *)title, (int)strlen(title));
 }
 
+/* ---- Wayland (ADR 0205) -------------------------------------------------------------------------------------------
+   A window on a Wayland compositor, beside the X11 one: chosen at the first open by CEESAFE_WINDOW_SYSTEM=wayland
+   (step 1; X11 stays the default until step 2 makes Wayland it). libwayland-client.so.0 and libxkbcommon.so.0 are
+   loaded with dlopen, and libdecor-0.so.0 when the compositor draws no title bar (GNOME); nothing is linked. One
+   connection serves every window of the process; its events are read in the pump and in the waits, on the window
+   thread. A Wayland window keeps the X11 one's record (struct cee_x11, display NULL) for what both have: its title,
+   its accessibility serial and focus (ADR 0164 §11); the rest is its struct cee_wl_window. The protocols' tables are
+   written out here from their XML (xdg-shell, xdg-decoration, fractional-scale, viewporter, cursor-shape); the core
+   ones are libwayland-client's own symbols. */
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+static int32_t cee_x_key(unsigned long sym);
+
+typedef struct cee_wl_proxy cee_wl_proxy;
+struct cee_wl_interface;
+struct cee_wl_message {
+    const char *name;
+    const char *signature;
+    const struct cee_wl_interface **types;
+};
+struct cee_wl_interface {
+    const char *name;
+    int version;
+    int method_count;
+    const struct cee_wl_message *methods;
+    int event_count;
+    const struct cee_wl_message *events;
+};
+struct cee_wl_array {
+    size_t size;
+    size_t alloc;
+    void *data;
+};
+typedef int32_t cee_wl_fixed; /* 24.8 */
+typedef void (*cee_wl_fn)(void);
+
+static float cee_wl_float(cee_wl_fixed f) { return (float)f / 256.0f; }
+
+/* The staged and xdg protocols' tables; their arguments' interfaces are filled at load, the core ones being the
+   library's data. */
+static const struct cee_wl_interface *cee_wl_types[32];
+#define CEE_WLT(k) (&cee_wl_types[k])
+/* cee_wl_types: 0 NULL, 1-2 (xdg_surface, wl_surface), 3 xdg_toplevel, 4-6 (xdg_popup, xdg_surface, xdg_positioner),
+   7 xdg_toplevel, 8-9 wl_seat, 10 wl_output, 11-12 (zxdg_toplevel_decoration_v1, xdg_toplevel), 13-14
+   (wp_fractional_scale_v1, wl_surface), 15-16 (wp_viewport, wl_surface), 17-18 (wp_cursor_shape_device_v1, wl_pointer),
+   19-20 (wp_cursor_shape_device_v1, NULL), 21 xdg_positioner, 22 xdg_activation_token_v1, 23-24 (NULL, wl_surface) */
+static const struct cee_wl_interface cee_xdg_positioner_interface = {"xdg_positioner", 6, 0, NULL, 0, NULL};
+static const struct cee_wl_interface cee_xdg_popup_interface = {"xdg_popup", 6, 0, NULL, 0, NULL};
+static const struct cee_wl_message cee_xdg_wm_base_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"create_positioner", "n", CEE_WLT(21)},
+    {"get_xdg_surface", "no", CEE_WLT(1)},
+    {"pong", "u", CEE_WLT(0)},
+};
+static const struct cee_wl_message cee_xdg_wm_base_events[] = {{"ping", "u", CEE_WLT(0)}};
+static const struct cee_wl_interface cee_xdg_wm_base_interface = {"xdg_wm_base", 6, 4, cee_xdg_wm_base_requests, 1,
+                                                                  cee_xdg_wm_base_events};
+static const struct cee_wl_message cee_xdg_surface_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_toplevel", "n", CEE_WLT(3)},
+    {"get_popup", "n?oo", CEE_WLT(4)},
+    {"set_window_geometry", "iiii", CEE_WLT(0)},
+    {"ack_configure", "u", CEE_WLT(0)},
+};
+static const struct cee_wl_message cee_xdg_surface_events[] = {{"configure", "u", CEE_WLT(0)}};
+static const struct cee_wl_interface cee_xdg_surface_interface = {"xdg_surface", 6, 5, cee_xdg_surface_requests, 1,
+                                                                  cee_xdg_surface_events};
+static const struct cee_wl_message cee_xdg_toplevel_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"set_parent", "?o", CEE_WLT(7)},
+    {"set_title", "s", CEE_WLT(0)},
+    {"set_app_id", "s", CEE_WLT(0)},
+    {"show_window_menu", "ouii", CEE_WLT(8)},
+    {"move", "ou", CEE_WLT(8)},
+    {"resize", "ouu", CEE_WLT(8)},
+    {"set_max_size", "ii", CEE_WLT(0)},
+    {"set_min_size", "ii", CEE_WLT(0)},
+    {"set_maximized", "", CEE_WLT(0)},
+    {"unset_maximized", "", CEE_WLT(0)},
+    {"set_fullscreen", "?o", CEE_WLT(10)},
+    {"unset_fullscreen", "", CEE_WLT(0)},
+    {"set_minimized", "", CEE_WLT(0)},
+};
+static const struct cee_wl_message cee_xdg_toplevel_events[] = {
+    {"configure", "iia", CEE_WLT(0)},
+    {"close", "", CEE_WLT(0)},
+    {"configure_bounds", "4ii", CEE_WLT(0)},
+    {"wm_capabilities", "5a", CEE_WLT(0)},
+};
+static const struct cee_wl_interface cee_xdg_toplevel_interface = {"xdg_toplevel", 6, 14, cee_xdg_toplevel_requests, 4,
+                                                                   cee_xdg_toplevel_events};
+static const struct cee_wl_message cee_decoration_manager_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_toplevel_decoration", "no", CEE_WLT(11)},
+};
+static const struct cee_wl_interface cee_decoration_manager_interface = {
+    "zxdg_decoration_manager_v1", 1, 2, cee_decoration_manager_requests, 0, NULL};
+static const struct cee_wl_message cee_decoration_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"set_mode", "u", CEE_WLT(0)},
+    {"unset_mode", "", CEE_WLT(0)},
+};
+static const struct cee_wl_message cee_decoration_events[] = {{"configure", "u", CEE_WLT(0)}};
+static const struct cee_wl_interface cee_decoration_interface = {"zxdg_toplevel_decoration_v1", 1, 3,
+                                                                 cee_decoration_requests, 1, cee_decoration_events};
+static const struct cee_wl_message cee_fractional_manager_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_fractional_scale", "no", CEE_WLT(13)},
+};
+static const struct cee_wl_interface cee_fractional_manager_interface = {
+    "wp_fractional_scale_manager_v1", 1, 2, cee_fractional_manager_requests, 0, NULL};
+static const struct cee_wl_message cee_fractional_requests[] = {{"destroy", "", CEE_WLT(0)}};
+static const struct cee_wl_message cee_fractional_events[] = {{"preferred_scale", "u", CEE_WLT(0)}};
+static const struct cee_wl_interface cee_fractional_interface = {"wp_fractional_scale_v1", 1, 1, cee_fractional_requests,
+                                                                 1, cee_fractional_events};
+static const struct cee_wl_message cee_viewporter_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_viewport", "no", CEE_WLT(15)},
+};
+static const struct cee_wl_interface cee_viewporter_interface = {"wp_viewporter", 1, 2, cee_viewporter_requests, 0,
+                                                                 NULL};
+static const struct cee_wl_message cee_viewport_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"set_source", "ffff", CEE_WLT(0)},
+    {"set_destination", "ii", CEE_WLT(0)},
+};
+static const struct cee_wl_interface cee_viewport_interface = {"wp_viewport", 1, 3, cee_viewport_requests, 0, NULL};
+static const struct cee_wl_message cee_cursor_manager_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_pointer", "no", CEE_WLT(17)},
+    {"get_tablet_tool_v2", "no", CEE_WLT(19)},
+};
+static const struct cee_wl_interface cee_cursor_manager_interface = {"wp_cursor_shape_manager_v1", 1, 3,
+                                                                     cee_cursor_manager_requests, 0, NULL};
+static const struct cee_wl_message cee_cursor_device_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"set_shape", "uu", CEE_WLT(0)},
+};
+static const struct cee_wl_interface cee_cursor_device_interface = {"wp_cursor_shape_device_v1", 1, 2,
+                                                                    cee_cursor_device_requests, 0, NULL};
+static const struct cee_wl_interface cee_activation_token_interface = {"xdg_activation_token_v1", 1, 0, NULL, 0, NULL};
+static const struct cee_wl_message cee_activation_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_activation_token", "n", CEE_WLT(22)},
+    {"activate", "so", CEE_WLT(23)},
+};
+static const struct cee_wl_interface cee_activation_interface = {"xdg_activation_v1", 1, 3, cee_activation_requests, 0,
+                                                                 NULL};
+
+/* libdecor's, as its header has them (0.2): the context's and a frame's callbacks, with room for later ones. */
+struct cee_decor_interface {
+    void (*error)(void *context, int error, const char *message);
+    cee_wl_fn reserved[10];
+};
+struct cee_decor_frame_interface {
+    void (*configure)(void *frame, void *configuration, void *data);
+    void (*close)(void *frame, void *data);
+    void (*commit)(void *frame, void *data);
+    void (*dismiss_popup)(void *frame, const char *seat, void *data);
+    cee_wl_fn reserved[12];
+};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    cee_wl_proxy *(*connect)(const char *);
+    void (*disconnect)(cee_wl_proxy *);
+    int (*get_fd)(cee_wl_proxy *);
+    int (*dispatch_pending)(cee_wl_proxy *);
+    int (*prepare_read)(cee_wl_proxy *);
+    int (*read_events)(cee_wl_proxy *);
+    void (*cancel_read)(cee_wl_proxy *);
+    int (*flush)(cee_wl_proxy *);
+    int (*roundtrip)(cee_wl_proxy *);
+    cee_wl_proxy *(*marshal_flags)(cee_wl_proxy *, uint32_t, const struct cee_wl_interface *, uint32_t, uint32_t, ...);
+    int (*add_listener)(cee_wl_proxy *, cee_wl_fn *, void *);
+    uint32_t (*get_version)(cee_wl_proxy *);
+    void (*destroy)(cee_wl_proxy *);
+    const struct cee_wl_interface *registry, *compositor, *surface, *shm, *shm_pool, *buffer, *seat, *pointer,
+        *keyboard, *touch, *callback, *output, *region;
+    /* xkbcommon */
+    void *(*xkb_context_new)(int);
+    void *(*xkb_keymap_new_from_string)(void *, const char *, int, int);
+    void *(*xkb_state_new)(void *);
+    void (*xkb_keymap_unref)(void *);
+    void (*xkb_state_unref)(void *);
+    int (*xkb_state_update_mask)(void *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+    uint32_t (*xkb_state_key_get_one_sym)(void *, uint32_t);
+    uint32_t (*xkb_state_key_get_utf32)(void *, uint32_t);
+    uint32_t (*xkb_state_key_get_layout)(void *, uint32_t);
+    int (*xkb_keymap_key_get_syms_by_level)(void *, uint32_t, uint32_t, uint32_t, const uint32_t **);
+    int (*xkb_keymap_key_repeats)(void *, uint32_t);
+    int (*xkb_state_mod_name_is_active)(void *, const char *, int);
+    /* libdecor, when it loads */
+    void *(*decor_new)(cee_wl_proxy *, struct cee_decor_interface *);
+    void *(*decor_decorate)(void *, cee_wl_proxy *, struct cee_decor_frame_interface *, void *);
+    void (*decor_frame_unref)(void *);
+    void (*decor_frame_set_title)(void *, const char *);
+    void (*decor_frame_set_app_id)(void *, const char *);
+    void (*decor_frame_map)(void *);
+    void (*decor_frame_commit)(void *, void *, void *);
+    int (*decor_configuration_get_content_size)(void *, void *, int *, int *);
+    void *(*decor_state_new)(int, int);
+    void (*decor_state_free)(void *);
+    int (*decor_dispatch)(void *, int);
+} cee_wl;
+
+/* The connection and what the compositor offers, the seat's devices, the keymap, and the keys' repeat. */
+static struct {
+    int state; /* 0 not tried, 1 connected, -1 none */
+    cee_wl_proxy *display, *registry, *compositor, *shm, *wm_base, *seat, *pointer, *keyboard, *touch;
+    cee_wl_proxy *decoration_manager, *fractional_manager, *viewporter, *cursor_manager, *cursor_device, *activation;
+    uint32_t compositor_version, seat_version, seat_caps;
+    int xbgr; /* the compositor takes XBGR8888, which is the frames' own byte order */
+    void *decor; /* libdecor's context, for compositors that draw no title bar */
+    struct cee_window *pointer_window, *keyboard_window;
+    uint32_t pointer_serial;
+    float pointer_x, pointer_y;
+    float wheel_x, wheel_y; /* this pointer frame's scroll, in lines */
+    int wheel_discrete;
+    void *xkb_context, *xkb_keymap, *xkb_state;
+    int32_t repeat_rate, repeat_delay; /* per second, ms; a rate of 0 is no repeat */
+    uint32_t repeat_key;               /* the evdev code + 8 of the key held, 0 for none */
+    double repeat_at;
+    char app_id[64];
+} cee_wls;
+
+struct cee_wl_buffer {
+    cee_wl_proxy *buffer;
+    uint32_t *data;
+    size_t size;
+    uint32_t width, height;
+    int busy;
+};
+
+struct cee_wl_window {
+    cee_wl_proxy *surface, *xdg_surface, *toplevel, *decoration, *fractional, *viewport;
+    void *frame; /* libdecor's, when it draws the title bar */
+    int configured;
+    int32_t pending_width, pending_height;
+    struct cee_wl_buffer buffers[3];
+};
+
+static struct cee_wl_window *cee_wl_of(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    return n != NULL ? (struct cee_wl_window *)n->wl : NULL;
+}
+
+/* The window whose surface this is: ours, not libdecor's title bar. */
+static struct cee_window *cee_wl_window_of(cee_wl_proxy *surface) {
+    for (struct cee_window *w = cee_wake_windows; w != NULL; w = w->wake_link) {
+        struct cee_wl_window *ww = !w->scripted ? cee_wl_of(w) : NULL;
+        if (ww != NULL && ww->surface == surface) {
+            return w;
+        }
+    }
+    return NULL;
+}
+
+static int cee_wl_load(void) {
+    if (cee_wl.state != 0) {
+        return cee_wl.state == 1;
+    }
+    cee_wl.state = -1;
+    void *c = dlopen("libwayland-client.so.0", RTLD_NOW | RTLD_LOCAL);
+    void *k = c != NULL ? dlopen("libxkbcommon.so.0", RTLD_NOW | RTLD_LOCAL) : NULL;
+    if (c == NULL || k == NULL) {
+        return 0;
+    }
+#define CEE_WL(handle, field, type, name)                                                                              \
+    cee_wl.field = (type)cee_x_symbol(handle, name);                                                                   \
+    if (cee_wl.field == NULL) {                                                                                        \
+        return 0;                                                                                                      \
+    }
+#define CEE_WL_DATA(field, name)                                                                                       \
+    cee_wl.field = (const struct cee_wl_interface *)dlsym(c, name);                                                    \
+    if (cee_wl.field == NULL) {                                                                                        \
+        return 0;                                                                                                      \
+    }
+    CEE_WL(c, connect, cee_wl_proxy * (*)(const char *), "wl_display_connect")
+    CEE_WL(c, disconnect, void (*)(cee_wl_proxy *), "wl_display_disconnect")
+    CEE_WL(c, get_fd, int (*)(cee_wl_proxy *), "wl_display_get_fd")
+    CEE_WL(c, dispatch_pending, int (*)(cee_wl_proxy *), "wl_display_dispatch_pending")
+    CEE_WL(c, prepare_read, int (*)(cee_wl_proxy *), "wl_display_prepare_read")
+    CEE_WL(c, read_events, int (*)(cee_wl_proxy *), "wl_display_read_events")
+    CEE_WL(c, cancel_read, void (*)(cee_wl_proxy *), "wl_display_cancel_read")
+    CEE_WL(c, flush, int (*)(cee_wl_proxy *), "wl_display_flush")
+    CEE_WL(c, roundtrip, int (*)(cee_wl_proxy *), "wl_display_roundtrip")
+    CEE_WL(c, marshal_flags,
+           cee_wl_proxy * (*)(cee_wl_proxy *, uint32_t, const struct cee_wl_interface *, uint32_t, uint32_t, ...),
+           "wl_proxy_marshal_flags")
+    CEE_WL(c, add_listener, int (*)(cee_wl_proxy *, cee_wl_fn *, void *), "wl_proxy_add_listener")
+    CEE_WL(c, get_version, uint32_t(*)(cee_wl_proxy *), "wl_proxy_get_version")
+    CEE_WL(c, destroy, void (*)(cee_wl_proxy *), "wl_proxy_destroy")
+    CEE_WL_DATA(registry, "wl_registry_interface")
+    CEE_WL_DATA(compositor, "wl_compositor_interface")
+    CEE_WL_DATA(surface, "wl_surface_interface")
+    CEE_WL_DATA(shm, "wl_shm_interface")
+    CEE_WL_DATA(shm_pool, "wl_shm_pool_interface")
+    CEE_WL_DATA(buffer, "wl_buffer_interface")
+    CEE_WL_DATA(seat, "wl_seat_interface")
+    CEE_WL_DATA(pointer, "wl_pointer_interface")
+    CEE_WL_DATA(keyboard, "wl_keyboard_interface")
+    CEE_WL_DATA(touch, "wl_touch_interface")
+    CEE_WL_DATA(callback, "wl_callback_interface")
+    CEE_WL_DATA(output, "wl_output_interface")
+    CEE_WL_DATA(region, "wl_region_interface")
+    CEE_WL(k, xkb_context_new, void *(*)(int), "xkb_context_new")
+    CEE_WL(k, xkb_keymap_new_from_string, void *(*)(void *, const char *, int, int), "xkb_keymap_new_from_string")
+    CEE_WL(k, xkb_state_new, void *(*)(void *), "xkb_state_new")
+    CEE_WL(k, xkb_keymap_unref, void (*)(void *), "xkb_keymap_unref")
+    CEE_WL(k, xkb_state_unref, void (*)(void *), "xkb_state_unref")
+    CEE_WL(k, xkb_state_update_mask, int (*)(void *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t),
+           "xkb_state_update_mask")
+    CEE_WL(k, xkb_state_key_get_one_sym, uint32_t(*)(void *, uint32_t), "xkb_state_key_get_one_sym")
+    CEE_WL(k, xkb_state_key_get_utf32, uint32_t(*)(void *, uint32_t), "xkb_state_key_get_utf32")
+    CEE_WL(k, xkb_state_key_get_layout, uint32_t(*)(void *, uint32_t), "xkb_state_key_get_layout")
+    CEE_WL(k, xkb_keymap_key_get_syms_by_level, int (*)(void *, uint32_t, uint32_t, uint32_t, const uint32_t **),
+           "xkb_keymap_key_get_syms_by_level")
+    CEE_WL(k, xkb_keymap_key_repeats, int (*)(void *, uint32_t), "xkb_keymap_key_repeats")
+    CEE_WL(k, xkb_state_mod_name_is_active, int (*)(void *, const char *, int), "xkb_state_mod_name_is_active")
+#undef CEE_WL_DATA
+    cee_wl_types[1] = &cee_xdg_surface_interface;
+    cee_wl_types[2] = cee_wl.surface;
+    cee_wl_types[3] = &cee_xdg_toplevel_interface;
+    cee_wl_types[4] = &cee_xdg_popup_interface;
+    cee_wl_types[5] = &cee_xdg_surface_interface;
+    cee_wl_types[6] = &cee_xdg_positioner_interface;
+    cee_wl_types[7] = &cee_xdg_toplevel_interface;
+    cee_wl_types[8] = cee_wl.seat;
+    cee_wl_types[10] = cee_wl.output;
+    cee_wl_types[11] = &cee_decoration_interface;
+    cee_wl_types[12] = &cee_xdg_toplevel_interface;
+    cee_wl_types[13] = &cee_fractional_interface;
+    cee_wl_types[14] = cee_wl.surface;
+    cee_wl_types[15] = &cee_viewport_interface;
+    cee_wl_types[16] = cee_wl.surface;
+    cee_wl_types[17] = &cee_cursor_device_interface;
+    cee_wl_types[18] = cee_wl.pointer;
+    cee_wl_types[19] = &cee_cursor_device_interface;
+    cee_wl_types[21] = &cee_xdg_positioner_interface;
+    cee_wl_types[22] = &cee_activation_token_interface;
+    cee_wl_types[24] = cee_wl.surface;
+    /* libdecor is optional: without it a window on a compositor that draws no title bar has none. */
+    void *d = dlopen("libdecor-0.so.0", RTLD_NOW | RTLD_LOCAL);
+    if (d != NULL) {
+        int ok = 1;
+#define CEE_DECOR(field, type, name)                                                                                   \
+    cee_wl.field = (type)cee_x_symbol(d, name);                                                                        \
+    ok = ok && cee_wl.field != NULL;
+        CEE_DECOR(decor_new, void *(*)(cee_wl_proxy *, struct cee_decor_interface *), "libdecor_new")
+        CEE_DECOR(decor_decorate, void *(*)(void *, cee_wl_proxy *, struct cee_decor_frame_interface *, void *),
+                  "libdecor_decorate")
+        CEE_DECOR(decor_frame_unref, void (*)(void *), "libdecor_frame_unref")
+        CEE_DECOR(decor_frame_set_title, void (*)(void *, const char *), "libdecor_frame_set_title")
+        CEE_DECOR(decor_frame_set_app_id, void (*)(void *, const char *), "libdecor_frame_set_app_id")
+        CEE_DECOR(decor_frame_map, void (*)(void *), "libdecor_frame_map")
+        CEE_DECOR(decor_frame_commit, void (*)(void *, void *, void *), "libdecor_frame_commit")
+        CEE_DECOR(decor_configuration_get_content_size, int (*)(void *, void *, int *, int *),
+                  "libdecor_configuration_get_content_size")
+        CEE_DECOR(decor_state_new, void *(*)(int, int), "libdecor_state_new")
+        CEE_DECOR(decor_state_free, void (*)(void *), "libdecor_state_free")
+        CEE_DECOR(decor_dispatch, int (*)(void *, int), "libdecor_dispatch")
+#undef CEE_DECOR
+        if (!ok) {
+            cee_wl.decor_new = NULL;
+        }
+    }
+#undef CEE_WL
+    cee_wl.state = 1;
+    return 1;
+}
+
+/* ---- The globals */
+
+static void cee_wl_ping(void *data, cee_wl_proxy *base, uint32_t serial) {
+    (void)data;
+    cee_wl.marshal_flags(base, 3 /* pong */, NULL, cee_wl.get_version(base), 0, serial);
+}
+static cee_wl_fn cee_wl_wm_base_listener[] = {(cee_wl_fn)cee_wl_ping};
+
+static void cee_wl_shm_format(void *data, cee_wl_proxy *shm, uint32_t format) {
+    (void)data;
+    (void)shm;
+    if (format == 0x34324258u) { /* XBGR8888: R, G, B, X in memory, as a frame's pixels are */
+        cee_wls.xbgr = 1;
+    }
+}
+static cee_wl_fn cee_wl_shm_listener[] = {(cee_wl_fn)cee_wl_shm_format};
+
+static void cee_wl_seat_caps(void *data, cee_wl_proxy *seat, uint32_t caps);
+static void cee_wl_seat_name(void *data, cee_wl_proxy *seat, const char *name) {
+    (void)data;
+    (void)seat;
+    (void)name;
+}
+static cee_wl_fn cee_wl_seat_listener[] = {(cee_wl_fn)cee_wl_seat_caps, (cee_wl_fn)cee_wl_seat_name};
+
+static cee_wl_proxy *cee_wl_bind(cee_wl_proxy *registry, uint32_t name, const struct cee_wl_interface *interface,
+                                 uint32_t offered, uint32_t wanted) {
+    uint32_t version = offered < wanted ? offered : wanted;
+    return cee_wl.marshal_flags(registry, 0 /* bind */, interface, version, 0, name, interface->name, version, NULL);
+}
+
+static void cee_wl_global(void *data, cee_wl_proxy *registry, uint32_t name, const char *interface,
+                          uint32_t version) {
+    (void)data;
+    if (strcmp(interface, "wl_compositor") == 0 && cee_wls.compositor == NULL) {
+        cee_wls.compositor_version = version < 6 ? version : 6;
+        cee_wls.compositor = cee_wl_bind(registry, name, cee_wl.compositor, version, 6);
+    } else if (strcmp(interface, "wl_shm") == 0 && cee_wls.shm == NULL) {
+        cee_wls.shm = cee_wl_bind(registry, name, cee_wl.shm, version, 1);
+        cee_wl.add_listener(cee_wls.shm, cee_wl_shm_listener, NULL);
+    } else if (strcmp(interface, "xdg_wm_base") == 0 && cee_wls.wm_base == NULL) {
+        cee_wls.wm_base = cee_wl_bind(registry, name, &cee_xdg_wm_base_interface, version, 6);
+        cee_wl.add_listener(cee_wls.wm_base, cee_wl_wm_base_listener, NULL);
+    } else if (strcmp(interface, "wl_seat") == 0 && cee_wls.seat == NULL) {
+        /* At most 9: from 10 a compositor may repeat keys itself, and the runtime repeats them (ADR 0205 §2.2). */
+        cee_wls.seat_version = version < 9 ? version : 9;
+        cee_wls.seat = cee_wl_bind(registry, name, cee_wl.seat, version, 9);
+        cee_wl.add_listener(cee_wls.seat, cee_wl_seat_listener, NULL);
+    } else if (strcmp(interface, "zxdg_decoration_manager_v1") == 0) {
+        cee_wls.decoration_manager = cee_wl_bind(registry, name, &cee_decoration_manager_interface, version, 1);
+    } else if (strcmp(interface, "wp_fractional_scale_manager_v1") == 0) {
+        cee_wls.fractional_manager = cee_wl_bind(registry, name, &cee_fractional_manager_interface, version, 1);
+    } else if (strcmp(interface, "wp_viewporter") == 0) {
+        cee_wls.viewporter = cee_wl_bind(registry, name, &cee_viewporter_interface, version, 1);
+    } else if (strcmp(interface, "xdg_activation_v1") == 0) {
+        cee_wls.activation = cee_wl_bind(registry, name, &cee_activation_interface, version, 1);
+    } else if (strcmp(interface, "wp_cursor_shape_manager_v1") == 0) {
+        cee_wls.cursor_manager = cee_wl_bind(registry, name, &cee_cursor_manager_interface, version, 1);
+    }
+}
+static void cee_wl_global_remove(void *data, cee_wl_proxy *registry, uint32_t name) {
+    (void)data;
+    (void)registry;
+    (void)name;
+}
+static cee_wl_fn cee_wl_registry_listener[] = {(cee_wl_fn)cee_wl_global, (cee_wl_fn)cee_wl_global_remove};
+
+/* ---- The pointer */
+
+static uint32_t cee_wl_shape(int32_t cursor) {
+    /* WindowCursor's order: Default, Pointer, Text, Crosshair, Grab, ResizeHorizontal, ResizeVertical. */
+    static const uint32_t shapes[] = {1 /* default */, 4 /* pointer */, 9 /* text */, 8 /* crosshair */, 16 /* grab */,
+                                      26 /* ew-resize */, 27 /* ns-resize */};
+    return shapes[cursor >= 0 && cursor < 7 ? cursor : 0];
+}
+
+static void cee_wl_set_cursor(struct cee_window *w) {
+    if (cee_wls.cursor_device != NULL && w != NULL && cee_wls.pointer_window == w) {
+        cee_wl.marshal_flags(cee_wls.cursor_device, 1 /* set_shape */, NULL, 1, 0, cee_wls.pointer_serial,
+                             cee_wl_shape(w->cursor));
+    }
+}
+
+static void cee_wl_pointer_enter(void *data, cee_wl_proxy *p, uint32_t serial, cee_wl_proxy *surface, cee_wl_fixed x,
+                                 cee_wl_fixed y) {
+    (void)data;
+    (void)p;
+    cee_wls.pointer_window = surface != NULL ? cee_wl_window_of(surface) : NULL;
+    cee_wls.pointer_serial = serial;
+    cee_wls.pointer_x = cee_wl_float(x);
+    cee_wls.pointer_y = cee_wl_float(y);
+    if (cee_wls.pointer_window != NULL) {
+        cee_wl_set_cursor(cee_wls.pointer_window);
+        cee_window_push(cee_wls.pointer_window, CEE_EVENT_MOVED, 0, 0, 0, 0, cee_wls.pointer_x, cee_wls.pointer_y);
+    }
+}
+static void cee_wl_pointer_leave(void *data, cee_wl_proxy *p, uint32_t serial, cee_wl_proxy *surface) {
+    (void)data;
+    (void)p;
+    (void)serial;
+    (void)surface;
+    cee_wls.pointer_window = NULL;
+}
+static void cee_wl_pointer_motion(void *data, cee_wl_proxy *p, uint32_t time, cee_wl_fixed x, cee_wl_fixed y) {
+    (void)data;
+    (void)p;
+    (void)time;
+    cee_wls.pointer_x = cee_wl_float(x);
+    cee_wls.pointer_y = cee_wl_float(y);
+    if (cee_wls.pointer_window != NULL) {
+        cee_window_push(cee_wls.pointer_window, CEE_EVENT_MOVED, 0, 0, 0, 0, cee_wls.pointer_x, cee_wls.pointer_y);
+    }
+}
+static void cee_wl_pointer_button(void *data, cee_wl_proxy *p, uint32_t serial, uint32_t time, uint32_t button,
+                                  uint32_t state) {
+    (void)data;
+    (void)p;
+    (void)serial;
+    (void)time;
+    /* evdev's codes: BTN_LEFT 0x110, BTN_RIGHT 0x111, BTN_MIDDLE 0x112 */
+    int32_t b = button == 0x110 ? 0 : button == 0x111 ? 1 : button == 0x112 ? 2 : -1;
+    if (b >= 0 && cee_wls.pointer_window != NULL) {
+        cee_window_push(cee_wls.pointer_window, CEE_EVENT_BUTTON, b, state == 1, 0, 0, cee_wls.pointer_x,
+                        cee_wls.pointer_y);
+    }
+}
+/* Scroll as WHEEL events in lines, one a notch (as X11's buttons 4 to 7 are): axis_value120 for a wheel, a touchpad's
+   pixels at 10 a line; positive Wayland values are down and right, a WHEEL's up and left. */
+static void cee_wl_pointer_axis(void *data, cee_wl_proxy *p, uint32_t time, uint32_t axis, cee_wl_fixed value) {
+    (void)data;
+    (void)p;
+    (void)time;
+    if (cee_wls.wheel_discrete) {
+        return; /* the frame's value120 says it */
+    }
+    float lines = -cee_wl_float(value) / 10.0f;
+    if (axis == 0) {
+        cee_wls.wheel_y += lines;
+    } else {
+        cee_wls.wheel_x += lines;
+    }
+}
+static void cee_wl_pointer_frame(void *data, cee_wl_proxy *p) {
+    (void)data;
+    (void)p;
+    if ((cee_wls.wheel_x != 0.0f || cee_wls.wheel_y != 0.0f) && cee_wls.pointer_window != NULL) {
+        cee_window_push(cee_wls.pointer_window, CEE_EVENT_WHEEL, 0, 0, 0, 0, -cee_wls.wheel_x, cee_wls.wheel_y);
+    }
+    cee_wls.wheel_x = cee_wls.wheel_y = 0.0f;
+    cee_wls.wheel_discrete = 0;
+}
+static void cee_wl_pointer_axis_source(void *data, cee_wl_proxy *p, uint32_t source) {
+    (void)data;
+    (void)p;
+    (void)source;
+}
+static void cee_wl_pointer_axis_stop(void *data, cee_wl_proxy *p, uint32_t time, uint32_t axis) {
+    (void)data;
+    (void)p;
+    (void)time;
+    (void)axis;
+}
+static void cee_wl_pointer_axis_discrete(void *data, cee_wl_proxy *p, uint32_t axis, int32_t discrete) {
+    (void)data;
+    (void)p;
+    (void)axis;
+    (void)discrete; /* before seat 8; value120 replaces it, and axis gives the same */
+}
+static void cee_wl_pointer_axis_value120(void *data, cee_wl_proxy *p, uint32_t axis, int32_t value120) {
+    (void)data;
+    (void)p;
+    if (!cee_wls.wheel_discrete) {
+        cee_wls.wheel_x = cee_wls.wheel_y = 0.0f; /* the frame's continuous value, if it came first, is the same */
+    }
+    cee_wls.wheel_discrete = 1;
+    float lines = -(float)value120 / 120.0f;
+    if (axis == 0) {
+        cee_wls.wheel_y += lines;
+    } else {
+        cee_wls.wheel_x += lines;
+    }
+}
+static void cee_wl_pointer_axis_direction(void *data, cee_wl_proxy *p, uint32_t axis, uint32_t direction) {
+    (void)data;
+    (void)p;
+    (void)axis;
+    (void)direction;
+}
+static cee_wl_fn cee_wl_pointer_listener[] = {
+    (cee_wl_fn)cee_wl_pointer_enter,       (cee_wl_fn)cee_wl_pointer_leave,
+    (cee_wl_fn)cee_wl_pointer_motion,      (cee_wl_fn)cee_wl_pointer_button,
+    (cee_wl_fn)cee_wl_pointer_axis,        (cee_wl_fn)cee_wl_pointer_frame,
+    (cee_wl_fn)cee_wl_pointer_axis_source, (cee_wl_fn)cee_wl_pointer_axis_stop,
+    (cee_wl_fn)cee_wl_pointer_axis_discrete, (cee_wl_fn)cee_wl_pointer_axis_value120,
+    (cee_wl_fn)cee_wl_pointer_axis_direction,
+};
+
+/* ---- Keys: xkbcommon over the compositor's keymap, and the repeat the runtime does */
+
+static int32_t cee_wl_modifiers(void) {
+    if (cee_wls.xkb_state == NULL) {
+        return 0;
+    }
+    const int effective = 8; /* XKB_STATE_MODS_EFFECTIVE */
+    return (cee_wl.xkb_state_mod_name_is_active(cee_wls.xkb_state, "Shift", effective) > 0 ? CEE_MOD_SHIFT : 0) |
+           (cee_wl.xkb_state_mod_name_is_active(cee_wls.xkb_state, "Control", effective) > 0 ? CEE_MOD_CONTROL : 0) |
+           (cee_wl.xkb_state_mod_name_is_active(cee_wls.xkb_state, "Mod1", effective) > 0 ? CEE_MOD_ALT : 0) |
+           (cee_wl.xkb_state_mod_name_is_active(cee_wls.xkb_state, "Mod4", effective) > 0 ? CEE_MOD_COMMAND : 0);
+}
+
+/* A key's Key, from its keysym at the first level of its layout (unshifted, as X11's is: Shift and 1 is Key 1). */
+static int32_t cee_wl_key_of(uint32_t code) {
+    const uint32_t *syms = NULL;
+    uint32_t layout = cee_wl.xkb_state_key_get_layout(cee_wls.xkb_state, code);
+    int count = cee_wl.xkb_keymap_key_get_syms_by_level(cee_wls.xkb_keymap, code, layout, 0, &syms);
+    uint32_t sym = count > 0 && syms != NULL ? syms[0] : cee_wl.xkb_state_key_get_one_sym(cee_wls.xkb_state, code);
+    return cee_x_key(sym); /* xkbcommon's keysyms are X11's */
+}
+
+/* A key down (first or repeated): KEY, and its text unless Control or the command key is held. */
+static void cee_wl_key_down(struct cee_window *w, uint32_t code, int32_t repeat) {
+    int32_t modifiers = cee_wl_modifiers();
+    cee_window_push(w, CEE_EVENT_KEY, cee_wl_key_of(code), 1, repeat, modifiers, 0.0f, 0.0f);
+    if (!(modifiers & (CEE_MOD_CONTROL | CEE_MOD_COMMAND))) {
+        uint32_t c = cee_wl.xkb_state_key_get_utf32(cee_wls.xkb_state, code);
+        if (c >= 0x20 && c != 0x7f && !(c >= 0x80 && c < 0xa0)) {
+            cee_window_text(w, c);
+        }
+    }
+}
+
+static void cee_wl_keymap(void *data, cee_wl_proxy *k, uint32_t format, int32_t fd, uint32_t size) {
+    (void)data;
+    (void)k;
+    if (format != 1 /* XKB_V1 */ || size == 0) {
+        close(fd);
+        return;
+    }
+    char *text = (char *)mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (text == MAP_FAILED) {
+        return;
+    }
+    if (cee_wls.xkb_context == NULL) {
+        cee_wls.xkb_context = cee_wl.xkb_context_new(0);
+    }
+    void *keymap = cee_wls.xkb_context != NULL
+                       ? cee_wl.xkb_keymap_new_from_string(cee_wls.xkb_context, text, 1 /* TEXT_V1 */, 0)
+                       : NULL;
+    munmap(text, size);
+    void *state = keymap != NULL ? cee_wl.xkb_state_new(keymap) : NULL;
+    if (state == NULL) {
+        if (keymap != NULL) {
+            cee_wl.xkb_keymap_unref(keymap);
+        }
+        return;
+    }
+    if (cee_wls.xkb_state != NULL) {
+        cee_wl.xkb_state_unref(cee_wls.xkb_state);
+        cee_wl.xkb_keymap_unref(cee_wls.xkb_keymap);
+    }
+    cee_wls.xkb_keymap = keymap;
+    cee_wls.xkb_state = state;
+}
+static void cee_wl_keyboard_enter(void *data, cee_wl_proxy *k, uint32_t serial, cee_wl_proxy *surface,
+                                  struct cee_wl_array *keys) {
+    (void)data;
+    (void)k;
+    (void)serial;
+    (void)keys;
+    struct cee_window *w = surface != NULL ? cee_wl_window_of(surface) : NULL;
+    cee_wls.keyboard_window = w;
+    if (w != NULL) {
+        cee_window_focus(w, 1);
+        cee_atspi_frame_focus(w, 1);
+    }
+}
+static void cee_wl_keyboard_leave(void *data, cee_wl_proxy *k, uint32_t serial, cee_wl_proxy *surface) {
+    (void)data;
+    (void)k;
+    (void)serial;
+    (void)surface;
+    struct cee_window *w = cee_wls.keyboard_window;
+    cee_wls.keyboard_window = NULL;
+    cee_wls.repeat_key = 0;
+    if (w != NULL) {
+        cee_window_focus(w, 0);
+        cee_atspi_frame_focus(w, 0);
+    }
+}
+static void cee_wl_keyboard_key(void *data, cee_wl_proxy *k, uint32_t serial, uint32_t time, uint32_t key,
+                                uint32_t state) {
+    (void)data;
+    (void)k;
+    (void)serial;
+    (void)time;
+    struct cee_window *w = cee_wls.keyboard_window;
+    if (w == NULL || cee_wls.xkb_state == NULL) {
+        return;
+    }
+    uint32_t code = key + 8u; /* evdev to XKB */
+    if (state == 1) {
+        cee_wl_key_down(w, code, 0);
+        if (cee_wls.repeat_rate > 0 && cee_wl.xkb_keymap_key_repeats(cee_wls.xkb_keymap, code)) {
+            cee_wls.repeat_key = code;
+            cee_wls.repeat_at = cee_window_now() + (double)cee_wls.repeat_delay / 1000.0;
+        }
+    } else {
+        if (cee_wls.repeat_key == code) {
+            cee_wls.repeat_key = 0;
+        }
+        cee_window_push(w, CEE_EVENT_KEY, cee_wl_key_of(code), 0, 0, cee_wl_modifiers(), 0.0f, 0.0f);
+    }
+}
+static void cee_wl_keyboard_modifiers(void *data, cee_wl_proxy *k, uint32_t serial, uint32_t depressed,
+                                      uint32_t latched, uint32_t locked, uint32_t group) {
+    (void)data;
+    (void)k;
+    (void)serial;
+    if (cee_wls.xkb_state != NULL) {
+        cee_wl.xkb_state_update_mask(cee_wls.xkb_state, depressed, latched, locked, 0, 0, group);
+    }
+}
+static void cee_wl_keyboard_repeat(void *data, cee_wl_proxy *k, int32_t rate, int32_t delay) {
+    (void)data;
+    (void)k;
+    cee_wls.repeat_rate = rate > 0 ? rate : 0;
+    cee_wls.repeat_delay = delay > 0 ? delay : 0;
+    if (rate <= 0) {
+        cee_wls.repeat_key = 0;
+    }
+}
+static cee_wl_fn cee_wl_keyboard_listener[] = {
+    (cee_wl_fn)cee_wl_keymap,         (cee_wl_fn)cee_wl_keyboard_enter,     (cee_wl_fn)cee_wl_keyboard_leave,
+    (cee_wl_fn)cee_wl_keyboard_key,   (cee_wl_fn)cee_wl_keyboard_modifiers, (cee_wl_fn)cee_wl_keyboard_repeat,
+};
+
+/* The held key's repeats that are due, from the pump. */
+static void cee_wl_repeat(void) {
+    struct cee_window *w = cee_wls.keyboard_window;
+    if (cee_wls.repeat_key == 0 || w == NULL || cee_wls.repeat_rate <= 0) {
+        return;
+    }
+    double now = cee_window_now(), step = 1.0 / (double)cee_wls.repeat_rate;
+    for (int k = 0; k < 64 && now >= cee_wls.repeat_at; k++) {
+        cee_wl_key_down(w, cee_wls.repeat_key, 1);
+        cee_wls.repeat_at += step;
+    }
+    if (now >= cee_wls.repeat_at) {
+        cee_wls.repeat_at = now + step; /* the program was away: no burst */
+    }
+}
+
+/* ---- Touch (ADR 0155): a finger's key is its id + 1, its place in the window's points */
+
+static struct cee_window *cee_wl_touch_window;
+static void cee_wl_touch_down(void *data, cee_wl_proxy *t, uint32_t serial, uint32_t time, cee_wl_proxy *surface,
+                              int32_t id, cee_wl_fixed x, cee_wl_fixed y) {
+    (void)data;
+    (void)t;
+    (void)serial;
+    struct cee_window *w = surface != NULL ? cee_wl_window_of(surface) : NULL;
+    if (w != NULL) {
+        cee_wl_touch_window = w;
+        cee_touch_began(w, (uintptr_t)(uint32_t)id + 1u, cee_wl_float(x), cee_wl_float(y), (uint64_t)time * 1000000u);
+    }
+}
+static void cee_wl_touch_up(void *data, cee_wl_proxy *t, uint32_t serial, uint32_t time, int32_t id) {
+    (void)data;
+    (void)t;
+    (void)serial;
+    struct cee_window *w = cee_wl_touch_window;
+    if (w != NULL) {
+        struct cee_window_finger *f = cee_touch_finger(w, (uintptr_t)(uint32_t)id + 1u);
+        cee_touch_ended(w, (uintptr_t)(uint32_t)id + 1u, f != NULL ? f->x : 0.0f, f != NULL ? f->y : 0.0f,
+                        (uint64_t)time * 1000000u, 0);
+    }
+}
+static void cee_wl_touch_motion(void *data, cee_wl_proxy *t, uint32_t time, int32_t id, cee_wl_fixed x,
+                                cee_wl_fixed y) {
+    (void)data;
+    (void)t;
+    if (cee_wl_touch_window != NULL) {
+        cee_touch_moved(cee_wl_touch_window, (uintptr_t)(uint32_t)id + 1u, cee_wl_float(x), cee_wl_float(y),
+                        (uint64_t)time * 1000000u);
+    }
+}
+static void cee_wl_touch_frame(void *data, cee_wl_proxy *t) {
+    (void)data;
+    (void)t;
+}
+static void cee_wl_touch_cancel(void *data, cee_wl_proxy *t) {
+    (void)data;
+    (void)t;
+    if (cee_wl_touch_window != NULL) {
+        cee_touch_cancel_all(cee_wl_touch_window);
+    }
+}
+static void cee_wl_touch_shape(void *data, cee_wl_proxy *t, int32_t id, cee_wl_fixed major, cee_wl_fixed minor) {
+    (void)data;
+    (void)t;
+    (void)id;
+    (void)major;
+    (void)minor;
+}
+static void cee_wl_touch_orientation(void *data, cee_wl_proxy *t, int32_t id, cee_wl_fixed orientation) {
+    (void)data;
+    (void)t;
+    (void)id;
+    (void)orientation;
+}
+static cee_wl_fn cee_wl_touch_listener[] = {
+    (cee_wl_fn)cee_wl_touch_down,   (cee_wl_fn)cee_wl_touch_up,    (cee_wl_fn)cee_wl_touch_motion,
+    (cee_wl_fn)cee_wl_touch_frame,  (cee_wl_fn)cee_wl_touch_cancel, (cee_wl_fn)cee_wl_touch_shape,
+    (cee_wl_fn)cee_wl_touch_orientation,
+};
+
+static void cee_wl_seat_caps(void *data, cee_wl_proxy *seat, uint32_t caps) {
+    (void)data;
+    cee_wls.seat_caps = caps;
+    uint32_t version = cee_wl.get_version(seat);
+    if ((caps & 1u) && cee_wls.pointer == NULL) {
+        cee_wls.pointer = cee_wl.marshal_flags(seat, 0 /* get_pointer */, cee_wl.pointer, version, 0, NULL);
+        cee_wl.add_listener(cee_wls.pointer, cee_wl_pointer_listener, NULL);
+        if (cee_wls.cursor_manager != NULL) {
+            cee_wls.cursor_device = cee_wl.marshal_flags(cee_wls.cursor_manager, 1 /* get_pointer */,
+                                                         &cee_cursor_device_interface, 1, 0, NULL, cee_wls.pointer);
+        }
+    }
+    if ((caps & 2u) && cee_wls.keyboard == NULL) {
+        cee_wls.keyboard = cee_wl.marshal_flags(seat, 1 /* get_keyboard */, cee_wl.keyboard, version, 0, NULL);
+        cee_wl.add_listener(cee_wls.keyboard, cee_wl_keyboard_listener, NULL);
+    }
+    if ((caps & 4u) && cee_wls.touch == NULL) {
+        cee_wls.touch = cee_wl.marshal_flags(seat, 2 /* get_touch */, cee_wl.touch, version, 0, NULL);
+        cee_wl.add_listener(cee_wls.touch, cee_wl_touch_listener, NULL);
+    }
+}
+
+/* libdecor's cairo plugin rather than its GTK one (ADR 0205 §2.2, the owner's choice): the GTK one runs GTK 3 in the
+   program, which aborts it when it cannot load an icon (Fedora 45's GTK loads them through a program found on PATH).
+   libdecor takes every plugin in LIBDECOR_PLUGIN_DIR and chooses among them, so that is a folder of the user's own,
+   $XDG_RUNTIME_DIR/ceesafe-libdecor, holding only a link to the cairo plugin beside libdecor's others. Nothing is done
+   when the program's environment names a plugin folder already, or there is no cairo plugin. */
+static void cee_wl_cairo_plugin(void) {
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    Dl_info info;
+    if (getenv("LIBDECOR_PLUGIN_DIR") != NULL || runtime == NULL || runtime[0] == '\0' ||
+        dladdr((void *)cee_wl.decor_new, &info) == 0 || info.dli_fname == NULL) {
+        return;
+    }
+    char plugin[512], folder[512], link[600];
+    const char *slash = strrchr(info.dli_fname, '/');
+    if (slash == NULL) {
+        return;
+    }
+    int at = snprintf(plugin, sizeof plugin, "%.*s/libdecor/plugins-1/libdecor-cairo.so",
+                      (int)(slash - info.dli_fname), info.dli_fname);
+    if (at <= 0 || (size_t)at >= sizeof plugin || access(plugin, R_OK) != 0) {
+        return;
+    }
+    at = snprintf(folder, sizeof folder, "%s/ceesafe-libdecor", runtime);
+    if (at <= 0 || (size_t)at >= sizeof folder || (mkdir(folder, 0700) != 0 && errno != EEXIST)) {
+        return;
+    }
+    snprintf(link, sizeof link, "%s/libdecor-cairo.so", folder);
+    char target[512];
+    ssize_t length = readlink(link, target, sizeof target - 1u);
+    if (length < 0 || (size_t)length != strlen(plugin) || memcmp(target, plugin, (size_t)length) != 0) {
+        unlink(link); /* another libdecor's, or none yet */
+        if (symlink(plugin, link) != 0 && errno != EEXIST) {
+            return;
+        }
+    }
+    setenv("LIBDECOR_PLUGIN_DIR", folder, 1);
+}
+
+static void cee_wl_decor_error(void *context, int error, const char *message) {
+    (void)context;
+    (void)error;
+    (void)message; /* libdecor's own failure: the window stays, without its title bar */
+}
+static struct cee_decor_interface cee_wl_decor_interface = {cee_wl_decor_error, {NULL}};
+
+/* The process's connection, at the first Wayland open: the compositor's globals and one roundtrip for the seat's
+   devices. 0 when there is none or it lacks what a window needs (ADR 0205 §2.1). */
+static int cee_wl_connect(void) {
+    if (cee_wls.state != 0) {
+        return cee_wls.state == 1;
+    }
+    cee_wls.state = -1;
+    if ((getenv("WAYLAND_DISPLAY") == NULL && getenv("WAYLAND_SOCKET") == NULL) || !cee_wl_load()) {
+        return 0;
+    }
+    cee_wl_proxy *display = cee_wl.connect(NULL);
+    if (display == NULL) {
+        return 0;
+    }
+    cee_wls.display = display;
+    cee_wls.registry = cee_wl.marshal_flags(display, 1 /* get_registry */, cee_wl.registry,
+                                            cee_wl.get_version(display), 0, NULL);
+    cee_wl.add_listener(cee_wls.registry, cee_wl_registry_listener, NULL);
+    cee_wl.roundtrip(display); /* the globals */
+    cee_wl.roundtrip(display); /* the seat's capabilities, the shm's formats, the keymap */
+    if (cee_wls.compositor == NULL || cee_wls.compositor_version < 4 || cee_wls.shm == NULL ||
+        cee_wls.wm_base == NULL || cee_wls.seat == NULL) {
+        cee_wl.disconnect(display);
+        memset(&cee_wls, 0, sizeof cee_wls);
+        cee_wls.state = -1;
+        return 0;
+    }
+    if (cee_wls.decoration_manager == NULL && cee_wl.decor_new != NULL) {
+        cee_wl_cairo_plugin();
+        /* Should libdecor still take its GTK plugin, GTK's accessibility bridge would make this process a second
+           application for readers beside the runtime's own (ADR 0164 §11). */
+        setenv("NO_AT_BRIDGE", "1", 0);
+        cee_wls.decor = cee_wl.decor_new(display, &cee_wl_decor_interface);
+    }
+#if defined(__FreeBSD__)
+    snprintf(cee_wls.app_id, sizeof cee_wls.app_id, "%s", getprogname());
+#else
+    FILE *comm = fopen("/proc/self/comm", "r");
+    if (comm != NULL) {
+        if (fgets(cee_wls.app_id, sizeof cee_wls.app_id, comm) != NULL) {
+            cee_wls.app_id[strcspn(cee_wls.app_id, "\n")] = '\0';
+        }
+        fclose(comm);
+    }
+#endif
+    cee_wls.state = 1;
+    return 1;
+}
+
+/* ---- A window */
+
+static void cee_wl_resize_to(struct cee_window *w, int32_t width, int32_t height) {
+    if (width > 0 && height > 0) {
+        cee_window_resized(w, (uint32_t)width, (uint32_t)height);
+    }
+}
+
+static void cee_wl_xdg_configure(void *data, cee_wl_proxy *xdg_surface, uint32_t serial) {
+    struct cee_window *w = (struct cee_window *)data;
+    struct cee_wl_window *ww = cee_wl_of(w);
+    cee_wl.marshal_flags(xdg_surface, 4 /* ack_configure */, NULL, cee_wl.get_version(xdg_surface), 0, serial);
+    if (ww != NULL) {
+        cee_wl_resize_to(w, ww->pending_width, ww->pending_height);
+        ww->configured = 1;
+    }
+}
+static cee_wl_fn cee_wl_xdg_surface_listener[] = {(cee_wl_fn)cee_wl_xdg_configure};
+
+static void cee_wl_toplevel_configure(void *data, cee_wl_proxy *t, int32_t width, int32_t height,
+                                      struct cee_wl_array *states) {
+    (void)t;
+    (void)states;
+    struct cee_wl_window *ww = cee_wl_of((struct cee_window *)data);
+    if (ww != NULL) {
+        ww->pending_width = width; /* 0: the window's own choice */
+        ww->pending_height = height;
+    }
+}
+static void cee_wl_toplevel_close(void *data, cee_wl_proxy *t) {
+    (void)t;
+    cee_window_push((struct cee_window *)data, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
+}
+static void cee_wl_toplevel_bounds(void *data, cee_wl_proxy *t, int32_t width, int32_t height) {
+    (void)data;
+    (void)t;
+    (void)width;
+    (void)height;
+}
+static void cee_wl_toplevel_capabilities(void *data, cee_wl_proxy *t, struct cee_wl_array *caps) {
+    (void)data;
+    (void)t;
+    (void)caps;
+}
+static cee_wl_fn cee_wl_toplevel_listener[] = {(cee_wl_fn)cee_wl_toplevel_configure, (cee_wl_fn)cee_wl_toplevel_close,
+                                               (cee_wl_fn)cee_wl_toplevel_bounds,
+                                               (cee_wl_fn)cee_wl_toplevel_capabilities};
+
+static void cee_wl_decoration_configure(void *data, cee_wl_proxy *d, uint32_t mode) {
+    (void)data;
+    (void)d;
+    (void)mode; /* the compositor's choice; asked for server-side, client-side draws nothing (no libdecor here) */
+}
+static cee_wl_fn cee_wl_decoration_listener[] = {(cee_wl_fn)cee_wl_decoration_configure};
+
+static void cee_wl_preferred_scale(void *data, cee_wl_proxy *f, uint32_t scale120) {
+    (void)f;
+    if (scale120 > 0) {
+        cee_window_rescaled((struct cee_window *)data, (float)scale120 / 120.0f);
+    }
+}
+static cee_wl_fn cee_wl_fractional_listener[] = {(cee_wl_fn)cee_wl_preferred_scale};
+
+static void cee_wl_surface_enter(void *data, cee_wl_proxy *s, cee_wl_proxy *output) {
+    (void)data;
+    (void)s;
+    (void)output;
+}
+static void cee_wl_surface_leave(void *data, cee_wl_proxy *s, cee_wl_proxy *output) {
+    (void)data;
+    (void)s;
+    (void)output;
+}
+static void cee_wl_surface_buffer_scale(void *data, cee_wl_proxy *s, int32_t factor) {
+    (void)s;
+    if (factor > 0 && cee_wls.fractional_manager == NULL) { /* the fraction, when there is one, says it better */
+        cee_window_rescaled((struct cee_window *)data, (float)factor);
+    }
+}
+static void cee_wl_surface_buffer_transform(void *data, cee_wl_proxy *s, uint32_t transform) {
+    (void)data;
+    (void)s;
+    (void)transform;
+}
+static cee_wl_fn cee_wl_surface_listener[] = {(cee_wl_fn)cee_wl_surface_enter, (cee_wl_fn)cee_wl_surface_leave,
+                                              (cee_wl_fn)cee_wl_surface_buffer_scale,
+                                              (cee_wl_fn)cee_wl_surface_buffer_transform};
+
+/* libdecor's frame: its configure is the xdg one, with the title bar's room taken off. */
+static void cee_wl_frame_configure(void *frame, void *configuration, void *data) {
+    struct cee_window *w = (struct cee_window *)data;
+    struct cee_wl_window *ww = cee_wl_of(w);
+    int width = 0, height = 0;
+    if (!cee_wl.decor_configuration_get_content_size(configuration, frame, &width, &height) || width <= 0 ||
+        height <= 0) {
+        width = (int)w->width;
+        height = (int)w->height;
+    }
+    void *state = cee_wl.decor_state_new(width, height);
+    cee_wl.decor_frame_commit(frame, state, configuration);
+    cee_wl.decor_state_free(state);
+    cee_wl_resize_to(w, width, height);
+    if (ww != NULL) {
+        ww->configured = 1;
+    }
+}
+static void cee_wl_frame_close(void *frame, void *data) {
+    (void)frame;
+    cee_window_push((struct cee_window *)data, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
+}
+static void cee_wl_frame_commit(void *frame, void *data) {
+    (void)frame;
+    struct cee_wl_window *ww = cee_wl_of((struct cee_window *)data);
+    if (ww != NULL) {
+        cee_wl.marshal_flags(ww->surface, 6 /* commit */, NULL, cee_wl.get_version(ww->surface), 0);
+    }
+}
+static void cee_wl_frame_dismiss(void *frame, const char *seat, void *data) {
+    (void)frame;
+    (void)seat;
+    (void)data;
+}
+static struct cee_decor_frame_interface cee_wl_frame_interface = {cee_wl_frame_configure, cee_wl_frame_close,
+                                                                  cee_wl_frame_commit, cee_wl_frame_dismiss, {NULL}};
+
+/* What the connection has read, given to the listeners (libdecor's dispatch, which also serves its plugin, when it
+   draws the title bars). */
+static void cee_wl_dispatch(void) {
+    if (cee_wls.decor != NULL) {
+        cee_wl.decor_dispatch(cee_wls.decor, 0);
+        return;
+    }
+    while (cee_wl.prepare_read(cee_wls.display) != 0) {
+        cee_wl.dispatch_pending(cee_wls.display);
+    }
+    cee_wl.flush(cee_wls.display);
+    struct pollfd p = {cee_wl.get_fd(cee_wls.display), POLLIN, 0};
+    if (poll(&p, 1, 0) > 0 && (p.revents & POLLIN)) {
+        cee_wl.read_events(cee_wls.display);
+    } else {
+        cee_wl.cancel_read(cee_wls.display);
+    }
+    cee_wl.dispatch_pending(cee_wls.display);
+}
+
+/* Until the compositor has events, one of `fds` is readable, or `seconds` pass; a held key's next repeat ends it too. */
+static void cee_wl_wait(struct pollfd *fds, nfds_t count, double seconds) {
+    if (cee_wls.repeat_key != 0 && cee_wls.keyboard_window != NULL) {
+        double left = cee_wls.repeat_at - cee_window_now();
+        seconds = left < seconds ? (left > 0.0 ? left : 0.0) : seconds;
+    }
+    int reading = 0;
+    if (cee_wls.decor == NULL) {
+        if (cee_wl.prepare_read(cee_wls.display) != 0) {
+            return; /* events already read: the pump gives them */
+        }
+        reading = 1;
+    }
+    cee_wl.flush(cee_wls.display);
+    fds[0].fd = cee_wl.get_fd(cee_wls.display);
+    fds[0].events = POLLIN;
+    fds[0].revents = 0;
+    double ms = seconds * 1000.0 + 0.999;
+    int ready = poll(fds, count, ms <= 0.0 ? 0 : ms >= 2147483647.0 ? 2147483647 : (int)ms);
+    if (reading) {
+        if (ready > 0 && (fds[0].revents & POLLIN)) {
+            cee_wl.read_events(cee_wls.display);
+        } else {
+            cee_wl.cancel_read(cee_wls.display);
+        }
+    }
+}
+
+static int cee_wl_open(struct cee_window *w, const char *title) {
+    if (!cee_wl_connect()) {
+        return CEE_WINDOW_NO_DISPLAY;
+    }
+    struct cee_x11 *n = (struct cee_x11 *)ceesafe_platform_alloc_zeroed(sizeof *n);
+    struct cee_wl_window *ww = (struct cee_wl_window *)ceesafe_platform_alloc_zeroed(sizeof *ww);
+    if (n == NULL || ww == NULL) {
+        ceesafe_platform_free(n);
+        ceesafe_platform_free(ww);
+        return CEE_WINDOW_RESOURCES;
+    }
+    n->wl = ww;
+    w->native = n;
+    w->scale = 1.0f;
+    /* The compositor says when the window has the keyboard (wl_keyboard.enter), which a new one need not: Focus(true)
+       comes then, not before. */
+    w->focused = 0;
+    ww->surface = cee_wl.marshal_flags(cee_wls.compositor, 0 /* create_surface */, cee_wl.surface,
+                                       cee_wl.get_version(cee_wls.compositor), 0, NULL);
+    if (ww->surface == NULL) {
+        w->native = NULL;
+        ceesafe_platform_free(n);
+        ceesafe_platform_free(ww);
+        return CEE_WINDOW_RESOURCES;
+    }
+    cee_wl.add_listener(ww->surface, cee_wl_surface_listener, w);
+    if (cee_wls.fractional_manager != NULL) {
+        ww->fractional = cee_wl.marshal_flags(cee_wls.fractional_manager, 1 /* get_fractional_scale */,
+                                              &cee_fractional_interface, 1, 0, NULL, ww->surface);
+        cee_wl.add_listener(ww->fractional, cee_wl_fractional_listener, w);
+    }
+    if (cee_wls.viewporter != NULL) {
+        ww->viewport = cee_wl.marshal_flags(cee_wls.viewporter, 1 /* get_viewport */, &cee_viewport_interface, 1, 0,
+                                            NULL, ww->surface);
+    }
+    if (cee_wls.decor != NULL) {
+        ww->frame = cee_wl.decor_decorate(cee_wls.decor, ww->surface, &cee_wl_frame_interface, w);
+    }
+    if (ww->frame != NULL) {
+        cee_wl.decor_frame_set_title(ww->frame, title);
+        cee_wl.decor_frame_set_app_id(ww->frame, cee_wls.app_id);
+        cee_wl.decor_frame_map(ww->frame);
+    } else {
+        uint32_t base = cee_wl.get_version(cee_wls.wm_base);
+        ww->xdg_surface = cee_wl.marshal_flags(cee_wls.wm_base, 2 /* get_xdg_surface */, &cee_xdg_surface_interface,
+                                               base, 0, NULL, ww->surface);
+        cee_wl.add_listener(ww->xdg_surface, cee_wl_xdg_surface_listener, w);
+        ww->toplevel = cee_wl.marshal_flags(ww->xdg_surface, 1 /* get_toplevel */, &cee_xdg_toplevel_interface, base,
+                                            0, NULL);
+        cee_wl.add_listener(ww->toplevel, cee_wl_toplevel_listener, w);
+        cee_wl.marshal_flags(ww->toplevel, 2 /* set_title */, NULL, base, 0, title);
+        cee_wl.marshal_flags(ww->toplevel, 3 /* set_app_id */, NULL, base, 0, cee_wls.app_id);
+        if (cee_wls.decoration_manager != NULL) {
+            ww->decoration = cee_wl.marshal_flags(cee_wls.decoration_manager, 1 /* get_toplevel_decoration */,
+                                                  &cee_decoration_interface, 1, 0, NULL, ww->toplevel);
+            cee_wl.add_listener(ww->decoration, cee_wl_decoration_listener, w);
+            cee_wl.marshal_flags(ww->decoration, 1 /* set_mode */, NULL, 1, 0, 2u /* server-side */);
+        }
+        cee_wl.marshal_flags(ww->surface, 6 /* commit */, NULL, cee_wl.get_version(ww->surface), 0);
+    }
+    /* Until the first configure, which says the size: a window is shown only once it has one. */
+    double deadline = cee_window_now() + 2.0;
+    while (!ww->configured && cee_window_now() < deadline) {
+        cee_wl.roundtrip(cee_wls.display);
+        if (cee_wls.decor != NULL) {
+            cee_wl.decor_dispatch(cee_wls.decor, 0);
+        }
+    }
+    /* The launcher's activation token (a terminal's, the desktop's): with it the compositor gives the new window the
+       keyboard, as it would not a window that just appeared. It is the first window's; the variable is consumed, as
+       the protocol asks, so the program's children do not use it again. */
+    const char *token = getenv("XDG_ACTIVATION_TOKEN");
+    if (token != NULL && token[0] != '\0' && cee_wls.activation != NULL) {
+        cee_wl.marshal_flags(cee_wls.activation, 2 /* activate */, NULL, 1, 0, token, ww->surface);
+        cee_wl.flush(cee_wls.display);
+    }
+    unsetenv("XDG_ACTIVATION_TOKEN");
+    size_t title_length = strlen(title);
+    n->title = (char *)ceesafe_platform_alloc(title_length + 1u);
+    if (n->title != NULL) {
+        memcpy(n->title, title, title_length + 1u);
+    }
+    n->atspi_serial = ++cee_atspi.next_serial;
+    cee_atspi_connect(); /* AT-SPI is D-Bus, whatever shows the window (ADR 0164 §11) */
+    cee_atspi_frame_added(w);
+    return 0;
+}
+
+static void cee_wl_buffer_release(void *data, cee_wl_proxy *buffer) {
+    (void)buffer;
+    ((struct cee_wl_buffer *)data)->busy = 0;
+}
+static cee_wl_fn cee_wl_buffer_listener[] = {(cee_wl_fn)cee_wl_buffer_release};
+
+static void cee_wl_buffer_free(struct cee_wl_buffer *b) {
+    if (b->buffer != NULL) {
+        cee_wl.marshal_flags(b->buffer, 0 /* destroy */, NULL, cee_wl.get_version(b->buffer), 1 /* DESTROY */);
+    }
+    if (b->data != NULL) {
+        munmap(b->data, b->size);
+    }
+    memset(b, 0, sizeof *b);
+}
+
+/* A shared-memory buffer of width x height, its memory a memfd (shm_open's anonymous one on FreeBSD). */
+static int cee_wl_buffer_make(struct cee_wl_buffer *b, uint32_t width, uint32_t height) {
+    size_t stride = (size_t)width * 4u, size = stride * (size_t)height;
+    if (size == 0 || size > 0x7fffffffu) {
+        return 0;
+    }
+#if defined(__FreeBSD__)
+    int fd = shm_open(SHM_ANON, O_RDWR | O_CREAT, 0600);
+#else
+    int fd = memfd_create("ceesafe-frame", MFD_CLOEXEC);
+#endif
+    if (fd < 0) {
+        return 0;
+    }
+    if (ftruncate(fd, (off_t)size) != 0) {
+        close(fd);
+        return 0;
+    }
+    void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (data == MAP_FAILED) {
+        close(fd);
+        return 0;
+    }
+    cee_wl_proxy *pool = cee_wl.marshal_flags(cee_wls.shm, 0 /* create_pool */, cee_wl.shm_pool,
+                                              cee_wl.get_version(cee_wls.shm), 0, NULL, fd, (int32_t)size);
+    close(fd);
+    if (pool == NULL) {
+        munmap(data, size);
+        return 0;
+    }
+    uint32_t format = cee_wls.xbgr ? 0x34324258u /* XBGR8888 */ : 1u /* XRGB8888 */;
+    b->buffer = cee_wl.marshal_flags(pool, 0 /* create_buffer */, cee_wl.buffer, cee_wl.get_version(pool), 0, NULL, 0,
+                                     (int32_t)width, (int32_t)height, (int32_t)stride, format);
+    cee_wl.marshal_flags(pool, 1 /* destroy */, NULL, cee_wl.get_version(pool), 1 /* DESTROY */);
+    if (b->buffer == NULL) {
+        munmap(data, size);
+        return 0;
+    }
+    b->data = (uint32_t *)data;
+    b->size = size;
+    b->width = width;
+    b->height = height;
+    b->busy = 0;
+    cee_wl.add_listener(b->buffer, cee_wl_buffer_listener, b);
+    return 1;
+}
+
+/* A buffer of that size the compositor is not reading: a free one of the size, a free one remade, or, all three being
+   read, the connection read until one is released (a quarter of a second at most). */
+static struct cee_wl_buffer *cee_wl_buffer_for(struct cee_wl_window *ww, uint32_t width, uint32_t height) {
+    double deadline = cee_window_now() + 0.25;
+    for (;;) {
+        for (int k = 0; k < 3; k++) {
+            struct cee_wl_buffer *b = &ww->buffers[k];
+            if (!b->busy && b->buffer != NULL && b->width == width && b->height == height) {
+                return b;
+            }
+        }
+        for (int k = 0; k < 3; k++) {
+            struct cee_wl_buffer *b = &ww->buffers[k];
+            if (!b->busy) {
+                cee_wl_buffer_free(b);
+                return cee_wl_buffer_make(b, width, height) ? b : NULL;
+            }
+        }
+        if (cee_window_now() >= deadline) {
+            return NULL;
+        }
+        struct pollfd p[1];
+        cee_wl_wait(p, 1, 0.01);
+        if (cee_wls.decor != NULL) {
+            cee_wl.decor_dispatch(cee_wls.decor, 0);
+        } else {
+            cee_wl.dispatch_pending(cee_wls.display);
+        }
+    }
+}
+
+/* A frame of width x height pixels shown over the window's size in points: the viewport maps it (any scale), or an
+   integral buffer scale does; `boxes` (NULL for all) are what changed. */
+static int32_t cee_wl_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                              const struct cee_window_box *boxes, size_t count) {
+    struct cee_wl_window *ww = cee_wl_of(w);
+    struct cee_wl_buffer *b = cee_wl_buffer_for(ww, width, height);
+    if (b == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    size_t total = (size_t)width * (size_t)height;
+    if (cee_wls.xbgr) {
+        memcpy(b->data, pixels, total * sizeof(uint32_t));
+    } else {
+        for (size_t k = 0; k < total; k++) { /* R and B change places: XRGB8888 is B, G, R, X in memory */
+            uint32_t p = pixels[k];
+            b->data[k] = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
+        }
+    }
+    uint32_t sv = cee_wl.get_version(ww->surface);
+    cee_wl.marshal_flags(ww->surface, 1 /* attach */, NULL, sv, 0, b->buffer, 0, 0);
+    if (ww->viewport != NULL) {
+        cee_wl.marshal_flags(ww->viewport, 2 /* set_destination */, NULL, 1, 0, (int32_t)w->width,
+                             (int32_t)w->height);
+    } else if (w->width > 0 && width % w->width == 0 && width / w->width >= 1) {
+        cee_wl.marshal_flags(ww->surface, 8 /* set_buffer_scale */, NULL, sv, 0, (int32_t)(width / w->width));
+    }
+    if (boxes == NULL) {
+        cee_wl.marshal_flags(ww->surface, 9 /* damage_buffer */, NULL, sv, 0, 0, 0, (int32_t)width, (int32_t)height);
+    } else {
+        for (size_t k = 0; k < count; k++) {
+            cee_wl.marshal_flags(ww->surface, 9 /* damage_buffer */, NULL, sv, 0, (int32_t)boxes[k].x,
+                                 (int32_t)boxes[k].y, (int32_t)boxes[k].w, (int32_t)boxes[k].h);
+        }
+    }
+    cee_wl.marshal_flags(ww->surface, 6 /* commit */, NULL, sv, 0);
+    b->busy = 1;
+    cee_wl.flush(cee_wls.display);
+    return 0;
+}
+
+static void cee_wl_close(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    struct cee_wl_window *ww = cee_wl_of(w);
+    if (n == NULL || ww == NULL) {
+        return;
+    }
+    cee_atspi_frame_removed(w);
+    if (cee_wls.pointer_window == w) {
+        cee_wls.pointer_window = NULL;
+    }
+    if (cee_wls.keyboard_window == w) {
+        cee_wls.keyboard_window = NULL;
+        cee_wls.repeat_key = 0;
+    }
+    if (cee_wl_touch_window == w) {
+        cee_wl_touch_window = NULL;
+    }
+    for (int k = 0; k < 3; k++) {
+        cee_wl_buffer_free(&ww->buffers[k]);
+    }
+    if (ww->frame != NULL) {
+        cee_wl.decor_frame_unref(ww->frame);
+    }
+    if (ww->decoration != NULL) {
+        cee_wl.marshal_flags(ww->decoration, 0, NULL, 1, 1);
+    }
+    if (ww->toplevel != NULL) {
+        cee_wl.marshal_flags(ww->toplevel, 0, NULL, cee_wl.get_version(ww->toplevel), 1);
+    }
+    if (ww->xdg_surface != NULL) {
+        cee_wl.marshal_flags(ww->xdg_surface, 0, NULL, cee_wl.get_version(ww->xdg_surface), 1);
+    }
+    if (ww->viewport != NULL) {
+        cee_wl.marshal_flags(ww->viewport, 0, NULL, 1, 1);
+    }
+    if (ww->fractional != NULL) {
+        cee_wl.marshal_flags(ww->fractional, 0, NULL, 1, 1);
+    }
+    cee_wl.marshal_flags(ww->surface, 0, NULL, cee_wl.get_version(ww->surface), 1);
+    cee_wl.flush(cee_wls.display);
+    ceesafe_platform_free(n->title);
+    ceesafe_platform_free(ww);
+    ceesafe_platform_free(n);
+    w->native = NULL;
+}
+
+static void cee_wl_title(struct cee_window *w, const char *title) {
+    struct cee_wl_window *ww = cee_wl_of(w);
+    if (ww->frame != NULL) {
+        cee_wl.decor_frame_set_title(ww->frame, title);
+    } else {
+        cee_wl.marshal_flags(ww->toplevel, 2 /* set_title */, NULL, cee_wl.get_version(ww->toplevel), 0, title);
+    }
+    cee_wl.flush(cee_wls.display);
+}
+
+static void cee_wl_pump(struct cee_window *w) {
+    (void)w;
+    cee_atspi_dispatch();
+    cee_wl_dispatch();
+    cee_wl_repeat();
+    cee_wl.flush(cee_wls.display);
+}
+
+/* Whether this process's windows are Wayland's: the first open decides (ADR 0205 §2.1, step 1: only when asked). */
+static int cee_wl_chosen = -1;
+static int cee_wl_on(void) {
+    if (cee_wl_chosen < 0) {
+        const char *system = getenv("CEESAFE_WINDOW_SYSTEM");
+        cee_wl_chosen = system != NULL && strcmp(system, "wayland") == 0;
+    }
+    return cee_wl_chosen;
+}
+
 static int cee_native_open(struct cee_window *w, const char *title) {
+    if (cee_wl_on()) {
+        return cee_wl_open(w, title);
+    }
     if (!cee_x_load()) {
         return CEE_WINDOW_NO_DISPLAY;
     }
@@ -13450,6 +14834,11 @@ static int cee_native_open(struct cee_window *w, const char *title) {
 
 static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        *first = (uint64_t)(uintptr_t)cee_wls.display;
+        *second = (uint64_t)(uintptr_t)((struct cee_wl_window *)n->wl)->surface;
+        return CEE_HANDLE_WAYLAND;
+    }
     *first = (uint64_t)(uintptr_t)n->display;
     *second = (uint64_t)n->window;
     return CEE_HANDLE_XLIB;
@@ -13458,6 +14847,10 @@ static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_
 static void cee_native_close(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (n == NULL) {
+        return;
+    }
+    if (n->wl != NULL) {
+        cee_wl_close(w);
         return;
     }
     cee_atspi_frame_removed(w);
@@ -13835,6 +15228,10 @@ static void cee_x_xdnd_message(struct cee_window *w, const cee_x_client *c) {
 
 static void cee_native_pump(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        cee_wl_pump(w);
+        return;
+    }
     cee_atspi_dispatch(); /* what readers asked (ADR 0164) */
     for (int k = 0; k < 256 && cee_x.pending(n->display) > 0; k++) {
         cee_x_event e;
@@ -13991,6 +15388,9 @@ static void cee_x_draw(struct cee_window *w) {
 
 static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return cee_wl_present(w, pixels, width, height, NULL, 0);
+    }
     size_t count = (size_t)width * (size_t)height;
     if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
         uint32_t *grown = (uint32_t *)ceesafe_platform_realloc(n->frame, count * sizeof(uint32_t));
@@ -14009,6 +15409,9 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
 static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
                                         const struct cee_window_box *boxes, size_t count) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return cee_wl_present(w, pixels, width, height, boxes, count);
+    }
     if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
         return cee_native_present(w, pixels, width, height);
     }
@@ -14055,6 +15458,11 @@ static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pi
 
 static void cee_native_cursor(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        cee_wl_set_cursor(w);
+        cee_wl.flush(cee_wls.display);
+        return;
+    }
     static const unsigned int shapes[] = {68, 60, 152, 34, 52, 108, 116}; /* XC_left_ptr, hand2, xterm, ... */
     int32_t k = w->cursor >= 0 && w->cursor < 7 ? w->cursor : 0;
     if (n->cursors[k] == 0) {
@@ -14066,8 +15474,12 @@ static void cee_native_cursor(struct cee_window *w) {
 
 static void cee_native_title(struct cee_window *w, const char *title) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
-    cee_x_title(n->display, n->window, n->utf8_atom, title);
-    cee_x.flush(n->display);
+    if (n->wl != NULL) {
+        cee_wl_title(w, title);
+    } else {
+        cee_x_title(n->display, n->window, n->utf8_atom, title);
+        cee_x.flush(n->display);
+    }
     size_t length = strlen(title);
     char *copy = (char *)ceesafe_platform_alloc(length + 1u);
     if (copy != NULL) {
@@ -14165,6 +15577,9 @@ static void cee_x_open_im(struct cee_window *w) {
    XLookupString as before. */
 static void cee_native_text_input(struct cee_window *w, int on) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return; /* text-input-v3 is step 2 (ADR 0205 §2.4): keys still give text */
+    }
     if (on) {
         cee_x_open_im(w);
         if (n->ic != NULL) {
@@ -14183,6 +15598,9 @@ static void cee_native_text_input(struct cee_window *w, int on) {
 
 static void cee_native_text_area(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return;
+    }
     cee_x_spot(w);
     cee_x.flush(n->display);
 }
@@ -14190,6 +15608,9 @@ static void cee_native_text_area(struct cee_window *w) {
 /* The CLIPBOARD selection, as UTF8_STRING (ADR 0141): this window owns it and answers in the pump. */
 static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return -CEE_WINDOW_UNSUPPORTED; /* wl_data_device is step 2 (ADR 0205 §2.4) */
+    }
     if (length > cee_x_max_property(n)) {
         return -CEE_WINDOW_RESOURCES; /* more than one request carries: no INCR */
     }
@@ -14217,6 +15638,9 @@ static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, 
 /* Asks the owner for UTF8_STRING and waits up to a second for its SelectionNotify; other events stay queued. */
 static int cee_native_clipboard_get(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        return 0;
+    }
     cee_xid owner = cee_x.get_selection_owner(n->display, n->clipboard_atom);
     if (owner == n->window && n->owned != NULL) {
         return cee_window_paste(w, n->owned, n->owned_length);
@@ -14274,6 +15698,12 @@ static void cee_native_wake(void) {} /* the window's pipe, which the wait includ
    `seconds`. */
 static void cee_native_wait(struct cee_window *w, double seconds) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->wl != NULL) {
+        int bus = cee_atspi_fd();
+        struct pollfd p[3] = {{-1, POLLIN, 0}, {w->wake_read, POLLIN, 0}, {bus, POLLIN, 0}};
+        cee_wl_wait(p, bus >= 0 ? 3 : 2, seconds);
+        return;
+    }
     if (cee_x.pending(n->display) > 0) {
         return;
     }
@@ -14288,6 +15718,12 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
    queues, with the process's pipe. Past 16 windows the descriptors are allocated; if that fails, the first 15 are
    polled for at most 10 ms at a time, so the loop around this still sees the others. */
 static void cee_native_wait_any(double seconds) {
+    if (cee_wls.state == 1) { /* one connection for every window (ADR 0205) */
+        int bus = cee_atspi_fd();
+        struct pollfd q[3] = {{-1, POLLIN, 0}, {cee_wake_any_read, POLLIN, 0}, {bus, POLLIN, 0}};
+        cee_wl_wait(q, bus >= 0 ? 3 : 2, seconds);
+        return;
+    }
     struct pollfd few[16];
     struct pollfd *p = few;
     int bus = cee_atspi_fd(); /* the accessibility bus (ADR 0164) */
@@ -14473,8 +15909,10 @@ static int32_t cee_native_dialog(struct cee_window *w, int kind, const char *tit
         int n = 0, ok = 1;
         if (kdialog) {
             argv[n++] = "kdialog";
-            argv[n++] = "--attach";
-            argv[n++] = xid;
+            if (((struct cee_x11 *)w->native)->wl == NULL) { /* a Wayland window has no X id to attach to */
+                argv[n++] = "--attach";
+                argv[n++] = xid;
+            }
             if (title[0] != '\0') {
                 argv[n++] = "--title";
                 argv[n++] = title;

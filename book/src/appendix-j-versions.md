@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.93.5
+## Releases 0.25.0 to 0.93.6
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.93.6 | 2026-11-23 | Containers for screen readers on Windows: UI Automation's tree, the containers' control types, items' places (`PositionInSet`, `SizeOfSet`), and a table's Grid and Table patterns with its cells' GridItem and TableItem (ADR 0207 step 2) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.5 | 2026-11-23 | Containers for screen readers: a `WindowAccessNode`'s `parent`, its place (`row`, `column`) and a container's counts (`rows`, `columns`, for virtual lists), and the roles `Group`, `List`, `Menu`, `MenuBar`, `TabList`, `Table`, `Row`, `Cell` and `ColumnHeader`; macOS first, the other systems keep the flat list until their steps (ADR 0207) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.4 | 2026-11-22 | A title bar the program draws on macOS and X11 too: on macOS the traffic lights stay the system's, centered in the program's bar, and `Window.systemButtons()` says where they are; on X11 the window manager's frame goes and it moves, resizes, maximizes and shows its menu at the runtime's asking (ADR 0206 step 3) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.3 | 2026-11-22 | A title bar the program draws on Windows too: Windows keeps the frame, its shadow, snapping and resizing, the bar is the caption and its maximize box Windows' maximize button (snap layouts), and `minimize`, `toggleMaximized` and `maximized` act on the window (ADR 0206 step 2) | [Appendix E](./appendix-e-ceesafec) |

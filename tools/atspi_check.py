@@ -47,6 +47,50 @@ fn node(id: u64, role: WindowAccessRole, flags: u32, y: f32, label: [u32; 2], va
         columns: 0,
     };
 
+/// An element of the tree (ADR 0207): its container, its place, its counts.
+fn held(id: u64, role: WindowAccessRole, parent: u64, label: [u32; 2], place: [u32; 2], counts: [u32; 2]) ->
+    WindowAccessNode {
+    var n = node(id, role, 0, round<f32>(id % 100) * 20.0, label, [0, 0]);
+    n.x = round<f32>(id / 100) * 10.0;
+    n.parent = parent;
+    n.row = place[0];
+    n.column = place[1];
+    n.rows = counts[0];
+    n.columns = counts[1];
+    return n;
+}
+
+/// window_check's tree: a list of 40 rows of which three are given, a menu, a tab list, a table of two by three whose
+/// first row is its headers, a group.
+fn tree(window: borrow mut Window) {
+    let text = "FruitApplePearPlumEditCutCopyViewsOneTwoGridNameSizeKindA1xToolsGo";
+    let none = [0u32, 0];
+    let nodes = [
+        held(100, WindowAccessRole.List, 0, [0, 5], none, [40, 0]),
+        held(101, WindowAccessRole.ListItem, 100, [5, 5], [3, 0], none),
+        held(102, WindowAccessRole.ListItem, 100, [10, 4], [4, 0], none),
+        held(103, WindowAccessRole.ListItem, 100, [14, 4], [5, 0], none),
+        held(200, WindowAccessRole.Menu, 0, [18, 4], none, none),
+        held(201, WindowAccessRole.MenuItem, 200, [22, 3], none, none),
+        held(202, WindowAccessRole.MenuItem, 200, [25, 4], none, none),
+        held(300, WindowAccessRole.TabList, 0, [29, 5], none, none),
+        held(301, WindowAccessRole.Tab, 300, [34, 3], none, none),
+        held(302, WindowAccessRole.Tab, 300, [37, 3], none, none),
+        held(400, WindowAccessRole.Table, 0, [40, 4], none, none),
+        held(410, WindowAccessRole.Row, 400, [0, 0], none, none),
+        held(411, WindowAccessRole.ColumnHeader, 410, [44, 4], none, none),
+        held(412, WindowAccessRole.ColumnHeader, 410, [48, 4], none, none),
+        held(413, WindowAccessRole.ColumnHeader, 410, [52, 4], none, none),
+        held(420, WindowAccessRole.Row, 400, [0, 0], none, none),
+        held(421, WindowAccessRole.Cell, 420, [56, 1], none, none),
+        held(422, WindowAccessRole.Cell, 420, [57, 1], none, none),
+        held(423, WindowAccessRole.Cell, 420, [58, 1], none, none),
+        held(500, WindowAccessRole.Group, 0, [59, 5], none, none),
+        held(501, WindowAccessRole.Button, 500, [64, 2], none, none),
+    ];
+    window.setAccessNodes(nodes[..], text.bytes());
+}
+
 fn give(window: borrow mut Window, volume: f64, focusField: bool) {
     //          0123456789012345678901234567890123456789012345678901234
     let text = "HeadingSaveAgreeAppleNameVolumeTabRowItemPickIconAlPear";
@@ -72,7 +116,11 @@ fn main() -> i32 {
         Ok(w) => w,
         Err(_) => { Console.writeLine("open failed"); return 1; }
     };
-    give(mut window, 4.0, true);
+    if (Process.argument(1) == Some("tree")) {
+        tree(mut window);
+    } else {
+        give(mut window, 4.0, true);
+    }
     Console.write("active ");
     Console.writeLine(window.accessActive());
     Console.writeLine("ready");
@@ -97,7 +145,7 @@ fn main() -> i32 {
                         WindowAccessAction.Increment => " increment",
                         WindowAccessAction.Decrement => " decrement",
                     });
-                    if (r.id == 2 && r.action == WindowAccessAction.Press) {
+                    if (r.id == 2 && r.action == WindowAccessAction.Press && Process.argument(1) != Some("tree")) {
                         // Pressed: the slider moves and the focus goes to Save, for the listener to hear.
                         give(mut window, 7.0, false);
                     }
@@ -133,6 +181,80 @@ EXPECTED = [
     ("combo box", "Pick", {"expandable", "expanded"}, set()),
     ("image", "Icon", set(), {"focusable"}),
 ]
+
+
+# The tree as pyatspi reads it (ADR 0207): each object's role, name, index in its container; an item's place in its
+# set (the posinset and setsize attributes, "3 of 40"); a table's rows and columns, its column headers and the
+# cells it finds by row and column.
+TREE_EXPECTED = [
+    "list Fruit index=0",
+    "  list item Apple index=0 place=3/40", "  list item Pear index=1 place=4/40",
+    "  list item Plum index=2 place=5/40",
+    "menu Edit index=1",
+    "  menu item Cut index=0 place=1/2", "  menu item Copy index=1 place=2/2",
+    "page tab list Views index=2",
+    "  page tab One index=0 place=1/2", "  page tab Two index=1 place=2/2",
+    "table Grid index=3 table=2x3 headers=Name,Size,Kind cells=Name,Size,Kind,A,1,x",
+    "  table row  index=0 place=1/2",
+    "    table column header Name index=0", "    table column header Size index=1",
+    "    table column header Kind index=2",
+    "  table row  index=1 place=2/2",
+    "    table cell A index=0", "    table cell 1 index=1", "    table cell x index=2",
+    "panel Tools index=4",
+    "  button Go index=0 place=1/1",
+]
+
+
+def tree_lines(pyatspi, element, depth, lines):
+    """What TREE_EXPECTED says of `element`'s children, and of theirs."""
+    for k in range(element.childCount):
+        child = element.getChildAtIndex(k)
+        line = f"{'  ' * depth}{child.getRoleName()} {child.name} index={child.getIndexInParent()}"
+        attributes = dict(a.split(":", 1) for a in child.getAttributes() if ":" in a)
+        if "posinset" in attributes:
+            line += f" place={attributes['posinset']}/{attributes.get('setsize')}"
+        if "Table" in pyatspi.listInterfaces(child):
+            table = child.queryTable()
+            headers = [table.getColumnHeader(c) for c in range(table.nColumns)]
+            cells = [table.getAccessibleAt(r, c) for r in range(table.nRows) for c in range(table.nColumns)]
+            line += (f" table={table.nRows}x{table.nColumns}" +
+                     f" headers={','.join(h.name if h is not None else '-' for h in headers)}" +
+                     f" cells={','.join(c.name if c is not None else '-' for c in cells)}")
+        if child.parent != element:
+            line += " (its parent is not its container)"
+        lines.append(line)
+        tree_lines(pyatspi, child, depth + 1, lines)
+    return lines
+
+
+def check_tree(exe, expect):
+    """The tree program, read from the accessibility bus as Orca reads it."""
+    program = subprocess.Popen([exe, "tree"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        program.stdout.readline()
+        line = program.stdout.readline().strip()
+        expect("the tree's window opens", line == "ready", line)
+        if line != "ready":
+            return
+        import pyatspi
+        frame = None
+        for _ in range(50):
+            apps = [a for a in pyatspi.Registry.getDesktop(0) if a is not None and a.name == "atspicheck"]
+            for a in apps:
+                if a.childCount > 0 and a.getChildAtIndex(0).childCount > 0:
+                    frame = a.getChildAtIndex(0)
+            if frame is not None:
+                break
+            time.sleep(0.2)
+        expect("the tree's frame", frame is not None, "not on the desktop")
+        if frame is None:
+            return
+        got = tree_lines(pyatspi, frame, 0, [])
+        expect("the containers, places and table (ADR 0207)", got == TREE_EXPECTED,
+               "expected\n  " + "\n  ".join(TREE_EXPECTED) + "\ngot\n  " + "\n  ".join(got))
+    finally:
+        program.terminate()
+        program.communicate(timeout=10)
 
 
 def main():
@@ -258,6 +380,7 @@ def main():
     asked = [l for l in out.splitlines() if l.startswith("asked")]
     expect("the program took the focus and the press", asked == ["asked 5 focus", "asked 2 press"], asked)
     expect("accessActive once asked", "active true" in out.splitlines(), out.splitlines()[:4])
+    check_tree(exe, expect)
     return report(problems, checks)
 
 

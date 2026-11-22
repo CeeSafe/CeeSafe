@@ -3662,7 +3662,11 @@ Diagnostics: none new.
     Group, List, Menu, MenuBar, Tab, DataGrid and DataItem (a row, a cell) and HeaderItem (a column header), an item
     its `PositionInSet` and `SizeOfSet`, a table the Grid and Table patterns (its cells by row and column, its column
     headers) and its cells and headers the GridItem and TableItem patterns; a table's row is invoked and selected as
-    a list's row is. Where a system's part has no containers yet (ADR 0207 §2.4: Linux, iOS and Android so far),
+    a list's row is. Under AT-SPI (Linux, FreeBSD) a node's parent is its container's object, a container's
+    children its own, with the roles panel, list, menu, menu bar, page tab list, table, table row, table cell and
+    table column header; an item has the attributes `posinset` and `setsize`; a table has the Table interface (its
+    rows and columns, its cells by row and column, its column headers) and its cells and headers the TableCell
+    interface. Where a system's part has no containers yet (ADR 0207 §2.4: iOS and Android so far),
     its list is ADR 0164's: containers are left out and what they hold is the window's, a table's `Row` is a
     `ListItem` and a `ColumnHeader` a `Button`; a `Row` with a name holds what is in it (left out), and in one with
     none only the `Cell`s are left out.

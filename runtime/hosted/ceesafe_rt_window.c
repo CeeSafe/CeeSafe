@@ -12715,8 +12715,10 @@ static int cee_x_load(void) {
    without an accessibility bus, windows work as before and no reader sees them. Every request is answered on the
    window thread, from the pump and the waits, which take the connection's descriptor too. A request makes the
    window's accessActive true, as on the other systems: something reads it. The roles, states and signatures are
-   at-spi2-core's (atspi-constants.h and xml/). */
+   at-spi2-core's (atspi-constants.h and xml/). Containers (ADR 0207) are objects too: a node's parent is its
+   container's object, or the frame's; the Table and TableCell interfaces describe a table. */
 #define CEE_WINDOW_ACCESS 1
+#define CEE_ACCESS_TREE 1
 
 typedef struct {
     const char *name;
@@ -12970,6 +12972,15 @@ static uint32_t cee_atspi_role(const struct cee_access_node *n) {
     case 8: return 35; /* MENU_ITEM */
     case 9: return 11; /* COMBO_BOX */
     case 10: return 27; /* IMAGE */
+    case CEE_ACCESS_GROUP: return 39;         /* PANEL */
+    case CEE_ACCESS_LIST: return 31;          /* LIST */
+    case CEE_ACCESS_MENU: return 33;          /* MENU */
+    case CEE_ACCESS_MENU_BAR: return 34;      /* MENU_BAR */
+    case CEE_ACCESS_TAB_LIST: return 38;      /* PAGE_TAB_LIST */
+    case CEE_ACCESS_TABLE: return 55;         /* TABLE */
+    case CEE_ACCESS_ROW: return 90;           /* TABLE_ROW */
+    case CEE_ACCESS_CELL: return 56;          /* TABLE_CELL */
+    case CEE_ACCESS_COLUMN_HEADER: return 57; /* TABLE_COLUMN_HEADER */
     default: return 29; /* LABEL */
     }
 }
@@ -12989,6 +13000,15 @@ static const char *cee_atspi_role_name(uint32_t role) {
     case 35: return "menu item";
     case 11: return "combo box";
     case 27: return "image";
+    case 39: return "panel";
+    case 31: return "list";
+    case 33: return "menu";
+    case 34: return "menu bar";
+    case 38: return "page tab list";
+    case 55: return "table";
+    case 90: return "table row";
+    case 56: return "table cell";
+    case 57: return "table column header";
     default: return "label";
     }
 }
@@ -12997,6 +13017,57 @@ static const char *cee_atspi_role_name(uint32_t role) {
 static int cee_atspi_acts(const struct cee_access_node *n) { return n->role != 0 && n->role != 4 && n->role != 5 && n->role != 10; }
 static int cee_atspi_valued(const struct cee_access_node *n) { return n->role == 5; }
 static int cee_atspi_texted(const struct cee_access_node *n) { return n->role == 4; }
+/* A table and its cells and column headers (ADR 0207). */
+static int cee_atspi_tabled(const struct cee_access_node *n) { return n->role == CEE_ACCESS_TABLE; }
+static int cee_atspi_celled(const struct cee_access_node *n) {
+    return n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER;
+}
+
+/* The tree (ADR 0207), in the list: the children of node `up` (CEE_ACCESS_TOP for the frame) are the nodes whose
+   container it is, in list order. */
+static int32_t cee_atspi_child_count(struct cee_window *w, uint32_t up) {
+    int32_t count = 0;
+    for (uint32_t k = 0; k < w->access_count; k++) {
+        count += w->access[k].up == up;
+    }
+    return count;
+}
+static int64_t cee_atspi_child_at(struct cee_window *w, uint32_t up, int32_t at) {
+    for (uint32_t k = 0; k < w->access_count && at >= 0; k++) {
+        if (w->access[k].up == up && at-- == 0) {
+            return (int64_t)k;
+        }
+    }
+    return -2;
+}
+/* Node k's index among its container's children, in `nodes`. */
+static int32_t cee_atspi_place(const struct cee_access_node *nodes, uint32_t k) {
+    int32_t at = 0;
+    for (uint32_t j = 0; j < k; j++) {
+        at += nodes[j].up == nodes[k].up;
+    }
+    return at;
+}
+/* The table a cell or column header is in (its row's container), or -2. */
+static int64_t cee_atspi_table_of(struct cee_window *w, uint32_t k) {
+    uint32_t row = w->access[k].up;
+    if (row == CEE_ACCESS_TOP || w->access[row].role != CEE_ACCESS_ROW || w->access[row].up == CEE_ACCESS_TOP ||
+        w->access[w->access[row].up].role != CEE_ACCESS_TABLE) {
+        return -2;
+    }
+    return (int64_t)w->access[row].up;
+}
+/* The cell or column header of table `t` at `row` and `column`, from 0; -2 for none. */
+static int64_t cee_atspi_cell_at(struct cee_window *w, uint32_t t, int32_t row, int32_t column) {
+    for (uint32_t k = t + 1u; k < w->access_count && row >= 0 && column >= 0; k++) {
+        const struct cee_access_node *c = &w->access[k];
+        if (cee_atspi_celled(c) && c->row == (uint32_t)row + 1u && c->column == (uint32_t)column + 1u &&
+            cee_atspi_table_of(w, k) == (int64_t)t) {
+            return (int64_t)k;
+        }
+    }
+    return -2;
+}
 
 /* The state set, two words of AtspiStateType bits. */
 static void cee_atspi_states(struct cee_window *w, int64_t index, uint32_t words[2]) {
@@ -13273,6 +13344,9 @@ static int cee_atspi_property(cee_dbus_iter *out, struct cee_window *w, int64_t 
             if (w == NULL) {
                 CEE_ATSPI_VARIANT("(so)", cee_atspi_desktop(&v));
             }
+            if (n != NULL && n->up != CEE_ACCESS_TOP) {
+                CEE_ATSPI_VARIANT("(so)", cee_atspi_ref(&v, w, (int64_t)n->up)); /* its container (ADR 0207) */
+            }
             CEE_ATSPI_VARIANT("(so)", cee_atspi_ref(&v, n != NULL ? w : NULL, -1));
         }
         if (strcmp(name, "ChildCount") == 0) {
@@ -13281,8 +13355,8 @@ static int cee_atspi_property(cee_dbus_iter *out, struct cee_window *w, int64_t 
                 for (struct cee_window *e = cee_wake_windows; e != NULL; e = e->wake_link) {
                     count += !e->scripted && e->native != NULL;
                 }
-            } else if (n == NULL) {
-                count = (int32_t)w->access_count;
+            } else {
+                count = cee_atspi_child_count(w, n == NULL ? CEE_ACCESS_TOP : (uint32_t)index);
             }
             CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, count));
         }
@@ -13338,6 +13412,42 @@ static int cee_atspi_property(cee_dbus_iter *out, struct cee_window *w, int64_t 
     } else if (strcmp(interface, "org.a11y.atspi.Action") == 0 && n != NULL && cee_atspi_acts(n)) {
         if (strcmp(name, "NActions") == 0) {
             CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, 1));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.Table") == 0 && n != NULL && cee_atspi_tabled(n)) {
+        if (strcmp(name, "NRows") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, (int32_t)n->rows));
+        }
+        if (strcmp(name, "NColumns") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, (int32_t)n->columns));
+        }
+        if (strcmp(name, "NSelectedRows") == 0 || strcmp(name, "NSelectedColumns") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, 0));
+        }
+        if (strcmp(name, "Caption") == 0 || strcmp(name, "Summary") == 0) {
+            CEE_ATSPI_VARIANT("(so)", cee_atspi_ref(&v, NULL, -2));
+        }
+        if (strcmp(name, "version") == 0) {
+            CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
+        }
+    } else if (strcmp(interface, "org.a11y.atspi.TableCell") == 0 && n != NULL && cee_atspi_celled(n)) {
+        if (strcmp(name, "RowSpan") == 0 || strcmp(name, "ColumnSpan") == 0) {
+            CEE_ATSPI_VARIANT("i", cee_atspi_int(&v, 1));
+        }
+        if (strcmp(name, "Position") == 0) {
+            cee_dbus_iter r;
+            cee_dbus.open_container(out, 'v', "(ii)", &v);
+            cee_dbus.open_container(&v, 'r', NULL, &r);
+            cee_atspi_int(&r, n->row > 0 ? (int32_t)n->row - 1 : 0);
+            cee_atspi_int(&r, n->column > 0 ? (int32_t)n->column - 1 : 0);
+            cee_dbus.close_container(&v, &r);
+            cee_dbus.close_container(out, &v);
+            return 1;
+        }
+        if (strcmp(name, "Table") == 0) {
+            CEE_ATSPI_VARIANT("(so)", cee_atspi_ref(&v, w, cee_atspi_table_of(w, (uint32_t)index)));
         }
         if (strcmp(name, "version") == 0) {
             CEE_ATSPI_VARIANT("u", cee_atspi_uint(&v, 1));
@@ -13415,9 +13525,12 @@ static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee
                         cee_atspi_ref(&s, f, -1);
                     }
                 }
-            } else if (n == NULL) {
+            } else {
+                uint32_t up = n == NULL ? CEE_ACCESS_TOP : (uint32_t)index; /* ADR 0207: a container's too */
                 for (uint32_t k = 0; k < w->access_count; k++) {
-                    cee_atspi_ref(&s, w, (int64_t)k);
+                    if (w->access[k].up == up) {
+                        cee_atspi_ref(&s, w, (int64_t)k);
+                    }
                 }
             }
             cee_dbus.close_container(&it, &s);
@@ -13437,8 +13550,9 @@ static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee
                         return 1;
                     }
                 }
-            } else if (n == NULL && at >= 0 && (uint32_t)at < w->access_count) {
-                cee_atspi_ref(&it, w, at);
+            } else {
+                int64_t k = cee_atspi_child_at(w, n == NULL ? CEE_ACCESS_TOP : (uint32_t)index, at);
+                cee_atspi_ref(&it, k >= 0 ? w : NULL, k);
                 return 1;
             }
             cee_atspi_ref(&it, NULL, -2);
@@ -13447,7 +13561,7 @@ static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee
         if (strcmp(member, "GetIndexInParent") == 0) {
             int32_t at = -1;
             if (n != NULL) {
-                at = (int32_t)index;
+                at = cee_atspi_place(w->access, (uint32_t)index); /* among its container's children */
             } else if (w != NULL) {
                 int32_t k = 0;
                 for (struct cee_window *f = cee_wake_windows; f != NULL; f = f->wake_link) {
@@ -13473,6 +13587,20 @@ static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee
             cee_atspi_string(&e, "toolkit");
             cee_atspi_string(&e, "CeeSafe");
             cee_dbus.close_container(&s, &e);
+            if (n != NULL && n->up != CEE_ACCESS_TOP && n->row > 0 && n->column == 0) {
+                /* An item's place in its container, "3 of 40" (ADR 0207): ARIA's attributes, which Orca reads. */
+                char number[16];
+                snprintf(number, sizeof number, "%u", n->row);
+                cee_dbus.open_container(&s, 'e', NULL, &e);
+                cee_atspi_string(&e, "posinset");
+                cee_atspi_string(&e, number);
+                cee_dbus.close_container(&s, &e);
+                snprintf(number, sizeof number, "%u", w->access[n->up].rows);
+                cee_dbus.open_container(&s, 'e', NULL, &e);
+                cee_atspi_string(&e, "setsize");
+                cee_atspi_string(&e, number);
+                cee_dbus.close_container(&s, &e);
+            }
             cee_dbus.close_container(&it, &s);
             return 1;
         }
@@ -13495,6 +13623,96 @@ static int cee_atspi_answer(cee_dbus_message *m, cee_dbus_message *r, struct cee
                 }
                 if (n != NULL && cee_atspi_texted(n)) {
                     cee_atspi_string(&s, "org.a11y.atspi.Text");
+                }
+                if (n != NULL && cee_atspi_tabled(n)) {
+                    cee_atspi_string(&s, "org.a11y.atspi.Table");
+                }
+                if (n != NULL && cee_atspi_celled(n)) {
+                    cee_atspi_string(&s, "org.a11y.atspi.TableCell");
+                }
+            }
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.Table") == 0 && n != NULL && cee_atspi_tabled(n)) {
+        int32_t row = 0, column = 0;
+        int32_t columns = n->columns > 0 ? (int32_t)n->columns : 1;
+        if (strcmp(member, "GetAccessibleAt") == 0 || strcmp(member, "GetIndexAt") == 0 ||
+            strcmp(member, "GetRowExtentAt") == 0 || strcmp(member, "GetColumnExtentAt") == 0 ||
+            strcmp(member, "IsSelected") == 0) {
+            void *args[] = {&row, &column};
+            if (!cee_atspi_args(m, "ii", args)) {
+                return 0;
+            }
+            if (strcmp(member, "GetAccessibleAt") == 0) {
+                int64_t k = cee_atspi_cell_at(w, (uint32_t)index, row, column);
+                cee_atspi_ref(&it, k >= 0 ? w : NULL, k);
+            } else if (strcmp(member, "GetIndexAt") == 0) {
+                cee_atspi_int(&it, row * columns + column);
+            } else if (strcmp(member, "IsSelected") == 0) {
+                cee_atspi_bool(&it, 0);
+            } else {
+                cee_atspi_int(&it, 1);
+            }
+            return 1;
+        }
+        if (strcmp(member, "GetRowAtIndex") == 0 || strcmp(member, "GetColumnAtIndex") == 0 ||
+            strcmp(member, "GetColumnHeader") == 0 || strcmp(member, "GetRowHeader") == 0 ||
+            strcmp(member, "GetRowDescription") == 0 || strcmp(member, "GetColumnDescription") == 0 ||
+            strcmp(member, "IsRowSelected") == 0 || strcmp(member, "IsColumnSelected") == 0) {
+            int32_t at = 0;
+            void *args[] = {&at};
+            if (!cee_atspi_args(m, "i", args)) {
+                return 0;
+            }
+            if (strcmp(member, "GetRowAtIndex") == 0) {
+                cee_atspi_int(&it, at / columns);
+            } else if (strcmp(member, "GetColumnAtIndex") == 0) {
+                cee_atspi_int(&it, at % columns);
+            } else if (strcmp(member, "GetColumnHeader") == 0) {
+                /* the column's header: the column header of that column, in whatever row has them */
+                int64_t found = -2;
+                for (uint32_t k = (uint32_t)index + 1u; k < w->access_count && found < 0; k++) {
+                    if (w->access[k].role == CEE_ACCESS_COLUMN_HEADER && w->access[k].column == (uint32_t)at + 1u &&
+                        cee_atspi_table_of(w, k) == index) {
+                        found = (int64_t)k;
+                    }
+                }
+                cee_atspi_ref(&it, found >= 0 ? w : NULL, found);
+            } else if (strcmp(member, "GetRowHeader") == 0) {
+                cee_atspi_ref(&it, NULL, -2);
+            } else if (strcmp(member, "GetRowDescription") == 0 || strcmp(member, "GetColumnDescription") == 0) {
+                cee_atspi_string(&it, "");
+            } else {
+                cee_atspi_bool(&it, 0);
+            }
+            return 1;
+        }
+        if (strcmp(member, "GetSelectedRows") == 0 || strcmp(member, "GetSelectedColumns") == 0) {
+            cee_dbus.open_container(&it, 'a', "i", &s);
+            cee_dbus.close_container(&it, &s);
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(interface, "org.a11y.atspi.TableCell") == 0 && n != NULL && cee_atspi_celled(n)) {
+        if (strcmp(member, "GetRowColumnSpan") == 0) {
+            cee_atspi_int(&it, n->row > 0 ? (int32_t)n->row - 1 : 0);
+            cee_atspi_int(&it, n->column > 0 ? (int32_t)n->column - 1 : 0);
+            cee_atspi_int(&it, 1);
+            cee_atspi_int(&it, 1);
+            return 1;
+        }
+        if (strcmp(member, "GetColumnHeaderCells") == 0 || strcmp(member, "GetRowHeaderCells") == 0) {
+            cee_dbus.open_container(&it, 'a', "(so)", &s);
+            int64_t t = cee_atspi_table_of(w, (uint32_t)index);
+            for (uint32_t k = t >= 0 ? (uint32_t)t + 1u : w->access_count;
+                 strcmp(member, "GetColumnHeaderCells") == 0 && n->role == CEE_ACCESS_CELL && k < w->access_count; k++) {
+                if (w->access[k].role == CEE_ACCESS_COLUMN_HEADER && w->access[k].column == n->column &&
+                    cee_atspi_table_of(w, k) == t) {
+                    cee_atspi_ref(&s, w, (int64_t)k);
                 }
             }
             cee_dbus.close_container(&it, &s);
@@ -14002,14 +14220,19 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
             char path[160];
             snprintf(path, sizeof path, "%s%u_%llu", CEE_ATSPI_PREFIX, ((struct cee_x11 *)w->native)->atspi_serial,
                      (unsigned long long)old[j].id);
-            char frame[160];
-            cee_atspi_path(frame, sizeof frame, w, -1);
+            char frame[160]; /* its container's object (ADR 0207), or the frame's */
+            if (old[j].parent != 0) {
+                snprintf(frame, sizeof frame, "%s%u_%llu", CEE_ATSPI_PREFIX, ((struct cee_x11 *)w->native)->atspi_serial,
+                         (unsigned long long)old[j].parent);
+            } else {
+                cee_atspi_path(frame, sizeof frame, w, -1);
+            }
             cee_dbus_message *s = cee_dbus.new_signal(frame, "org.a11y.atspi.Event.Object", "ChildrenChanged");
             if (s != NULL) {
                 cee_dbus_iter it, v, r, d;
                 cee_dbus.iter_init_append(s, &it);
                 cee_atspi_string(&it, "remove");
-                cee_atspi_int(&it, (int32_t)j);
+                cee_atspi_int(&it, cee_atspi_place(old, j));
                 cee_atspi_int(&it, 0);
                 cee_dbus.open_container(&it, 'v', "(so)", &v);
                 cee_dbus.open_container(&v, 'r', NULL, &r);
@@ -14040,8 +14263,10 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
         }
         if (j == old_count) {
             struct cee_atspi_child c = {w, (int64_t)k};
-            cee_atspi_signal(w, -1, "org.a11y.atspi.Event.Object", "ChildrenChanged", "add", (int32_t)k, 0, "(so)",
-                             cee_atspi_any_child, &c);
+            /* told to its container (ADR 0207), with its index among the container's children */
+            cee_atspi_signal(w, n->up == CEE_ACCESS_TOP ? -1 : (int64_t)n->up, "org.a11y.atspi.Event.Object",
+                             "ChildrenChanged", "add", cee_atspi_place(w->access, k), 0, "(so)", cee_atspi_any_child,
+                             &c);
             if ((n->flags & CEE_ACCESS_FOCUSED) != 0) {
                 cee_atspi_state_changed(w, (int64_t)k, "focused", 1);
             }

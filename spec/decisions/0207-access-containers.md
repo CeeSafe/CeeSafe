@@ -197,3 +197,26 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
   listboxes were not reached by the keys at all, so a reader following the focus never came to them; ClayWind
   fixed that (they are Tab stops now, and their chosen row or tab is the focused element). A script's arrows must
   be sent as extended keys: without that flag they are the numeric keypad's, which NVDA takes for its review keys.
+
+## 9. Step 3 as implemented: Linux and FreeBSD (2026-11-23)
+
+`runtime/hosted/ceesafe_rt_window.c` (the AT-SPI part), type-system.md §26.13, `tools/atspi_check.py`.
+
+- **The tree**: `CEE_ACCESS_TREE` for Linux and FreeBSD. An object's `Parent` is its container's object (the
+  frame's for the top level); `ChildCount`, `GetChildren` and `GetChildAtIndex` are a container's own children, the
+  frame's the top level's; `GetIndexInParent` its index among its container's children. An object's path is still
+  its id, so it is the same object wherever it moves. `ChildrenChanged` is sent on the container, with the index
+  among its children (a removed element's, from the old list, on its old container).
+- **Roles**: panel, list, menu, menu bar, page tab list, table, table row, table cell, table column header.
+- **Places**: an item of a container has the object attributes `posinset` and `setsize`, ARIA's, which Orca reads.
+- **Tables**: a table has the Table interface (`NRows`, `NColumns`, `GetAccessibleAt` by row and column from 0,
+  `GetColumnHeader`, `GetRowAtIndex` and `GetColumnAtIndex` over a row-major index, no selection, no caption);
+  its cells and headers the TableCell interface (`Position`, spans of 1, `Table`, `GetRowColumnSpan`, a cell's
+  `GetColumnHeaderCells`).
+- **Checked** (Fedora 45 VM, GNOME): `atspi_check` reads window_check's tree through pyatspi, as Orca reads it: each
+  object's role, name and index in its container, the items' places ("3 of 40" from the program, the rest counted),
+  the table's 2 by 3 with its column headers and its six cells found by row and column; 55 checks, 0 problems,
+  under Wayland and under X11. `window_check --display` 82 of 82. **Orca** (51.0) with ClayWind's demo, driven with
+  GNOME's real pointer and keys (Mutter's RemoteDesktop) while a logging Orca stood in for GNOME's (the screen
+  reader setting off meanwhile, and back on after): "table with 10001 rows 4 columns", "Frances Allen", Down
+  "Barbara Liskov"; "Selection page tab", Right "Lists page tab"; "List with 6 items", "README.md", Down "main.c".

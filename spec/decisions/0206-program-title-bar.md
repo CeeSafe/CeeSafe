@@ -1,7 +1,8 @@
 # ADR 0206 — A title bar the program draws
 
-- Status: **Proposed**, 2026-11-22, as ADR 0205's step 3 (the owner: "I prefer the cairo plugin. Then we draw
-  CeeSafe's own title bar"). Not yet accepted.
+- Status: **Accepted** by the owner, 2026-11-22 ("Go ahead I'm with you in all 1-3": the layout, Wayland then
+  Windows then macOS and X11, ClayWind's demo with its own bar on each system as it comes), as ADR 0205's step 3 (the
+  owner: "I prefer the cairo plugin. Then we draw CeeSafe's own title bar").
 - Scope: `lib/std/window.cee` (an open option, a title bar's layout, three window actions), `runtime/hosted/
   ceesafe_rt_window.c` (Wayland first; Windows and macOS later steps), type-system.md §26.13, `tools/window_check.py`.
   No language or compiler change.
@@ -82,7 +83,7 @@
 - `window_check`: the API in `CEESAFE_WINDOW_SCRIPT` runs (the layout logged, the actions as script lines).
 - ClayWind's demo with its own title bar, checked by the owner.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered: the proposals, all three)
 
 1. **The API**: a layout the program gives (proposed, §2.2), or actions it calls (§3)?
 2. **The order**: Wayland, then Windows, then macOS and X11 (proposed), or only Wayland for now?

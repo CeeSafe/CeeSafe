@@ -6133,6 +6133,7 @@ static HCURSOR cee_win32_cursor(int32_t cursor) {
    oleaut32.dll, loaded at first use, so no program needs a header or a link flag. NVDA and Narrator read through
    these. */
 #define CEE_WINDOW_ACCESS 1
+#define CEE_ACCESS_TREE 1 /* ADR 0207: UI Automation's tree, its Grid and Table patterns */
 
 static const IID cee_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
 static const IID cee_iid_uia_simple = {0xd6dd68d1, 0x86fd, 0x4332, {0x86, 0x66, 0x9a, 0xbe, 0xde, 0xa2, 0xd2, 0x4c}};
@@ -6144,6 +6145,11 @@ static const IID cee_iid_uia_range = {0x36dc7aef, 0x33e6, 0x4691, {0xaf, 0xe1, 0
 static const IID cee_iid_uia_value = {0xc7935180, 0x6fb3, 0x4201, {0xb1, 0x74, 0x7d, 0xf7, 0x3a, 0xdb, 0xf6, 0x4a}};
 static const IID cee_iid_uia_selection = {0x2acad808, 0xb2d4, 0x452d, {0xa4, 0x07, 0x91, 0xff, 0x1a, 0xd1, 0x67, 0xb2}};
 static const IID cee_iid_uia_expand = {0xd847d3a5, 0xcab0, 0x4a98, {0x8c, 0x32, 0xec, 0xb4, 0x5c, 0x59, 0xad, 0x24}};
+/* ADR 0207: a table's (IGridProvider, ITableProvider) and its cells' (IGridItemProvider, ITableItemProvider). */
+static const IID cee_iid_uia_grid = {0xb17d6187, 0x0907, 0x464b, {0xa1, 0x68, 0x0e, 0xf1, 0x7a, 0x15, 0x72, 0xb1}};
+static const IID cee_iid_uia_grid_item = {0xd02541f1, 0xfb81, 0x4d64, {0xae, 0x32, 0xf5, 0x20, 0xf8, 0xa6, 0xdb, 0xd1}};
+static const IID cee_iid_uia_table = {0x9c860395, 0x97b3, 0x490a, {0xb5, 0x2a, 0x85, 0x8c, 0xc2, 0x2a, 0xf1, 0x66}};
+static const IID cee_iid_uia_table_item = {0xb9734fa6, 0x771f, 0x4d78, {0x9c, 0x90, 0x25, 0x17, 0x99, 0x93, 0x49, 0xcd}};
 
 /* UI Automation's numbers (UIAutomationClient.h). */
 #define CEE_UIA_ROOT_OBJECT (-25)
@@ -6156,6 +6162,12 @@ static const IID cee_iid_uia_expand = {0xd847d3a5, 0xcab0, 0x4a98, {0x8c, 0x32, 
 #define CEE_UIA_PATTERN_EXPAND 10005
 #define CEE_UIA_PATTERN_SELECTION_ITEM 10010
 #define CEE_UIA_PATTERN_TOGGLE 10015
+#define CEE_UIA_PATTERN_GRID 10006
+#define CEE_UIA_PATTERN_GRID_ITEM 10007
+#define CEE_UIA_PATTERN_TABLE 10012
+#define CEE_UIA_PATTERN_TABLE_ITEM 10013
+#define CEE_UIA_PROPERTY_POSITION_IN_SET 30152 /* Windows 10 1703 on: "3 of 40" */
+#define CEE_UIA_PROPERTY_SIZE_OF_SET 30153
 #define CEE_UIA_PROPERTY_CONTROL_TYPE 30003
 #define CEE_UIA_PROPERTY_NAME 30005
 #define CEE_UIA_PROPERTY_HAS_FOCUS 30008
@@ -6258,6 +6270,40 @@ struct cee_uia_expand_vtbl {
     HRESULT(STDMETHODCALLTYPE *state)(void *self, int *out);
 };
 
+struct cee_uia_grid_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *item)(void *self, int row, int column, void **out);
+    HRESULT(STDMETHODCALLTYPE *rows)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *columns)(void *self, int *out);
+};
+struct cee_uia_grid_item_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *row)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *column)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *row_span)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *column_span)(void *self, int *out);
+    HRESULT(STDMETHODCALLTYPE *grid)(void *self, void **out);
+};
+struct cee_uia_table_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *row_headers)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *column_headers)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *major)(void *self, int *out);
+};
+struct cee_uia_table_item_vtbl {
+    HRESULT(STDMETHODCALLTYPE *query)(void *self, REFIID iid, void **out);
+    ULONG(STDMETHODCALLTYPE *add_ref)(void *self);
+    ULONG(STDMETHODCALLTYPE *release)(void *self);
+    HRESULT(STDMETHODCALLTYPE *row_headers)(void *self, SAFEARRAY **out);
+    HRESULT(STDMETHODCALLTYPE *column_headers)(void *self, SAFEARRAY **out);
+};
+
 /* The window's provider: a fragment root. `w` is NULL once the window closed. */
 struct cee_uia_root {
     const struct cee_uia_simple_vtbl *simple;
@@ -6278,6 +6324,10 @@ struct cee_uia_element {
     const struct cee_uia_value_vtbl *value;
     const struct cee_uia_selection_vtbl *selection;
     const struct cee_uia_expand_vtbl *expand;
+    const struct cee_uia_grid_vtbl *grid;
+    const struct cee_uia_grid_item_vtbl *grid_item;
+    const struct cee_uia_table_vtbl *table;
+    const struct cee_uia_table_item_vtbl *table_item;
     LONG refs;
     struct cee_window *w;
     uint64_t id;
@@ -6370,6 +6420,53 @@ static const struct cee_access_node *cee_uia_node(struct cee_uia_element *e) {
     return NULL;
 }
 
+/* The tree (ADR 0207), in the list: from node `at` (CEE_ACCESS_TOP for the window), the next sibling (1), the one
+   before (2), the first child (3) or the last (4); -1 for none. A node's children come after it, in list order. */
+static int64_t cee_uia_relative(struct cee_window *w, uint32_t count, uint32_t at, int direction) {
+    if (count > w->access_count) {
+        count = w->access_count;
+    }
+    const struct cee_access_node *nodes = w->access;
+    if (direction == 1 || direction == 2) {
+        uint32_t up = nodes[at].up;
+        if (direction == 1) {
+            for (uint32_t k = at + 1u; k < count; k++) {
+                if (nodes[k].up == up) {
+                    return (int64_t)k;
+                }
+            }
+        } else {
+            for (uint32_t k = at; k-- > 0;) {
+                if (nodes[k].up == up) {
+                    return (int64_t)k;
+                }
+            }
+        }
+        return -1;
+    }
+    uint32_t from = at == CEE_ACCESS_TOP ? 0u : at + 1u;
+    int64_t found = -1;
+    for (uint32_t k = from; k < count; k++) {
+        if (nodes[k].up == at) {
+            found = (int64_t)k;
+            if (direction == 3) {
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+/* The table node `t` is in, for a cell or a header (its row's container), or -1. */
+static int64_t cee_uia_table_of(const struct cee_access_node *nodes, uint32_t count, uint32_t k) {
+    uint32_t row = nodes[k].up;
+    if (row == CEE_ACCESS_TOP || row >= count || nodes[row].role != CEE_ACCESS_ROW) {
+        return -1;
+    }
+    uint32_t table = nodes[row].up;
+    return table != CEE_ACCESS_TOP && table < count && nodes[table].role == CEE_ACCESS_TABLE ? (int64_t)table : -1;
+}
+
 /* A client asks `action` of the element: kept for the window's pump, which is woken. */
 static HRESULT cee_uia_ask(struct cee_uia_element *e, int32_t action) {
     HRESULT result = CEE_UIA_E_NOT_AVAILABLE;
@@ -6416,6 +6513,14 @@ static HRESULT cee_uia_element_query(struct cee_uia_element *e, REFIID iid, void
         *out = &e->selection;
     } else if (IsEqualIID(iid, &cee_iid_uia_expand)) {
         *out = &e->expand;
+    } else if (IsEqualIID(iid, &cee_iid_uia_grid)) {
+        *out = &e->grid;
+    } else if (IsEqualIID(iid, &cee_iid_uia_grid_item)) {
+        *out = &e->grid_item;
+    } else if (IsEqualIID(iid, &cee_iid_uia_table)) {
+        *out = &e->table;
+    } else if (IsEqualIID(iid, &cee_iid_uia_table_item)) {
+        *out = &e->table_item;
     } else {
         return E_NOINTERFACE;
     }
@@ -6450,6 +6555,10 @@ CEE_UIA_ELEMENT_UNKNOWN(erange, range)
 CEE_UIA_ELEMENT_UNKNOWN(evalue, value)
 CEE_UIA_ELEMENT_UNKNOWN(eselection, selection)
 CEE_UIA_ELEMENT_UNKNOWN(eexpand, expand)
+CEE_UIA_ELEMENT_UNKNOWN(egrid, grid)
+CEE_UIA_ELEMENT_UNKNOWN(egriditem, grid_item)
+CEE_UIA_ELEMENT_UNKNOWN(etable, table)
+CEE_UIA_ELEMENT_UNKNOWN(etableitem, table_item)
 
 static HRESULT STDMETHODCALLTYPE cee_uia_options(void *self, int *out) {
     (void)self;
@@ -6461,7 +6570,9 @@ static HRESULT STDMETHODCALLTYPE cee_uia_options(void *self, int *out) {
 }
 
 /* The pattern a role has: a button is invoked, a checkbox toggled, a radio button, a tab and a list's row selected,
-   a slider has a range, a field and a dropdown a value, a dropdown and a menu's item are also expanded. */
+   a slider has a range, a field and a dropdown a value, a dropdown and a menu's item are also expanded. ADR 0207: a
+   table's row is invoked and selected as a list's row is, a column header invoked (it sorts); a table is a grid and
+   a table, its cells and headers grid items and table items. */
 static HRESULT STDMETHODCALLTYPE cee_uia_element_pattern(void *self, int pattern, void **out) {
     struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
     if (out == NULL) {
@@ -6475,12 +6586,23 @@ static HRESULT STDMETHODCALLTYPE cee_uia_element_pattern(void *self, int pattern
     if (n == NULL) {
         return CEE_UIA_E_NOT_AVAILABLE;
     }
-    if (pattern == CEE_UIA_PATTERN_INVOKE && (role == 1 || role == 7 || role == 8)) {
+    int cell = role == CEE_ACCESS_CELL || role == CEE_ACCESS_COLUMN_HEADER;
+    if (pattern == CEE_UIA_PATTERN_INVOKE &&
+        (role == 1 || role == 7 || role == 8 || role == CEE_ACCESS_ROW || role == CEE_ACCESS_COLUMN_HEADER)) {
         *out = &e->invoke;
     } else if (pattern == CEE_UIA_PATTERN_TOGGLE && role == 2) {
         *out = &e->toggle;
-    } else if (pattern == CEE_UIA_PATTERN_SELECTION_ITEM && (role == 3 || role == 6 || role == 7)) {
+    } else if (pattern == CEE_UIA_PATTERN_SELECTION_ITEM &&
+               (role == 3 || role == 6 || role == 7 || role == CEE_ACCESS_ROW)) {
         *out = &e->selection;
+    } else if (pattern == CEE_UIA_PATTERN_GRID && role == CEE_ACCESS_TABLE) {
+        *out = &e->grid;
+    } else if (pattern == CEE_UIA_PATTERN_TABLE && role == CEE_ACCESS_TABLE) {
+        *out = &e->table;
+    } else if (pattern == CEE_UIA_PATTERN_GRID_ITEM && cell) {
+        *out = &e->grid_item;
+    } else if (pattern == CEE_UIA_PATTERN_TABLE_ITEM && cell) {
+        *out = &e->table_item;
     } else if (pattern == CEE_UIA_PATTERN_RANGE && role == 5) {
         *out = &e->range;
     } else if (pattern == CEE_UIA_PATTERN_VALUE && (role == 4 || role == 9)) {
@@ -6495,8 +6617,10 @@ static HRESULT STDMETHODCALLTYPE cee_uia_element_pattern(void *self, int pattern
 }
 
 static HRESULT STDMETHODCALLTYPE cee_uia_element_property(void *self, int property, VARIANT *out) {
-    /* Text, Button, CheckBox, RadioButton, Edit, Slider, TabItem, ListItem, MenuItem, ComboBox, Image. */
-    static const LONG types[CEE_ACCESS_ROLES] = {50020, 50000, 50002, 50013, 50004, 50015, 50019, 50007, 50011, 50003, 50006};
+    /* Text, Button, CheckBox, RadioButton, Edit, Slider, TabItem, ListItem, MenuItem, ComboBox, Image; ADR 0207's
+       Group, List, Menu, MenuBar, Tab (a tab list), DataGrid, DataItem (a row), DataItem (a cell), HeaderItem. */
+    static const LONG types[CEE_ACCESS_ROLES] = {50020, 50000, 50002, 50013, 50004, 50015, 50019, 50007, 50011, 50003,
+                                                 50006, 50026, 50008, 50009, 50010, 50018, 50028, 50029, 50029, 50035};
     struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, simple, self);
     if (out == NULL) {
         return E_POINTER;
@@ -6550,6 +6674,13 @@ static HRESULT STDMETHODCALLTYPE cee_uia_element_property(void *self, int proper
         V_VT(out) = VT_BOOL;
         V_BOOL(out) = (n->flags & CEE_ACCESS_SECURE) != 0 ? VARIANT_TRUE : VARIANT_FALSE;
         break;
+    case CEE_UIA_PROPERTY_POSITION_IN_SET: /* an item's place in its container, "3 of 40" (ADR 0207) */
+    case CEE_UIA_PROPERTY_SIZE_OF_SET:
+        if (n->up != CEE_ACCESS_TOP && n->row > 0 && n->column == 0) {
+            V_VT(out) = VT_I4;
+            V_I4(out) = property == CEE_UIA_PROPERTY_POSITION_IN_SET ? (LONG)n->row : (LONG)e->w->access[n->up].rows;
+        }
+        break;
     default:
         break;
     }
@@ -6578,17 +6709,18 @@ static HRESULT STDMETHODCALLTYPE cee_uia_element_navigate(void *self, int direct
     struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
     if (m == NULL) {
         result = CEE_UIA_E_NOT_AVAILABLE;
-    } else if (direction == 0 && m->uia_root != NULL) { /* the parent */
-        InterlockedIncrement(&m->uia_root->refs);
-        *out = &m->uia_root->fragment;
-    } else if (direction == 1 || direction == 2) { /* the next sibling, the one before */
+    } else if (direction == 0 && (n->up == CEE_ACCESS_TOP || n->up >= m->uia_count)) { /* the parent: the window */
+        if (m->uia_root != NULL) {
+            InterlockedIncrement(&m->uia_root->refs);
+            *out = &m->uia_root->fragment;
+        }
+    } else {
+        /* The tree (ADR 0207): its container, the siblings in it, its own children. */
         uint32_t at = (uint32_t)(n - e->w->access);
-        if ((direction == 1 && at + 1u < m->uia_count) || (direction == 2 && at > 0)) {
-            struct cee_uia_element *other = m->uia_elements[direction == 1 ? at + 1u : at - 1u];
-            if (other != NULL) {
-                InterlockedIncrement(&other->refs);
-                *out = &other->fragment;
-            }
+        int64_t k = direction == 0 ? (int64_t)n->up : cee_uia_relative(e->w, m->uia_count, at, direction);
+        if (k >= 0 && m->uia_elements[k] != NULL) {
+            InterlockedIncrement(&m->uia_elements[k]->refs);
+            *out = &m->uia_elements[k]->fragment;
         }
     }
     LeaveCriticalSection(&cee_uia.lock);
@@ -6815,12 +6947,179 @@ static HRESULT STDMETHODCALLTYPE cee_uia_is_selected(void *self, BOOL *out) {
     return on < 0 ? CEE_UIA_E_NOT_AVAILABLE : S_OK;
 }
 
+/* The container a selected item is chosen in: its list, tab list or table (ADR 0207); none at the top level. */
 static HRESULT STDMETHODCALLTYPE cee_uia_selection_container(void *self, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, selection, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL && n->up != CEE_ACCESS_TOP && n->up < m->uia_count && m->uia_elements[n->up] != NULL) {
+        InterlockedIncrement(&m->uia_elements[n->up]->refs);
+        *out = &m->uia_elements[n->up]->simple;
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+/* ---- Tables (ADR 0207): the Grid and Table patterns of a table, the GridItem and TableItem patterns of its cells
+   and column headers. A cell's place is its node's row and column, from 1 there, from 0 here. */
+
+/* The provider of node `k`, with a reference for the caller, or NULL. The lock is held. */
+static void *cee_uia_provider_at(struct cee_win32 *m, int64_t k) {
+    if (k < 0 || (uint32_t)k >= m->uia_count || m->uia_elements[k] == NULL) {
+        return NULL;
+    }
+    InterlockedIncrement(&m->uia_elements[k]->refs);
+    return &m->uia_elements[k]->simple;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_grid_item(void *self, int row, int column, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, grid, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    HRESULT result = E_INVALIDARG;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL && row >= 0 && column >= 0) {
+        uint32_t table = (uint32_t)(n - e->w->access);
+        for (uint32_t k = table + 1u; k < m->uia_count && k < e->w->access_count; k++) {
+            const struct cee_access_node *c = &e->w->access[k];
+            if ((c->role == CEE_ACCESS_CELL || c->role == CEE_ACCESS_COLUMN_HEADER) && c->row == (uint32_t)row + 1u &&
+                c->column == (uint32_t)column + 1u && cee_uia_table_of(e->w->access, m->uia_count, k) == table) {
+                *out = cee_uia_provider_at(m, k);
+                result = *out != NULL ? S_OK : E_INVALIDARG;
+                break;
+            }
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return result;
+}
+
+static HRESULT cee_uia_number_of(struct cee_uia_element *e, int which, int *out) {
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = 0;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    if (n != NULL) {
+        switch (which) {
+        case 0: *out = (int)n->rows; break;
+        case 1: *out = (int)n->columns; break;
+        case 2: *out = n->row > 0 ? (int)n->row - 1 : 0; break;
+        case 3: *out = n->column > 0 ? (int)n->column - 1 : 0; break;
+        default: *out = 1; break; /* a span */
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return n != NULL ? S_OK : CEE_UIA_E_NOT_AVAILABLE;
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_grid_rows(void *self, int *out) {
+    return cee_uia_number_of(CEE_UIA_OBJECT(cee_uia_element, grid, self), 0, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_grid_columns(void *self, int *out) {
+    return cee_uia_number_of(CEE_UIA_OBJECT(cee_uia_element, grid, self), 1, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_cell_row(void *self, int *out) {
+    return cee_uia_number_of(CEE_UIA_OBJECT(cee_uia_element, grid_item, self), 2, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_cell_column(void *self, int *out) {
+    return cee_uia_number_of(CEE_UIA_OBJECT(cee_uia_element, grid_item, self), 3, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_cell_span(void *self, int *out) {
+    return cee_uia_number_of(CEE_UIA_OBJECT(cee_uia_element, grid_item, self), 4, out);
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_cell_grid(void *self, void **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, grid_item, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL) {
+        *out = cee_uia_provider_at(m, cee_uia_table_of(e->w->access, m->uia_count, (uint32_t)(n - e->w->access)));
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+
+/* The column headers of table `table` (all of them, or those of `column`, from 1, when it is not 0), as an array of
+   providers. The lock is held. */
+static SAFEARRAY *cee_uia_headers(struct cee_window *w, struct cee_win32 *m, uint32_t table, uint32_t column) {
+    LONG found = 0;
+    for (uint32_t k = table + 1u; k < m->uia_count && k < w->access_count; k++) {
+        found += w->access[k].role == CEE_ACCESS_COLUMN_HEADER && (column == 0 || w->access[k].column == column) &&
+                 cee_uia_table_of(w->access, m->uia_count, k) == (int64_t)table && m->uia_elements[k] != NULL;
+    }
+    SAFEARRAY *array = cee_uia.array(VT_UNKNOWN, 0, (ULONG)found);
+    LONG at = 0;
+    for (uint32_t k = table + 1u; array != NULL && k < m->uia_count && k < w->access_count && at < found; k++) {
+        if (w->access[k].role == CEE_ACCESS_COLUMN_HEADER && (column == 0 || w->access[k].column == column) &&
+            cee_uia_table_of(w->access, m->uia_count, k) == (int64_t)table && m->uia_elements[k] != NULL) {
+            cee_uia.array_put(array, &at, &m->uia_elements[k]->simple); /* it takes its own reference */
+            at++;
+        }
+    }
+    return array;
+}
+
+static HRESULT STDMETHODCALLTYPE cee_uia_no_headers(void *self, SAFEARRAY **out) {
     (void)self;
     if (out == NULL) {
         return E_POINTER;
     }
-    *out = NULL; /* the list is flat: a set has no element of its own */
+    *out = NULL; /* no row headers */
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_table_columns(void *self, SAFEARRAY **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, table, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL) {
+        *out = cee_uia_headers(e->w, m, (uint32_t)(n - e->w->access), 0);
+    }
+    LeaveCriticalSection(&cee_uia.lock);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_table_major(void *self, int *out) {
+    (void)self;
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = 0; /* RowOrColumnMajor_RowMajor */
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE cee_uia_cell_columns(void *self, SAFEARRAY **out) {
+    struct cee_uia_element *e = CEE_UIA_OBJECT(cee_uia_element, table_item, self);
+    if (out == NULL) {
+        return E_POINTER;
+    }
+    *out = NULL;
+    EnterCriticalSection(&cee_uia.lock);
+    const struct cee_access_node *n = cee_uia_node(e);
+    struct cee_win32 *m = n != NULL ? (struct cee_win32 *)e->w->native : NULL;
+    if (m != NULL) {
+        int64_t table = cee_uia_table_of(e->w->access, m->uia_count, (uint32_t)(n - e->w->access));
+        if (table >= 0 && n->role != CEE_ACCESS_COLUMN_HEADER) {
+            *out = cee_uia_headers(e->w, m, (uint32_t)table, n->column);
+        }
+    }
+    LeaveCriticalSection(&cee_uia.lock);
     return S_OK;
 }
 
@@ -6873,6 +7172,18 @@ static const struct cee_uia_selection_vtbl cee_uia_element_selection = {
 static const struct cee_uia_expand_vtbl cee_uia_element_expand = {
     cee_uia_eexpand_query, cee_uia_eexpand_add_ref, cee_uia_eexpand_release, cee_uia_expand, cee_uia_collapse,
     cee_uia_expand_state};
+static const struct cee_uia_grid_vtbl cee_uia_element_grid = {cee_uia_egrid_query, cee_uia_egrid_add_ref,
+                                                             cee_uia_egrid_release, cee_uia_grid_item,
+                                                             cee_uia_grid_rows, cee_uia_grid_columns};
+static const struct cee_uia_grid_item_vtbl cee_uia_element_grid_item = {
+    cee_uia_egriditem_query, cee_uia_egriditem_add_ref, cee_uia_egriditem_release, cee_uia_cell_row,
+    cee_uia_cell_column, cee_uia_cell_span, cee_uia_cell_span, cee_uia_cell_grid};
+static const struct cee_uia_table_vtbl cee_uia_element_table = {cee_uia_etable_query, cee_uia_etable_add_ref,
+                                                               cee_uia_etable_release, cee_uia_no_headers,
+                                                               cee_uia_table_columns, cee_uia_table_major};
+static const struct cee_uia_table_item_vtbl cee_uia_element_table_item = {
+    cee_uia_etableitem_query, cee_uia_etableitem_add_ref, cee_uia_etableitem_release, cee_uia_no_headers,
+    cee_uia_cell_columns};
 
 static struct cee_uia_element *cee_uia_element_new(struct cee_window *w, uint64_t id, uint32_t at) {
     struct cee_uia_element *e = (struct cee_uia_element *)ceesafe_platform_alloc_zeroed(sizeof *e);
@@ -6885,6 +7196,10 @@ static struct cee_uia_element *cee_uia_element_new(struct cee_window *w, uint64_
         e->value = &cee_uia_element_value;
         e->selection = &cee_uia_element_selection;
         e->expand = &cee_uia_element_expand;
+        e->grid = &cee_uia_element_grid;
+        e->grid_item = &cee_uia_element_grid_item;
+        e->table = &cee_uia_element_table;
+        e->table_item = &cee_uia_element_table_item;
         e->refs = 1;
         e->w = w;
         e->id = id;
@@ -6977,11 +7292,11 @@ static HRESULT STDMETHODCALLTYPE cee_uia_root_navigate(void *self, int direction
     *out = NULL;
     EnterCriticalSection(&cee_uia.lock);
     struct cee_win32 *m = r->w != NULL ? (struct cee_win32 *)r->w->native : NULL;
-    if (m != NULL && m->uia_count > 0 && (direction == 3 || direction == 4)) { /* the first child, the last */
-        struct cee_uia_element *e = m->uia_elements[direction == 3 ? 0 : m->uia_count - 1u];
-        if (e != NULL) {
-            InterlockedIncrement(&e->refs);
-            *out = &e->fragment;
+    if (m != NULL && (direction == 3 || direction == 4)) { /* the first child, the last: of the top level */
+        int64_t k = cee_uia_relative(r->w, m->uia_count, CEE_ACCESS_TOP, direction);
+        if (k >= 0 && m->uia_elements[k] != NULL) {
+            InterlockedIncrement(&m->uia_elements[k]->refs);
+            *out = &m->uia_elements[k]->fragment;
         }
     }
     LeaveCriticalSection(&cee_uia.lock);
@@ -7176,6 +7491,9 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
                 }
             }
             layout = 1;
+        }
+        if (j < old_count && (old[j].parent != n->parent || old[j].row != n->row || old[j].column != n->column)) {
+            layout = 1; /* the tree changed: its children are asked again (ADR 0207) */
         }
         if (j < old_count && m->uia_elements[j] != NULL) {
             const struct cee_access_node *o = &old[j];

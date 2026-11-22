@@ -166,3 +166,34 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
   **VoiceOver**, by the owner: "It's working fine".
 - **Not yet**: a grid row's cells (ClayWind's `gridCell` has no id of its own yet), so a reader moves by row, not
   by column; the demo's sidebar as a list.
+
+## 8. Step 2 as implemented: Windows (2026-11-23)
+
+`runtime/hosted/ceesafe_rt_window.c` (the UI Automation part), type-system.md §26.13, `tools/window_check.py`.
+
+- **The tree**: `CEE_ACCESS_TREE` for Windows, so the backend has the list as given. A provider's `Navigate` answers
+  from the list: its parent is its container's provider (the window's root for the top level), its siblings the
+  nodes of the same container before and after it, its first and last child the first and last node it holds; the
+  root's children are the top level's. A changed parent or place marks the list's shape changed, and the root's
+  children are invalidated, as when an element came or went.
+- **Control types**: Group, List, Menu, MenuBar, Tab (a tab list), DataGrid (a table), DataItem (a row, a cell),
+  HeaderItem (a column header).
+- **Places**: an item of a container (a node with a `row` and no `column`) has `PositionInSet` (its `row`) and
+  `SizeOfSet` (its container's `rows`): NVDA's "3 of 40". A selected item's `SelectionContainer` is its container.
+- **Tables**: a `Table` has the Grid pattern (`GetItem` by row and column from 0, its `rows` and `columns`) and the
+  Table pattern (its column headers, row-major); a `Cell` or `ColumnHeader` the GridItem pattern (its row and column
+  from 0, spans of 1, its table) and the TableItem pattern (a cell's column's header). A `Row` is invoked and
+  selected as a list's row; a `ColumnHeader` invoked (it sorts).
+- **Checked** (`window_check --display` in the desktop session; a C client of UI Automation in another process,
+  since a client on the window's own thread waits on the providers it asks): the "tree" window's list with
+  "Apple 3 of 40", its menu, tab list and group with their items' places counted, and its table, a grid of 2 by 3
+  whose column headers are Name, Size and Kind, each header and cell at its row and column. Windows 11 ARM64 VM
+  (LLVM clang) and the owner's x64 laptop (MinGW gcc): 82 checks, 0 problems each.
+- **NVDA** on the owner's laptop with ClayWind's demo, driven by a script (clicks at the elements' centres, the keys)
+  while NVDA wrote its speech to its log (`--log-level=12` on its command line, its settings untouched): "data
+  grid", "Frances Allen, data item, selected, 2 of 10001", the arrows "3 of 10001", "Barbara Liskov … 4 of 10001",
+  NVDA's own table key "… 5 of 10001"; "tab control", "Selection, tab, selected, 2 of 5", Right "Tasks … 4 of 5";
+  "list", "README.md, 1 of 6", Down "main.c, 2 of 6". On the way it found that ClayWind's lists, grid, tabs and
+  listboxes were not reached by the keys at all, so a reader following the focus never came to them; ClayWind
+  fixed that (they are Tab stops now, and their chosen row or tab is the focused element). A script's arrows must
+  be sent as extended keys: without that flag they are the numeric keypad's, which NVDA takes for its review keys.

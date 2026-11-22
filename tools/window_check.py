@@ -1949,7 +1949,9 @@ fn main() -> i32 {
     }
     if (Process.argument(1) == Some("tree")) {
         tree(mut window);
-        for (frame in 0..3) {
+        // "hold": the window stays about six seconds, for another process to ask the system (Windows' check).
+        let hold = Process.argument(2) == Some("hold");
+        for (frame in 0..(if (hold) 400 else 3)) {
             loop {
                 match (window.nextEvent()) {
                     Some(_) => {}
@@ -1960,7 +1962,7 @@ fn main() -> i32 {
                 Ok() => {}
                 Err(_) => { Console.writeLine("present failed"); return 1; }
             }
-            if (frame == 1) {
+            if (frame == 1 && !hold) {
                 let top = unsafe { access_inspect(2) }; // its lines first: the C helper writes them itself
                 Console.write("tree ");
                 Console.writeLine(top);
@@ -2676,6 +2678,143 @@ int main(int argc, char **argv) {
 # A person's drag on Windows (ADR 0150, --display): a press on this helper's small window starts an OLE drag
 # (DoDragDrop) of files (CF_HDROP) or text (CF_UNICODETEXT), and the system's mouse input (SendInput) moves the pointer
 # to the target point in steps and releases it there, or with `leave` back over the helper. It prints the effect.
+# Windows (ADR 0207): what UI Automation's clients see of the "tree" window, asked from another process (a client on
+# the window's own thread would wait on the providers it asks). Each element of the program's (FrameworkId CeeSafe):
+# its control type, name, place in its set, a table's grid and column headers, a cell's place.
+WIN_UIA_TREE = r"""#define COBJMACROS
+#include <windows.h>
+#include <ole2.h>
+#include <uiautomation.h>
+#include <stdio.h>
+/* The interfaces' and the class's GUIDs, as UIAutomationClient.h has them: defined here, so that the helper links
+   alike with MinGW and with clang over Visual Studio's libraries. */
+static const CLSID cuia = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
+static const IID iuia = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
+static const IID igrid = {0x414c3cdc, 0x856b, 0x4f5b, {0x85, 0x38, 0x31, 0x31, 0xc6, 0x30, 0x25, 0x50}};
+static const IID itable = {0x620e691c, 0xea96, 0x4710, {0xa8, 0x50, 0x75, 0x4b, 0x24, 0xce, 0x24, 0x17}};
+static const IID icell = {0x78f8ef57, 0x66c3, 0x4e09, {0xbd, 0x7c, 0xe7, 0x9b, 0x20, 0x04, 0x89, 0x4d}};
+static IUIAutomation *ua;
+static IUIAutomationTreeWalker *walker;
+static void utf8(BSTR b, char *out, int n) {
+    out[0] = 0;
+    if (b != NULL) WideCharToMultiByte(CP_UTF8, 0, b, -1, out, n, NULL, NULL);
+}
+static int number(IUIAutomationElement *e, PROPERTYID id) {
+    VARIANT v;
+    VariantInit(&v);
+    int r = 0;
+    if (SUCCEEDED(IUIAutomationElement_GetCurrentPropertyValue(e, id, &v)) && v.vt == VT_I4) r = v.lVal;
+    VariantClear(&v);
+    return r;
+}
+static void walk(IUIAutomationElement *parent, int depth) {
+    IUIAutomationElement *e = NULL;
+    IUIAutomationTreeWalker_GetFirstChildElement(walker, parent, &e);
+    while (e != NULL) {
+        BSTR b = NULL;
+        char name[128], framework[32];
+        IUIAutomationElement_get_CurrentFrameworkId(e, &b);
+        utf8(b, framework, sizeof framework);
+        SysFreeString(b);
+        if (strcmp(framework, "CeeSafe") == 0) {
+            CONTROLTYPEID type = 0;
+            IUIAutomationElement_get_CurrentControlType(e, &type);
+            b = NULL;
+            IUIAutomationElement_get_CurrentName(e, &b);
+            utf8(b, name, sizeof name);
+            SysFreeString(b);
+            printf("  %*s%d %s", depth * 2, "", (int)type, name);
+            int place = number(e, UIA_PositionInSetPropertyId), size = number(e, UIA_SizeOfSetPropertyId);
+            if (place > 0) printf(" set=%d/%d", place, size);
+            IUIAutomationGridPattern *grid = NULL;
+            IUIAutomationElement_GetCurrentPatternAs(e, UIA_GridPatternId, &igrid, (void **)&grid);
+            if (grid != NULL) {
+                int rows = 0, columns = 0;
+                IUIAutomationGridPattern_get_CurrentRowCount(grid, &rows);
+                IUIAutomationGridPattern_get_CurrentColumnCount(grid, &columns);
+                printf(" grid=%dx%d", rows, columns);
+                IUIAutomationGridPattern_Release(grid);
+            }
+            IUIAutomationTablePattern *table = NULL;
+            IUIAutomationElement_GetCurrentPatternAs(e, UIA_TablePatternId, &itable, (void **)&table);
+            if (table != NULL) {
+                IUIAutomationElementArray *headers = NULL;
+                IUIAutomationTablePattern_GetCurrentColumnHeaders(table, &headers);
+                int count = 0;
+                if (headers != NULL) IUIAutomationElementArray_get_Length(headers, &count);
+                printf(" headers=");
+                for (int k = 0; k < count; k++) {
+                    IUIAutomationElement *h = NULL;
+                    IUIAutomationElementArray_GetElement(headers, k, &h);
+                    b = NULL;
+                    if (h != NULL) IUIAutomationElement_get_CurrentName(h, &b);
+                    utf8(b, name, sizeof name);
+                    SysFreeString(b);
+                    printf("%s%s", k ? "," : "", name);
+                    if (h != NULL) IUIAutomationElement_Release(h);
+                }
+                if (headers != NULL) IUIAutomationElementArray_Release(headers);
+                IUIAutomationTablePattern_Release(table);
+            }
+            IUIAutomationGridItemPattern *cell = NULL;
+            IUIAutomationElement_GetCurrentPatternAs(e, UIA_GridItemPatternId, &icell, (void **)&cell);
+            if (cell != NULL) {
+                int row = 0, column = 0;
+                IUIAutomationGridItemPattern_get_CurrentRow(cell, &row);
+                IUIAutomationGridItemPattern_get_CurrentColumn(cell, &column);
+                printf(" cell=%d,%d", row, column);
+                IUIAutomationGridItemPattern_Release(cell);
+            }
+            printf("\n");
+            walk(e, depth + 1);
+        }
+        IUIAutomationElement *next = NULL;
+        IUIAutomationTreeWalker_GetNextSiblingElement(walker, e, &next);
+        IUIAutomationElement_Release(e);
+        e = next;
+    }
+}
+int main(void) {
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (FAILED(CoCreateInstance(&cuia, NULL, CLSCTX_INPROC_SERVER, &iuia, (void **)&ua))) {
+        printf("no UI Automation\n");
+        return 1;
+    }
+    HWND window = NULL;
+    for (int k = 0; k < 50 && window == NULL; k++) {
+        window = FindWindowW(NULL, L"access check");
+        if (window == NULL) Sleep(100);
+    }
+    IUIAutomationElement *root = NULL;
+    if (window == NULL || FAILED(IUIAutomation_ElementFromHandle(ua, window, &root)) || root == NULL) {
+        printf("no window\n");
+        return 1;
+    }
+    IUIAutomation_get_RawViewWalker(ua, &walker);
+    walk(root, 0);
+    fflush(stdout);
+    return 0;
+}
+"""
+
+# What WIN_UIA_TREE prints of the "tree" window (ADR 0207): the containers with their children, the items' places
+# ("3 of 40" from the program, the rest counted), the table's grid and headers, its cells' places.
+WIN_UIA_TREE_EXPECTED = [
+    "  50008 Fruit",
+    "    50007 Apple set=3/40", "    50007 Pear set=4/40", "    50007 Plum set=5/40",
+    "  50009 Edit",
+    "    50011 Cut set=1/2", "    50011 Copy set=2/2",
+    "  50018 Views",
+    "    50019 One set=1/2", "    50019 Two set=2/2",
+    "  50028 Grid grid=2x3 headers=Name,Size,Kind",
+    "    50029  set=1/2",
+    "      50035 Name cell=0,0", "      50035 Size cell=0,1", "      50035 Kind cell=0,2",
+    "    50029  set=2/2",
+    "      50029 A cell=1,0", "      50029 1 cell=1,1", "      50029 x cell=1,2",
+    "  50026 Tools",
+    "    50000 Go set=1/1",
+]
+
 WIN_DROP_SOURCE = r"""/* window_check's drag source on Windows (ADR 0150): a person's drag, made with the system's mouse input (SendInput)
    and an OLE drag (DoDragDrop) of files (CF_HDROP) or of text (CF_UNICODETEXT). A press on this helper's small window
    starts the drag, the pointer moves to the target point in steps and is released there, or with `leave` back over
@@ -3425,6 +3564,30 @@ def native_arm64():
     return os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() == "ARM64"
 
 
+def windows_uia_tree(access, work):
+    """ADR 0207 on Windows: the access program's "tree" window, held open, as UI Automation's clients see it from
+    another process (WIN_UIA_TREE). The problems found."""
+    cc = os.environ.get("CC", "gcc")
+    source, helper = os.path.join(work, "uiatree.c"), os.path.join(work, "uiatree.exe")
+    with open(source, "w", encoding="utf-8") as f:
+        f.write(WIN_UIA_TREE)
+    r = subprocess.run([cc, "-o", helper, source, "-lole32", "-loleaut32", "-luser32"], capture_output=True,
+                       text=True, env=msvc_environment(cc))
+    if r.returncode != 0:
+        return [f"a real window's containers (ADR 0207): building the UI Automation helper failed:\n{r.stderr}"]
+    program = subprocess.Popen([access, "tree", "hold"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    try:
+        r = subprocess.run([helper], capture_output=True, text=True, timeout=60)
+    finally:
+        program.kill()
+        program.wait()
+    got = r.stdout.splitlines()
+    if r.returncode != 0 or got != WIN_UIA_TREE_EXPECTED:
+        return ["a real window's containers (ADR 0207), as UI Automation reports them: expected\n" +
+                "\n".join(WIN_UIA_TREE_EXPECTED) + f"\ngot (status {r.returncode})\n{r.stdout}{r.stderr}"]
+    return []
+
+
 def msvc_environment(cc):
     """For clang or cl on Windows outside Visual Studio's developer prompt (INCLUDE unset): the environment its
     vcvarsall.bat leaves, found as ceesafec finds it (vswhere, the C++ tools for this machine; tooling.md §8.2), so a
@@ -3825,6 +3988,9 @@ def main():
                 if r.returncode != 0 or r.stdout.splitlines() != want:
                     problems.append("a real window's containers (ADR 0207), as AppKit reports them: expected\n" +
                                     "\n".join(want) + f"\ngot (status {r.returncode})\n{r.stdout}{r.stderr}")
+            if os.name == "nt":
+                checks += 1
+                problems.extend(windows_uia_tree(access, work))
             r = run([any_program, "real"], {}, work)
             checks += 1
             if r.returncode != 0 or r.stdout.strip() != "real wake of the second ok":

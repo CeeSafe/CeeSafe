@@ -11853,6 +11853,28 @@ static cee_x_fn cee_x_symbol(void *handle, const char *name) {
     return f;
 }
 
+/* Xlib's error event: what failed, and on what. */
+typedef struct {
+    int type;
+    cee_x_display *display;
+    unsigned long resource;
+    unsigned long serial;
+    unsigned char error_code, request_code, minor_code;
+} cee_x_error_event;
+typedef int (*cee_x_error_handler)(cee_x_display *, cee_x_error_event *);
+static cee_x_error_handler cee_x_error_before;
+
+/* An X error that the window's own requests did not cause: BadWindow (3), a window of another client gone before the
+   request reached it (a clipboard's requestor that closed, as GNOME's Xwayland bridge's do), is no failure of the
+   program's, and Xlib's default handler would end the process for it. Every other error goes to the handler there
+   was before (the program's own, or Xlib's). */
+static int cee_x_error(cee_x_display *display, cee_x_error_event *e) {
+    if (e->error_code == 3 /* BadWindow */) {
+        return 0;
+    }
+    return cee_x_error_before != NULL ? cee_x_error_before(display, e) : 0;
+}
+
 static int cee_x_load(void) {
     if (cee_x.state != 0) {
         return cee_x.state == 1;
@@ -11935,7 +11957,12 @@ static int cee_x_load(void) {
     CEE_X(extended_max_request_size, long (*)(cee_x_display *), "XExtendedMaxRequestSize")
     CEE_X(translate_coordinates, int (*)(cee_x_display *, cee_xid, cee_xid, int, int, int *, int *, cee_xid *),
           "XTranslateCoordinates")
+    cee_x_error_handler (*set_error_handler)(cee_x_error_handler) =
+        (cee_x_error_handler(*)(cee_x_error_handler))cee_x_symbol(x, "XSetErrorHandler");
 #undef CEE_X
+    if (set_error_handler != NULL) {
+        cee_x_error_before = set_error_handler(cee_x_error);
+    }
     cee_x.state = 1;
     return 1;
 }
@@ -13426,7 +13453,8 @@ static const struct cee_wl_interface *cee_wl_types[32];
 /* cee_wl_types: 0 NULL, 1-2 (xdg_surface, wl_surface), 3 xdg_toplevel, 4-6 (xdg_popup, xdg_surface, xdg_positioner),
    7 xdg_toplevel, 8-9 wl_seat, 10 wl_output, 11-12 (zxdg_toplevel_decoration_v1, xdg_toplevel), 13-14
    (wp_fractional_scale_v1, wl_surface), 15-16 (wp_viewport, wl_surface), 17-18 (wp_cursor_shape_device_v1, wl_pointer),
-   19-20 (wp_cursor_shape_device_v1, NULL), 21 xdg_positioner, 22 xdg_activation_token_v1, 23-24 (NULL, wl_surface) */
+   19-20 (wp_cursor_shape_device_v1, NULL), 21 xdg_positioner, 22 xdg_activation_token_v1, 23-24 (NULL, wl_surface),
+   25-26 (zwp_text_input_v3, wl_seat), 27 wl_surface */
 static const struct cee_wl_interface cee_xdg_positioner_interface = {"xdg_positioner", 6, 0, NULL, 0, NULL};
 static const struct cee_wl_interface cee_xdg_popup_interface = {"xdg_popup", 6, 0, NULL, 0, NULL};
 static const struct cee_wl_message cee_xdg_wm_base_requests[] = {
@@ -13529,6 +13557,32 @@ static const struct cee_wl_message cee_activation_requests[] = {
 };
 static const struct cee_wl_interface cee_activation_interface = {"xdg_activation_v1", 1, 3, cee_activation_requests, 0,
                                                                  NULL};
+static const struct cee_wl_message cee_text_manager_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"get_text_input", "no", CEE_WLT(25)},
+};
+static const struct cee_wl_interface cee_text_manager_interface = {"zwp_text_input_manager_v3", 1, 2,
+                                                                   cee_text_manager_requests, 0, NULL};
+static const struct cee_wl_message cee_text_input_requests[] = {
+    {"destroy", "", CEE_WLT(0)},
+    {"enable", "", CEE_WLT(0)},
+    {"disable", "", CEE_WLT(0)},
+    {"set_surrounding_text", "sii", CEE_WLT(0)},
+    {"set_text_change_cause", "u", CEE_WLT(0)},
+    {"set_content_type", "uu", CEE_WLT(0)},
+    {"set_cursor_rectangle", "iiii", CEE_WLT(0)},
+    {"commit", "", CEE_WLT(0)},
+};
+static const struct cee_wl_message cee_text_input_events[] = {
+    {"enter", "o", CEE_WLT(27)},
+    {"leave", "o", CEE_WLT(27)},
+    {"preedit_string", "?sii", CEE_WLT(0)},
+    {"commit_string", "?s", CEE_WLT(0)},
+    {"delete_surrounding_text", "uu", CEE_WLT(0)},
+    {"done", "u", CEE_WLT(0)},
+};
+static const struct cee_wl_interface cee_text_input_interface = {"zwp_text_input_v3", 1, 8, cee_text_input_requests, 6,
+                                                                 cee_text_input_events};
 
 /* libdecor's, as its header has them (0.2): the context's and a frame's callbacks, with room for later ones. */
 struct cee_decor_interface {
@@ -13594,7 +13648,7 @@ static struct {
     int state; /* 0 not tried, 1 connected, -1 none */
     cee_wl_proxy *display, *registry, *compositor, *shm, *wm_base, *seat, *pointer, *keyboard, *touch;
     cee_wl_proxy *decoration_manager, *fractional_manager, *viewporter, *cursor_manager, *cursor_device, *activation;
-    cee_wl_proxy *data_manager, *data_device;
+    cee_wl_proxy *data_manager, *data_device, *text_manager, *text_input;
     uint32_t serial; /* the last input event's, which a selection change carries */
     uint32_t compositor_version, seat_version, seat_caps;
     int xbgr; /* the compositor takes XBGR8888, which is the frames' own byte order */
@@ -13732,6 +13786,9 @@ static int cee_wl_load(void) {
     cee_wl_types[21] = &cee_xdg_positioner_interface;
     cee_wl_types[22] = &cee_activation_token_interface;
     cee_wl_types[24] = cee_wl.surface;
+    cee_wl_types[25] = &cee_text_input_interface;
+    cee_wl_types[26] = cee_wl.seat;
+    cee_wl_types[27] = cee_wl.surface;
     /* libdecor is optional: without it a window on a compositor that draws no title bar has none. */
     void *d = dlopen("libdecor-0.so.0", RTLD_NOW | RTLD_LOCAL);
     if (d != NULL) {
@@ -13818,6 +13875,8 @@ static void cee_wl_global(void *data, cee_wl_proxy *registry, uint32_t name, con
         cee_wls.viewporter = cee_wl_bind(registry, name, &cee_viewporter_interface, version, 1);
     } else if (strcmp(interface, "wl_data_device_manager") == 0 && cee_wls.data_manager == NULL) {
         cee_wls.data_manager = cee_wl_bind(registry, name, cee_wl.data_manager, version, 3);
+    } else if (strcmp(interface, "zwp_text_input_manager_v3") == 0 && cee_wls.text_manager == NULL) {
+        cee_wls.text_manager = cee_wl_bind(registry, name, &cee_text_manager_interface, version, 1);
     } else if (strcmp(interface, "xdg_activation_v1") == 0) {
         cee_wls.activation = cee_wl_bind(registry, name, &cee_activation_interface, version, 1);
     } else if (strcmp(interface, "wp_cursor_shape_manager_v1") == 0) {
@@ -14202,6 +14261,137 @@ static void cee_wl_seat_caps(void *data, cee_wl_proxy *seat, uint32_t caps) {
         cee_wl.add_listener(cee_wls.touch, cee_wl_touch_listener, NULL);
     }
 }
+
+/* ---- The input method: zwp_text_input_v3 (ADR 0205 step 2; ADRs 0141, 0157) ---------------------------------------
+   The seat's text input is enabled while the window it entered has text input on (setTextInput), with the field's
+   kind as its content type and the caret's area (setTextInputArea) as its cursor rectangle; the input method's
+   composition is COMPOSITION, and what it commits is TEXT, scalar by scalar, as on X11. Its events come in groups that
+   `done` applies, as the protocol has them. */
+
+
+/* The window the text input entered, whether it is enabled, and the group of events `done` has not applied. */
+static struct {
+    struct cee_window *window;
+    int enabled;
+    char *preedit, *commit;
+    int32_t preedit_caret;
+} cee_wl_ti;
+
+/* The text input as the window it entered wants it: enabled with the field's kind and the caret's area while its text
+   input is on, disabled when not. */
+static void cee_wl_text_update(void) {
+    cee_wl_proxy *t = cee_wls.text_input;
+    struct cee_window *w = cee_wl_ti.window;
+    if (t == NULL) {
+        return;
+    }
+    int wanted = w != NULL && w->text_input == 1;
+    if (wanted) {
+        /* WindowTextKind to the protocol's purpose: Text normal, Number digits, Decimal number, Email email, Url url,
+           Password password with the hints sensitive data and hidden text. */
+        static const uint32_t purposes[] = {0, 2, 3, 6, 5, 8};
+        int32_t kind = w->text_kind >= 0 && w->text_kind <= 5 ? w->text_kind : 0;
+        uint32_t hints = kind == 5 ? 0x80u /* sensitive_data */ | 0x40u /* hidden_text */ : 0u;
+        if (!cee_wl_ti.enabled) {
+            cee_wl.marshal_flags(t, 1 /* enable */, NULL, 1, 0);
+        }
+        cee_wl.marshal_flags(t, 5 /* set_content_type */, NULL, 1, 0, hints, purposes[kind]);
+        cee_wl.marshal_flags(t, 6 /* set_cursor_rectangle */, NULL, 1, 0, (int32_t)w->text_area.x,
+                             (int32_t)w->text_area.y, (int32_t)w->text_area.w, (int32_t)w->text_area.h);
+        cee_wl.marshal_flags(t, 7 /* commit */, NULL, 1, 0);
+        cee_wl_ti.enabled = 1;
+    } else if (cee_wl_ti.enabled) {
+        cee_wl.marshal_flags(t, 2 /* disable */, NULL, 1, 0);
+        cee_wl.marshal_flags(t, 7 /* commit */, NULL, 1, 0);
+        cee_wl_ti.enabled = 0;
+        if (w != NULL) {
+            cee_window_compose(w, "", 0, 0); /* no input method, no composition */
+        }
+    }
+    cee_wl.flush(cee_wls.display);
+}
+
+static void cee_wl_text_enter(void *data, cee_wl_proxy *t, cee_wl_proxy *surface) {
+    (void)data;
+    (void)t;
+    cee_wl_ti.window = surface != NULL ? cee_wl_window_of(surface) : NULL;
+    cee_wl_ti.enabled = 0;
+    cee_wl_text_update();
+}
+static void cee_wl_text_leave(void *data, cee_wl_proxy *t, cee_wl_proxy *surface) {
+    (void)data;
+    (void)surface;
+    if (cee_wl_ti.enabled) {
+        cee_wl.marshal_flags(t, 2 /* disable */, NULL, 1, 0);
+        cee_wl.marshal_flags(t, 7 /* commit */, NULL, 1, 0);
+    }
+    if (cee_wl_ti.window != NULL) {
+        cee_window_compose(cee_wl_ti.window, "", 0, 0);
+    }
+    cee_wl_ti.window = NULL;
+    cee_wl_ti.enabled = 0;
+}
+
+static char *cee_wl_copy_string(const char *text) {
+    if (text == NULL) {
+        return NULL;
+    }
+    size_t length = strlen(text);
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy != NULL) {
+        memcpy(copy, text, length + 1u);
+    }
+    return copy;
+}
+
+static void cee_wl_text_preedit(void *data, cee_wl_proxy *t, const char *text, int32_t begin, int32_t end) {
+    (void)data;
+    (void)t;
+    (void)end;
+    ceesafe_platform_free(cee_wl_ti.preedit);
+    cee_wl_ti.preedit = cee_wl_copy_string(text);
+    cee_wl_ti.preedit_caret = begin; /* a byte offset, or -1: no caret shown */
+}
+static void cee_wl_text_commit(void *data, cee_wl_proxy *t, const char *text) {
+    (void)data;
+    (void)t;
+    ceesafe_platform_free(cee_wl_ti.commit);
+    cee_wl_ti.commit = cee_wl_copy_string(text);
+}
+static void cee_wl_text_delete(void *data, cee_wl_proxy *t, uint32_t before, uint32_t after) {
+    (void)data;
+    (void)t;
+    (void)before;
+    (void)after; /* the runtime sends no surrounding text, so an input method has none to delete */
+}
+/* A group of the input method's events, applied: what it committed, as TEXT, then its composition (none if it sent
+   none in the group, as the protocol has it). */
+static void cee_wl_text_done(void *data, cee_wl_proxy *t, uint32_t serial) {
+    (void)data;
+    (void)t;
+    (void)serial;
+    struct cee_window *w = cee_wl_ti.window;
+    if (w != NULL && cee_wl_ti.commit != NULL) {
+        size_t length = strlen(cee_wl_ti.commit), i = 0;
+        while (i < length) {
+            cee_window_text(w, cee_window_utf8((const unsigned char *)cee_wl_ti.commit, length, &i));
+        }
+    }
+    if (w != NULL) {
+        const char *p = cee_wl_ti.preedit != NULL ? cee_wl_ti.preedit : "";
+        size_t length = strlen(p);
+        int32_t caret = cee_wl_ti.preedit_caret;
+        cee_window_compose(w, p, length, caret >= 0 && (size_t)caret <= length ? (size_t)caret : length);
+    }
+    ceesafe_platform_free(cee_wl_ti.preedit);
+    ceesafe_platform_free(cee_wl_ti.commit);
+    cee_wl_ti.preedit = NULL;
+    cee_wl_ti.commit = NULL;
+}
+static cee_wl_fn cee_wl_text_listener[] = {
+    (cee_wl_fn)cee_wl_text_enter,  (cee_wl_fn)cee_wl_text_leave,  (cee_wl_fn)cee_wl_text_preedit,
+    (cee_wl_fn)cee_wl_text_commit, (cee_wl_fn)cee_wl_text_delete, (cee_wl_fn)cee_wl_text_done,
+};
 
 /* ---- The clipboard and drops: wl_data_device (ADR 0205 step 2; ADRs 0141, 0150) ---------------------------------
    The seat's data device carries both. The clipboard: setClipboardText offers the text as a data source and makes it
@@ -14596,6 +14786,11 @@ static int cee_wl_connect(void) {
         cee_wls.data_device = cee_wl.marshal_flags(cee_wls.data_manager, 1 /* get_data_device */, cee_wl.data_device,
                                                    cee_wl.get_version(cee_wls.data_manager), 0, NULL, cee_wls.seat);
         cee_wl.add_listener(cee_wls.data_device, cee_wl_data_device_listener, NULL);
+    }
+    if (cee_wls.text_manager != NULL) {
+        cee_wls.text_input = cee_wl.marshal_flags(cee_wls.text_manager, 1 /* get_text_input */,
+                                                  &cee_text_input_interface, 1, 0, NULL, cee_wls.seat);
+        cee_wl.add_listener(cee_wls.text_input, cee_wl_text_listener, NULL);
     }
     if (cee_wls.decoration_manager == NULL && cee_wl.decor_new != NULL) {
         cee_wl_cairo_plugin();
@@ -15034,6 +15229,10 @@ static void cee_wl_close(struct cee_window *w) {
     if (cee_wl_drag.window == w) {
         cee_wl_drag.window = NULL;
     }
+    if (cee_wl_ti.window == w) {
+        cee_wl_ti.window = NULL;
+        cee_wl_ti.enabled = 0;
+    }
     for (int k = 0; k < 3; k++) {
         cee_wl_buffer_free(&ww->buffers[k]);
     }
@@ -15081,12 +15280,20 @@ static void cee_wl_pump(struct cee_window *w) {
     cee_wl.flush(cee_wls.display);
 }
 
-/* Whether this process's windows are Wayland's: the first open decides (ADR 0205 §2.1, step 1: only when asked). */
+/* Whether this process's windows are Wayland's, which the first open decides (ADR 0205 §2.1): CEESAFE_WINDOW_SYSTEM
+   when it says x11 or wayland; else Wayland when there is a compositor the connection takes (step 2 made it the
+   default), and X11 when not. */
 static int cee_wl_chosen = -1;
 static int cee_wl_on(void) {
     if (cee_wl_chosen < 0) {
         const char *system = getenv("CEESAFE_WINDOW_SYSTEM");
-        cee_wl_chosen = system != NULL && strcmp(system, "wayland") == 0;
+        if (system != NULL && strcmp(system, "wayland") == 0) {
+            cee_wl_chosen = 1; /* asked for: without a compositor, open is NoDisplay */
+        } else if (system != NULL && strcmp(system, "x11") == 0) {
+            cee_wl_chosen = 0;
+        } else {
+            cee_wl_chosen = cee_wl_connect();
+        }
     }
     return cee_wl_chosen;
 }
@@ -15914,7 +16121,9 @@ static void cee_x_open_im(struct cee_window *w) {
 static void cee_native_text_input(struct cee_window *w, int on) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (n->wl != NULL) {
-        return; /* text-input-v3 is step 2 (ADR 0205 §2.4): keys still give text */
+        (void)on; /* w->text_input says it */
+        cee_wl_text_update();
+        return;
     }
     if (on) {
         cee_x_open_im(w);
@@ -15935,6 +16144,9 @@ static void cee_native_text_input(struct cee_window *w, int on) {
 static void cee_native_text_area(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (n->wl != NULL) {
+        if (cee_wl_ti.window == w) {
+            cee_wl_text_update();
+        }
         return;
     }
     cee_x_spot(w);
@@ -16827,6 +17039,10 @@ void ceesafe_window_set_text_kind(void *window, int32_t kind) {
 #if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
     if (!w->scripted) {
         cee_native_text_kind(w);
+    }
+#elif (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
+    if (!w->scripted && cee_wl_of(w) != NULL && cee_wl_ti.window == w) {
+        cee_wl_text_update(); /* Wayland's input method takes the field's kind too (ADR 0205) */
     }
 #endif
 }

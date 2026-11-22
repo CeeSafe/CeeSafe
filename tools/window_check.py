@@ -3225,8 +3225,11 @@ def run(command, env, cwd):
         return subprocess.CompletedProcess(command, -1, text(e.stdout), text(e.stderr) + "\n(killed after 120 s)")
 
 
-# Linux windows on Wayland (ADR 0205), when the environment asks for them.
-WAYLAND = sys.platform.startswith(("linux", "freebsd")) and os.environ.get("CEESAFE_WINDOW_SYSTEM") == "wayland"
+# Linux windows on Wayland (ADR 0205): asked for, or the default where there is a compositor.
+WAYLAND = sys.platform.startswith(("linux", "freebsd")) and (
+    os.environ.get("CEESAFE_WINDOW_SYSTEM") == "wayland" or
+    (os.environ.get("CEESAFE_WINDOW_SYSTEM") != "x11" and
+     bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET"))))
 
 
 def main():
@@ -3541,7 +3544,7 @@ def main():
             r = run([text, "real"], {}, work)
             checks += 1
             if WAYLAND:
-                pass  # the clipboard on Wayland is ADR 0205's step 2
+                pass  # a Wayland selection needs a serial of the user's input, which this window never has (ADR 0205 §8)
             elif r.returncode != 0 or r.stdout.strip() != "clipboard [CeeSafe ✓ clipboard]":
                 problems.append(f"a real window's clipboard: expected 'clipboard [CeeSafe ✓ clipboard]', got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")

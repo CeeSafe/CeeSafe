@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-22 ("I accept your recommendation 1-3": X11 stays the default until
   step 2, libdecor draws the title bar on GNOME, a release per step), for ClayWind's roadmap phase P5 (platform
-  completeness), whose last open item is Wayland.
+  completeness), whose last open item is Wayland. Steps 1 and 2 are implemented (§7, §8); step 3, CeeSafe's own title bar, is next.
 - Scope: `runtime/hosted/ceesafe_rt_window.c` (a Wayland part beside the X11 one, for Linux and FreeBSD),
   `lib/std/window.cee` (one `WindowHandle` variant, and words in the errors' notes), type-system.md §26.13,
   `tools/window_check.py` and `tools/atspi_check.py` (run under both). No language or compiler change.
@@ -159,3 +159,43 @@
     notifications check box checked", "System selected radio button".
 - **Not checked**: KDE and wlroots compositors, where the title bar is the compositor's; FreeBSD; touch (no touch
   screen); two monitors of different scale.
+
+## 8. Step 2 as implemented (2026-11-22)
+
+`runtime/hosted/ceesafe_rt_window.c`, `lib/std/window.cee` (the errors' notes), type-system.md §26.13,
+`tools/window_check.py`.
+
+- **Wayland is the default** where there is one: the first open takes `CEESAFE_WINDOW_SYSTEM` when it says `wayland`
+  or `x11`, and else connects to the compositor `WAYLAND_DISPLAY` names, keeping X11 when that fails (a stale
+  variable, no library). Checked on the owner's Fedora 45 PC by a probe that prints its handle's kind: no setting
+  `wayland`; `x11` asked `x11`; `wayland` asked `wayland`; a `WAYLAND_DISPLAY` with no compositor behind it `x11`;
+  that and no `DISPLAY` `NoDisplay`.
+- **The clipboard**, `wl_data_device`: a source offering the text as `text/plain;charset=utf-8`, `UTF8_STRING`,
+  `text/plain`, `TEXT` and `STRING`, made the selection with the serial of the last key, button or keyboard
+  focus; the selection's offer read through a pipe (a second, 16 MiB at most); the window's own text while the
+  selection is still its source. A compositor gives the selection only with an input's serial, so before any input
+  `setClipboardText` is `Resources`, and `window_check`'s clipboard case, whose window takes none, is not run on
+  Wayland. Checked by hand, keys pressed through mutter's remote desktop into ClayWind's C example: Ctrl+A and Ctrl+C
+  in its name field, then `wl-paste`: `World`; `wl-copy "Pasted ✓ in"`, then Ctrl+A and Ctrl+V: the field reads
+  `Pasted ✓ in` through AT-SPI.
+- **Drops**: a drag offering `text/uri-list` is accepted with the copy action, its list read at its entry (the files
+  counted, ADR 0150's `dragOver`) and at the drop (the paths, through X11's URI parser, which both share); other
+  drags are refused. Checked with the owner dragging a file from GNOME Files onto a probe: `drag over: 1 files`,
+  then the drop with `/home/kutty/drop-test/first.txt`; the protocol trace shows the offer's types, the accept, the
+  copy action and the list read.
+- **The input method**, `zwp_text_input_v3`: enabled while the window it entered has text input on, with the
+  field's kind as its content type (Text normal, Number digits, Decimal number, Email email, Url url, Password
+  password with the sensitive-data and hidden-text hints) and the caret's area as its cursor rectangle; each `done`
+  gives what was committed as `Text` and the composition as `Composition`. The runtime sends no surrounding text, so
+  an input method has none to delete. Checked with IBus's Anthy: `nihon` typed in the C example's name field
+  composes (the field's text is still `World`), and Enter commits it: `Worldにほん`.
+- **Found on the way, on X11**: `window_check`'s clipboard case failed once in five runs on the owner's PC, the
+  program ended by "X Error of failed request: BadWindow". GNOME's Xwayland bridge asks an X11 program for the
+  clipboard's text to give it to Wayland's programs, and its requestor window can be gone when the answer reaches
+  it; the runtime installed no X error handler, so Xlib's own ended the process. The runtime now installs one when it
+  loads libX11: BadWindow is ignored (another client's window gone is not the program's failure), and every other
+  error goes to the handler there was before, the program's own or Xlib's. Three runs after it: 77 checks, 0
+  problems each.
+- **Not checked**: an input method on KDE (its `text-input-v1`/`v2` are not taken; `v3` only); a drag from an X11
+  program into a Wayland window (Xwayland's bridge is the compositor's); the clipboard's `INCR`-sized texts against
+  X11 programs.

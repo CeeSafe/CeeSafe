@@ -3736,18 +3736,24 @@ Diagnostics: none new.
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
   - **Windows:** Win32 and GDI;
-  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`; or Wayland (ADR 0205), chosen at the first `open` when
-    `CEESAFE_WINDOW_SYSTEM=wayland` is in the environment (X11 is the default until ADR 0205's step 2):
+  - **Linux:** Wayland or X11 (ADR 0205), chosen at the first `open` for the process: `CEESAFE_WINDOW_SYSTEM=wayland`
+    or `=x11` in the environment chooses; else Wayland when `WAYLAND_DISPLAY` (or `WAYLAND_SOCKET`) names a
+    compositor the runtime can connect to, and X11 when not. X11: `libX11.so.6` loaded with `dlopen`. Wayland:
     `libwayland-client.so.0` and `libxkbcommon.so.0` loaded with `dlopen`, and `libdecor-0.so.0` for the title bar
     when the compositor draws none (GNOME), with libdecor's cairo plugin, given to it in
-    `$XDG_RUNTIME_DIR/ceesafe-libdecor` unless the environment names `LIBDECOR_PLUGIN_DIR`. Without a compositor
+    `$XDG_RUNTIME_DIR/ceesafe-libdecor` unless the environment names `LIBDECOR_PLUGIN_DIR`. Asked for, without a compositor
     or the two libraries `open` is `NoDisplay`. One connection serves the process's windows. A window shows
     shared-memory frames over its size in points (`wp_viewporter`), and `scale()` is the compositor's fractional
     scale (`wp_fractional_scale_v1`, else its integral buffer scale); keys come from xkbcommon over the
     compositor's keymap, repeated by the runtime at the seat's rate; the pointer, the wheel (a notch is a line,
     `axis_value120`), touches (`wl_touch`) and the cursor's shape (`wp_cursor_shape_v1`) as on X11. `nativeHandle`
-    is `Wayland(display, surface)`. Not yet (step 2): an input method, the clipboard (`setClipboardText` is
-    `Unsupported`, `clipboardText` null) and drops. AT-SPI is as on X11, but a frame's screen coordinates are the
+    is `Wayland(display, surface)`. The input method is the seat's `zwp_text_input_v3`, enabled while text input
+    is on, with the field's kind as its content type and `setTextInputArea` as its cursor rectangle; its composition
+    is `Composition` and what it commits `Text`. The clipboard and drops are the seat's `wl_data_device`:
+    `setClipboardText` offers UTF-8 text as the selection, with the serial of the last input the process took (so
+    `Resources` before any input, which a compositor requires); `clipboardText` reads the selection's text through
+    a pipe; a drag that offers `text/uri-list` is accepted with the copy action, its files counted for `dragOver`
+    and their paths given to `nextDrop`. AT-SPI is as on X11, but a frame's screen coordinates are the
     window's: a Wayland window does not know where it is. A Wayland window has the focus when the compositor gives
     it the keyboard, which it reports with `Focus(true)`; one opened without the launcher's activation token
     (`XDG_ACTIVATION_TOKEN`, which the runtime passes on and removes from the environment) may not have it until

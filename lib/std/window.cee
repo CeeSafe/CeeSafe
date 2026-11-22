@@ -119,11 +119,10 @@ extern "C" {
 public enum WindowError {
     /// No backend for this system, the interpreter, a size of 0 or over 16384, a `present` to a window opened with
     /// `WindowSurface.External`, a menu on X11 or one with an item before its first `addMenu` or over 4096 entries,
-    /// a file dialog on a Linux system without `zenity` or `kdialog`, a dialog's path that is not UTF-8, or
-    /// `setClipboardText` on Wayland until ADR 0205's step 2.
+    /// a file dialog on a Linux system without `zenity` or `kdialog`, or a dialog's path that is not UTF-8.
     Unsupported,
-    /// No window server: no `DISPLAY`, no X11 library, or a session without one; with `CEESAFE_WINDOW_SYSTEM=wayland`,
-    /// no Wayland compositor or no `libwayland-client` and `libxkbcommon` (ADR 0205).
+    /// No window server: no Wayland compositor (ADR 0205) and no `DISPLAY` or X11 library, or a session without one;
+    /// with `CEESAFE_WINDOW_SYSTEM=wayland`, no compositor or no `libwayland-client` and `libxkbcommon`.
     NoDisplay,
     /// Called on a thread other than the program's first.
     NotMainThread,

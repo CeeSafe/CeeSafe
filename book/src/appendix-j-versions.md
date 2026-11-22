@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.93.1
+## Releases 0.25.0 to 0.93.2
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.93.2 | 2026-11-22 | A window can have a title bar its program draws (`Window.openStyled` with `WindowStyle.ProgramTitleBar`): the runtime moves, maximizes and resizes it from the bar's layout, and `minimize`, `toggleMaximized` and `maximized` act on it; on Wayland first (ADR 0206) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.1 | 2026-11-22 | On a Wayland desktop, Linux and FreeBSD windows are Wayland's by default, with the input method, the clipboard and file drops; an X11 window is no longer ended by another program's vanished window (ADR 0205) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.0 | 2026-11-22 | Linux and FreeBSD windows can run on Wayland, chosen with `CEESAFE_WINDOW_SYSTEM=wayland`: sharp at any scale, keys in the user's layout, read by Orca; X11 stays the default for now (ADR 0205) | [Appendix E](./appendix-e-ceesafec) |
 | 0.92.0 | 2026-11-22 | On Linux and FreeBSD a window's elements reach screen readers such as Orca through AT-SPI 2, as on the other systems; and an X11 window's title is shown in UTF-8 (ADR 0164) | [Appendix E](./appendix-e-ceesafec) |

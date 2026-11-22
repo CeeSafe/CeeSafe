@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.92.0
+## Releases 0.25.0 to 0.93.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.93.0 | 2026-11-22 | Linux and FreeBSD windows can run on Wayland, chosen with `CEESAFE_WINDOW_SYSTEM=wayland`: sharp at any scale, keys in the user's layout, read by Orca; X11 stays the default for now (ADR 0205) | [Appendix E](./appendix-e-ceesafec) |
 | 0.92.0 | 2026-11-22 | On Linux and FreeBSD a window's elements reach screen readers such as Orca through AT-SPI 2, as on the other systems; and an X11 window's title is shown in UTF-8 (ADR 0164) | [Appendix E](./appendix-e-ceesafec) |
 | 0.91.0 | 2026-11-22 | An async function's locals are no longer zeroed at every resume: only one written in part or borrowed is, as in a sync function, so a task resumed often does less work (ADR 0204) | [Appendix E](./appendix-e-ceesafec) |
 | 0.90.0 | 2026-11-21 | Compression in lib/std: `Deflate`, `Zlib` and `Gzip` compress and decompress whole buffers, and `Inflater` and `Deflater` stream; every decoder takes a limit, so a bomb is refused, and no input panics it (`DecodeError`). `Adler32` beside `Crc32` (ADR 0196, phase 1) | [Appendix C](./appendix-c-built-in-types) |

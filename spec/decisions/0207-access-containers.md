@@ -159,5 +159,10 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
   5, a menu, a tab bar, a two-by-three table whose first row is its headers, and a group, all numbered by the
   runtime but the list's items; AppKit reports the tree, each element's parent, the places and counts, and the
   table's headers. A parent not in the list, after its child, or not a container: three panics.
-- **Not yet**: VoiceOver with ClayWind's demo, once ClayWind gives its lists, grid, menus and tabs as containers
-  (step 6, which follows this release).
+- **ClayWind's demo** (ClayWind given containers on the branch's compiler: its listboxes and virtual list as
+  lists, its dropdowns and menus as menus, the menu bar, its tabs as a tab list, its data grid as a table of all its
+  rows with its titles as column headers), read from another process through `AXUIElement` as a reader reads it:
+  the grid a table of 10,001 rows and 4 columns, its rows at their places; the tabs a tab group, each at its place.
+  **VoiceOver**, by the owner: "It's working fine".
+- **Not yet**: a grid row's cells (ClayWind's `gridCell` has no id of its own yet), so a reader moves by row, not
+  by column; the demo's sidebar as a list.

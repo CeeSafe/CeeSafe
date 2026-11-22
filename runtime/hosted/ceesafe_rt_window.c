@@ -13558,6 +13558,8 @@ static struct {
     int (*add_listener)(cee_wl_proxy *, cee_wl_fn *, void *);
     uint32_t (*get_version)(cee_wl_proxy *);
     void (*destroy)(cee_wl_proxy *);
+    void *(*get_user_data)(cee_wl_proxy *);
+    const struct cee_wl_interface *data_manager, *data_device, *data_source, *data_offer;
     const struct cee_wl_interface *registry, *compositor, *surface, *shm, *shm_pool, *buffer, *seat, *pointer,
         *keyboard, *touch, *callback, *output, *region;
     /* xkbcommon */
@@ -13592,6 +13594,8 @@ static struct {
     int state; /* 0 not tried, 1 connected, -1 none */
     cee_wl_proxy *display, *registry, *compositor, *shm, *wm_base, *seat, *pointer, *keyboard, *touch;
     cee_wl_proxy *decoration_manager, *fractional_manager, *viewporter, *cursor_manager, *cursor_device, *activation;
+    cee_wl_proxy *data_manager, *data_device;
+    uint32_t serial; /* the last input event's, which a selection change carries */
     uint32_t compositor_version, seat_version, seat_caps;
     int xbgr; /* the compositor takes XBGR8888, which is the frames' own byte order */
     void *decor; /* libdecor's context, for compositors that draw no title bar */
@@ -13674,6 +13678,11 @@ static int cee_wl_load(void) {
     CEE_WL(c, add_listener, int (*)(cee_wl_proxy *, cee_wl_fn *, void *), "wl_proxy_add_listener")
     CEE_WL(c, get_version, uint32_t(*)(cee_wl_proxy *), "wl_proxy_get_version")
     CEE_WL(c, destroy, void (*)(cee_wl_proxy *), "wl_proxy_destroy")
+    CEE_WL(c, get_user_data, void *(*)(cee_wl_proxy *), "wl_proxy_get_user_data")
+    CEE_WL_DATA(data_manager, "wl_data_device_manager_interface")
+    CEE_WL_DATA(data_device, "wl_data_device_interface")
+    CEE_WL_DATA(data_source, "wl_data_source_interface")
+    CEE_WL_DATA(data_offer, "wl_data_offer_interface")
     CEE_WL_DATA(registry, "wl_registry_interface")
     CEE_WL_DATA(compositor, "wl_compositor_interface")
     CEE_WL_DATA(surface, "wl_surface_interface")
@@ -13807,6 +13816,8 @@ static void cee_wl_global(void *data, cee_wl_proxy *registry, uint32_t name, con
         cee_wls.fractional_manager = cee_wl_bind(registry, name, &cee_fractional_manager_interface, version, 1);
     } else if (strcmp(interface, "wp_viewporter") == 0) {
         cee_wls.viewporter = cee_wl_bind(registry, name, &cee_viewporter_interface, version, 1);
+    } else if (strcmp(interface, "wl_data_device_manager") == 0 && cee_wls.data_manager == NULL) {
+        cee_wls.data_manager = cee_wl_bind(registry, name, cee_wl.data_manager, version, 3);
     } else if (strcmp(interface, "xdg_activation_v1") == 0) {
         cee_wls.activation = cee_wl_bind(registry, name, &cee_activation_interface, version, 1);
     } else if (strcmp(interface, "wp_cursor_shape_manager_v1") == 0) {
@@ -13870,8 +13881,8 @@ static void cee_wl_pointer_button(void *data, cee_wl_proxy *p, uint32_t serial, 
                                   uint32_t state) {
     (void)data;
     (void)p;
-    (void)serial;
     (void)time;
+    cee_wls.serial = serial;
     /* evdev's codes: BTN_LEFT 0x110, BTN_RIGHT 0x111, BTN_MIDDLE 0x112 */
     int32_t b = button == 0x110 ? 0 : button == 0x111 ? 1 : button == 0x112 ? 2 : -1;
     if (b >= 0 && cee_wls.pointer_window != NULL) {
@@ -14021,10 +14032,10 @@ static void cee_wl_keyboard_enter(void *data, cee_wl_proxy *k, uint32_t serial, 
                                   struct cee_wl_array *keys) {
     (void)data;
     (void)k;
-    (void)serial;
     (void)keys;
     struct cee_window *w = surface != NULL ? cee_wl_window_of(surface) : NULL;
     cee_wls.keyboard_window = w;
+    cee_wls.serial = serial;
     if (w != NULL) {
         cee_window_focus(w, 1);
         cee_atspi_frame_focus(w, 1);
@@ -14047,8 +14058,8 @@ static void cee_wl_keyboard_key(void *data, cee_wl_proxy *k, uint32_t serial, ui
                                 uint32_t state) {
     (void)data;
     (void)k;
-    (void)serial;
     (void)time;
+    cee_wls.serial = serial;
     struct cee_window *w = cee_wls.keyboard_window;
     if (w == NULL || cee_wls.xkb_state == NULL) {
         return;
@@ -14192,6 +14203,323 @@ static void cee_wl_seat_caps(void *data, cee_wl_proxy *seat, uint32_t caps) {
     }
 }
 
+/* ---- The clipboard and drops: wl_data_device (ADR 0205 step 2; ADRs 0141, 0150) ---------------------------------
+   The seat's data device carries both. The clipboard: setClipboardText offers the text as a data source and makes it
+   the selection, with the serial of the last input the window took (the compositor gives the selection only to the
+   client the user is working in); clipboardText reads the selection's offer through a pipe, or the window's own text
+   when the selection is still this process's. Drops: a drag that offers `text/uri-list` is accepted with the copy
+   action, its list read once when it enters (its files counted for dragOver, ADR 0150) and again at the drop (their
+   paths); other drags are refused. */
+
+static uint32_t cee_x_uri_list(const char *text, size_t length, struct cee_window_paths *p);
+
+/* What an offer carries: which of the types the runtime reads, as the offer's events listed them. */
+struct cee_wl_offer {
+    cee_wl_proxy *offer;
+    int utf8, utf8_string, plain, uris;
+};
+
+static void cee_wl_offer_type(void *data, cee_wl_proxy *offer, const char *type) {
+    (void)offer;
+    struct cee_wl_offer *o = (struct cee_wl_offer *)data;
+    if (strcmp(type, "text/plain;charset=utf-8") == 0) {
+        o->utf8 = 1;
+    } else if (strcmp(type, "UTF8_STRING") == 0) {
+        o->utf8_string = 1;
+    } else if (strcmp(type, "text/plain") == 0) {
+        o->plain = 1;
+    } else if (strcmp(type, "text/uri-list") == 0) {
+        o->uris = 1;
+    }
+}
+static void cee_wl_offer_actions(void *data, cee_wl_proxy *offer, uint32_t actions) {
+    (void)data;
+    (void)offer;
+    (void)actions;
+}
+static void cee_wl_offer_action(void *data, cee_wl_proxy *offer, uint32_t action) {
+    (void)data;
+    (void)offer;
+    (void)action;
+}
+static cee_wl_fn cee_wl_offer_listener[] = {(cee_wl_fn)cee_wl_offer_type, (cee_wl_fn)cee_wl_offer_actions,
+                                            (cee_wl_fn)cee_wl_offer_action};
+
+static struct cee_wl_offer *cee_wl_offer_of(cee_wl_proxy *offer) {
+    return offer != NULL ? (struct cee_wl_offer *)cee_wl.get_user_data(offer) : NULL;
+}
+
+static void cee_wl_offer_drop(struct cee_wl_offer *o) {
+    if (o != NULL) {
+        cee_wl.marshal_flags(o->offer, 2 /* destroy */, NULL, cee_wl.get_version(o->offer), 1 /* DESTROY */);
+        ceesafe_platform_free(o);
+    }
+}
+
+/* An offer's bytes in `type`, through a pipe its source writes (up to 16 MiB, a second at most); NULL when it gave
+   none. The caller frees them. */
+static char *cee_wl_receive(struct cee_wl_offer *o, const char *type, size_t *length) {
+    *length = 0;
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) != 0) {
+        return NULL;
+    }
+    cee_wl.marshal_flags(o->offer, 1 /* receive */, NULL, cee_wl.get_version(o->offer), 0, type, fds[1]);
+    close(fds[1]);
+    cee_wl.flush(cee_wls.display);
+    size_t capacity = 0;
+    char *text = NULL;
+    double deadline = cee_window_now() + 1.0;
+    for (;;) {
+        double left = deadline - cee_window_now();
+        struct pollfd p = {fds[0], POLLIN, 0};
+        if (left <= 0.0 || poll(&p, 1, (int)(left * 1000.0) + 1) <= 0) {
+            break;
+        }
+        if (*length + 4096u > capacity) {
+            if (capacity >= 16u * 1024u * 1024u) {
+                break;
+            }
+            size_t grown = capacity == 0 ? 8192u : capacity * 2u;
+            char *bigger = (char *)ceesafe_platform_realloc(text, grown);
+            if (bigger == NULL) {
+                break;
+            }
+            text = bigger;
+            capacity = grown;
+        }
+        ssize_t got = read(fds[0], text + *length, capacity - *length);
+        if (got <= 0) {
+            break; /* the source's end is closed: all of it */
+        }
+        *length += (size_t)got;
+    }
+    close(fds[0]);
+    return text;
+}
+
+static void cee_wl_data_offer(void *data, cee_wl_proxy *device, cee_wl_proxy *offer) {
+    (void)data;
+    (void)device;
+    struct cee_wl_offer *o = (struct cee_wl_offer *)ceesafe_platform_alloc_zeroed(sizeof *o);
+    if (o == NULL) {
+        cee_wl.marshal_flags(offer, 2 /* destroy */, NULL, cee_wl.get_version(offer), 1);
+        return;
+    }
+    o->offer = offer;
+    cee_wl.add_listener(offer, cee_wl_offer_listener, o);
+}
+
+/* The drag over a window: its offer, the window, the files its list names, and where it is. */
+static struct {
+    struct cee_wl_offer *offer;
+    struct cee_window *window;
+    uint32_t files, serial;
+    float x, y;
+} cee_wl_drag;
+
+static void cee_wl_drag_enter(void *data, cee_wl_proxy *device, uint32_t serial, cee_wl_proxy *surface,
+                              cee_wl_fixed x, cee_wl_fixed y, cee_wl_proxy *offer) {
+    (void)data;
+    (void)device;
+    cee_wl_offer_drop(cee_wl_drag.offer);
+    memset(&cee_wl_drag, 0, sizeof cee_wl_drag);
+    struct cee_wl_offer *o = cee_wl_offer_of(offer);
+    struct cee_window *w = surface != NULL ? cee_wl_window_of(surface) : NULL;
+    if (o == NULL) {
+        return;
+    }
+    cee_wl_drag.offer = o;
+    cee_wl_drag.window = w;
+    cee_wl_drag.serial = serial;
+    cee_wl_drag.x = cee_wl_float(x);
+    cee_wl_drag.y = cee_wl_float(y);
+    uint32_t version = cee_wl.get_version(offer);
+    if (w == NULL || !o->uris) {
+        cee_wl.marshal_flags(offer, 0 /* accept */, NULL, version, 0, serial, (const char *)NULL);
+        return; /* not files, or not over a window of ours: refused */
+    }
+    cee_wl.marshal_flags(offer, 0 /* accept */, NULL, version, 0, serial, "text/uri-list");
+    if (version >= 3) {
+        cee_wl.marshal_flags(offer, 4 /* set_actions */, NULL, version, 0, 1u /* copy */, 1u /* copy */);
+    }
+    size_t length = 0;
+    char *list = cee_wl_receive(o, "text/uri-list", &length);
+    cee_wl_drag.files = list != NULL ? cee_x_uri_list(list, length, NULL) : 0;
+    ceesafe_platform_free(list);
+    cee_window_drag(w, cee_wl_drag.files, cee_wl_drag.x, cee_wl_drag.y);
+}
+static void cee_wl_drag_leave(void *data, cee_wl_proxy *device) {
+    (void)data;
+    (void)device;
+    if (cee_wl_drag.window != NULL) {
+        cee_window_drag(cee_wl_drag.window, 0, 0.0f, 0.0f);
+    }
+    cee_wl_offer_drop(cee_wl_drag.offer);
+    memset(&cee_wl_drag, 0, sizeof cee_wl_drag);
+}
+static void cee_wl_drag_motion(void *data, cee_wl_proxy *device, uint32_t time, cee_wl_fixed x, cee_wl_fixed y) {
+    (void)data;
+    (void)device;
+    (void)time;
+    cee_wl_drag.x = cee_wl_float(x);
+    cee_wl_drag.y = cee_wl_float(y);
+    if (cee_wl_drag.window != NULL && cee_wl_drag.files > 0) {
+        cee_window_drag(cee_wl_drag.window, cee_wl_drag.files, cee_wl_drag.x, cee_wl_drag.y);
+    }
+}
+static void cee_wl_drag_drop(void *data, cee_wl_proxy *device) {
+    (void)data;
+    (void)device;
+    struct cee_wl_offer *o = cee_wl_drag.offer;
+    struct cee_window *w = cee_wl_drag.window;
+    if (o != NULL && w != NULL && o->uris && cee_wl_drag.files > 0) {
+        size_t length = 0;
+        char *list = cee_wl_receive(o, "text/uri-list", &length);
+        struct cee_window_paths p = {NULL, 0, 0};
+        if (list != NULL) {
+            cee_x_uri_list(list, length, &p);
+        }
+        ceesafe_platform_free(list);
+        cee_window_dropped(w, cee_wl_drag.x, cee_wl_drag.y, &p);
+        if (cee_wl.get_version(o->offer) >= 3) {
+            cee_wl.marshal_flags(o->offer, 3 /* finish */, NULL, cee_wl.get_version(o->offer), 0);
+        }
+    } else if (w != NULL) {
+        cee_window_drag(w, 0, 0.0f, 0.0f);
+    }
+    cee_wl_offer_drop(o);
+    memset(&cee_wl_drag, 0, sizeof cee_wl_drag);
+}
+
+/* The selection's offer (NULL when the clipboard is empty, or the selection is this process's own source). */
+static struct cee_wl_offer *cee_wl_selection;
+static void cee_wl_data_selection(void *data, cee_wl_proxy *device, cee_wl_proxy *offer) {
+    (void)data;
+    (void)device;
+    if (cee_wl_selection != NULL && cee_wl_selection != cee_wl_drag.offer) {
+        cee_wl_offer_drop(cee_wl_selection);
+    }
+    cee_wl_selection = cee_wl_offer_of(offer);
+}
+static cee_wl_fn cee_wl_data_device_listener[] = {
+    (cee_wl_fn)cee_wl_data_offer,  (cee_wl_fn)cee_wl_drag_enter, (cee_wl_fn)cee_wl_drag_leave,
+    (cee_wl_fn)cee_wl_drag_motion, (cee_wl_fn)cee_wl_drag_drop,  (cee_wl_fn)cee_wl_data_selection,
+};
+
+/* The text this process offers as the selection, and its source; NULL once another client's selection replaced it. */
+static cee_wl_proxy *cee_wl_source;
+static char *cee_wl_owned;
+static size_t cee_wl_owned_length;
+
+static void cee_wl_source_forget(void) {
+    if (cee_wl_source != NULL) {
+        cee_wl.marshal_flags(cee_wl_source, 1 /* destroy */, NULL, cee_wl.get_version(cee_wl_source), 1);
+        cee_wl_source = NULL;
+    }
+    ceesafe_platform_free(cee_wl_owned);
+    cee_wl_owned = NULL;
+    cee_wl_owned_length = 0;
+}
+
+static void cee_wl_source_target(void *data, cee_wl_proxy *source, const char *type) {
+    (void)data;
+    (void)source;
+    (void)type;
+}
+/* A client pastes: the text, written whole to its pipe. */
+static void cee_wl_source_send(void *data, cee_wl_proxy *source, const char *type, int32_t fd) {
+    (void)data;
+    (void)type;
+    if (source == cee_wl_source && cee_wl_owned != NULL) {
+        int flags = fcntl(fd, F_GETFL);
+        if (flags >= 0) {
+            fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
+        }
+        size_t done = 0;
+        while (done < cee_wl_owned_length) {
+            ssize_t put = write(fd, cee_wl_owned + done, cee_wl_owned_length - done);
+            if (put <= 0) {
+                break;
+            }
+            done += (size_t)put;
+        }
+    }
+    close(fd);
+}
+static void cee_wl_source_cancelled(void *data, cee_wl_proxy *source) {
+    (void)data;
+    if (source == cee_wl_source) {
+        cee_wl_source_forget(); /* another client's selection now */
+    } else {
+        cee_wl.marshal_flags(source, 1 /* destroy */, NULL, cee_wl.get_version(source), 1);
+    }
+}
+static void cee_wl_source_dnd(void *data, cee_wl_proxy *source) {
+    (void)data;
+    (void)source;
+}
+static void cee_wl_source_action(void *data, cee_wl_proxy *source, uint32_t action) {
+    (void)data;
+    (void)source;
+    (void)action;
+}
+static cee_wl_fn cee_wl_source_listener[] = {
+    (cee_wl_fn)cee_wl_source_target, (cee_wl_fn)cee_wl_source_send,   (cee_wl_fn)cee_wl_source_cancelled,
+    (cee_wl_fn)cee_wl_source_dnd,    (cee_wl_fn)cee_wl_source_dnd,    (cee_wl_fn)cee_wl_source_action,
+};
+
+static int32_t cee_wl_clipboard_set(struct cee_window *w, const char *text, size_t length) {
+    (void)w;
+    if (cee_wls.data_manager == NULL || cee_wls.data_device == NULL || cee_wls.serial == 0) {
+        return -CEE_WINDOW_RESOURCES; /* no data device, or no input yet to vouch for the change */
+    }
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (length > 0) {
+        memcpy(copy, text, length);
+    }
+    copy[length] = '\0';
+    uint32_t version = cee_wl.get_version(cee_wls.data_manager);
+    cee_wl_proxy *source = cee_wl.marshal_flags(cee_wls.data_manager, 0 /* create_data_source */, cee_wl.data_source,
+                                                version, 0, NULL);
+    if (source == NULL) {
+        ceesafe_platform_free(copy);
+        return -CEE_WINDOW_RESOURCES;
+    }
+    cee_wl.add_listener(source, cee_wl_source_listener, NULL);
+    static const char *const types[] = {"text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING"};
+    for (size_t k = 0; k < sizeof types / sizeof *types; k++) {
+        cee_wl.marshal_flags(source, 0 /* offer */, NULL, version, 0, types[k]);
+    }
+    cee_wl_source_forget();
+    cee_wl_source = source;
+    cee_wl_owned = copy;
+    cee_wl_owned_length = length;
+    cee_wl.marshal_flags(cee_wls.data_device, 1 /* set_selection */, NULL, cee_wl.get_version(cee_wls.data_device), 0,
+                         source, cee_wls.serial);
+    cee_wl.flush(cee_wls.display);
+    return 0;
+}
+
+static int cee_wl_clipboard_get(struct cee_window *w) {
+    if (cee_wl_source != NULL && cee_wl_owned != NULL) {
+        return cee_window_paste(w, cee_wl_owned, cee_wl_owned_length); /* still ours */
+    }
+    struct cee_wl_offer *o = cee_wl_selection;
+    if (o == NULL || (!o->utf8 && !o->utf8_string && !o->plain)) {
+        return 0;
+    }
+    size_t length = 0;
+    char *text = cee_wl_receive(o, o->utf8 ? "text/plain;charset=utf-8" : o->utf8_string ? "UTF8_STRING" : "text/plain",
+                                &length);
+    int found = text != NULL ? cee_window_paste(w, text, length) : 0;
+    ceesafe_platform_free(text);
+    return found;
+}
+
 /* libdecor's cairo plugin rather than its GTK one (ADR 0205 §2.2, the owner's choice): the GTK one runs GTK 3 in the
    program, which aborts it when it cannot load an icon (Fedora 45's GTK loads them through a program found on PATH).
    libdecor takes every plugin in LIBDECOR_PLUGIN_DIR and chooses among them, so that is a folder of the user's own,
@@ -14263,6 +14591,11 @@ static int cee_wl_connect(void) {
         memset(&cee_wls, 0, sizeof cee_wls);
         cee_wls.state = -1;
         return 0;
+    }
+    if (cee_wls.data_manager != NULL) {
+        cee_wls.data_device = cee_wl.marshal_flags(cee_wls.data_manager, 1 /* get_data_device */, cee_wl.data_device,
+                                                   cee_wl.get_version(cee_wls.data_manager), 0, NULL, cee_wls.seat);
+        cee_wl.add_listener(cee_wls.data_device, cee_wl_data_device_listener, NULL);
     }
     if (cee_wls.decoration_manager == NULL && cee_wl.decor_new != NULL) {
         cee_wl_cairo_plugin();
@@ -14697,6 +15030,9 @@ static void cee_wl_close(struct cee_window *w) {
     }
     if (cee_wl_touch_window == w) {
         cee_wl_touch_window = NULL;
+    }
+    if (cee_wl_drag.window == w) {
+        cee_wl_drag.window = NULL;
     }
     for (int k = 0; k < 3; k++) {
         cee_wl_buffer_free(&ww->buffers[k]);
@@ -15609,7 +15945,7 @@ static void cee_native_text_area(struct cee_window *w) {
 static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, size_t length) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (n->wl != NULL) {
-        return -CEE_WINDOW_UNSUPPORTED; /* wl_data_device is step 2 (ADR 0205 §2.4) */
+        return cee_wl_clipboard_set(w, text, length);
     }
     if (length > cee_x_max_property(n)) {
         return -CEE_WINDOW_RESOURCES; /* more than one request carries: no INCR */
@@ -15639,7 +15975,7 @@ static int32_t cee_native_clipboard_set(struct cee_window *w, const char *text, 
 static int cee_native_clipboard_get(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     if (n->wl != NULL) {
-        return 0;
+        return cee_wl_clipboard_get(w);
     }
     cee_xid owner = cee_x.get_selection_owner(n->display, n->clipboard_atom);
     if (owner == n->window && n->owned != NULL) {

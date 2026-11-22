@@ -11936,7 +11936,7 @@ static int32_t cee_native_print(struct cee_window *w, const char *title, const c
 #include <sys/select.h>
 
 /* KeyPress, KeyRelease, ButtonPress, ButtonRelease, PointerMotion, Exposure, StructureNotify, FocusChange. */
-#define CEE_X_EVENTS (1L | 2L | 4L | 8L | 64L | (1L << 15) | (1L << 17) | (1L << 21))
+#define CEE_X_EVENTS (1L | 2L | 4L | 8L | 64L | (1L << 15) | (1L << 17) | (1L << 21) | (1L << 22))
 
 typedef unsigned long cee_xid;
 typedef struct cee_x_display cee_x_display;
@@ -12002,9 +12002,19 @@ typedef struct { /* XSelectionClearEvent */
     cee_xid window;
     unsigned long selection, time;
 } cee_x_selection_clear;
+typedef struct { /* XPropertyEvent */
+    int type;
+    unsigned long serial;
+    int send_event;
+    cee_x_display *display;
+    cee_xid window;
+    unsigned long atom, time;
+    int state;
+} cee_x_property;
 typedef union {
     int type;
     cee_x_any any;
+    cee_x_property property;
     cee_x_input input;
     cee_x_configure configure;
     cee_x_client client;
@@ -12094,6 +12104,7 @@ static struct {
     long (*max_request_size)(cee_x_display *);
     long (*extended_max_request_size)(cee_x_display *);
     int (*translate_coordinates)(cee_x_display *, cee_xid, cee_xid, int, int, int *, int *, cee_xid *); /* ADR 0150 */
+    int (*ungrab_pointer)(cee_x_display *, unsigned long); /* ADR 0206 */
 } cee_x;
 
 struct cee_x11 {
@@ -12130,6 +12141,14 @@ struct cee_x11 {
     char *title;
     uint32_t atspi_serial;
     int atspi_active;
+    /* A title bar the program draws (ADR 0206): the window manager's atoms for it, the pointer's last position and
+       the edge whose resize shape it shows (0 none), those shapes, and when the bar was last pressed (a double press
+       maximizes). */
+    unsigned long wm_state, wm_max_vert, wm_max_horz, wm_moveresize, wm_menu, wm_change_state;
+    float pointer_x, pointer_y;
+    uint32_t edge_shown;
+    cee_xid edge_cursors[16];
+    double bar_pressed_at;
     /* A Wayland window's own record (ADR 0205): this one then has no display, and only the fields above. */
     void *wl;
 };
@@ -12246,6 +12265,7 @@ static int cee_x_load(void) {
     CEE_X(extended_max_request_size, long (*)(cee_x_display *), "XExtendedMaxRequestSize")
     CEE_X(translate_coordinates, int (*)(cee_x_display *, cee_xid, cee_xid, int, int, int *, int *, cee_xid *),
           "XTranslateCoordinates")
+    CEE_X(ungrab_pointer, int (*)(cee_x_display *, unsigned long), "XUngrabPointer")
     cee_x_error_handler (*set_error_handler)(cee_x_error_handler) =
         (cee_x_error_handler(*)(cee_x_error_handler))cee_x_symbol(x, "XSetErrorHandler");
 #undef CEE_X
@@ -15111,8 +15131,11 @@ static int cee_wl_clipboard_get(struct cee_window *w) {
 static void cee_wl_cairo_plugin(void) {
     const char *runtime = getenv("XDG_RUNTIME_DIR");
     Dl_info info;
+    void *address = NULL; /* the function's address as an object pointer, which ISO C does not convert; POSIX's
+                             function and object pointers have one representation */
+    memcpy(&address, &cee_wl.decor_new, sizeof address);
     if (getenv("LIBDECOR_PLUGIN_DIR") != NULL || runtime == NULL || runtime[0] == '\0' ||
-        dladdr((void *)cee_wl.decor_new, &info) == 0 || info.dli_fname == NULL) {
+        dladdr(address, &info) == 0 || info.dli_fname == NULL) {
         return;
     }
     char plugin[512], folder[512], link[600];
@@ -15708,6 +15731,186 @@ static void cee_wl_toggle_maximized(struct cee_window *w) {
     }
 }
 
+/* ---- A title bar the program draws, on X11 (ADR 0206 step 3): the window manager draws no frame (_MOTIF_WM_HINTS,
+   decorations none) and does what only it can when the runtime asks it, as EWMH says: moving and resizing by the
+   pointer (_NET_WM_MOVERESIZE), the window menu (_GTK_SHOW_WINDOW_MENU, GNOME's and KDE's), maximizing
+   (_NET_WM_STATE), minimizing (WM_CHANGE_STATE). Only with a window manager that moves windows so: without one, or
+   with one that does not say it does (_NET_SUPPORTED), the window keeps the system's frame. */
+static int cee_x_supports(struct cee_x11 *n, unsigned long atom) {
+    unsigned long supported = cee_x.intern_atom(n->display, "_NET_SUPPORTED", 0), type = 0, count = 0, after = 0;
+    int format = 0;
+    unsigned char *data = NULL;
+    int found = 0;
+    if (cee_x.get_window_property(n->display, cee_x.root_window(n->display, n->screen), supported, 0, 4096, 0,
+                                  4 /* XA_ATOM */, &type, &format, &count, &after, &data) == 0 &&
+        data != NULL) {
+        const unsigned long *atoms = (const unsigned long *)data; /* format 32 is longs */
+        for (unsigned long k = 0; k < count && format == 32; k++) {
+            found |= atoms[k] == atom;
+        }
+    }
+    if (data != NULL) {
+        cee_x.release(data);
+    }
+    return found;
+}
+
+static void cee_x_program_bar(struct cee_window *w, struct cee_x11 *n) {
+    n->wm_state = cee_x.intern_atom(n->display, "_NET_WM_STATE", 0);
+    n->wm_max_vert = cee_x.intern_atom(n->display, "_NET_WM_STATE_MAXIMIZED_VERT", 0);
+    n->wm_max_horz = cee_x.intern_atom(n->display, "_NET_WM_STATE_MAXIMIZED_HORZ", 0);
+    n->wm_moveresize = cee_x.intern_atom(n->display, "_NET_WM_MOVERESIZE", 0);
+    n->wm_menu = cee_x.intern_atom(n->display, "_GTK_SHOW_WINDOW_MENU", 0);
+    n->wm_change_state = cee_x.intern_atom(n->display, "WM_CHANGE_STATE", 0);
+    w->program_bar = w->wants_bar && cee_x_supports(n, n->wm_moveresize);
+    if (w->program_bar) {
+        unsigned long hints[5] = {2ul /* decorations */, 0ul, 0ul /* none */, 0ul, 0ul};
+        unsigned long motif = cee_x.intern_atom(n->display, "_MOTIF_WM_HINTS", 0);
+        cee_x.change_property(n->display, n->window, motif, motif, 32, 0 /* PropModeReplace */,
+                              (const unsigned char *)hints, 5);
+    }
+}
+
+/* A client message about this window to the root window, as EWMH's requests are sent. */
+static void cee_x_ask_wm(struct cee_x11 *n, unsigned long type, long a, long b, long c, long d, long e) {
+    cee_x_event message;
+    memset(&message, 0, sizeof message);
+    message.client.type = 33; /* ClientMessage */
+    message.client.window = n->window;
+    message.client.message_type = type;
+    message.client.format = 32;
+    message.client.data[0] = a;
+    message.client.data[1] = b;
+    message.client.data[2] = c;
+    message.client.data[3] = d;
+    message.client.data[4] = e;
+    cee_x.send_event(n->display, cee_x.root_window(n->display, n->screen), 0,
+                     (1L << 19) | (1L << 20) /* SubstructureNotify | SubstructureRedirect */, &message);
+    cee_x.flush(n->display);
+}
+
+static void cee_x_toggle_maximized(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_x_ask_wm(n, n->wm_state, 2 /* toggle */, (long)n->wm_max_vert, (long)n->wm_max_horz, 1 /* an application */, 0);
+}
+
+static void cee_x_minimize(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    cee_x_ask_wm(n, n->wm_change_state, 3 /* IconicState */, 0, 0, 0, 0);
+}
+
+/* Whether the window is maximized, from its _NET_WM_STATE, kept for every window; a change is a Resized. */
+static void cee_x_read_state(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    unsigned long type = 0, count = 0, after = 0;
+    int format = 0, vertical = 0, horizontal = 0;
+    unsigned char *data = NULL;
+    if (cee_x.get_window_property(n->display, n->window, n->wm_state, 0, 64, 0, 4 /* XA_ATOM */, &type, &format,
+                                  &count, &after, &data) == 0 &&
+        data != NULL) {
+        const unsigned long *atoms = (const unsigned long *)data;
+        for (unsigned long k = 0; k < count && format == 32; k++) {
+            vertical |= atoms[k] == n->wm_max_vert;
+            horizontal |= atoms[k] == n->wm_max_horz;
+        }
+    }
+    if (data != NULL) {
+        cee_x.release(data);
+    }
+    int maximized = vertical && horizontal;
+    if (maximized != w->maximized) {
+        w->maximized = maximized;
+        cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+    }
+}
+
+/* _NET_WM_MOVERESIZE's direction for an edge (cee_wl_edge's bits): 0 top left, then clockwise to 7 left. */
+static long cee_x_direction(uint32_t edge) {
+    switch (edge) {
+    case 5: return 0;
+    case 1: return 1;
+    case 9: return 2;
+    case 8: return 3;
+    case 10: return 4;
+    case 2: return 5;
+    case 6: return 6;
+    default: return 7;
+    }
+}
+
+/* A press the runtime takes for a window with the program's title bar (ADR 0206), as on Wayland: at an edge the
+   primary button resizes; in the bar but in none of its boxes, the primary button moves the window and a second
+   press within 0.4 s toggles maximized, and the secondary shows the window menu. The press's implicit grab is let go
+   so that the window manager can take the pointer. 1 when taken: the program sees no press then. */
+static int cee_x_bar_press(struct cee_window *w, const cee_x_input *press) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    float x = (float)press->x, y = (float)press->y;
+    if (!w->program_bar || (press->code != 1 && press->code != 3)) {
+        return 0;
+    }
+    uint32_t edge = cee_wl_edge(w, x, y);
+    long direction = -1;
+    if (edge != 0) {
+        if (press->code != 1) {
+            return 0;
+        }
+        direction = cee_x_direction(edge);
+    } else {
+        if (y >= w->bar[0]) {
+            return 0;
+        }
+        for (int k = 0; k < 4; k++) {
+            const float *b = &w->bar[1 + 4 * k];
+            if (b[2] > 0.0f && b[3] > 0.0f && x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3]) {
+                return 0;
+            }
+        }
+        if (press->code == 3) {
+            cee_x.ungrab_pointer(n->display, press->time);
+            cee_x_ask_wm(n, n->wm_menu, 0 /* the core pointer */, press->x_root, press->y_root, 0, 0);
+            return 1;
+        }
+        double now = cee_window_now();
+        if (now - n->bar_pressed_at < 0.4) {
+            n->bar_pressed_at = 0.0;
+            cee_x_toggle_maximized(w);
+            return 1;
+        }
+        n->bar_pressed_at = now;
+        direction = 8; /* _NET_WM_MOVERESIZE_MOVE */
+    }
+    cee_x.ungrab_pointer(n->display, press->time);
+    cee_x_ask_wm(n, n->wm_moveresize, press->x_root, press->y_root, direction, 1 /* the button */,
+                 1 /* an application */);
+    return 1;
+}
+
+/* The pointer's shape: a resize shape at an edge of a window with the program's title bar, else the program's. */
+static void cee_x_show_cursor(struct cee_window *w) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    uint32_t edge = cee_wl_edge(w, n->pointer_x, n->pointer_y);
+    n->edge_shown = edge;
+    if (edge != 0) {
+        /* XC_top_left_corner, top_side, top_right_corner, right_side, bottom_right_corner, bottom_side,
+           bottom_left_corner, left_side, by cee_x_direction's order. */
+        static const unsigned int shapes[] = {134, 138, 136, 96, 14, 16, 12, 70};
+        long k = cee_x_direction(edge);
+        if (n->edge_cursors[k] == 0) {
+            n->edge_cursors[k] = cee_x.create_font_cursor(n->display, shapes[k]);
+        }
+        cee_x.define_cursor(n->display, n->window, n->edge_cursors[k]);
+        cee_x.flush(n->display);
+        return;
+    }
+    static const unsigned int shapes[] = {68, 60, 152, 34, 52, 108, 116}; /* XC_left_ptr, hand2, xterm, ... */
+    int32_t k = w->cursor >= 0 && w->cursor < 7 ? w->cursor : 0;
+    if (n->cursors[k] == 0) {
+        n->cursors[k] = cee_x.create_font_cursor(n->display, shapes[k]);
+    }
+    cee_x.define_cursor(n->display, n->window, n->cursors[k]);
+    cee_x.flush(n->display);
+}
+
 /* Whether this process's windows are Wayland's, which the first open decides (ADR 0205 §2.1): CEESAFE_WINDOW_SYSTEM
    when it says x11 or wayland; else Wayland when there is a compositor the connection takes (step 2 made it the
    default), and X11 when not. */
@@ -15788,6 +15991,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     cee_x.change_property(display, n->window, n->xdnd_aware, 4 /* XA_ATOM */, 32, 0 /* PropModeReplace */,
                           (const unsigned char *)&version, 1);
     cee_x_title(display, n->window, n->utf8_atom, title);
+    cee_x_program_bar(w, n);
     cee_x.map_window(display, n->window);
     cee_x.flush(display);
     size_t title_length = strlen(title);
@@ -16261,13 +16465,26 @@ static void cee_native_pump(struct cee_window *w) {
                     cee_window_push(w, CEE_EVENT_WHEEL, 0, 0, 0, 0, dx, dy);
                 }
             } else if (b >= 1 && b <= 3) {
+                if (e.type == 4 && cee_x_bar_press(w, &e.input)) {
+                    break; /* the runtime's (ADR 0206) */
+                }
                 int32_t button = b == 1 ? 0 : b == 3 ? 1 : 2;
                 cee_window_push(w, CEE_EVENT_BUTTON, button, e.type == 4, 0, 0, x, y);
             }
             break;
         }
         case 6: /* MotionNotify */
+            n->pointer_x = (float)e.input.x;
+            n->pointer_y = (float)e.input.y;
+            if (w->program_bar && cee_wl_edge(w, n->pointer_x, n->pointer_y) != n->edge_shown) {
+                cee_x_show_cursor(w); /* an edge's resize shape, or the program's again (ADR 0206) */
+            }
             cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, (float)e.input.x, (float)e.input.y);
+            break;
+        case 28: /* PropertyNotify: the window manager's state of the window (ADR 0206) */
+            if (e.property.atom == n->wm_state) {
+                cee_x_read_state(w);
+            }
             break;
         case 9: /* FocusIn */
             cee_window_focus(w, 1);
@@ -16434,13 +16651,7 @@ static void cee_native_cursor(struct cee_window *w) {
         cee_wl.flush(cee_wls.display);
         return;
     }
-    static const unsigned int shapes[] = {68, 60, 152, 34, 52, 108, 116}; /* XC_left_ptr, hand2, xterm, ... */
-    int32_t k = w->cursor >= 0 && w->cursor < 7 ? w->cursor : 0;
-    if (n->cursors[k] == 0) {
-        n->cursors[k] = cee_x.create_font_cursor(n->display, shapes[k]);
-    }
-    cee_x.define_cursor(n->display, n->window, n->cursors[k]);
-    cee_x.flush(n->display);
+    cee_x_show_cursor(w);
 }
 
 static void cee_native_title(struct cee_window *w, const char *title) {
@@ -17514,6 +17725,8 @@ void ceesafe_window_minimize(void *window) {
 #if (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
     if (!w->scripted && cee_wl_of(w) != NULL) {
         cee_wl_minimize(w);
+    } else if (!w->scripted && w->native != NULL) {
+        cee_x_minimize(w);
     }
 #elif defined(_WIN32)
     if (!w->scripted) {
@@ -17535,6 +17748,8 @@ void ceesafe_window_toggle_maximized(void *window) {
 #if (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
     if (!w->scripted && cee_wl_of(w) != NULL) {
         cee_wl_toggle_maximized(w);
+    } else if (!w->scripted && w->native != NULL) {
+        cee_x_toggle_maximized(w);
     }
 #elif defined(_WIN32)
     if (!w->scripted) {

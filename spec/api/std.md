@@ -4504,6 +4504,18 @@ Whether the program draws the window's title bar (ADR 0206): it asked for `Windo
 the system allows it. Only then does a program draw one.
 Safety: the runtime only reads the window's record.
 
+### Window.systemButtons
+
+```ceesafe
+public fn systemButtons(borrow this) -> WindowArea
+```
+
+Where the system's own buttons are in the program's title bar (ADR 0206), with their margins: on macOS the
+traffic lights, which stay the system's, centered in the bar's height. A program leaves that area clear and
+draws no minimize, maximize or close of its own then. 0 by 0 where the program draws them (Wayland, Windows,
+X11) and for a window with the system's title bar. A change of it is a `Resized`.
+Safety: the runtime writes the four numbers.
+
 ### Window.setTitleBar
 
 ```ceesafe

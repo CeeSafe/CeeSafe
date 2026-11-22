@@ -3301,8 +3301,14 @@ Diagnostics: none new.
   draws the title bar: `WindowStyle.System` (what `open` and `openWith` give) or `WindowStyle.ProgramTitleBar`, a
   window with no title bar of the system's, whose program draws one at the top of its content. Where the system does
   not allow it the window is `System`'s, and `w.programTitleBar()` says which it got: true on Wayland (where the
-  compositor, asked, draws none) and on Windows (the caption taken away, the frame's borders, shadow and snapping
-  kept), false so far on macOS and X11 and in script runs (ADR 0206 §2.4's later steps).
+  compositor, asked, draws none), on Windows (the caption taken away, the frame's borders, shadow and snapping kept),
+  on macOS (a full-size content view under a transparent title bar, the traffic lights kept) and on X11 with a window
+  manager that moves windows by EWMH (`_NET_WM_MOVERESIZE` in `_NET_SUPPORTED`; the frame taken away by
+  `_MOTIF_WM_HINTS`); false in script runs.
+  - `w.systemButtons()` is the area, a `WindowArea` with the buttons' margins, that the system's own buttons take
+    in the program's bar: on macOS the traffic lights, centered in the bar's height. A program leaves it clear and
+    draws no minimize, maximize or close of its own then. It is 0 by 0 where the program draws them (Wayland,
+    Windows, X11), in full screen, and for a window with the system's title bar; a change of it is a `Resized`.
   - `w.setTitleBar(WindowTitleBar)` gives the bar's layout whenever it changes: its `height` from the content's top
     and its `minimize`, `maximize`, `close` and `menu` buttons as `WindowArea`s (x, y, width, height in points; one
     of 0 by 0 is none). For a window with the program's title bar, a primary press in the bar but in none of the
@@ -3310,11 +3316,15 @@ Diagnostics: none new.
     system's window menu; a primary press within 6 points of an edge or a corner resizes it, and the pointer takes
     the resize shape there, but while the window is maximized, fullscreen or tiled. Those presses are the window's,
     not the program's: no `PointerButton` comes of them. The program draws the buttons and acts on their presses.
+    On macOS a double press does what the user chose in System Settings (zoom, minimize or nothing), the edges are
+    AppKit's (a press in the top 4 points resizes), there is no window menu, and a press on a traffic light is the
+    system's alone.
   - `w.minimize()` and `w.toggleMaximized()` ask the system; `w.maximized()` is whether the window is maximized, and
     a change of it is a `Resized`. On Windows the maximize box is Windows' maximize button to the system (so Windows
     11's snap layouts open over it), and the pointer's moves and presses over it are given to the program as any
-    other's. Where the system does not implement them (so far: macOS and X11), they do nothing and `maximized()` is
-    false.
+    other's. On macOS they are `miniaturize:` and `zoom:`, and `maximized()` is `isZoomed`; on X11 they are EWMH's
+    `WM_CHANGE_STATE` and `_NET_WM_STATE`, and `maximized()` is both of `_NET_WM_STATE`'s maximized states. In script
+    runs they do nothing and `maximized()` is false.
 - **Native handles** (ADR 0137). `w.nativeHandle()` is a `WindowHandle`:
   - `AppKit(window, view)`: macOS's `NSWindow` and its content `NSView`, which is layer-backed;
   - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;

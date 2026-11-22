@@ -3607,9 +3607,9 @@ def main():
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1
-            # ADR 0206: the program's title bar on Wayland, Windows and macOS, where the traffic lights stay the system's
-            bar = ("bar true false true" if sys.platform == "darwin" else
-                   "bar true false false" if WAYLAND or os.name == "nt" else "bar false false false")
+            # ADR 0206: the program's title bar everywhere (on X11 with a window manager that moves windows by EWMH,
+            # as every desktop's does); on macOS the traffic lights stay the system's
+            bar = "bar true false true" if sys.platform == "darwin" else "bar true false false"
             if r.returncode != 0 or r.stdout.strip() != bar:
                 problems.append(f"a real window asking for its own title bar: expected {bar!r}, got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")

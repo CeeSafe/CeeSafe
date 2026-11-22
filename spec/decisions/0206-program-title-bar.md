@@ -4,7 +4,7 @@
   Windows then macOS and X11, ClayWind's demo with its own bar on each system as it comes), as ADR 0205's step 3 (the
   owner: "I prefer the cairo plugin. Then we draw CeeSafe's own title bar").
 - Scope: `lib/std/window.cee` (an open option, a title bar's layout, three window actions), `runtime/hosted/
-  ceesafe_rt_window.c` (Wayland first; Windows and macOS later steps), type-system.md §26.13, `tools/window_check.py`.
+  ceesafe_rt_window.c` (Wayland, then Windows, then macOS and X11), type-system.md §26.13, `tools/window_check.py`.
   No language or compiler change.
 
 ## 1. Context
@@ -39,6 +39,11 @@
   the bar to start the compositor's move with the press's serial.
 - **Resizing** by the edges is the runtime's: a press within 6 points of an edge or a corner resizes, and the pointer
   takes the resize shape there, unless the window is maximized, fullscreen or tiled.
+
+- **`w.systemButtons() -> WindowArea`** (added at step 3, the owner's choice: "systemButtons()"): the area, with
+  their margins, that the system's own buttons take in the bar, which the program leaves clear, drawing no
+  minimize, maximize or close of its own then. On macOS, the traffic lights; 0 by 0 elsewhere, where the program
+  draws them. Without it a program could not know where the lights are, nor that it should not draw buttons.
 
 ### 2.3 What only the system can do
 
@@ -161,3 +166,56 @@
   is told AMD64, and took x64's libraries; the process's pseudo-handle is passed as a pointer, not ctypes' default
   32-bit int, or the call fails), and names `-luser32`. On the VM then: 78 checks, 0 problems.
 - **Not checked**: a second monitor at another DPI; Windows 10.
+
+## 9. Step 3 as implemented: macOS and X11 (2026-11-22)
+
+`runtime/hosted/ceesafe_rt_window.c` (the AppKit and X11 parts), `lib/std/window.cee` (`systemButtons`),
+type-system.md §26.13, `tools/window_check.py`.
+
+### 9.1 macOS
+
+- **The window**: `NSWindowStyleMaskFullSizeContentView`, `titlebarAppearsTransparent`, the title hidden (it stays
+  the window's, for the Window menu and Mission Control). The content fills the window; the program's bar is drawn
+  under AppKit's transparent one.
+- **The traffic lights stay the system's** (§2.2's `systemButtons`): they are centered in the program's bar (its
+  height from `setTitleBar`, AppKit's title bar's until then), as far in from the left as from the top (7 points at
+  least), and placed again when AppKit lays them out anew (each resize). A bar taller than AppKit's title bar keeps
+  them inside it. `systemButtons()` is the area from the content's left to the lights' right with that margin, as
+  high as the bar; in full screen, where AppKit hides them, it is none.
+- **Presses**: the runtime sees every event before AppKit (`cee_native_pump`). A primary press in the bar outside
+  the program's boxes and the lights moves the window (`performWindowDragWithEvent:`), and a double press does the
+  user's `AppleActionOnDoubleClick` (zoom by default, minimize, or nothing); the program sees neither. A press on a
+  light or in the top 4 points (the frame's resize edge) goes to AppKit alone. A press in a program's box goes to the
+  program alone, not to AppKit's title bar, which would move the window by it. There is no window menu on macOS.
+- **The actions**: `miniaturize:` and `zoom:`; `maximized()` is `isZoomed`, read at each resize, for every window.
+- **Checked on this Mac (macOS 26)** with a probe and real mouse events (CGEvent) and screenshots: the lights
+  centered in a 36-point bar, `systemButtons()` 0,0 82 by 36; dragging the bar moved the window by the drag (480,150
+  to 580,200); a press in the program's menu box reached it and did not move the window; a double press zoomed
+  (1440 by 799, `maximized` true) and another restored; the top edge resized (320 to 381 high) with no press to the
+  program; the green light entered full screen (`systemButtons()` none) and, again, left it (the area back); yellow
+  minimized; red gave `Closed`. `window_check --display`: 80 of 80.
+
+### 9.2 X11
+
+- **The frame**: `_MOTIF_WM_HINTS` with no decorations, only when the window manager says (`_NET_SUPPORTED`) that it
+  moves windows for a client (`_NET_WM_MOVERESIZE`); without one the window keeps the system's frame, and
+  `programTitleBar()` is false.
+- **Presses**, as on Wayland: at an edge (6 points, not while maximized) the primary button resizes, by
+  `_NET_WM_MOVERESIZE` with the edge's direction; in the bar outside the boxes it moves the window
+  (`_NET_WM_MOVERESIZE_MOVE`), a second within 0.4 s toggles maximized, and the secondary shows the window menu
+  (`_GTK_SHOW_WINDOW_MENU`, GNOME's and KDE's). The press's implicit grab is let go first (`XUngrabPointer`), so that
+  the window manager can take the pointer. The pointer takes the edge's resize shape (the cursor font's sides and
+  corners).
+- **The actions**: `WM_CHANGE_STATE` (iconic) and `_NET_WM_STATE` (toggle both maximized states); `maximized()` is
+  read from `_NET_WM_STATE` at each `PropertyNotify` (the window now selects `PropertyChangeMask`), for every window.
+- **Checked on the Fedora 45 VM** (GNOME, Xwayland, `CEESAFE_WINDOW_SYSTEM=x11`) with the probe and GNOME's real
+  pointer (Mutter's RemoteDesktop; Xwayland takes no synthetic input while the real pointer is elsewhere): no frame
+  (`_NET_FRAME_EXTENTS` none); dragging the bar moved the window by the drag (272,240 to 372,290); a double press
+  maximized it (1024 by 736, `_NET_WM_STATE` both maximized, `maximized()` true); the program's maximize box restored
+  it; the right edge resized it (480 to 562 wide); a secondary press in the bar was the runtime's (the press after it
+  closed the menu); the minimize box made it iconic. `window_check --display`: 79 of 79 on Wayland and on X11.
+- **Also**: the cairo plugin's lookup (ADR 0205) passed a function pointer to `dladdr` as an object pointer, which
+  ISO C does not convert (`-Wpedantic` warned in Linux builds); its address is copied
+  now.
+- **Not checked**: the edge's resize shape (no screenshot of Xwayland's pointer here); window managers other than
+  Mutter.

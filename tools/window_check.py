@@ -2963,7 +2963,9 @@ fn main() -> i32 {
         Console.write("bar ");
         Console.write(got);
         Console.write(" ");
-        Console.writeLine(styled.maximized());
+        Console.write(styled.maximized());
+        Console.write(" ");
+        Console.writeLine(styled.systemButtons().width > 0.0);
         return 0;
     }
     let surface = if (mode == "external") WindowSurface.External else WindowSurface.Frames;
@@ -3345,7 +3347,7 @@ def main():
         surface_cases = [
             ("a scripted Frames window", [surface, "frames"], "0 0 0", 0, True),
             ("a scripted External window", [surface, "external"], "0 1 1", 0, False),
-            ("a scripted window asking for its own title bar (ADR 0206)", [surface, "bar"], "bar false false", 0,
+            ("a scripted window asking for its own title bar (ADR 0206)", [surface, "bar"], "bar false false false", 0,
              False),
             ("openWith in the interpreter", [compiler, "run", "--interp", surface_source, "--", "external"],
              "open failed", 1, False),
@@ -3605,7 +3607,9 @@ def main():
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1
-            bar = "bar true false" if WAYLAND or os.name == "nt" else "bar false false"  # ADR 0206: Wayland, Windows
+            # ADR 0206: the program's title bar on Wayland, Windows and macOS, where the traffic lights stay the system's
+            bar = ("bar true false true" if sys.platform == "darwin" else
+                   "bar true false false" if WAYLAND or os.name == "nt" else "bar false false false")
             if r.returncode != 0 or r.stdout.strip() != bar:
                 problems.append(f"a real window asking for its own title bar: expected {bar!r}, got "
                                 f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")

@@ -377,6 +377,9 @@ struct cee_window {
        points (its height, then the minimize, maximize, close and menu boxes, x, y, width, height each); whether the
        window is maximized, or tiled or fullscreen (no edge resizes then). */
     int wants_bar, program_bar, maximized, tiled;
+    /* The area the system's own buttons take in the program's bar, in points from the content's top left (macOS's
+       traffic lights, with their margins); 0 by 0 where the program draws them. */
+    float sys_buttons[4];
     float bar[17];
     int32_t return_key; /* WindowReturnKey's number, 0 to 5 (ADR 0161) */
     /* Accessibility (ADR 0164): the list last given and the text its ranges point into (the runtime's copies), the
@@ -434,6 +437,7 @@ void ceesafe_window_safe_area(void *window, float *insets);
 void ceesafe_window_keyboard_inset(void *window, float *inset);
 void ceesafe_window_set_text_kind(void *window, int32_t kind);
 int32_t ceesafe_window_program_title_bar(void *window);
+void ceesafe_window_system_buttons(void *window, float *area);
 void ceesafe_window_set_title_bar(void *window, const float *bar);
 void ceesafe_window_minimize(void *window);
 void ceesafe_window_toggle_maximized(void *window);
@@ -3557,6 +3561,10 @@ struct cee_mac {
     /* Accessibility (ADR 0164): the element of each node of the window's list, in its order, each retained. */
     cee_id *access_elements;
     uint32_t access_count;
+    /* A title bar the program draws (ADR 0206): the traffic lights' row, in points from the content's top left, and
+       the bar's height they were centered in. */
+    float lights[4];
+    float lights_bar;
 };
 
 static cee_fn cee_mac_symbol(void *handle, const char *name) {
@@ -3656,6 +3664,107 @@ static void cee_mac_update_size(struct cee_window *w) {
     cee_window_resized(w, (uint32_t)(width + 0.5), (uint32_t)(height + 0.5));
 }
 
+/* A title bar the program draws (ADR 0206 step 3): the window's content fills it, under a transparent title bar with
+   no title, and the traffic lights stay the system's. They are centered in the program's bar (its height from
+   setTitleBar, AppKit's title bar's until then), as far in from the left as from the top, and the area they take,
+   with that margin on each side, is `systemButtons()`. AppKit lays them out again when the window changes, so they
+   are placed again then. In full screen AppKit hides them: the area is none. A change of it is a Resized. */
+static void cee_mac_place_buttons(struct cee_window *w) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (!w->program_bar || m == NULL) {
+        return;
+    }
+    float area[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    cee_id close = cee_send_id_ulong(m->window, "standardWindowButton:", 0ul);
+    cee_id mini = cee_send_id_ulong(m->window, "standardWindowButton:", 1ul);
+    cee_id zoom = cee_send_id_ulong(m->window, "standardWindowButton:", 2ul);
+    int full = (cee_send_ulong(m->window, "styleMask") & (1ul << 14)) != 0; /* NSWindowStyleMaskFullScreen */
+    if (close != NULL && mini != NULL && zoom != NULL && !full) {
+        cee_id titlebar = cee_send(close, "superview");
+        double room = cee_send_rect(titlebar, "bounds").size.height;
+        cee_rect c = cee_send_rect(close, "frame");
+        double size = c.size.height, step = cee_send_rect(mini, "frame").origin.x - c.origin.x;
+        double bar = w->bar[0] > 0.0f ? (double)w->bar[0] : room;
+        double top = (bar - size) / 2.0;
+        if (top + size > room) {
+            top = room - size; /* a bar taller than AppKit's title bar: the lights stay inside it */
+        }
+        if (top < 0.0) {
+            top = 0.0;
+        }
+        double left = (bar - size) / 2.0 < 7.0 ? 7.0 : (bar - size) / 2.0;
+        int flipped = cee_send_bool(titlebar, "isFlipped") != 0;
+        cee_id buttons[3] = {close, mini, zoom};
+        for (int k = 0; k < 3; k++) {
+            cee_point at = {left + step * k, flipped ? top : room - top - size};
+            ((void (*)(cee_id, cee_sel, cee_point))cee_objc.send)(buttons[k], cee_mac_sel("setFrameOrigin:"), at);
+        }
+        m->lights[0] = (float)left;
+        m->lights[1] = (float)top;
+        m->lights[2] = (float)(step * 2.0 + size);
+        m->lights[3] = (float)size;
+        m->lights_bar = (float)bar;
+        area[2] = (float)(left * 2.0 + step * 2.0 + size);
+        area[3] = (float)bar;
+    } else {
+        m->lights[2] = 0.0f;
+    }
+    if (memcmp(area, w->sys_buttons, sizeof area) != 0) {
+        memcpy(w->sys_buttons, area, sizeof area);
+        cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+    }
+}
+
+/* Whether (x, y) is in box `k` of the program's title bar (0 minimize, 1 maximize, 2 close, 3 menu). */
+static int cee_mac_in_box(const struct cee_window *w, int k, float x, float y) {
+    const float *b = &w->bar[1 + 4 * k];
+    return b[2] > 0.0f && b[3] > 0.0f && x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3];
+}
+
+/* A primary press the runtime takes for a window with the program's title bar (ADR 0206): in the bar but in none of
+   the program's boxes and not on a traffic light, it moves the window (performWindowDragWithEvent:), and a double
+   press does what the user chose in System Settings (AppleActionOnDoubleClick: zoom by default, minimize, or
+   nothing). 1 when taken: the program sees no press then, and AppKit's title bar no event. -1 for a press in a
+   program's box: the program's, and not AppKit's title bar's, which would move the window by it. -2 for one on a
+   traffic light or in the top 4 points, the frame's edge, which resizes there: AppKit's only. 0 otherwise. */
+static int cee_mac_bar_press(struct cee_window *w, cee_id event, float x, float y) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (!w->program_bar || y >= w->bar[0]) {
+        return 0;
+    }
+    const float *l = m->lights;
+    if (y < 4.0f || (l[2] > 0.0f && x >= l[0] && x < l[0] + l[2] && y >= l[1] && y < l[1] + l[3])) {
+        return -2;
+    }
+    if (cee_mac_in_box(w, 0, x, y) || cee_mac_in_box(w, 1, x, y) || cee_mac_in_box(w, 2, x, y) ||
+        cee_mac_in_box(w, 3, x, y)) {
+        return -1;
+    }
+    if (cee_send_long(event, "clickCount") >= 2) {
+        cee_id choice = cee_send_id_id(cee_send(cee_mac_cls("NSUserDefaults"), "standardUserDefaults"),
+                                       "stringForKey:", cee_nsstring("AppleActionOnDoubleClick"));
+        const char *action = choice != NULL ? (const char *)cee_send(choice, "UTF8String") : NULL;
+        if (action != NULL && strcmp(action, "Minimize") == 0) {
+            cee_send_v_id(m->window, "miniaturize:", NULL);
+        } else if (action == NULL || strcmp(action, "None") != 0) {
+            cee_send_v_id(m->window, "zoom:", NULL);
+        }
+        return 1;
+    }
+    cee_send_v_id(m->window, "performWindowDragWithEvent:", event);
+    return 1;
+}
+
+/* Whether the window is zoomed (ADR 0206's maximized), kept for every window; a change is a Resized. */
+static void cee_mac_update_zoomed(struct cee_window *w) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    int zoomed = cee_send_bool(m->window, "isZoomed") != 0;
+    if (zoomed != w->maximized) {
+        w->maximized = zoomed;
+        cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
+    }
+}
+
 /* The delegate's methods. */
 static signed char cee_mac_should_close(cee_id self, cee_sel cmd, cee_id sender) {
     (void)self;
@@ -3681,6 +3790,8 @@ static void cee_mac_did_resize(cee_id self, cee_sel cmd, cee_id notification) {
     if (w != NULL) {
         unsigned queued = w->count;
         cee_mac_update_size(w);
+        cee_mac_update_zoomed(w);
+        cee_mac_place_buttons(w);
         if (w->count != queued) {
             cee_mac_wake_perform(NULL);
         }
@@ -4698,9 +4809,12 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     void *pool = cee_objc.pool_push();
     cee_rect frame = {{0.0, 0.0}, {(double)w->width, (double)w->height}};
     cee_id window = cee_send(cee_mac_cls("NSWindow"), "alloc");
-    /* Titled, closable, miniaturizable, resizable; buffered backing. */
+    /* Titled, closable, miniaturizable, resizable; for the program's title bar (ADR 0206) also a full-size content
+       view; buffered backing. */
+    w->program_bar = w->wants_bar;
+    unsigned long style = 15ul | (w->program_bar ? 1ul << 15 /* NSWindowStyleMaskFullSizeContentView */ : 0ul);
     window = ((cee_id(*)(cee_id, cee_sel, cee_rect, unsigned long, unsigned long, signed char))cee_objc.send)(
-        window, cee_mac_sel("initWithContentRect:styleMask:backing:defer:"), frame, 15ul, 2ul, 0);
+        window, cee_mac_sel("initWithContentRect:styleMask:backing:defer:"), frame, style, 2ul, 0);
     if (window == NULL) {
         cee_objc.pool_pop(pool);
         ceesafe_platform_free(m);
@@ -4728,6 +4842,10 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     cee_send_v_id(window, "setDelegate:", m->delegate);
     cee_send_v_bool(window, "setAcceptsMouseMovedEvents:", 1);
     cee_send_v_id(window, "setTitle:", cee_nsstring(title));
+    if (w->program_bar) { /* the title stays the window's (the Window menu, Mission Control), not drawn */
+        cee_send_v_bool(window, "setTitlebarAppearsTransparent:", 1);
+        cee_send_v_long(window, "setTitleVisibility:", 1 /* NSWindowTitleHidden */);
+    }
     /* An sRGB window: its backing store matches the frames (sRGB CGImages), so Core Animation shows them without
        converting every frame on the CPU; the window server matches the window to the display. */
     cee_send_v_id(window, "setColorSpace:", cee_send(cee_mac_cls("NSColorSpace"), "sRGBColorSpace"));
@@ -4740,6 +4858,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     cee_send_v_id(window, "makeKeyAndOrderFront:", NULL);
     cee_send_v_bool(cee_objc.app, "activateIgnoringOtherApps:", 1);
     w->scale = (float)cee_send_double(window, "backingScaleFactor");
+    cee_mac_place_buttons(w);
     cee_objc.pool_pop(pool);
     return 0;
 }
@@ -4870,8 +4989,18 @@ static int cee_mac_translate(struct cee_window *w, cee_id event) {
         } else {
             int32_t button = (type == 1 || type == 2) ? 0 : (type == 3 || type == 4) ? 1 : 2;
             int32_t down = type == 1 || type == 3 || type == 25;
+            int bar = type == 1 && inside ? cee_mac_bar_press(w, event, x, y) : 0;
+            if (bar == 1) {
+                return 0; /* the runtime's (ADR 0206) */
+            }
+            if (bar == -2) {
+                return 1; /* the system's */
+            }
             if (!down || inside) {
                 cee_window_push(w, CEE_EVENT_BUTTON, button, down, 0, 0, x, y);
+            }
+            if (bar == -1) {
+                return 0;
             }
         }
         return 1;
@@ -17357,11 +17486,25 @@ void ceesafe_window_set_text_kind(void *window, int32_t kind) {
    implement them (Wayland, step 1). */
 int32_t ceesafe_window_program_title_bar(void *window) { return ((struct cee_window *)window)->program_bar; }
 
+void ceesafe_window_system_buttons(void *window, float *area) {
+    memcpy(area, ((struct cee_window *)window)->sys_buttons, 4u * sizeof(float));
+}
+
 void ceesafe_window_set_title_bar(void *window, const float *bar) {
     struct cee_window *w = (struct cee_window *)window;
+    float height = w->bar[0];
     for (int k = 0; k < 17; k++) {
         w->bar[k] = bar[k] > 0.0f && bar[k] < 1e6f ? bar[k] : 0.0f; /* NaN, negative or absurd: none */
     }
+#if defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)
+    if (!w->scripted && w->bar[0] != height) {
+        void *pool = cee_objc.pool_push();
+        cee_mac_place_buttons(w); /* the traffic lights centered in the new height */
+        cee_objc.pool_pop(pool);
+    }
+#else
+    (void)height;
+#endif
 }
 
 int32_t ceesafe_window_maximized(void *window) { return ((struct cee_window *)window)->maximized; }
@@ -17375,6 +17518,12 @@ void ceesafe_window_minimize(void *window) {
 #elif defined(_WIN32)
     if (!w->scripted) {
         cee_win32_minimize(w);
+    }
+#elif defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)
+    if (!w->scripted) {
+        void *pool = cee_objc.pool_push();
+        cee_send_v_id(((struct cee_mac *)w->native)->window, "miniaturize:", NULL);
+        cee_objc.pool_pop(pool);
     }
 #else
     (void)w;
@@ -17390,6 +17539,12 @@ void ceesafe_window_toggle_maximized(void *window) {
 #elif defined(_WIN32)
     if (!w->scripted) {
         cee_win32_toggle_maximized(w);
+    }
+#elif defined(__APPLE__) && !defined(CEE_WINDOW_UIKIT)
+    if (!w->scripted) {
+        void *pool = cee_objc.pool_push();
+        cee_send_v_id(((struct cee_mac *)w->native)->window, "zoom:", NULL);
+        cee_objc.pool_pop(pool);
     }
 #else
     (void)w;

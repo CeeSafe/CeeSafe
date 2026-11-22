@@ -44,6 +44,8 @@ extern "C" {
     @effects()
     fn ceesafe_window_program_title_bar(window: *mut void) -> i32;
     @effects()
+    fn ceesafe_window_system_buttons(window: *mut void, area: *mut f32);
+    @effects()
     fn ceesafe_window_set_title_bar(window: *mut void, bar: *f32);
     @effects(sleep)
     fn ceesafe_window_minimize(window: *mut void);
@@ -857,6 +859,17 @@ public struct Window {
     /// the system allows it. Only then does a program draw one.
     /// Safety: the runtime only reads the window's record.
     public fn programTitleBar(borrow this) -> bool => unsafe { ceesafe_window_program_title_bar(this.raw) } != 0;
+
+    /// Where the system's own buttons are in the program's title bar (ADR 0206), with their margins: on macOS the
+    /// traffic lights, which stay the system's, centered in the bar's height. A program leaves that area clear and
+    /// draws no minimize, maximize or close of its own then. 0 by 0 where the program draws them (Wayland, Windows,
+    /// X11) and for a window with the system's title bar. A change of it is a `Resized`.
+    /// Safety: the runtime writes the four numbers.
+    public fn systemButtons(borrow this) -> WindowArea {
+        var area = [0.0f32; 4];
+        unsafe { ceesafe_window_system_buttons(this.raw, borrow mut area[0] as *mut f32); }
+        return WindowArea { x: area[0], y: area[1], width: area[2], height: area[3] };
+    }
 
     /// The program's title bar as it is drawn now (ADR 0206): given whenever its layout changes. The runtime moves,
     /// maximizes and shows the window menu for presses in the bar outside its buttons, and resizes by the edges.

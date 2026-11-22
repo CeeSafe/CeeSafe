@@ -88,3 +88,36 @@
 1. **The API**: a layout the program gives (proposed, §2.2), or actions it calls (§3)?
 2. **The order**: Wayland, then Windows, then macOS and X11 (proposed), or only Wayland for now?
 3. **ClayWind's demo**: its own title bar on every system once there (proposed), or on Linux only?
+
+## 7. Step 1 as implemented: Wayland (2026-11-22)
+
+`lib/std/window.cee` (`WindowStyle`, `WindowArea`, `WindowTitleBar`, `openStyled`, `programTitleBar`, `setTitleBar`,
+`minimize`, `toggleMaximized`, `maximized`), `runtime/hosted/ceesafe_rt_window.c`, type-system.md §26.13,
+`tools/window_check.py`.
+
+- **As §2 has it.** `openStyled` passes the style above the surface's number, so the runtime's open keeps its
+  signature. A Wayland window asking for the program's bar has a plain `xdg_toplevel`: no libdecor frame, and where
+  the compositor offers decorations (`zxdg_decoration_manager_v1`) it is asked for client-side ones, the program's
+  bar being granted only if it agrees. The configure's states give `maximized()` and whether the window is tiled or
+  fullscreen. The runtime takes the presses §2.2 names (`xdg_toplevel`'s `move`, `resize` with the edge,
+  `show_window_menu`, `set_maximized` or `unset_maximized`), with the serial of the press, and the program does not
+  see them; over an edge the pointer takes cursor-shape-v1's resize shape.
+- **libdecor is loaded at the first window that needs it**, not at the connection: a program whose windows all draw
+  their own bar loads neither libdecor nor cairo nor pango. Checked: the probe's process maps
+  `libwayland-client.so.0` and no `libdecor`.
+- **The name**: the layout's boxes are `WindowArea`s, in points as `f32`; `WindowBox` was taken, `presentChanged`'s in
+  pixels as `u32`. The first draft reused the name, and the compiler took the first definition: lib/std's duplicate
+  went unreported because the embedded library is not checked when a program is built (`ceesafec check lib/std`
+  and the contract suite do check it).
+- **Script runs**: a scripted window keeps the layout and has no system frame, so `programTitleBar()` is false and
+  the actions do nothing; `window_check` runs the API there (§5's "the layout logged" is not done: no other
+  window call writes the script's log either).
+- **Checked on Fedora 45** (GNOME on Wayland, the VM): a probe window draws a dark bar of 36 points with three
+  buttons. Its log: `program title bar true`; the maximize button took it from 480 by 320 to 1024 by 736,
+  `maximized true`, and back; a double press in the bar maximized it with no press reaching the program; the
+  minimize button minimized it; the close button ended it. The owner, at the VM: the bar moves the window, a double
+  press maximizes and restores it, a secondary press shows GNOME's window menu, the edges and corners resize it with
+  the resize pointer ("Yes, done all. Work as you said above"); the move, the menu and the resizes are the owner's
+  check alone, the probe logging a size only when its width changed, which its log never shows but for maximizing. `window_check`: the scripted case, and a real window
+  says `bar true false` on Wayland and `bar false false` elsewhere.
+- **Not yet**: steps 2 to 4 (Windows, macOS and X11, ClayWind's `TitleBar`).

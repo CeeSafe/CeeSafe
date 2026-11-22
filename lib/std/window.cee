@@ -41,6 +41,16 @@ extern "C" {
     fn ceesafe_window_scale(window: *mut void, scale: *mut f32);
     @effects()
     fn ceesafe_window_set_cursor(window: *mut void, cursor: i32);
+    @effects()
+    fn ceesafe_window_program_title_bar(window: *mut void) -> i32;
+    @effects()
+    fn ceesafe_window_set_title_bar(window: *mut void, bar: *f32);
+    @effects(sleep)
+    fn ceesafe_window_minimize(window: *mut void);
+    @effects(sleep)
+    fn ceesafe_window_toggle_maximized(window: *mut void);
+    @effects()
+    fn ceesafe_window_maximized(window: *mut void) -> i32;
     @effects(sleep)
     fn ceesafe_window_set_title(window: *mut void, title: *u8, length: u64);
     @effects(sleep)
@@ -277,6 +287,34 @@ public enum WindowCursor {
     ResizeVertical,
 }
 
+/// Who draws a window's title bar (§26.13, ADR 0206).
+public enum WindowStyle {
+    /// The system, or on a Wayland compositor that draws none, libdecor: what `open` and `openWith` give.
+    System,
+    /// The program, at the top of its content, giving the runtime its layout with `setTitleBar`. Where the system
+    /// does not allow it the window is `System`'s, which `programTitleBar` says.
+    ProgramTitleBar,
+}
+
+/// An area in points from the content's top left (`WindowTitleBar`). One of 0 by 0 is none.
+public struct WindowArea {
+    public x: f32;
+    public y: f32;
+    public width: f32;
+    public height: f32;
+}
+
+/// A program's title bar (`Window.setTitleBar`, ADR 0206): its height from the content's top, and where its buttons
+/// are. A press in the bar but in none of them moves the window, a double press maximizes or restores it, and a
+/// secondary press shows the system's window menu; the program draws the buttons and acts on their presses itself.
+public struct WindowTitleBar {
+    public height: f32;
+    public minimize: WindowArea;
+    public maximize: WindowArea;
+    public close: WindowArea;
+    public menu: WindowArea;
+}
+
 /// What happened to a window (§26.13). Positions are points from the content's top left.
 public enum WindowEvent {
     /// The user asked to close the window; it stays open until the `Window` is dropped.
@@ -456,9 +494,26 @@ public struct Window {
         height: u32,
         surface: WindowSurface,
     ) -> Result<Window, WindowError> {
-        let code: u32 = match (surface) {
+        return Window.openStyled(title, width, height, surface, WindowStyle.System);
+    }
+
+    /// Opens a resizable window of `width` × `height` points titled `title`, whose content `surface` says who draws
+    /// and whose title bar `style` says who draws (ADR 0206).
+    /// Safety: as openWith.
+    public fn openStyled(
+        title: StringView,
+        width: u32,
+        height: u32,
+        surface: WindowSurface,
+        style: WindowStyle,
+    ) -> Result<Window, WindowError> {
+        let kind: u32 = match (surface) {
             WindowSurface.Frames => 0,
             WindowSurface.External => 1,
+        };
+        let code: u32 = kind | match (style) {
+            WindowStyle.System => 0u32,
+            WindowStyle.ProgramTitleBar => 256u32, /* the style rides above the surface's number */
         };
         var error: i32 = 0;
         let raw = unsafe { ceesafe_window_open(
@@ -797,6 +852,41 @@ public struct Window {
     public fn setTitle(borrow mut this, title: StringView) {
         unsafe { ceesafe_window_set_title(this.raw, title.ptr, title.length as u64); }
     }
+
+    /// Whether the program draws the window's title bar (ADR 0206): it asked for `WindowStyle.ProgramTitleBar`, and
+    /// the system allows it. Only then does a program draw one.
+    /// Safety: the runtime only reads the window's record.
+    public fn programTitleBar(borrow this) -> bool => unsafe { ceesafe_window_program_title_bar(this.raw) } != 0;
+
+    /// The program's title bar as it is drawn now (ADR 0206): given whenever its layout changes. The runtime moves,
+    /// maximizes and shows the window menu for presses in the bar outside its buttons, and resizes by the edges.
+    /// Safety: the runtime copies the seventeen numbers during the call only.
+    public fn setTitleBar(borrow mut this, bar: WindowTitleBar) {
+        let values = [
+            bar.height,
+            bar.minimize.x, bar.minimize.y, bar.minimize.width, bar.minimize.height,
+            bar.maximize.x, bar.maximize.y, bar.maximize.width, bar.maximize.height,
+            bar.close.x, bar.close.y, bar.close.width, bar.close.height,
+            bar.menu.x, bar.menu.y, bar.menu.width, bar.menu.height,
+        ];
+        unsafe { ceesafe_window_set_title_bar(this.raw, values[..].ptr); }
+    }
+
+    /// Minimizes the window, where the system lets a program do it (ADR 0206).
+    /// Safety: the runtime only asks the system.
+    public fn minimize(borrow mut this) {
+        unsafe { ceesafe_window_minimize(this.raw); }
+    }
+
+    /// Maximizes the window, or restores it when it is maximized (ADR 0206). The size changes as a `Resized`.
+    /// Safety: the runtime only asks the system.
+    public fn toggleMaximized(borrow mut this) {
+        unsafe { ceesafe_window_toggle_maximized(this.raw); }
+    }
+
+    /// Whether the window is maximized (ADR 0206); a change of it is a `Resized`.
+    /// Safety: the runtime only reads the window's record.
+    public fn maximized(borrow this) -> bool => unsafe { ceesafe_window_maximized(this.raw) } != 0;
 
     /// Returns about 1/60 s after the previous call, or earlier when an event arrives or the window is woken
     /// (`WindowWaker`, ADR 0142).

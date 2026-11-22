@@ -3297,6 +3297,21 @@ Diagnostics: none new.
   - `WindowSurface.Frames`: the window shows the frames given to `present` and `presentChanged`;
   - `WindowSurface.External`: the program draws the content itself, through the system's GPU API on
     `nativeHandle()`. The runtime never paints it, and `present` and `presentChanged` are `Unsupported`.
+- **Title bars** (ADR 0206). `Window.openStyled(title, width, height, surface, style: WindowStyle)` also says who
+  draws the title bar: `WindowStyle.System` (what `open` and `openWith` give) or `WindowStyle.ProgramTitleBar`, a
+  window with no title bar of the system's, whose program draws one at the top of its content. Where the system does
+  not allow it the window is `System`'s, and `w.programTitleBar()` says which it got: true on Wayland (where the
+  compositor, asked, draws none), false so far elsewhere and in script runs (ADR 0206 §2.4's later steps).
+  - `w.setTitleBar(WindowTitleBar)` gives the bar's layout whenever it changes: its `height` from the content's top
+    and its `minimize`, `maximize`, `close` and `menu` buttons as `WindowArea`s (x, y, width, height in points; one
+    of 0 by 0 is none). For a window with the program's title bar, a primary press in the bar but in none of the
+    buttons moves the window, a second within 0.4 s maximizes or restores it, and a secondary press shows the
+    system's window menu; a primary press within 6 points of an edge or a corner resizes it, and the pointer takes
+    the resize shape there, but while the window is maximized, fullscreen or tiled. Those presses are the window's,
+    not the program's: no `PointerButton` comes of them. The program draws the buttons and acts on their presses.
+  - `w.minimize()` and `w.toggleMaximized()` ask the system; `w.maximized()` is whether the window is maximized, and
+    a change of it is a `Resized`. Where the system does not implement them (so far: all but Wayland), they do
+    nothing and `maximized()` is false.
 - **Native handles** (ADR 0137). `w.nativeHandle()` is a `WindowHandle`:
   - `AppKit(window, view)`: macOS's `NSWindow` and its content `NSView`, which is layer-backed;
   - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;
@@ -3727,11 +3742,11 @@ Diagnostics: none new.
     `TextCaretMoved` for a field, `StateChanged` for the flags, `Window` `Activate` and `Deactivate`, and an
     `Announcement` for `announce`. Every question is answered on the program's first thread, from the window's
     pump and its waits, which wake for the bus too; the first makes `accessActive` true.
-- **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
+- **Effects.** `open`, `openWith`, `openStyled`, `minimize`, `toggleMaximized`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop` and `setAccessNodes`, allocate.
   `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
-  `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
+  `programTitleBar`, `setTitleBar`, `maximized`, `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;

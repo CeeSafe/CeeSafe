@@ -101,6 +101,9 @@
 - [struct WindowModifiers](#struct-windowmodifiers)
 - [enum WindowKey](#enum-windowkey)
 - [enum WindowCursor](#enum-windowcursor)
+- [enum WindowStyle](#enum-windowstyle)
+- [struct WindowArea](#struct-windowarea)
+- [struct WindowTitleBar](#struct-windowtitlebar)
 - [enum WindowEvent](#enum-windowevent)
 - [struct WindowDrop](#struct-windowdrop)
 - [struct WindowDragOver](#struct-windowdragover)
@@ -4007,6 +4010,46 @@ public enum WindowCursor {
 
 The pointer's shape over the content.
 
+## enum WindowStyle
+
+```ceesafe
+public enum WindowStyle {
+    System,
+    ProgramTitleBar,
+}
+```
+
+Who draws a window's title bar (§26.13, ADR 0206).
+
+## struct WindowArea
+
+```ceesafe
+public struct WindowArea {
+    public x: f32;
+    public y: f32;
+    public width: f32;
+    public height: f32;
+}
+```
+
+An area in points from the content's top left (`WindowTitleBar`). One of 0 by 0 is none.
+
+## struct WindowTitleBar
+
+```ceesafe
+public struct WindowTitleBar {
+    public height: f32;
+    public minimize: WindowArea;
+    public maximize: WindowArea;
+    public close: WindowArea;
+    public menu: WindowArea;
+}
+```
+
+A program's title bar (`Window.setTitleBar`, ADR 0206): its height from the content's top, and where its buttons
+are. A press in the bar but in none of them moves the window, a double press maximizes or restores it, and a
+secondary press shows the system's window menu; the program draws the buttons and acts on their presses itself.
+
 ## enum WindowEvent
 
 ```ceesafe
@@ -4244,6 +4287,22 @@ Opens a resizable window of `width` × `height` points titled `title`, whose con
 Safety: the runtime reads the title's bytes during the call only, and the handle it returns is this window's
 until the drop closes it.
 
+### Window.openStyled
+
+```ceesafe
+public fn openStyled(
+    title: StringView,
+    width: u32,
+    height: u32,
+    surface: WindowSurface,
+    style: WindowStyle,
+) -> Result<Window, WindowError>
+```
+
+Opens a resizable window of `width` × `height` points titled `title`, whose content `surface` says who draws
+and whose title bar `style` says who draws (ADR 0206).
+Safety: as openWith.
+
 ### Window.nativeHandle
 
 ```ceesafe
@@ -4434,6 +4493,53 @@ public fn setTitle(borrow mut this, title: StringView)
 
 Sets the title.
 Safety: the runtime reads the title's bytes during the call only.
+
+### Window.programTitleBar
+
+```ceesafe
+public fn programTitleBar(borrow this) -> bool
+```
+
+Whether the program draws the window's title bar (ADR 0206): it asked for `WindowStyle.ProgramTitleBar`, and
+the system allows it. Only then does a program draw one.
+Safety: the runtime only reads the window's record.
+
+### Window.setTitleBar
+
+```ceesafe
+public fn setTitleBar(borrow mut this, bar: WindowTitleBar)
+```
+
+The program's title bar as it is drawn now (ADR 0206): given whenever its layout changes. The runtime moves,
+maximizes and shows the window menu for presses in the bar outside its buttons, and resizes by the edges.
+Safety: the runtime copies the seventeen numbers during the call only.
+
+### Window.minimize
+
+```ceesafe
+public fn minimize(borrow mut this)
+```
+
+Minimizes the window, where the system lets a program do it (ADR 0206).
+Safety: the runtime only asks the system.
+
+### Window.toggleMaximized
+
+```ceesafe
+public fn toggleMaximized(borrow mut this)
+```
+
+Maximizes the window, or restores it when it is maximized (ADR 0206). The size changes as a `Resized`.
+Safety: the runtime only asks the system.
+
+### Window.maximized
+
+```ceesafe
+public fn maximized(borrow this) -> bool
+```
+
+Whether the window is maximized (ADR 0206); a change of it is a `Resized`.
+Safety: the runtime only reads the window's record.
 
 ### Window.waitFrame
 

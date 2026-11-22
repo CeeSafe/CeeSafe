@@ -2943,6 +2943,29 @@ fn main() -> i32 {
         Some(m) => m,
         null => "frames",
     };
+    if (mode == "bar") {
+        // A title bar the program draws (ADR 0206): whether it got one, the layout and the actions taken, and
+        // whether it is maximized (the actions only ask the system, which answers later or not at all).
+        var styled = match (Window.openStyled("window_check bar", 8, 6, WindowSurface.Frames,
+                                              WindowStyle.ProgramTitleBar)) {
+            Ok(w) => w,
+            Err(_) => { Console.writeLine("open failed"); return 1; }
+        };
+        let none = WindowArea { x: 0.0, y: 0.0, width: 0.0, height: 0.0 };
+        styled.setTitleBar(WindowTitleBar {
+            height: 3.0,
+            minimize: WindowArea { x: 5.0, y: 0.0, width: 1.0, height: 3.0 },
+            maximize: WindowArea { x: 6.0, y: 0.0, width: 1.0, height: 3.0 },
+            close: WindowArea { x: 7.0, y: 0.0, width: 1.0, height: 3.0 },
+            menu: none,
+        });
+        let got = styled.programTitleBar();
+        Console.write("bar ");
+        Console.write(got);
+        Console.write(" ");
+        Console.writeLine(styled.maximized());
+        return 0;
+    }
     let surface = if (mode == "external") WindowSurface.External else WindowSurface.Frames;
     var window = match (Window.openWith("window_check surface", 8, 6, surface)) {
         Ok(w) => w,
@@ -3279,6 +3302,8 @@ def main():
         surface_cases = [
             ("a scripted Frames window", [surface, "frames"], "0 0 0", 0, True),
             ("a scripted External window", [surface, "external"], "0 1 1", 0, False),
+            ("a scripted window asking for its own title bar (ADR 0206)", [surface, "bar"], "bar false false", 0,
+             False),
             ("openWith in the interpreter", [compiler, "run", "--interp", surface_source, "--", "external"],
              "open failed", 1, False),
         ]
@@ -3535,6 +3560,12 @@ def main():
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
                   len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 2 + 1 + 8)
         if args.display:
+            r = run([surface, "bar"], {}, work)
+            checks += 1
+            bar = "bar true false" if WAYLAND else "bar false false"  # ADR 0206: Wayland's first
+            if r.returncode != 0 or r.stdout.strip() != bar:
+                problems.append(f"a real window asking for its own title bar: expected {bar!r}, got "
+                                f"{r.stdout.strip()!r} (status {r.returncode}) {r.stderr.strip()}")
             r = run([surface, "external"], {}, work)
             checks += 1
             kind = "1" if sys.platform == "darwin" else "2" if os.name == "nt" else "6" if WAYLAND else "3"

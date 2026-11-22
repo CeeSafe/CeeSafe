@@ -373,6 +373,11 @@ struct cee_window {
        kind of keyboard the program asked for (WindowTextKind's number). */
     float keyboard;
     int32_t text_kind;
+    /* ADR 0206: the program asked to draw the title bar, and the system lets it (`program_bar`); the bar's layout in
+       points (its height, then the minimize, maximize, close and menu boxes, x, y, width, height each); whether the
+       window is maximized, or tiled or fullscreen (no edge resizes then). */
+    int wants_bar, program_bar, maximized, tiled;
+    float bar[17];
     int32_t return_key; /* WindowReturnKey's number, 0 to 5 (ADR 0161) */
     /* Accessibility (ADR 0164): the list last given and the text its ranges point into (the runtime's copies), the
        requests not yet taken (a ring), and whether anything has asked the system for the list. */
@@ -428,6 +433,11 @@ int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *
 void ceesafe_window_safe_area(void *window, float *insets);
 void ceesafe_window_keyboard_inset(void *window, float *inset);
 void ceesafe_window_set_text_kind(void *window, int32_t kind);
+int32_t ceesafe_window_program_title_bar(void *window);
+void ceesafe_window_set_title_bar(void *window, const float *bar);
+void ceesafe_window_minimize(void *window);
+void ceesafe_window_toggle_maximized(void *window);
+int32_t ceesafe_window_maximized(void *window);
 void ceesafe_window_set_return_key(void *window, int32_t key);
 int32_t ceesafe_window_app_event(void *window);
 int32_t ceesafe_window_set_access(void *window, const void *nodes, uint32_t count, const uint8_t *text, uint32_t length);
@@ -13789,6 +13799,19 @@ static int cee_wl_load(void) {
     cee_wl_types[25] = &cee_text_input_interface;
     cee_wl_types[26] = cee_wl.seat;
     cee_wl_types[27] = cee_wl.surface;
+#undef CEE_WL
+    cee_wl.state = 1;
+    return 1;
+}
+
+/* libdecor, at the first window that wants a title bar the compositor does not draw (ADR 0205 §7): a window with the
+   program's own (ADR 0206) loads none of it. Optional: without it such a window has no title bar. */
+static int cee_wl_decor_state; /* 0 not tried, 1 loaded, -1 not there */
+static int cee_wl_load_decor(void) {
+    if (cee_wl_decor_state != 0) {
+        return cee_wl_decor_state == 1;
+    }
+    cee_wl_decor_state = -1;
     /* libdecor is optional: without it a window on a compositor that draws no title bar has none. */
     void *d = dlopen("libdecor-0.so.0", RTLD_NOW | RTLD_LOCAL);
     if (d != NULL) {
@@ -13814,8 +13837,10 @@ static int cee_wl_load(void) {
             cee_wl.decor_new = NULL;
         }
     }
-#undef CEE_WL
-    cee_wl.state = 1;
+    if (cee_wl.decor_new == NULL) {
+        return 0;
+    }
+    cee_wl_decor_state = 1;
     return 1;
 }
 
@@ -13899,11 +13924,90 @@ static uint32_t cee_wl_shape(int32_t cursor) {
     return shapes[cursor >= 0 && cursor < 7 ? cursor : 0];
 }
 
+/* The edge of a window with the program's title bar that (x, y) is within 6 points of, as xdg_toplevel's resize edge
+   (top 1, bottom 2, left 4, right 8, and their sums for corners); 0 for none, and always for one maximized or tiled
+   (ADR 0206). */
+static uint32_t cee_wl_edge(struct cee_window *w, float x, float y) {
+    if (!w->program_bar || w->maximized || w->tiled) {
+        return 0;
+    }
+    const float m = 6.0f;
+    uint32_t edge = 0;
+    edge |= y < m ? 1u : 0u;
+    edge |= y >= (float)w->height - m ? 2u : 0u;
+    edge |= x < m ? 4u : 0u;
+    edge |= x >= (float)w->width - m ? 8u : 0u;
+    return edge;
+}
+
+/* cursor-shape-v1's resize shapes for an edge: n 19, s 22, w 25, e 18, nw 21, ne 20, sw 24, se 23. */
+static uint32_t cee_wl_edge_shape(uint32_t edge) {
+    switch (edge) {
+    case 1: return 19;
+    case 2: return 22;
+    case 4: return 25;
+    case 8: return 18;
+    case 5: return 21;
+    case 9: return 20;
+    case 6: return 24;
+    case 10: return 23;
+    default: return 1;
+    }
+}
+
 static void cee_wl_set_cursor(struct cee_window *w) {
     if (cee_wls.cursor_device != NULL && w != NULL && cee_wls.pointer_window == w) {
+        uint32_t edge = cee_wl_edge(w, cee_wls.pointer_x, cee_wls.pointer_y);
         cee_wl.marshal_flags(cee_wls.cursor_device, 1 /* set_shape */, NULL, 1, 0, cee_wls.pointer_serial,
-                             cee_wl_shape(w->cursor));
+                             edge != 0 ? cee_wl_edge_shape(edge) : cee_wl_shape(w->cursor));
     }
+}
+
+/* Whether (x, y) is in box `k` of the program's title bar (0 minimize, 1 maximize, 2 close, 3 menu). */
+static int cee_wl_in_box(const struct cee_window *w, int k, float x, float y) {
+    const float *b = &w->bar[1 + 4 * k];
+    return b[2] > 0.0f && b[3] > 0.0f && x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3];
+}
+
+/* A press the runtime takes for a window with the program's title bar (ADR 0206): at an edge it resizes; in the bar
+   but in none of its boxes, the primary button moves the window and a second press within 0.4 s toggles maximized,
+   and the secondary shows the window menu. 1 when taken: the program sees no press then (the compositor's grab would
+   take its release). */
+static double cee_wl_bar_pressed_at;
+static int cee_wl_bar_press(struct cee_window *w, int32_t button, uint32_t serial, float x, float y) {
+    struct cee_wl_window *ww = cee_wl_of(w);
+    if (!w->program_bar || ww == NULL || ww->toplevel == NULL) {
+        return 0;
+    }
+    uint32_t version = cee_wl.get_version(ww->toplevel);
+    uint32_t edge = cee_wl_edge(w, x, y);
+    if (edge != 0 && button == 0) {
+        cee_wl.marshal_flags(ww->toplevel, 6 /* resize */, NULL, version, 0, cee_wls.seat, serial, edge);
+        return 1;
+    }
+    float height = w->bar[0];
+    if (y >= height || cee_wl_in_box(w, 0, x, y) || cee_wl_in_box(w, 1, x, y) || cee_wl_in_box(w, 2, x, y) ||
+        cee_wl_in_box(w, 3, x, y)) {
+        return 0;
+    }
+    if (button == 1) {
+        cee_wl.marshal_flags(ww->toplevel, 4 /* show_window_menu */, NULL, version, 0, cee_wls.seat, serial,
+                             (int32_t)x, (int32_t)y);
+        return 1;
+    }
+    if (button != 0) {
+        return 0;
+    }
+    double now = cee_window_now();
+    if (now - cee_wl_bar_pressed_at < 0.4) {
+        cee_wl_bar_pressed_at = 0.0;
+        cee_wl.marshal_flags(ww->toplevel, w->maximized ? 10 /* unset_maximized */ : 9 /* set_maximized */, NULL,
+                             version, 0);
+        return 1;
+    }
+    cee_wl_bar_pressed_at = now;
+    cee_wl.marshal_flags(ww->toplevel, 5 /* move */, NULL, version, 0, cee_wls.seat, serial);
+    return 1;
 }
 
 static void cee_wl_pointer_enter(void *data, cee_wl_proxy *p, uint32_t serial, cee_wl_proxy *surface, cee_wl_fixed x,
@@ -13930,10 +14034,15 @@ static void cee_wl_pointer_motion(void *data, cee_wl_proxy *p, uint32_t time, ce
     (void)data;
     (void)p;
     (void)time;
+    struct cee_window *w = cee_wls.pointer_window;
+    uint32_t was = w != NULL ? cee_wl_edge(w, cee_wls.pointer_x, cee_wls.pointer_y) : 0;
     cee_wls.pointer_x = cee_wl_float(x);
     cee_wls.pointer_y = cee_wl_float(y);
-    if (cee_wls.pointer_window != NULL) {
-        cee_window_push(cee_wls.pointer_window, CEE_EVENT_MOVED, 0, 0, 0, 0, cee_wls.pointer_x, cee_wls.pointer_y);
+    if (w != NULL) {
+        if (cee_wl_edge(w, cee_wls.pointer_x, cee_wls.pointer_y) != was) {
+            cee_wl_set_cursor(w); /* onto an edge or off it: the resize shape, or the program's own */
+        }
+        cee_window_push(w, CEE_EVENT_MOVED, 0, 0, 0, 0, cee_wls.pointer_x, cee_wls.pointer_y);
     }
 }
 static void cee_wl_pointer_button(void *data, cee_wl_proxy *p, uint32_t serial, uint32_t time, uint32_t button,
@@ -13944,6 +14053,11 @@ static void cee_wl_pointer_button(void *data, cee_wl_proxy *p, uint32_t serial, 
     cee_wls.serial = serial;
     /* evdev's codes: BTN_LEFT 0x110, BTN_RIGHT 0x111, BTN_MIDDLE 0x112 */
     int32_t b = button == 0x110 ? 0 : button == 0x111 ? 1 : button == 0x112 ? 2 : -1;
+    if (b >= 0 && state == 1 && cee_wls.pointer_window != NULL &&
+        cee_wl_bar_press(cee_wls.pointer_window, b, serial, cee_wls.pointer_x, cee_wls.pointer_y)) {
+        cee_wl.flush(cee_wls.display);
+        return; /* the window's move, resize or menu: no press for the program */
+    }
     if (b >= 0 && cee_wls.pointer_window != NULL) {
         cee_window_push(cee_wls.pointer_window, CEE_EVENT_BUTTON, b, state == 1, 0, 0, cee_wls.pointer_x,
                         cee_wls.pointer_y);
@@ -14792,13 +14906,6 @@ static int cee_wl_connect(void) {
                                                   &cee_text_input_interface, 1, 0, NULL, cee_wls.seat);
         cee_wl.add_listener(cee_wls.text_input, cee_wl_text_listener, NULL);
     }
-    if (cee_wls.decoration_manager == NULL && cee_wl.decor_new != NULL) {
-        cee_wl_cairo_plugin();
-        /* Should libdecor still take its GTK plugin, GTK's accessibility bridge would make this process a second
-           application for readers beside the runtime's own (ADR 0164 §11). */
-        setenv("NO_AT_BRIDGE", "1", 0);
-        cee_wls.decor = cee_wl.decor_new(display, &cee_wl_decor_interface);
-    }
 #if defined(__FreeBSD__)
     snprintf(cee_wls.app_id, sizeof cee_wls.app_id, "%s", getprogname());
 #else
@@ -14836,11 +14943,23 @@ static cee_wl_fn cee_wl_xdg_surface_listener[] = {(cee_wl_fn)cee_wl_xdg_configur
 static void cee_wl_toplevel_configure(void *data, cee_wl_proxy *t, int32_t width, int32_t height,
                                       struct cee_wl_array *states) {
     (void)t;
-    (void)states;
-    struct cee_wl_window *ww = cee_wl_of((struct cee_window *)data);
+    struct cee_window *w = (struct cee_window *)data;
+    struct cee_wl_window *ww = cee_wl_of(w);
     if (ww != NULL) {
         ww->pending_width = width; /* 0: the window's own choice */
         ww->pending_height = height;
+    }
+    /* xdg_toplevel's states: maximized 1, fullscreen 2, tiled left, right, top, bottom 5 to 8 (ADR 0206). */
+    int maximized = 0, tiled = 0;
+    const uint32_t *state = states != NULL ? (const uint32_t *)states->data : NULL;
+    for (size_t k = 0; state != NULL && k < states->size / sizeof(uint32_t); k++) {
+        maximized |= state[k] == 1u;
+        tiled |= state[k] == 2u || (state[k] >= 5u && state[k] <= 8u);
+    }
+    w->tiled = tiled;
+    if (maximized != w->maximized) {
+        w->maximized = maximized;
+        cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
     }
 }
 static void cee_wl_toplevel_close(void *data, cee_wl_proxy *t) {
@@ -14863,9 +14982,11 @@ static cee_wl_fn cee_wl_toplevel_listener[] = {(cee_wl_fn)cee_wl_toplevel_config
                                                (cee_wl_fn)cee_wl_toplevel_capabilities};
 
 static void cee_wl_decoration_configure(void *data, cee_wl_proxy *d, uint32_t mode) {
-    (void)data;
     (void)d;
-    (void)mode; /* the compositor's choice; asked for server-side, client-side draws nothing (no libdecor here) */
+    struct cee_window *w = (struct cee_window *)data;
+    /* The compositor's choice: a program's bar only where it draws none (client-side, 1); asked for server-side, a
+       window it leaves bare draws nothing (no libdecor here). */
+    w->program_bar = w->wants_bar && mode == 1u;
 }
 static cee_wl_fn cee_wl_decoration_listener[] = {(cee_wl_fn)cee_wl_decoration_configure};
 
@@ -15022,7 +15143,16 @@ static int cee_wl_open(struct cee_window *w, const char *title) {
         ww->viewport = cee_wl.marshal_flags(cee_wls.viewporter, 1 /* get_viewport */, &cee_viewport_interface, 1, 0,
                                             NULL, ww->surface);
     }
-    if (cee_wls.decor != NULL) {
+    /* A program's own title bar (ADR 0206): no libdecor frame; a compositor that draws decorations is asked for none. */
+    w->program_bar = w->wants_bar;
+    if (cee_wls.decor == NULL && !w->wants_bar && cee_wls.decoration_manager == NULL && cee_wl_load_decor()) {
+        cee_wl_cairo_plugin();
+        /* Should libdecor still take its GTK plugin, GTK's accessibility bridge would make this process a second
+           application for readers beside the runtime's own (ADR 0164 §11). */
+        setenv("NO_AT_BRIDGE", "1", 0);
+        cee_wls.decor = cee_wl.decor_new(cee_wls.display, &cee_wl_decor_interface);
+    }
+    if (cee_wls.decor != NULL && !w->wants_bar) {
         ww->frame = cee_wl.decor_decorate(cee_wls.decor, ww->surface, &cee_wl_frame_interface, w);
     }
     if (ww->frame != NULL) {
@@ -15043,7 +15173,8 @@ static int cee_wl_open(struct cee_window *w, const char *title) {
             ww->decoration = cee_wl.marshal_flags(cee_wls.decoration_manager, 1 /* get_toplevel_decoration */,
                                                   &cee_decoration_interface, 1, 0, NULL, ww->toplevel);
             cee_wl.add_listener(ww->decoration, cee_wl_decoration_listener, w);
-            cee_wl.marshal_flags(ww->decoration, 1 /* set_mode */, NULL, 1, 0, 2u /* server-side */);
+            cee_wl.marshal_flags(ww->decoration, 1 /* set_mode */, NULL, 1, 0,
+                                 w->wants_bar ? 1u /* client-side */ : 2u /* server-side */);
         }
         cee_wl.marshal_flags(ww->surface, 6 /* commit */, NULL, cee_wl.get_version(ww->surface), 0);
     }
@@ -15278,6 +15409,24 @@ static void cee_wl_pump(struct cee_window *w) {
     cee_wl_dispatch();
     cee_wl_repeat();
     cee_wl.flush(cee_wls.display);
+}
+
+/* ADR 0206's actions: xdg_toplevel's set_minimized, and set_maximized or unset_maximized (a libdecor frame has none
+   of these here: a window with libdecor's bar has the system's buttons). */
+static void cee_wl_minimize(struct cee_window *w) {
+    struct cee_wl_window *ww = cee_wl_of(w);
+    if (ww != NULL && ww->toplevel != NULL) {
+        cee_wl.marshal_flags(ww->toplevel, 13 /* set_minimized */, NULL, cee_wl.get_version(ww->toplevel), 0);
+        cee_wl.flush(cee_wls.display);
+    }
+}
+static void cee_wl_toggle_maximized(struct cee_window *w) {
+    struct cee_wl_window *ww = cee_wl_of(w);
+    if (ww != NULL && ww->toplevel != NULL) {
+        cee_wl.marshal_flags(ww->toplevel, w->maximized ? 10 /* unset_maximized */ : 9 /* set_maximized */, NULL,
+                             cee_wl.get_version(ww->toplevel), 0);
+        cee_wl.flush(cee_wls.display);
+    }
 }
 
 /* Whether this process's windows are Wayland's, which the first open decides (ADR 0205 §2.1): CEESAFE_WINDOW_SYSTEM
@@ -16533,6 +16682,12 @@ static char *cee_window_cstring(const uint8_t *text, uint64_t length) {
 void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width, uint32_t height, uint32_t surface,
                           int32_t *error) {
     *error = 0;
+    uint32_t style = surface >> 8; /* WindowStyle (ADR 0206), above the surface's number */
+    surface &= 0xffu;
+    if (style > 1u) {
+        *error = CEE_WINDOW_UNSUPPORTED;
+        return NULL;
+    }
     if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE || height > CEE_WINDOW_MAX_SIDE ||
         (surface != CEE_SURFACE_FRAMES && surface != CEE_SURFACE_EXTERNAL)) {
         *error = CEE_WINDOW_UNSUPPORTED;
@@ -16557,6 +16712,7 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
     w->width = width;
     w->height = height;
     w->external = surface == CEE_SURFACE_EXTERNAL;
+    w->wants_bar = style == 1u;
     w->scale = 1.0f;
     w->focused = 1;
     w->text_input = -1;
@@ -17044,6 +17200,41 @@ void ceesafe_window_set_text_kind(void *window, int32_t kind) {
     if (!w->scripted && cee_wl_of(w) != NULL && cee_wl_ti.window == w) {
         cee_wl_text_update(); /* Wayland's input method takes the field's kind too (ADR 0205) */
     }
+#endif
+}
+
+/* ---- A title bar the program draws (ADR 0206): the layout, kept for every window; the actions, on the systems that
+   implement them (Wayland, step 1). */
+int32_t ceesafe_window_program_title_bar(void *window) { return ((struct cee_window *)window)->program_bar; }
+
+void ceesafe_window_set_title_bar(void *window, const float *bar) {
+    struct cee_window *w = (struct cee_window *)window;
+    for (int k = 0; k < 17; k++) {
+        w->bar[k] = bar[k] > 0.0f && bar[k] < 1e6f ? bar[k] : 0.0f; /* NaN, negative or absurd: none */
+    }
+}
+
+int32_t ceesafe_window_maximized(void *window) { return ((struct cee_window *)window)->maximized; }
+
+void ceesafe_window_minimize(void *window) {
+    struct cee_window *w = (struct cee_window *)window;
+#if (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
+    if (!w->scripted && cee_wl_of(w) != NULL) {
+        cee_wl_minimize(w);
+    }
+#else
+    (void)w;
+#endif
+}
+
+void ceesafe_window_toggle_maximized(void *window) {
+    struct cee_window *w = (struct cee_window *)window;
+#if (defined(__linux__) || defined(__FreeBSD__)) && !defined(__ANDROID__)
+    if (!w->scripted && cee_wl_of(w) != NULL) {
+        cee_wl_toggle_maximized(w);
+    }
+#else
+    (void)w;
 #endif
 }
 

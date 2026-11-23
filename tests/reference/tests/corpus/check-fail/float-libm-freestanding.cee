@@ -1,0 +1,19 @@
+// profile: freestanding
+// The float methods that are the C library's math functions need the hosted runtime (ADR 0218 §2.4; type-system.md
+// §35.8): CosmoOS has no libm. The exact ones, computed in rt.h as floor and ceil are, remain.
+
+fn transcendental(x: f64, y: f32) -> f64 {
+    let a = x.exp();                  // error[N0293]
+    let b = x.pow(2.0);               // error[N0293]
+    let _ = y.sin();                  // error[N0293]
+    let d = x.fma(x, x);              // error[N0293]
+    let e = x.scaleB(3);              // error[N0293]
+    let f = x.truncatingRemainder(x); // error[N0293]
+    return a + b + d + e + f;
+}
+
+fn exact(x: f64, y: f32) -> f64 {
+    let a = x.trunc() + x.round() + x.roundEven() + x.copySign(-1.0);
+    let b = y.trunc() + y.round() + y.roundEven() + y.copySign(-1.0);
+    return a + b.floor() as f64;
+}

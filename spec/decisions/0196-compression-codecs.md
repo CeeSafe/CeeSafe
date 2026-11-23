@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G35 and G40
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): its Iceberg table maintenance (CosmoStore ADR-0086) reads
   Avro and Parquet that other writers compressed, its compaction (ADR-0098) was designed around never
-  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`. Phase 2 implemented for 0.94.0: `Snappy`, both ways, and `Snappy.length`.
+  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`. Phase 2 implemented for 0.94.0: `Snappy`, both ways, and `Snappy.length`. Phase 3 implemented for 0.94.4: `Zstd.decompress`, `ZstdDecoder` and `Xxh64`.
 - Scope: `lib/std` (new `compress_deflate.cee`, `compress_snappy.cee`, `compress_zstd.cee`; `Adler32`
   and `Xxh64` added to `checksums.cee`; `Crc32` is ADR 0194's, their tables by `tools/gen_checksums.py`), `spec/api/std.md`, the guide's
   built-in types page and the book's Appendix on lib/std, `tools/oracles/`, the corpus, a fuzzer under `tests/fuzz/`,
@@ -327,3 +327,65 @@ adds, in CosmoStore's repository, the change that drops its copies; CeeSafe.Web'
     clang 18.1), from the 0.93.6 release: the fixed point; the codec corpus under both compilers with the leak check;
     and `codec_check.py` with the model as the only oracle (31,595 blocks): 0 problems.
 
+## As built (0.94.4, phase 3)
+
+- **`Zstd`** and **`ZstdDecoder`** are `lib/std/compress_zstd.cee`, 1,587 lines; **`Xxh64`** is in `checksums.cee`
+  (`create(seed)`, `update`, `finish`, `of(bytes, seed)`).
+- **Decoding** is table-driven, as libzstd's: an FSE entry holds its symbol's base value and extra bits, and a Huffman
+  table of up to 2^12 entries is indexed by the next bits. The four Huffman streams are decoded in turn, a symbol of
+  each, while each has 8 bytes left. Each sequence runs as it is decoded: its literals 16 bytes at a time, then its match
+  8 at a time (byte by byte below an offset of 8, then from the least multiple of it that is 8 or more).
+- **Memory:** `Zstd.decompress` allocates 150 KiB of tables and a block's literals, and grows `out` to the stated
+  content size at once, or as blocks need it, never past the limit. `ZstdDecoder.create` also allocates a ring of
+  `windowLimit` and one block (128 KiB, or the window if smaller) and a block's input. A frame's ring wraps when a
+  block would not fit, and a match may then read from the end of the previous segment. `step` allocates nothing and
+  is `@effects()`.
+- **Where RFC 8878 leaves room,** libzstd's stream decoder decides (its memory is bounded by the window, as
+  `ZstdDecoder`'s is):
+  - a block larger than the window or 128 KiB is `Malformed`, raw and RLE blocks too. libzstd's one call accepts those
+    up to 2^21 - 1 bytes;
+  - Huffman codes may be 12 bits long, as libzstd's, though the RFC says 11;
+  - four Huffman streams need 6 literals;
+  - a sequences section of no sequences has nothing after its count.
+- **Stricter than libzstd's stream in three places,** each as the RFC says, none written by any encoder:
+  - each Huffman stream must be used up exactly (libzstd's fast loops do not check it, its reference loop does);
+  - an offset reaches at most the window back (libzstd's stream buffer holds more);
+  - a compressed block of 0 bytes is `Malformed` (libzstd's stream reads it as empty, its one call refuses it).
+- **Laxer in one:** an RLE block of exactly 128 KiB is read, as the RFC allows and libzstd's one call does. libzstd's
+  stream refuses it, and zstd's own golden file `rle-first-block.zst` has such blocks.
+- **Behaviour §2 did not say:**
+  - an empty input is `Malformed`, as gzip's is (libzstd returns no bytes); skippable frames alone decode to nothing;
+  - `Zstd.decompress` takes windows of up to 2 GiB (libzstd's limit) and is bounded by its limit, not the window.
+    A single-segment frame's window is its content size;
+  - a stated content size above 32,768 times the bytes after the header is `Malformed` before anything is allocated,
+    since no frame can be that long (an RLE block of 4 bytes writes at most 128 KiB);
+  - a refusal comes from the first sequence that has one, checked in this order: its literals, the block's maximum,
+    the content size (`Malformed`) or the limit (`TooLarge`), its offset. Both entry points share that code, so they
+    agree;
+  - `done` comes at a data frame's end. A step goes on past a skippable frame, and is `done` if the input ends after
+    one.
+- **A cost of the optimiser:** clang at -O2 does not inline the bit reader's small methods into the large block
+  function, so the hot loops keep the reader in locals, as deflate's do. That took decoding from about 300 to about
+  450 MB/s. Left for ADR 0101's line of work.
+- **Measured** (M1, best of 3, MB/s; `guide/performance.md`; load average 7 to 9):
+  - decode 447 to 823 MB/s, which is 37 to 46% of libzstd 1.5.7's;
+  - the 500 MB/s target was met on seven of the nine inputs and missed on text at levels 1 and 3 (447, 499). Under a
+    load average of 70 to 145 the same runs gave 276 to 525;
+  - Question 6: reported, not a gate.
+- **lib/std's size:** `ceesafec check` of a hello world took 0.297 s against 0.94.1's 0.254 s on the Linux host (Xeon
+  D, the mean of 20; again 0.562 s against 0.473 s, the mean of 40, at a higher load there). That is about 18% more,
+  for 1,711 more lines (`compress_zstd.cee` and `Xxh64`): the checker checks all of lib/std for every program, phase 1's
+  finding, now larger.
+- **Tests:**
+  - `run-pass/zstd.cee`: 121 frames, each decoded whole and in steps, from libzstd and the model;
+  - `check-fail/adr0196-zstd-api.cee` and `-effects.cee`;
+  - `tools/oracles/zstd_model.py`: a decoder written from RFC 8878. Against libzstd's stream on 16,000 frames and
+    mutants it disagrees on none, beyond the cases above;
+  - `tools/oracles/zstd_golden`: zstd's golden decompression files, vendored under its BSD licence (Question 7);
+  - `tools/codec_check.py` (the "codecs" step): 16,011 frames decoded whole and in steps, 15,054 of them prefixes and
+    mutants, each verdict the model's. libzstd agreed on all but the 183 cases above. An allocation sweep of 216
+    points;
+  - `tests/fuzz/zstd`: its second implementation is the stream (`ZstdDecoder`, steps of random sizes) against the
+    whole buffer. There is no zstd encoder for round trips and no second decoder, unlike deflate's and snappy's.
+    985,216 inputs in 10 minutes under ASan and UBSan on the M1, none failing. A panic it found while being written
+    (a literals header of 5 bytes read as 8) was fixed before the first commit.

@@ -40,6 +40,7 @@
 - [struct Deflate](#struct-deflate)
 - [struct Zlib](#struct-zlib)
 - [struct Gzip](#struct-gzip)
+- [struct Snappy](#struct-snappy)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
@@ -2058,6 +2059,51 @@ public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> 
 
 Encodes `input` at `level` (0 to 9; see `Deflater`) onto the end of `out`, as one member with no name and a
 modification time of 0.
+
+## struct Snappy
+
+```ceesafe
+public struct Snappy
+```
+
+Snappy's raw block format in whole buffers: Parquet's `SNAPPY` pages, and Avro's `snappy` blocks, which are a raw
+block followed by the big-endian CRC-32 (`Crc32`) of the decoded bytes. The raw format does not stream (one length,
+copies from anywhere before), so there is no stream type; snappy's framing format (`sNaPpY` chunks) is not handled.
+
+No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time, and neither is
+compression's output length: do not compress a secret with bytes an attacker chooses.
+
+### Snappy.length
+
+```ceesafe
+@effects()
+public fn length(input: Slice<u8>) -> usize?
+```
+
+The uncompressed length a block's preamble states, read from the preamble alone, or `null` if it is not a
+varint of at most five bytes and 32 bits. It is what the block claims: only `decompress` checks it.
+
+### Snappy.decompress
+
+```ceesafe
+public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError>
+```
+
+Decodes all of `input`, one raw snappy block, onto the end of `out`, at most `limit` bytes. A stated length
+above `limit` is `TooLarge`, and one longer than a block of this size could produce is `Malformed`, both
+before anything is allocated; the stated length is then allocated once, and decoding needs no more. A copy before the
+start (or of offset 0), an element cut short, and output that disagrees with the preamble (short of it, or
+past it: bytes after the block) are `Malformed`. On an error, `out` is as it was.
+
+### Snappy.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input` onto the end of `out` as one raw block, as libsnappy does. Snappy has one level: `level` is
+ignored. The block is at most 32 + n + n / 6 bytes for n of input. An input of more than 2^32 - 1 bytes, which
+the preamble cannot state, panics.
 
 ## enum PathKind
 

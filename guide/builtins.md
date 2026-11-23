@@ -379,10 +379,10 @@ fn main() {
 42
 ```
 
-## Compression: `Deflate`, `Zlib` and `Gzip`
+## Compression: `Deflate`, `Zlib`, `Gzip` and `Snappy`
 
-lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, both ways, in pure CeeSafe
-([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
+lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, and snappy's raw block format,
+both ways, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
 signature):
 
 | Function or type | Type |
@@ -394,6 +394,8 @@ signature):
 | `i.setWindow(history)` | a preset dictionary, before the first step |
 | `Deflater.create(format, level)`, `d.update(input, mut out)`, `d.flush(mut out)`, `d.finish(mut out)` | an encoder that appends to a `Vector<u8>`; `flush` is a sync flush (all so far decodes) |
 | `Adler32` | zlib's checksum, with `create`, `update`, `finish` and `of`, as `Crc32` (gzip's) |
+| `Snappy.decompress(input, limit, mut out)`, `Snappy.compress(input, level, mut out)` | snappy's raw block (Parquet's `SNAPPY` pages; Avro's `snappy` blocks, which add the big-endian `Crc32` of the bytes), as `Deflate`'s calls; snappy has one level, so `level` is ignored |
+| `Snappy.length(input)` | `usize?`: the length a block's preamble states, read alone, or `null`; `decompress` refuses one above its limit before allocating |
 
 Every decoder takes a limit, so a decompression bomb costs at most `limit` bytes, and no input panics one: every
 refusal is a `DecodeError`. `Inflater.step` allocates nothing after `create` and has no effect (`@effects()`), so
@@ -434,6 +436,18 @@ fn main() {
         }
     }
     Console.writeLine(Adler32.of("123456789".bytes()));
+    var block = Vector<u8>.create();
+    Snappy.compress(text, 0, mut block)!;
+    Console.writeLine(Snappy.length(block.view()) ?? 0);
+    match (Snappy.decompress(block.view(), 10, mut back)) {
+        Ok() => { Console.writeLine("decoded"); }
+        Err(e) => {
+            match (e) {
+                DecodeError.TooLarge => { Console.writeLine("more than 10 bytes"); }
+                _ => { Console.writeLine("refused"); }
+            }
+        }
+    }
 }
 ```
 
@@ -442,6 +456,8 @@ to be, or not to be, that is the question: to be, or not to be
 62
 cut short
 152961502
+62
+more than 10 bytes
 ```
 
 ## Every signature above

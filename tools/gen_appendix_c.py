@@ -897,9 +897,9 @@ REST_ROWS = [
     ("`Layout`, `Allocator`, `Volatile<T>`, `MmioPtr`, `Cpu`", "Programs without an operating system: allocators of your own, device registers, the processor.",
      ["ch22-01", "ch22-02"], link("kernel code", "guide/kernel")),
     ("`Crc32`, `Crc32c`, `Adler32`, `Sha1`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `Deflate`, `Zlib`, "
-     "`Gzip`, `Inflater`, `Deflater`, `AsyncUdpSocket`, `AsyncDns`, `Window`, `Bluetooth`, `BluetoothLink`",
-     "Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib and gzip compression, UDP "
-     "and name lookup, native windows, Bluetooth printers.", [],
+     "`Gzip`, `Inflater`, `Deflater`, `Snappy`, `AsyncUdpSocket`, `AsyncDns`, `Window`, `Bluetooth`, `BluetoothLink`",
+     "Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib, gzip and snappy "
+     "compression, UDP and name lookup, native windows, Bluetooth printers.", [],
      link("lib/std", "reference/api/std")),
 ]
 

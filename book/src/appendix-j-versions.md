@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.94.2
+## Releases 0.25.0 to 0.94.3
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.94.3 | 2026-11-23 | On iOS and Android a table's named row is always read whole by a screen reader, its cells left out (ADR 0207 §12) | [Appendix E](./appendix-e-ceesafec) |
 | 0.94.2 | 2026-11-23 | Containers for screen readers on Android: the virtual views' parents and children, `CollectionInfo` on lists, menus, tab lists and tables, and `CollectionItemInfo` on what they hold (ADR 0207 step 5); every system now has the tree | [Appendix E](./appendix-e-ceesafec) |
 | 0.94.1 | 2026-11-23 | Containers for screen readers on iOS: accessibility containers with their types (semantic group, list, data table), the tab bar trait on a tab list, and a table's `UIAccessibilityContainerDataTable` with its cells' row and column ranges (ADR 0207 step 4) | [Appendix E](./appendix-e-ceesafec) |
 | 0.94.0 | 2026-11-23 | Snappy in lib/std: `Snappy.decompress` and `Snappy.compress` for snappy's raw blocks (Parquet's `SNAPPY` pages, Avro's `snappy` blocks), and `Snappy.length` for the length a block states; the decoder takes a limit and refuses a length above it before allocating, and no input panics it (ADR 0196, phase 2) | [Appendix C](./appendix-c-built-in-types) |

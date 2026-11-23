@@ -50,9 +50,9 @@ diagnostics, so any cascade fails the test.
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7) | missing `;`, `(` after `if`, `}` before `fn`, `Colour::Red` |
-| N0101 | Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3) | `let x = 1;`, `class Foo {}` |
-| N0102 | Expected an expression | `let a = ;` |
+| N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7); the forms other languages write, each with what CeeSafe writes instead (below) | missing `;`, `(` after `if`, `}` before `fn`, `Colour::Red`, `if x > 2 {`, `(1, 2)`, `let mut n` |
+| N0101 | Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3); `type Name = …`, which says CeeSafe has no type aliases | `let x = 1;`, `class Foo {}`, `type Id = i32;` |
+| N0102 | Expected an expression; at a `\|`, that a closure is written `(a) => a + 1` | `let a = ;`, `\|a\| a + 1` |
 | N0103 | Comparison operators chained | `a < b < c` |
 | N0104 | Invalid assignment target | `1 = 2;`, `f() = 3;` |
 | N0105 | Expected a type, or `Self` where it names no type (outside an interface, an `impl` or a struct's or enum's body, ADR 0086 §2.2) | `fn f(x: ) {}` |
@@ -61,6 +61,22 @@ diagnostics, so any cascade fails the test.
 | N0108 | Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`) | `match (n) { + => { } }` |
 | N0109 | An `import` declaration after an item | `fn a() {}` then `import geometry;` |
 | N0110 | Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed | 1,000 nested parentheses; a sum of 1,001 terms |
+
+**Forms from other languages.** Where a program writes what Rust, C#, Swift or TypeScript would, the parser reports
+one error that names CeeSafe's form, and goes on as if that form had been written, so nothing else follows from it:
+
+| Written | Message ends | Code |
+|---|---|---|
+| `if x > 2 {`, `while n > 2 {` | a condition is written in parentheses, `if (x > 2) { … }` | N0100 |
+| `if let Some(n) = found {` | CeeSafe has no `if let`: write `if (value is Some(n)) { … }` | N0100 |
+| `match x {` | the value matched is written in parentheses, `match (x) { … }` | N0100 |
+| `for x in xs {` | a `for` loop's variable and sequence are written in parentheses, `for (x in xs) { … }` | N0100 |
+| `Some(v) if v > 3 => …` | an arm's guard is written in parentheses, `Some(v) if (v > 3) => …` | N0100 |
+| `Some(v) => return v,` in a `match` statement | an arm's body is a block, `=> { return v; }` | N0100 |
+| `(1, 2)`, `-> (i32, i32)` | CeeSafe has no tuples: declare a struct for the values | N0100 |
+| `let mut n = 1;` | a variable that changes is `var n = …;`; the statement is taken as that `var` | N0100 |
+| `type Id = i32;` | CeeSafe has no type aliases: write the type where it is used, or declare a struct that holds it | N0101 |
+| `\|a\| a + 1` | a closure is written `(a) => a + 1` | N0102 |
 
 ### Names, types and flow (N0200–N0299)
 

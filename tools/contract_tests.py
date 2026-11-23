@@ -217,6 +217,8 @@ def main():
             ("book", py + [f"{HERE}/book_check.py", "--ceesafec", cee]),
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
             ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
+            # The parser's messages for forms other languages write (spec/diagnostics.md): one error each.
+            ("habit messages", py + [f"{HERE}/habit_messages_check.py", "--compiler", cee]),
             ("mcp package", py + [f"{HERE}/mcp_package_check.py", "--compiler", cee]),
             ("fix kinds", py + [f"{HERE}/fix_kinds_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),

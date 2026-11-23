@@ -392,7 +392,7 @@ fn main() {
 ```
 
 ```text
-main.cee:2:18: error[N0100]: expected ')', found ','
+main.cee:2:18: error[N0100]: expected ')', found ',': CeeSafe has no tuples; declare a struct for the values, 'struct Pair { first: i32; second: i32; }'
   |
 2 |     let pair = (1, 2);
   |                  ^
@@ -415,7 +415,7 @@ fn main() {
 ```
 
 ```text
-main.cee:1:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found 'type'
+main.cee:1:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found 'type': CeeSafe has no type aliases; write the type where it is used, or declare a struct that holds it
   |
 1 | type Count = u32;
   | ^^^^

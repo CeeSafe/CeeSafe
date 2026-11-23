@@ -312,7 +312,7 @@ fn main() {
 ```
 
 ```text
-main.cee:3:8: error[N0100]: expected '(', found 'let'
+main.cee:3:8: error[N0100]: expected '(', found 'let': CeeSafe has no 'if let'; write 'if (value is Some(n)) { … }', the value first, then 'is', then the pattern
   |
 3 |     if let Some(n) = found {
   |        ^^^

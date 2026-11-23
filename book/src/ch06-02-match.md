@@ -350,7 +350,7 @@ fn main() {
 ```
 
 ```text
-main.cee:3:16: error[N0100]: expected '{', found identifier
+main.cee:3:16: error[N0100]: expected '{', found identifier: in a 'match' statement an arm's body is a block, '=> { return v; }' (a 'match' used as a value, 'let x = match …', takes expressions)
   |
 3 |         200 => Console.writeLine("ok"),
   |                ^^^^^^^

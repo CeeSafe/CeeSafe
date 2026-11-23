@@ -116,7 +116,7 @@ type Count = u32;
 ```
 
 ```text
-main.cee:1:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found 'type'
+main.cee:1:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found 'type': CeeSafe has no type aliases; write the type where it is used, or declare a struct that holds it
   |
 1 | type Count = u32;
   | ^^^^

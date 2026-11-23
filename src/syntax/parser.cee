@@ -132,6 +132,9 @@ struct Parser {
     parsingSignatures: bool; // inside an interface or extern block: functions end with ';' instead of a body
     parsingExtern: bool;     // inside an extern block: a function may end its parameters with `...` (ADR 0041 §3.3)
     recovering: bool;
+    /// While a condition written without its parentheses is parsed (`if x > 2 {`, reported): a name before `{` is
+    /// the condition's end, not a struct literal.
+    noStructLiteral: bool;
     nesting: u32;
     tooDeep: bool;
     semicolonFixable: bool; // false while ending an expression statement that is not a call
@@ -359,7 +362,13 @@ struct Parser {
                 )?;
                 this.advance();
             } else {
-                this.errorFound(expectedItem(), "expected 'fn', 'const', 'struct' or 'enum', found ", "")?;
+                let alias = this.at(TokenKind.TypeKeyword);
+                this.errorFound(
+                    expectedItem(),
+                    "expected 'fn', 'const', 'struct' or 'enum', found ",
+                    if (alias) ": CeeSafe has no type aliases; write the type where it is used, or declare a struct that holds it"
+                        else "",
+                )?;
                 this.advance();
             }
 
@@ -1644,6 +1653,13 @@ struct Parser {
             // A parenthesised type: `borrow (T?)` is a reference to an optional (M11, type-system.md §22.1).
             let start = this.advance().start;
             let inner = this.parseType()?;
+            if (this.at(TokenKind.Comma)) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected ')', found ",
+                    ": CeeSafe has no tuple types; declare a struct for the values and name it here",
+                )?;
+            }
             this.expect(TokenKind.CloseParen)?;
             this.front.ast.typeSpans[inner as usize] = Span { start: start, end: this.endFrom(start) };
             return Ok(inner);
@@ -1835,7 +1851,18 @@ struct Parser {
             }
             TokenKind.ForKeyword => {
                 this.advance();
-                this.expect(TokenKind.OpenParen)?;
+                let bare = !this.at(TokenKind.OpenParen);
+                if (bare) {
+                    this.errorFound(
+                        expectedToken(),
+                        "expected '(', found ",
+                        ": a 'for' loop's variable and sequence are written in parentheses, 'for (x in xs) { … }'",
+                    )?;
+                } else {
+                    this.advance();
+                }
+                let savedLiteral = this.noStructLiteral;
+                this.noStructLiteral = bare;
                 let variable = this.parseIdentifier()?;
                 if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot)) {
                     this.errorFound(
@@ -1847,7 +1874,10 @@ struct Parser {
                 this.expect(TokenKind.InKeyword)?;
                 let first = this.parseExpr()?;
                 let end = if (this.eatRangeDots()?) this.parseExpr()? else none();
-                this.expect(TokenKind.CloseParen)?;
+                this.noStructLiteral = savedLiteral;
+                if (!bare) {
+                    this.expect(TokenKind.CloseParen)?;
+                }
                 let body = this.parseBlock()?;
                 return this.front.ast.addStmt(StmtNode.For(variable, first, end, body), start, this.endFrom(start));
             }
@@ -1889,6 +1919,13 @@ struct Parser {
             let pattern = this.parsePattern()?;
             let guard = this.parseGuard()?;
             this.expect(TokenKind.FatArrow)?;
+            if (!this.at(TokenKind.OpenBrace)) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected '{', found ",
+                    ": in a 'match' statement an arm's body is a block, '=> { return v; }' (a 'match' used as a value, 'let x = match …', takes expressions)",
+                )?;
+            }
             let body = this.parseBlock()?;
             this.front.ast.matchArms.push(MatchArm {
                 pattern: pattern,
@@ -1912,6 +1949,13 @@ struct Parser {
     fn parseGuard(borrow mut this) -> Result<u32, AllocError> {
         if (!this.eat(TokenKind.IfKeyword)) {
             return Ok(none());
+        }
+        if (!this.at(TokenKind.OpenParen)) {
+            this.errorFound(
+                expectedToken(),
+                "expected '(', found ",
+                ": an arm's guard is written in parentheses, 'Some(v) if (v > 3) => …'",
+            )?;
         }
         return this.parseParenthesizedCondition();
     }
@@ -2491,6 +2535,21 @@ struct Parser {
             let pattern = this.parsePattern()?;
             return this.parseLetElse(start, pattern);
         }
+        var isVariable = isMutable;
+        if (!isMutable && this.at(TokenKind.MutKeyword) && this.peekIs(1, TokenKind.Identifier)) {
+            // `let mut n`, as Rust writes a variable: reported once, and taken as `var n`.
+            let mutToken = this.current();
+            this.error(
+                expectedToken(),
+                mutToken.start,
+                mutToken.end,
+                textMessage(
+                    "expected a name, found 'mut': a variable that changes is 'var n = …;' ('let' never changes)",
+                )?,
+            )?;
+            this.advance();
+            isVariable = true;
+        }
         let nameStart = this.current().start;
         let name = this.parseIdentifier()?;
         let typ = if (this.eat(TokenKind.Colon)) this.parseType()? else none();
@@ -2511,7 +2570,7 @@ struct Parser {
             this.parseBlock()?; // read past the block, so that it is reported once
         }
         this.expect(TokenKind.Semicolon)?;
-        let kind = if (isMutable) LocalKind.Var else LocalKind.Let;
+        let kind = if (isVariable) LocalKind.Var else LocalKind.Let;
         return this.front.ast.addStmt(StmtNode.Local(kind, name, typ, initializer), start, this.endFrom(start));
     }
 
@@ -2606,9 +2665,49 @@ struct Parser {
         return Ok(otherwise);
     }
 
+    /// `( e )` after `if`, `while` or `match` (the token before). Without the `(`, as other languages write it, the
+    /// error says what CeeSafe writes, and the expression is parsed as far as the `{` so that nothing else follows
+    /// from it.
     fn parseParenthesizedCondition(borrow mut this) -> Result<u32, AllocError> {
-        this.expect(TokenKind.OpenParen)?;
+        if (this.at(TokenKind.LetKeyword) && sameKind(this.previous().kind, TokenKind.IfKeyword)) {
+            // Rust's and Swift's `if let P = e {`: reported, then read as far as the `{`.
+            this.errorFound(
+                expectedToken(),
+                "expected '(', found ",
+                ": CeeSafe has no 'if let'; write 'if (value is Some(n)) { … }', the value first, then 'is', then the pattern",
+            )?;
+            this.advance();
+            this.parsePattern()?;
+            this.eat(TokenKind.Equals);
+            let saved = this.noStructLiteral;
+            this.noStructLiteral = true;
+            let matched = this.parseExpr()?;
+            this.noStructLiteral = saved;
+            return Ok(matched);
+        }
+        if (!this.at(TokenKind.OpenParen)) {
+            let keyword = this.previous().kind;
+            let after = if (sameKind(
+                keyword,
+                TokenKind.MatchKeyword,
+            )) ": the value matched is written in parentheses, 'match (x) { … }'"
+                else if (sameKind(
+                    keyword,
+                    TokenKind.WhileKeyword,
+                )) ": a condition is written in parentheses, 'while (x > 2) { … }'"
+                else ": a condition is written in parentheses, 'if (x > 2) { … }'";
+            this.errorFound(expectedToken(), "expected '(', found ", after)?;
+            let saved = this.noStructLiteral;
+            this.noStructLiteral = true;
+            let unwrapped = this.parseExpr()?;
+            this.noStructLiteral = saved;
+            return Ok(unwrapped);
+        }
+        this.advance();
+        let saved = this.noStructLiteral;
+        this.noStructLiteral = false;
         let condition = this.parseExpr()?;
+        this.noStructLiteral = saved;
         this.expect(TokenKind.CloseParen)?;
         return Ok(condition);
     }
@@ -3083,7 +3182,17 @@ struct Parser {
                     return this.parseClosure();
                 }
                 this.advance();
+                let savedLiteral = this.noStructLiteral;
+                this.noStructLiteral = false;
                 let inner = this.parseExpr()?;
+                this.noStructLiteral = savedLiteral;
+                if (this.at(TokenKind.Comma)) {
+                    this.errorFound(
+                        expectedToken(),
+                        "expected ')', found ",
+                        ": CeeSafe has no tuples; declare a struct for the values, 'struct Pair { first: i32; second: i32; }'",
+                    )?;
+                }
                 this.expect(TokenKind.CloseParen)?;
                 return this.front.ast.addExpr(ExprNode.Paren(inner), token.start, this.endFrom(token.start));
             }
@@ -3112,7 +3221,7 @@ struct Parser {
                     Some(close) => this.peekIs(close + 1, TokenKind.OpenBrace),
                     null => false,
                 };
-                if (this.at(TokenKind.Dot) && this.peekIs(1, TokenKind.Identifier) &&
+                if (!this.noStructLiteral && this.at(TokenKind.Dot) && this.peekIs(1, TokenKind.Identifier) &&
                     (this.peekIs(2, TokenKind.OpenBrace) || genericThenBrace)) {
                     // `geometry.Point { … }`: a struct literal of a dependency's type, named as one dotted name that
                     // the type checker resolves (type-system.md §2, M10 T5).
@@ -3141,7 +3250,7 @@ struct Parser {
                 }
                 let typeArguments =
                     if (this.isGenericArgumentListAhead()) this.parseGenericArguments()? else emptyRange();
-                if (this.at(TokenKind.OpenBrace)) {
+                if (this.at(TokenKind.OpenBrace) && !this.noStructLiteral) {
                     return this.parseStructLiteral(name, token.start, typeArguments);
                 }
                 return this.front.ast.addExpr(
@@ -3215,7 +3324,14 @@ struct Parser {
             }
             _ => {}
         }
-        this.errorFound(expectedExpression(), "expected expression, found ", "")?;
+        this.errorFound(
+            expectedExpression(),
+            "expected expression, found ",
+            if (sameKind(token.kind, TokenKind.Pipe) || sameKind(
+                token.kind,
+                TokenKind.PipePipe,
+            )) ": a closure is written '(a) => a + 1', or '() => value' without parameters" else "",
+        )?;
         // Leave closing delimiters and terminators for the enclosing construct.
         let leave = match (token.kind) {
             TokenKind.Semicolon => true,
@@ -3498,6 +3614,7 @@ fn parseFile(file: u32, lexed: Lexed, front: Frontend) -> Result<Frontend, Alloc
         parsingSignatures: false,
         parsingExtern: false,
         recovering: false,
+        noStructLiteral: false,
         nesting: 0,
         tooDeep: false,
         semicolonFixable: true,

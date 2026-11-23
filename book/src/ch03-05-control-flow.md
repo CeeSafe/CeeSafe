@@ -268,7 +268,7 @@ fn main() {
 ```
 
 ```text
-main.cee:3:8: error[N0100]: expected '(', found identifier
+main.cee:3:8: error[N0100]: expected '(', found identifier: a condition is written in parentheses, 'if (x > 2) { … }'
   |
 3 |     if n > 2 {
   |        ^

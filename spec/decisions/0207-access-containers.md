@@ -324,3 +324,19 @@ part), type-system.md §26.13.
   stays the same element (iOS: the same object, at its row across four columns, found at each column by
   `accessibilityDataTableCellElementForRow:column:`; Android: a button, `CollectionItemInfo` row 4 across 4, and
   `ACTION_CLICK` arrives as `Press`), and the cell is not there; everything else reads as before.
+
+## 13. The phones, by the owner (2026-11-23)
+
+What §10 and §11 left unchecked, with ClayWind's demo built by 0.94.3.
+
+- **Android**, a moto g35 5G (Android 15, TalkBack 17.1), TalkBack running, its cursor moved by
+  `ACTION_ACCESSIBILITY_FOCUS` and its speech read from its verbose log: "Controls, Button, 2 of 6, in list Pages, 6
+  items"; "Edit, Button, 2 of 4, in list, 4 items"; "Selection, Button, 2 of 5, in list, 5 items"; "main.c, Button, 2
+  of 6, in list, 6 items"; "Barbara Liskov, Button, row 4, in grid, 10001 rows 4 columns"; "Customer, Button, column
+  heading, row 1". A grid's row and a list's row are selected by TalkBack's click. The tree is the emulator's.
+  TalkBack's own gestures are the owner's to make.
+- **iOS**, an iPhone 14 Plus, the demo signed and installed on it, VoiceOver by the owner: "I've tested iphone
+  successfully."
+- **Found, not fixed here**: a second `NativeActivity` started on top of a running one (`am start -n` by component,
+  which the launcher does not do) has no access view, so nothing to read: ADR 0164 §8's "a second activity after the
+  first ends".

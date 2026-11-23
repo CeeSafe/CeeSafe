@@ -1,0 +1,357 @@
+// Compression (ADR 0196 phase 2): snappy's raw block format (snappy's format_description.txt), both ways, in pure
+// CeeSafe. A block is a preamble, the uncompressed length as a varint of at most 32 bits, and elements: literals
+// (a tag, up to four bytes of length, the bytes) and copies of 1 to 64 bytes from 1 to 2^32 - 1 bytes back (offsets
+// of 11, 16 or 32 bits). Decoding sizes the output once from the preamble, refuses a length above the limit before
+// allocating, and writes every element into that space with its bounds checked; a copy whose offset is 8 or more moves
+// eight bytes at a time. Encoding is libsnappy's: fragments of 64 KiB, a hash table of four bytes with up to 2^14
+// entries, a skip that grows past data with no matches, and copies extended eight bytes at a time.
+
+/// The most bytes an element writes per byte of it, with a margin: a 3-byte copy writes at most 64 bytes.
+fn snappyMaxRatio() -> u64 => 22;
+/// The encoder's fragment: no offset it writes is 65,536 or more.
+fn snappyFragmentSize() -> usize => 65536;
+/// Below this many bytes, a fragment is one literal (libsnappy's kInputMarginBytes).
+fn snappyMargin() -> usize => 15;
+
+/// A block's preamble: the uncompressed length, and how many bytes the varint took.
+struct SnappyPreamble {
+    value: u32;
+    size: usize;
+}
+
+/// Reads the varint at the start of `input`: at most five bytes, and at most 32 bits (the fifth byte below 16).
+@effects()
+fn snappyPreamble(input: Slice<u8>) -> SnappyPreamble? {
+    var value: u32 = 0;
+    var shift: u32 = 0;
+    var at: usize = 0;
+    while (at < input.length && at < 5) {
+        let b = input[at];
+        at += 1;
+        if (at == 5 && b >= 16) { return null; }
+        value = value | (((b & 127) as u32) << shift);
+        if (b < 128) { return SnappyPreamble { value: value, size: at }; }
+        shift += 7;
+    }
+    return null;
+}
+
+/// Copies `length` bytes to `out[to..]` from `offset` bytes back, where the ranges may overlap. With room for eight
+/// bytes past the copy, it moves eight at a time (the bytes written past it are written again by what follows): from
+/// `offset` back when that is 8 or more, so each read is of bytes already written; else after the first eight bytes
+/// one at a time, from the least multiple of `offset` that is 8 or more back, since the copy repeats every `offset`
+/// bytes. An offset of 1 is one value; without the room, byte by byte.
+@effects()
+fn snappyCopy(out: SliceMut<u8>, to: usize, offset: usize, length: usize) {
+    let from = to - offset;
+    if (out.length - to >= length + 8) {
+        var k: usize = 0;
+        var back = offset;
+        if (offset == 1) {
+            let b = out[from];
+            out[to..to + length].fill(b);
+            return;
+        }
+        if (offset < 8) {
+            let first = if (length < 8) length else 8;
+            while (k < first) {
+                out[to + k] = out[from + k];
+                k += 1;
+            }
+            back = offset * ((offset + 7) / offset);
+        }
+        while (k < length) {
+            let w = out.readLE<u64>(to + k - back);
+            out.writeLE(to + k, w);
+            k += 8;
+        }
+    } else {
+        for (k in 0..length) {
+            out[to + k] = out[from + k];
+        }
+    }
+}
+
+/// Decodes the elements of `input` into all of `out`: false if one is cut short, reaches before the start or past
+/// the end, or the elements end before `out` is full.
+@effects()
+fn snappyElements(input: Slice<u8>, out: SliceMut<u8>) -> bool {
+    let n = out.length;
+    let end = input.length;
+    var at: usize = 0;
+    var pos: usize = 0;
+    while (at < end) {
+        let tag = input[at] as usize;
+        let kind = tag & 3;
+        if (kind == 0) {
+            var length = (tag >> 2) + 1;
+            at += 1;
+            if (length > 60) {
+                let extra = length - 60;
+                if (end - at < extra) { return false; }
+                var v: u64 = 0;
+                if (extra == 1) {
+                    v = input[at] as u64;
+                } else if (extra == 2) {
+                    v = input.readLE<u16>(at) as u64;
+                } else if (extra == 3) {
+                    v = (input.readLE<u16>(at) as u64) | ((input[at + 2] as u64) << 16);
+                } else {
+                    v = input.readLE<u32>(at) as u64;
+                }
+                at += extra;
+                if (v >= (n - pos) as u64) { return false; }
+                length = truncate<usize>(v) + 1;
+            }
+            if (length > n - pos || length > end - at) { return false; }
+            if (length <= 64 && n - pos >= length + 8 && end - at >= length + 8) {
+                // A short literal a word at a time, with room for the last (what is written past it is written
+                // again).
+                var k: usize = 0;
+                while (k < length) {
+                    out.writeLE(pos + k, input.readLE<u64>(at + k));
+                    k += 8;
+                }
+            } else {
+                out[pos..pos + length].copyFrom(input[at..at + length]);
+            }
+            pos += length;
+            at += length;
+        } else {
+            var length: usize = 0;
+            var offset: usize = 0;
+            if (kind == 1) {
+                if (end - at < 2) { return false; }
+                length = 4 + ((tag >> 2) & 7);
+                offset = ((tag >> 5) << 8) | (input[at + 1] as usize);
+                at += 2;
+            } else if (kind == 2) {
+                if (end - at < 3) { return false; }
+                length = (tag >> 2) + 1;
+                offset = input.readLE<u16>(at + 1) as usize;
+                at += 3;
+            } else {
+                if (end - at < 5) { return false; }
+                length = (tag >> 2) + 1;
+                offset = truncate<usize>(input.readLE<u32>(at + 1));
+                at += 5;
+            }
+            if (offset == 0 || offset > pos || length > n - pos) { return false; }
+            snappyCopy(out, pos, offset, length);
+            pos += length;
+        }
+    }
+    return pos == n;
+}
+
+/// The hash of four bytes into a table of 2^(32 - shift) entries.
+fn snappyHash(v: u32, shift: u32) -> usize => (v.wrappingMul(0x1e35a7bd) >> shift) as usize;
+
+/// How many bytes from `input[a..]` equal those from `input[b..]`, with `a < b`, up to the end of `input`.
+fn snappyMatchLength(input: Slice<u8>, a: usize, b: usize) -> usize {
+    let n = input.length;
+    var k: usize = 0;
+    while (n - (b + k) >= 8) {
+        let x = input.readLE<u64>(a + k) ^ input.readLE<u64>(b + k);
+        if (x != 0) { return k + (x.trailingZeros() / 8) as usize; }
+        k += 8;
+    }
+    while (b + k < n && input[a + k] == input[b + k]) {
+        k += 1;
+    }
+    return k;
+}
+
+/// Writes a literal of `bytes` (at least one) at `out[op..]`; where it ends.
+fn snappyLiteral(out: SliceMut<u8>, op: usize, bytes: Slice<u8>) -> usize {
+    let n = bytes.length - 1;
+    var at = op;
+    if (n < 60) {
+        out[at] = truncate<u8>(n << 2);
+        at += 1;
+    } else if (n < 256) {
+        out[at] = 240;
+        out[at + 1] = truncate<u8>(n);
+        at += 2;
+    } else if (n < 65536) {
+        out[at] = 244;
+        out.writeLE(at + 1, truncate<u16>(n));
+        at += 3;
+    } else if (n < 16777216) {
+        out[at] = 248;
+        out.writeLE(at + 1, truncate<u16>(n));
+        out[at + 3] = truncate<u8>(n >> 16);
+        at += 4;
+    } else {
+        out[at] = 252;
+        out.writeLE(at + 1, truncate<u32>(n));
+        at += 5;
+    }
+    out[at..at + bytes.length].copyFrom(bytes);
+    return at + bytes.length;
+}
+
+/// A copy of 1 to 64 bytes with a 16-bit offset.
+fn snappyCopy2(out: SliceMut<u8>, op: usize, offset: usize, length: usize) -> usize {
+    out[op] = truncate<u8>(2 | ((length - 1) << 2));
+    out.writeLE(op + 1, truncate<u16>(offset));
+    return op + 3;
+}
+
+/// Writes copies of `length` bytes (4 or more) from `offset` back (below 65,536), as libsnappy does: 64 bytes at a
+/// time while 68 or more remain, then 60 if more than 64 do, and the rest with an 11-bit offset where it fits.
+fn snappyCopies(out: SliceMut<u8>, op: usize, offset: usize, length: usize) -> usize {
+    var at = op;
+    var left = length;
+    while (left >= 68) {
+        at = snappyCopy2(out, at, offset, 64);
+        left -= 64;
+    }
+    if (left > 64) {
+        at = snappyCopy2(out, at, offset, 60);
+        left -= 60;
+    }
+    if (left < 12 && offset < 2048) {
+        out[at] = truncate<u8>(1 | ((left - 4) << 2) | ((offset >> 8) << 5));
+        out[at + 1] = truncate<u8>(offset);
+        return at + 2;
+    }
+    return snappyCopy2(out, at, offset, left);
+}
+
+/// Encodes one fragment (at most 64 KiB) at `out[op..]`, as libsnappy's CompressFragment; where it ends.
+fn snappyFragment(input: Slice<u8>, table: SliceMut<u16>, out: SliceMut<u8>, op: usize) -> usize {
+    let n = input.length;
+    var at = op;
+    var nextEmit: usize = 0;
+    if (n >= snappyMargin()) {
+        var bits: u32 = 8;
+        while (bits < 14 && (1usize << bits) < n) {
+            bits += 1;
+        }
+        table[0..1usize << bits].fill(0);
+        let shift = 32 - bits;
+        let limit = n - snappyMargin();
+        var ip: usize = 1;
+        var nextHash = snappyHash(input.readLE<u32>(ip), shift);
+        var going = true;
+        while (going) {
+            // Look for a match, stepping further the longer none is found.
+            var skip: u32 = 32;
+            var nextIp = ip;
+            var candidate: usize = 0;
+            while (true) {
+                ip = nextIp;
+                let h = nextHash;
+                nextIp = ip + (skip >> 5) as usize;
+                skip += 1;
+                if (nextIp > limit) {
+                    going = false;
+                    break;
+                }
+                nextHash = snappyHash(input.readLE<u32>(nextIp), shift);
+                candidate = table[h] as usize;
+                table[h] = truncate<u16>(ip);
+                if (input.readLE<u32>(ip) == input.readLE<u32>(candidate)) { break; }
+            }
+            if (!going) { break; }
+            at = snappyLiteral(out, at, input[nextEmit..ip]);
+            // Copies, for as long as the next four bytes match too.
+            while (true) {
+                let base = ip;
+                let matched = 4 + snappyMatchLength(input, candidate + 4, ip + 4);
+                ip += matched;
+                at = snappyCopies(out, at, base - candidate, matched);
+                nextEmit = ip;
+                if (ip >= limit) {
+                    going = false;
+                    break;
+                }
+                table[snappyHash(input.readLE<u32>(ip - 1), shift)] = truncate<u16>(ip - 1);
+                let h = snappyHash(input.readLE<u32>(ip), shift);
+                candidate = table[h] as usize;
+                table[h] = truncate<u16>(ip);
+                if (input.readLE<u32>(ip) != input.readLE<u32>(candidate)) { break; }
+            }
+            if (!going) { break; }
+            ip += 1;
+            nextHash = snappyHash(input.readLE<u32>(ip), shift);
+        }
+    }
+    if (nextEmit < n) { at = snappyLiteral(out, at, input[nextEmit..]); }
+    return at;
+}
+
+/// Snappy's raw block format in whole buffers: Parquet's `SNAPPY` pages, and Avro's `snappy` blocks, which are a raw
+/// block followed by the big-endian CRC-32 (`Crc32`) of the decoded bytes. The raw format does not stream (one length,
+/// copies from anywhere before), so there is no stream type; snappy's framing format (`sNaPpY` chunks) is not handled.
+///
+/// No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time, and neither is
+/// compression's output length: do not compress a secret with bytes an attacker chooses.
+public struct Snappy {
+    /// The uncompressed length a block's preamble states, read from the preamble alone, or `null` if it is not a
+    /// varint of at most five bytes and 32 bits. It is what the block claims: only `decompress` checks it.
+    @effects()
+    public fn length(input: Slice<u8>) -> usize? {
+        return match (snappyPreamble(input)) {
+            Some(p) => truncate<usize>(p.value),
+            null => null,
+        };
+    }
+
+    /// Decodes all of `input`, one raw snappy block, onto the end of `out`, at most `limit` bytes. A stated length
+    /// above `limit` is `TooLarge`, and one longer than a block of this size could produce is `Malformed`, both
+    /// before anything is allocated; the stated length is then allocated once, and decoding needs no more. A copy before the
+    /// start (or of offset 0), an element cut short, and output that disagrees with the preamble (short of it, or
+    /// past it: bytes after the block) are `Malformed`. On an error, `out` is as it was.
+    public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+        let p = match (snappyPreamble(input)) {
+            Some(p) => p,
+            null => { return Err(DecodeError.Malformed); },
+        };
+        let size = truncate<usize>(p.value);
+        if (size > limit) { return Err(DecodeError.TooLarge); }
+        let rest = input.length - p.size;
+        if (p.value as u64 > (rest as u64) * snappyMaxRatio()) { return Err(DecodeError.Malformed); }
+        let start = out.length;
+        out.resize(start + size, 0)?;
+        if (!snappyElements(input[p.size..], mut out[start..])) {
+            out.truncate(start);
+            return Err(DecodeError.Malformed);
+        }
+        return Ok();
+    }
+
+    /// Encodes `input` onto the end of `out` as one raw block, as libsnappy does. Snappy has one level: `level` is
+    /// ignored. The block is at most 32 + n + n / 6 bytes for n of input. An input of more than 2^32 - 1 bytes, which
+    /// the preamble cannot state, panics.
+    public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        let n = input.length;
+        if (n as u64 > 4294967295) { panic("Snappy compresses at most 2^32 - 1 bytes in one block"); }
+        var table = Vector<u16>.create();
+        var entries: usize = 256;
+        while (entries < 16384 && entries < n) {
+            entries = entries << 1;
+        }
+        table.resize(entries, 0)?;
+        let start = out.length;
+        out.resize(start + 32 + n + n / 6, 0)?;
+        var at = start;
+        var v = n;
+        while (v >= 128) {
+            out[at] = truncate<u8>(v | 128);
+            v = v >> 7;
+            at += 1;
+        }
+        out[at] = truncate<u8>(v);
+        at += 1;
+        var from: usize = 0;
+        while (from < n) {
+            let end = if (n - from < snappyFragmentSize()) n else from + snappyFragmentSize();
+            at = snappyFragment(input[from..end], table.viewMut(), out.viewMut(), at);
+            from = end;
+        }
+        out.truncate(at);
+        return Ok();
+    }
+}

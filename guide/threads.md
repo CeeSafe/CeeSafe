@@ -275,6 +275,42 @@ fn main() {
 - `take()` and `getMut()` need the cell exclusively (`var` and no other borrow).
 - For one thread, lib/core's `OnceCell<T>` has the same members and no lock.
 
+## In a static
+
+A table every thread shares can be a `static`. A static's value is fixed at compile time, so it starts empty:
+`OnceLock<T>.constant()` is an empty cell, `Mutex<T>.constant(v)` a mutex around a value that is itself a constant,
+and `Vector<T>.empty()` an empty vector (`null` and `String.create()` are constants too).
+
+```ceesafe
+static SEEN: Mutex<Vector<u64>> = Mutex<Vector<u64>>.constant(Vector<u64>.empty());
+static LIMIT: OnceLock<u64> = OnceLock<u64>.constant();
+
+fn record(id: u64) -> Result<usize, AllocError> {
+    var guard = SEEN.lock();
+    guard.data().push(id)?;
+    return Ok(guard.data().length);
+}
+
+fn main() {
+    Console.writeLine(LIMIT.getOrInit(() => 2));
+    Console.writeLine(record(7)!);
+    Console.writeLine(record(9)!);
+}
+```
+
+```text
+2
+1
+2
+```
+
+- A constant `Mutex` allocates its lock at its first use, and panics there if the memory cannot be had;
+  `Mutex<T>.create(v)` reports that instead. Where that matters, keep the mutex in a `OnceLock` and fill it with
+  `tryInit(() => Mutex<T>.create(v))`.
+- A static is never destroyed: what it comes to own lives until the program ends. A run that counts allocations
+  (`ceesafec test`, `CEESAFE_ALLOC_REPORT=1`) destroys the statics when `main` returns, so they are not reported as
+  leaks.
+
 ## Borrowing: `Thread.both`
 
 A spawned thread cannot borrow, since it may outlive what it borrowed. `Thread.both(a, b)` can: it runs `a` on a new

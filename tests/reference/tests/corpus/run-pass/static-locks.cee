@@ -1,0 +1,86 @@
+// Statics that come to own memory, behind a lock (type-system.md §39.4, ADR 0211): an optional's `null` and an empty
+// vector or string are static initialisers; `OnceLock<T>.constant()` is filled once, with an initialiser that can
+// fail; `Mutex<T>.constant(v)` makes its platform lock at its first use, here by three threads at once. With
+// `--check-leaks` the run counts allocations, so the statics are destroyed before the report and nothing is live.
+// The sum is 100 × (1000 + 2000 + 3000) + 3 × (0 + … + 99).
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 8080
+// expect-stdout: server
+// expect-stdout: 300
+// expect-stdout: 614850
+// expect-stdout: kept
+// expect-stdout: 305
+
+struct Config {
+    port: u32;
+    name: String;
+}
+
+struct Slot {
+    value: i32?;
+    next: Box<Slot>?;
+}
+
+static EMPTY: Slot = Slot { value: null, next: null };
+static CONFIG: OnceLock<Config> = OnceLock<Config>.constant();
+static TABLE: Mutex<Vector<u64>> = Mutex<Vector<u64>>.constant(Vector<u64>.empty());
+static NAMES: Mutex<String> = Mutex<String>.constant(String.create());
+static COUNT: Mutex<u64> = Mutex<u64>.constant(5);
+
+fn load() -> Result<Config, AllocError> {
+    var name = String.create();
+    name.append("server")?;
+    return Ok(Config { port: 8080, name: name });
+}
+
+fn add(v: u64) -> Result<void, AllocError> {
+    var guard = TABLE.lock();
+    guard.data().push(v)?;
+    return Ok();
+}
+
+fn worker(base: u64) -> u64 {
+    for (i in 0u64..100u64) {
+        add(base + i)!;
+        var c = COUNT.lock();
+        let d = c.data();
+        d += 1;
+    }
+    return base;
+}
+
+fn main() {
+    Console.writeLine(EMPTY.value.isNull());
+    Console.writeLine(CONFIG.get().isNull());
+    match (CONFIG.tryInit(() => load())) {
+        Ok(_) => {}
+        Err(_) => { Console.writeLine("no memory"); }
+    }
+    match (CONFIG.get()) {
+        Some(config) => {
+            Console.writeLine(config.port);
+            Console.writeLine(config.name.view());
+        }
+        null => { Console.writeLine("empty"); }
+    }
+    let a = Thread.spawn(move () => worker(1000))!;
+    let b = Thread.spawn(move () => worker(2000))!;
+    let c = Thread.spawn(move () => worker(3000))!;
+    let _ = a.join();
+    let _ = b.join();
+    let _ = c.join();
+    var guard = TABLE.lock();
+    var total: u64 = 0;
+    for (v in guard.data().view()) {
+        total += v;
+    }
+    Console.writeLine(guard.data().length);
+    Console.writeLine(total);
+    var names = NAMES.lock();
+    names.data().append("kept")!;
+    Console.writeLine(names.data().view());
+    var count = COUNT.lock();
+    let seen: u64 = count.data();
+    Console.writeLine(seen);
+}

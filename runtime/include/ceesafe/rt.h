@@ -1065,6 +1065,9 @@ extern uint32_t ceesafe_rt_allocated;
    allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. A host has
    no way to ask for this: ceesafe_init masks config.flags' reserved bits off. */
 int32_t ceesafe_rt_init_main(const ceesafe_config *config);
+/* 1 while allocations are counted: the generated `main` then destroys the statics that need drop before
+   ceesafe_shutdown (ADR 0211 §2.5). */
+uint32_t ceesafe_rt_alloc_counted(void);
 /* The generated `main` of a windowed build calls this first (ADR 0151, type-system.md §26.3): on Windows each standard
    stream without a handle is opened on the parent's console, when attaching to it succeeds, or on NUL; a stream with
    a handle (redirected, a pipe) is kept. On iOS it runs the application (ceesafe_window_app_start, ADR 0154).

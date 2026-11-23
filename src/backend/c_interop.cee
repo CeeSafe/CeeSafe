@@ -879,6 +879,35 @@ fn emitCfgClose(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Res
     return e.line("#endif");
 }
 
+/// Before the report of a run that counts allocations, the statics that need drop are destroyed, the last declared
+/// first, so that what they own is not reported as live (ADR 0211 §2.5). A run that does not count never destroys a
+/// static (§39).
+fn emitStaticsRelease(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
+    var any = false;
+    var k = c.hir.statics.length;
+    while (k > 0) {
+        k -= 1;
+        let item = borrow c.hir.statics[k];
+        if (item.value == none() || item.imported || !c.types.needsDrop(item.typ) || !staticEmitted(e, k)) {
+            continue;
+        }
+        if (!any) {
+            e.line("    if (ceesafe_rt_alloc_counted() != 0u) {")?;
+            any = true;
+        }
+        e.t("        ")?;
+        appendDropGlueName(c, mut e.buf, item.typ)?;
+        e.t("(&")?;
+        appendStaticName(c, mut e.buf, truncate<u32>(k))?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    if (any) {
+        e.line("    }")?;
+    }
+    return Ok();
+}
+
 /// `int main` calling the reference `main` (EmitMainWrapper): C's signature is the one place plain `char` appears.
 fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var main = none();
@@ -930,6 +959,7 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
         e.b(entry.view())?;
         e.t("();")?;
         e.emit()?;
+        emitStaticsRelease(e, c)?;
         e.line("    (void)ceesafe_shutdown();")?;
         e.line("    return 0;")?;
     } else {
@@ -937,6 +967,7 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
         e.b(entry.view())?;
         e.t("();")?;
         e.emit()?;
+        emitStaticsRelease(e, c)?;
         e.line("    (void)ceesafe_shutdown();")?;
         e.line("    return (int)code;")?;
     }

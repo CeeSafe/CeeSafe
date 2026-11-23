@@ -900,7 +900,11 @@ fn appendStaticInitializer(
             }
             appendText(out, if (cArray) " }" else " } }")?;
         }
+        HirExpr.EnumValue(_, _) => { appendText(out, "{ 0 }")?; } // an optional's null (ADR 0211 §2.1)
         HirExpr.BuiltinCall(function, arguments) => {
+            if (function == bfVectorCreate()) {
+                return appendText(out, "{ 0 }"); // an empty vector (ADR 0211 §2.2)
+            }
             let of = c.types.info(c.hir.typeOf(c.hir.at(arguments, 0))).pointee;
             if (function == bfLayoutOf()) {
                 appendMeasuredLayout(c, out, of)?;

@@ -367,6 +367,7 @@ true
 | `FixedBufferAllocator.over(mut bytes)` | an allocator over a caller's buffer, for freestanding code |
 | `Arena`, `Scratch`, `Pool<T>`, `SlotMap<T>`, `StableVector<T>` | see [memory](memory.md) and [collections](collections.md) |
 | `Thread.spawn`, `Thread.both`, `Async.run`, `Async.scope` | see [threads](threads.md) and [async](async.md) |
+| `OnceLock<T>.constant()`, `Mutex<T>.constant(v)`, `Vector<T>.empty()` | static initialisers: an empty cell, a mutex whose lock is made at its first use, an empty vector ([In a static](threads.md#in-a-static)) |
 | `OnceCell<T>`, `OnceLock<T>` | a value written once and then lent as `borrow T`: `getOrInit(init)`, `tryInit<E>(init)`, `get()`, `set(v)`; `OnceLock` is the one threads share ([threads](threads.md#built-once-oncelock)) |
 
 ```ceesafe

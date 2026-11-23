@@ -13,6 +13,10 @@ public struct RawCell<T> {
     /// A cell holding `value`.
     public fn create(value: T) -> RawCell<T> => RawCell { value: value };
 
+    /// `create`, as a static initialiser when `value` is one (type-system.md §39.4).
+    @constant
+    public fn constant(value: T) -> RawCell<T> => RawCell { value: value };
+
     /// The contents' address: safe to take, `unsafe` to use. Unsafe code must not make two live `borrow mut T` from
     /// it, nor write while a `borrow T` it made is live (unsafe.md §2).
     public fn pointer(borrow this) -> *mut T => borrow this.value as *T as *mut T;

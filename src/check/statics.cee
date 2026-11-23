@@ -488,6 +488,10 @@ fn staticFold(
             if (function == bfLayoutOf() || function == bfOffsetOf()) {
                 return Ok(e);
             }
+            // An empty vector or string owns no memory: its bytes are zero (ADR 0211 §2.2).
+            if (function == bfVectorCreate() && c.types.is(c.hir.exprTypes[e as usize], TypeKind.Vector)) {
+                return Ok(e);
+            }
             return staticFail(c, e, "this expression");
         }
         HirExpr.LocalRef(local) => {
@@ -697,7 +701,13 @@ fn staticFold(
         // A C function's address where an `extern "C" fn` is expected (§29.5; ADR 0042 §3.3).
         HirExpr.FunctionAddress(_) => { return Ok(e); }
         HirExpr.Here => { return staticFail(c, e, "'here' is only a C constant macro's argument"); }
-        HirExpr.EnumValue(_, _) => { return staticFail(c, e, "an enum value"); }
+        HirExpr.EnumValue(_, payload) => {
+            // An optional's `null`: its bytes are zero, a null pointer or the tag 0 (ADR 0211 §2.1).
+            if (payload.count == 0 && c.types.optionType(c.hir.exprTypes[e as usize]) != none()) {
+                return Ok(e);
+            }
+            return staticFail(c, e, "an enum value (only an optional's 'null' is one)");
+        }
         HirExpr.Closure(_, _) => { return staticFail(c, e, "a closure"); }
         HirExpr.Deref(_) => {
             if (isStaticPlace(c, e)) {

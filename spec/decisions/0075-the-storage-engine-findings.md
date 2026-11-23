@@ -348,7 +348,8 @@ the interpreter must give the same results.
 4. **§2.12.** The shifting is a loop of `swap`s in lib/core's `VectorEditing<T>`, not a `memmove`. That keeps it out
    of the C backend and the interpreter. The index check is emitted at the call, as `ByteOrder`'s is, so a panic
    names the program's line.
-5. **§2.15.** `Mutex<T>.constant` and `Vector<T>.empty()` are left out. `Vector` is a built-in type, and making it a
+5. **§2.15.** `Mutex<T>.constant` and `Vector<T>.empty()` are left out (they are in since ADR 0211, which also
+   says how the leak checker leaves a static's allocations out). `Vector` is a built-in type, and making it a
    static initialiser is its own change. Static arrays of atomics are in, and they are what CosmoStore's registry
    needs.
 6. **§2.16, G15.** A sweep panic counts as the tests' own when it is an unwrap in any file that declares an `@test`

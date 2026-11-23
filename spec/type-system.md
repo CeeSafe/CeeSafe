@@ -6107,6 +6107,15 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. ADR 0198 makes this the rule
   everywhere (§16.1, §16.2). A library's static is emitted in C only where compiled code uses it;
 - a call of a `@constant` function whose arguments are static initialisers;
+- an optional's `null` (ADR 0211 §2.1): a null pointer, or the tag 0. `Some(e)` and any other enum value are not;
+- `Vector<T>.empty()`, `Vector<T>.create()`, `String.create()` (ADR 0211 §2.2): an empty vector or string owns no
+  memory, and `empty` is `create` under the name that reads well here. So a static may hold a value that allocates
+  later, behind a lock: `static TABLE: Mutex<Vector<u64>> = Mutex<Vector<u64>>.constant(Vector<u64>.empty());`,
+  `static CONFIG: OnceLock<Config> = OnceLock<Config>.constant();` (lib/std). A static is never destroyed, so what it
+  comes to own lives until the process ends. One exception, for the tools: **a run that counts allocations**
+  (`CEESAFE_ALLOC_REPORT`, an injected failure, `ceesafec test`) destroys the statics that need drop when `main`
+  returns, the last declared first, before the report, so that what they own is not reported as live (ADR 0211
+  §2.5). `Process.exit` and a panic do not;
 - a call of a C constant macro whose arguments are static initialisers or `here` (below);
 - `layoutOf<T>()` (§30.1).
 

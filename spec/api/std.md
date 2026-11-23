@@ -3592,6 +3592,17 @@ public fn create(data: T) -> Result<Mutex<T>, AllocError>
 A mutex holding `data`; its platform lock is allocated.
 Safety: a null lock is reported, never stored.
 
+### Mutex.constant
+
+```ceesafe
+@constant
+public fn constant(data: T) -> Mutex<T>
+```
+
+A mutex holding `data`, as a static initialiser when `data` is one (type-system.md §39.4):
+`static TABLE: Mutex<Vector<u64>> = Mutex<Vector<u64>>.constant(Vector<u64>.empty());`. Its platform lock is
+allocated at its first use, where running out of memory panics: `create` reports it instead.
+
 ### Mutex.lock
 
 ```ceesafe
@@ -3736,6 +3747,16 @@ public fn create() -> OnceLock<T>
 ```
 
 An empty cell.
+
+### OnceLock.constant
+
+```ceesafe
+@constant
+public fn constant() -> OnceLock<T>
+```
+
+An empty cell, as a static initialiser (type-system.md §39.4): `static CONFIG: OnceLock<Config> =
+OnceLock<Config>.constant();`, filled once with `getOrInit` or `tryInit`.
 
 ### OnceLock.get
 

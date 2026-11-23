@@ -9,4 +9,7 @@ struct Pair<T> {
 }
 
 @constant
-fn makePair<T>() -> Pair<T> => Pair<T> { first: null };
+fn makePair<T>() -> Pair<T> => Pair<T> { first: absent<T>() };
+
+// Not `@constant`: the call above is what is no static initialiser (a `null` there is one since ADR 0211).
+fn absent<T>() -> T? => null;

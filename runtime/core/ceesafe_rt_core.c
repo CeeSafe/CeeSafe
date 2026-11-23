@@ -1524,6 +1524,12 @@ int32_t ceesafe_rt_init_main(const ceesafe_config *config) {
     return rt_init(config, true);
 }
 
+/* Are allocations counted (a report, an injected failure, `ceesafec test`)? The generated `main` then destroys the
+   statics that need drop before ceesafe_shutdown, so what they own is not reported as live (ADR 0211 §2.5). */
+uint32_t ceesafe_rt_alloc_counted(void) {
+    return ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTED && config_u32(&alloc_counting) != 0u ? 1u : 0u;
+}
+
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
    with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak; then, if
    isolated units trapped, "ceesafe alloc: isolated leaked=<k>\n" (ADR 0175 amendments 1 and 2), the live blocks they

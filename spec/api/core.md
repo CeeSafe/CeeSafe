@@ -1813,6 +1813,15 @@ public fn create(value: T) -> RawCell<T>
 
 A cell holding `value`.
 
+### RawCell.constant
+
+```ceesafe
+@constant
+public fn constant(value: T) -> RawCell<T>
+```
+
+`create`, as a static initialiser when `value` is one (type-system.md §39.4).
+
 ### RawCell.pointer
 
 ```ceesafe

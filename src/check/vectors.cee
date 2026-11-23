@@ -99,7 +99,8 @@ fn checkVectorCreate(
     if (!isString && isVectorRawName(text)) {
         return checkVectorRaw(c, member, typeArguments, arguments, expected, span);
     }
-    if (!withCapacity && !fromText && !sameText(text, "create")) {
+    // `empty` is `create` under the name a static's initialiser reads well with (ADR 0211 §2.2).
+    if (!withCapacity && !fromText && !sameText(text, "create") && !sameText(text, "empty")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendText(mut message, kind)?;

@@ -1,0 +1,17 @@
+// What is still no static initialiser (type-system.md §39.4, ADR 0211): a constructor that allocates or is not
+// `@constant`, an enum value other than an optional's `null`, and `Some(e)`.
+enum Colour {
+    Red,
+    Green,
+}
+
+static A: Mutex<u64> = Mutex<u64>.create(0)!;       // error[N0338]
+static B: Vector<u8> = Vector<u8>.withCapacity(4)!; // error[N0338]
+static C: Colour = Colour.Red;                      // error[N0338]
+static D: i32? = Some(3);                           // error[N0338]
+static E: OnceLock<u64> = OnceLock<u64>.create();   // error[N0338]
+static F: i32? = null;
+static G: Vector<u8> = Vector<u8>.empty();
+static H: String = String.create();
+
+fn main() {}

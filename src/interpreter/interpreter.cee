@@ -2115,6 +2115,13 @@ fn staticValue(it: borrow mut Interp, c: borrow Checker, e: u32, t: u32) -> Resu
             }
             return Ok(result);
         }
+        HirExpr.EnumValue(_, _) => { return Ok(valueOf(0, typeSize(c, t)?)); } // an optional's null (ADR 0211 §2.1)
+        HirExpr.BuiltinCall(function, _) => {
+            if (function == bfVectorCreate()) {
+                return Ok(valueOf(0, typeSize(c, t)?)); // an empty vector (ADR 0211 §2.2)
+            }
+            return Err(fault("a static's initialiser was not evaluated"));
+        }
         HirExpr.Call(callee, _) => {
             var m = copyBytes("static initialiser calls the C constant macro '".bytes())!;
             appendBytes(mut m, c.name(c.hir.functions[callee as usize].name))!;
@@ -2381,6 +2388,19 @@ fn runMainSteps(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, 
         Some(v) => truncate<i32>(truncate<u32>(v.bits(0, 4)?)),
         null => 0,
     };
+    if (it.options.allocationReport) {
+        // What the statics own is not reported as live (ADR 0211 §2.5): they are destroyed first, the last declared
+        // first, as the generated `main` does when allocations are counted.
+        var k = c.hir.statics.length;
+        while (k > 0) {
+            k -= 1;
+            let typ = c.hir.statics[k].typ;
+            if (k < it.statics.length && c.types.needsDrop(typ)) {
+                let address = it.statics[k];
+                destroy(it, c, n, typ, address)?;
+            }
+        }
+    }
     finishRuntime(it);
     return Ok(code);
 }

@@ -29,7 +29,8 @@ extern "C" {
 @threadSafe
 @noncopy
 public struct Mutex<T: Send> {
-    private raw: *mut void;
+    /// The platform lock's address, or 0 before the first use of a mutex made by `constant`.
+    private raw: AtomicUSize;
     private data: RawCell<T>; // changed through the guard while the mutex is shared (type-system.md §41.1)
     /// 1 once an isolated task that held the lock trapped (ADR 0175 §2.6), until `heal`.
     private poisoned: AtomicU32;
@@ -41,7 +42,41 @@ public struct Mutex<T: Send> {
         if (raw.isNull()) {
             return Err(AllocError.OutOfMemory);
         }
-        return Ok(Mutex { raw: raw, data: RawCell<T>.create(data), poisoned: AtomicU32.create(0) });
+        return Ok(
+            Mutex {
+                raw: AtomicUSize.create(raw as usize),
+                data: RawCell<T>.create(data),
+                poisoned: AtomicU32.create(0),
+            },
+        );
+    }
+
+    /// A mutex holding `data`, as a static initialiser when `data` is one (type-system.md §39.4):
+    /// `static TABLE: Mutex<Vector<u64>> = Mutex<Vector<u64>>.constant(Vector<u64>.empty());`. Its platform lock is
+    /// allocated at its first use, where running out of memory panics: `create` reports it instead.
+    @constant
+    public fn constant(data: T) -> Mutex<T> =>
+        Mutex { raw: AtomicUSize.constant(0), data: RawCell<T>.constant(data), poisoned: AtomicU32.constant(0) };
+
+    /// The platform lock, made now if this mutex came from `constant` and was never used. Two threads that arrive
+    /// together both make one, and the one that loses the exchange destroys its own.
+    /// Safety: a lock is stored only once, never replaced, and destroyed only in drop or here before any use.
+    fn lockHandle(borrow this) -> *mut void {
+        let have = this.raw.load();
+        if (have != 0) {
+            return have as *mut void;
+        }
+        let made = unsafe { ceesafe_mutex_create() };
+        if (made.isNull()) {
+            panic("out of memory making a constant Mutex's lock");
+        }
+        match (this.raw.compareExchange(0, made as usize)) {
+            Ok(_) => { return made; }
+            Err(other) => {
+                unsafe { ceesafe_mutex_destroy(made); }
+                return other as *mut void;
+            }
+        }
     }
 
     /// Waits for the lock; the guard lends the data until it is dropped. It panics (`PanicKind.Poisoned`) if an
@@ -49,10 +84,10 @@ public struct Mutex<T: Send> {
     /// code that can repair it.
     /// Safety: `raw` is the lock made in create, destroyed only in drop, when no guard can be live (B-rules).
     public fn lock(borrow this) -> MutexGuard<T> {
-        unsafe { ceesafe_mutex_lock(this.raw); }
+        unsafe { ceesafe_mutex_lock(this.lockHandle()); }
         if (this.poisoned.load() != 0) {
             unsafe {
-                ceesafe_mutex_unlock(this.raw);
+                ceesafe_mutex_unlock(this.lockHandle());
                 ceesafe_panic_poisoned();
             }
         }
@@ -64,7 +99,7 @@ public struct Mutex<T: Send> {
     /// mark once the data is whole again.
     /// Safety: as `lock`.
     public fn recover(borrow this) -> MutexGuard<T> {
-        unsafe { ceesafe_mutex_lock(this.raw); }
+        unsafe { ceesafe_mutex_lock(this.lockHandle()); }
         this.held();
         return MutexGuard { lock: this };
     }
@@ -72,7 +107,7 @@ public struct Mutex<T: Send> {
     /// `tryLock`, whether or not the mutex is poisoned: for async code, which cannot wait for a lock.
     /// Safety: as `tryLock`.
     public fn tryRecover(borrow this) -> MutexGuard<T>? {
-        if (!unsafe { ceesafe_mutex_try_lock(this.raw) }) {
+        if (!unsafe { ceesafe_mutex_try_lock(this.lockHandle()) }) {
             return null;
         }
         this.held();
@@ -83,19 +118,19 @@ public struct Mutex<T: Send> {
     /// poisoned and released.
     /// Safety: the flag is this mutex's, which outlives the guard that holds the lock.
     fn held(borrow this) {
-        unsafe { ceesafe_async_lock_held(1, this.raw, borrow this.poisoned as *AtomicU32 as *mut u32); }
+        unsafe { ceesafe_async_lock_held(1, this.lockHandle(), borrow this.poisoned as *AtomicU32 as *mut u32); }
     }
 
     /// The guard if no thread holds the lock, else null, at once: it never waits (ADR 0112). The thread that holds
     /// the lock gets null too. It has no effect, so async code may call it.
     /// Safety: as `lock`; the guard exists only when the lock was taken.
     public fn tryLock(borrow this) -> MutexGuard<T>? {
-        if (!unsafe { ceesafe_mutex_try_lock(this.raw) }) {
+        if (!unsafe { ceesafe_mutex_try_lock(this.lockHandle()) }) {
             return null;
         }
         if (this.poisoned.load() != 0) {
             unsafe {
-                ceesafe_mutex_unlock(this.raw);
+                ceesafe_mutex_unlock(this.lockHandle());
                 ceesafe_panic_poisoned();
             }
         }
@@ -105,7 +140,10 @@ public struct Mutex<T: Send> {
 
     /// Safety: no guard is live once the mutex can be dropped, so the lock is free.
     drop {
-        unsafe { ceesafe_mutex_destroy(this.raw); }
+        let have = this.raw.load();
+        if (have != 0) {
+            unsafe { ceesafe_mutex_destroy(have as *mut void); }
+        }
     }
 }
 
@@ -128,8 +166,8 @@ public struct MutexGuard<region r, T: Send> {
     /// Safety: the guard took the lock in Mutex.lock and releases it once.
     drop {
         unsafe {
-            ceesafe_async_lock_released(this.lock.raw);
-            ceesafe_mutex_unlock(this.lock.raw);
+            ceesafe_async_lock_released(this.lock.lockHandle());
+            ceesafe_mutex_unlock(this.lock.lockHandle());
         }
     }
 }
@@ -191,6 +229,11 @@ public struct OnceLock<T: Send + Share> {
 
     /// An empty cell.
     public fn create() -> OnceLock<T> => OnceLock { state: AtomicU8.create(0), raw: RawCell<T?>.create(null) };
+
+    /// An empty cell, as a static initialiser (type-system.md §39.4): `static CONFIG: OnceLock<Config> =
+    /// OnceLock<Config>.constant();`, filled once with `getOrInit` or `tryInit`.
+    @constant
+    public fn constant() -> OnceLock<T> => OnceLock { state: AtomicU8.constant(0), raw: RawCell<T?>.constant(null) };
 
     /// The value, or null while the cell is empty.
     public fn get(borrow this) -> borrow T? {

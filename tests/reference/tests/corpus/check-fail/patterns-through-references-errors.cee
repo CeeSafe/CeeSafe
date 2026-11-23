@@ -1,0 +1,35 @@
+// A nested pattern through a reference payload (type-system.md §15.2, ADR 0212) is covered over the referent's
+// constructors (N0256 names a missing one, N0257 an arm that cannot match), binds references (a shared one is not
+// written through, N0211; what it refers to is not moved out, N0251), and `name @ P` is still refused (N0205).
+enum Node {
+    Leaf(i32),
+    Items(Vector<u32>),
+    Empty,
+}
+
+fn missing(n: borrow Node?) -> i32 => match (n) { // error[N0256]
+    Some(Node.Leaf(v)) => v,
+    Some(Node.Empty) => 0,
+    null => -1,
+};
+
+fn unreachable(n: borrow Node?) -> i32 => match (n) {
+    Some(Node.Leaf(v)) => v,
+    Some(_) => 0,
+    Some(Node.Empty) => 1, // error[N0257]
+    null => -1,
+};
+
+fn writes(n: borrow Node?) {
+    match (n) {
+        Some(Node.Leaf(v)) => { v += 1; } // error[N0211]
+        _ => {}
+    }
+}
+
+fn named(n: borrow Node?) -> i32 => match (n) {
+    Some(x @ Node.Leaf(v)) => v, // error[N0205]
+    _ => 0,
+};
+
+fn main() {}

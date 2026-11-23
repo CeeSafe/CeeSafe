@@ -1,0 +1,15 @@
+// A name bound through a reference payload is a reference (type-system.md §15.2, ADR 0212): the vector it refers
+// to cannot be moved out (N0251).
+enum Node {
+    Leaf(i32),
+    Items(Vector<u32>),
+}
+
+fn moves(n: borrow Node?) -> Vector<u32> {
+    match (n) {
+        Some(Node.Items(items)) => { return items; } // error[N0251]
+        _ => { return Vector<u32>.create(); }
+    }
+}
+
+fn main() {}

@@ -918,12 +918,16 @@ and `E.V…` there are patterns.
     of a consuming match, §18.4), no binding under `P` may also move, so `e @ Err(inner)` with a non-Copy payload is
     N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
     first, from the value, and on a reference scrutinee every binding is a reference.
-  - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
-    through it is a separate `match` on that reference: N0205 otherwise, "this payload is a reference ('borrow E'):
-    bind it ('Some(n)') and match on 'n' separately" (a field of a struct pattern, ADR 0123, likewise, 'f: n'). The
-    names the refused pattern binds are declared in the arm with the error type, so their uses report nothing more
-    (ADR 0195 §2.2). A slice or `StringView` payload takes string and slice patterns, which test its elements (ADR
-    0085 §2.7).
+  - **A payload that is itself a reference** (`borrow E`) takes a binding, `_`, or a nested pattern that **matches
+    what it refers to** (ADR 0212): a variant, struct, literal or range pattern, or alternatives of them, as a
+    `match` on that reference would. `Some(Node.Items(v))` on a `borrow Node?` binds `v` as a `borrow Vector<u32>`.
+    Every name under it is a reference into the referent, mutable only where the payload is a `borrow mut` and the
+    match is not itself through a shared reference; nothing moves, and coverage is decided over the referent's
+    constructors. A field of a struct pattern (ADR 0123) likewise. `name @ P` there is still N0205, "this payload
+    is a reference ('borrow E'): bind it ('Some(n)') and match on 'n' separately": the name would be the reference
+    and `P` its referent. The names a refused pattern binds are declared in the arm with the error type, so their
+    uses report nothing more (ADR 0195 §2.2). A slice or `StringView` payload takes string and slice patterns, which
+    test its elements (ADR 0085 §2.7).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision

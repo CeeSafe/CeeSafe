@@ -92,7 +92,7 @@ fn notStruct(n: u32, s: Shape) -> u32 {
 }
 
 fn referenceField(b: Borrowed) -> i32 {
-    if (b is Borrowed { at: Point { x: 0, .. } }) { // error[N0205]
+    if (b is Borrowed { at: Point { x: 0, .. } }) { // a reference field's referent since ADR 0212 (was N0205)
         return 1;
     }
     let Borrowed { at } = b;

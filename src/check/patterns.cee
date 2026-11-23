@@ -1148,6 +1148,14 @@ fn checkPattern(
                 let t = payloadType(c, variant, i);
                 let binding = c.front.ast.bindings[c.front.ast.at(bindings, truncate<u32>(i)) as usize];
                 if (binding.nested != none()) {
+                    if (matchesThroughReference(c, binding.nested, t)) {
+                        // A nested pattern on a reference payload matches what it refers to, and binds references
+                        // (§15.2, ADR 0212).
+                        let through = referenceThrough(c, t, reference)?;
+                        let referent = c.types.info(t).pointee;
+                        payload.push(checkPattern(c, binding.nested, referent, through, failed, alternatives)?)?;
+                        continue;
+                    }
                     if (c.types.is(t, TypeKind.Reference) && !viewPattern(c, binding.nested, t)) {
                         let nestedSpan = c.front.ast.patternSpans[binding.nested as usize];
                         var message = Vector<u8>.create();
@@ -1203,6 +1211,40 @@ fn isStringLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.expr
     ExprNode.StringLiteral(_) => true,
     _ => false,
 };
+
+/// Does a nested pattern on a payload or field of type `t` match what a reference refers to (§15.2, ADR 0212)? `t`
+/// is a reference that is no slice and no `StringView` (their patterns test elements, viewPattern), and the pattern
+/// is a variant, struct, literal or range pattern, or alternatives of them. `name @ P` is not: `name` would be the
+/// reference and `P` its referent, so it is bound and matched separately.
+fn matchesThroughReference(c: borrow Checker, pattern: u32, t: u32) -> bool {
+    if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t)) {
+        return false;
+    }
+    match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Variant(_, _, _) => { return true; }
+        PatternNode.Struct(_, _, _) => { return true; }
+        PatternNode.Literal(literal) => { return !isStringLiteral(c, literal); }
+        PatternNode.Range(_, _, _) => { return true; }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (!matchesThroughReference(c, c.front.ast.at(alternatives, k), t)) {
+                    return false;
+                }
+            }
+            return alternatives.count > 0;
+        }
+        _ => { return false; }
+    }
+}
+
+/// The reference a pattern under the reference payload `t` binds through: `t`'s referent, mutably only if `t` is a
+/// `borrow mut` and the match is not through a shared reference itself.
+fn referenceThrough(c: borrow mut Checker, t: u32, reference: u32) -> Result<u32, AllocError> {
+    let mutable = c.types.info(t).mutableReference &&
+        (reference == none() || c.types.info(reference).mutableReference);
+    let referent = c.types.info(t).pointee;
+    return c.types.referenceTo(referent, mutable);
+}
 
 /// Is the pattern a string or slice pattern on a payload that is a view (`Some("get")` on a `StringView?`, ADR 0085
 /// §2.7)? It tests the view's elements, so the reference payload is not a reason to refuse it. So are alternatives
@@ -1817,6 +1859,13 @@ fn checkStructPattern(
                 PatternNode.Binding(_, _) => true,
                 _ => false,
             };
+            if (!plain && matchesThroughReference(c, b.nested, t)) {
+                // As a variant's reference payload (§15.2, ADR 0212).
+                let through = referenceThrough(c, t, reference)?;
+                let referent = c.types.info(t).pointee;
+                trees[index] = checkPattern(c, b.nested, referent, through, failed, alternatives)?;
+                continue;
+            }
             if (!plain && c.types.is(t, TypeKind.Reference) && !viewPattern(c, b.nested, t)) {
                 let nestedSpan = c.front.ast.patternSpans[b.nested as usize];
                 var message = Vector<u8>.create();

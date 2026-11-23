@@ -1,0 +1,181 @@
+// A nested pattern on a payload or field that is a reference matches what it refers to (type-system.md §15.2, ADR
+// 0212): an optional reference a lookup returns, an enum's reference payloads (a literal, a range, alternatives, a
+// struct pattern under one), a struct's reference fields, a `borrow mut` payload whose names are written through, an
+// `is` pattern, a guard, two references deep, `let … else`, and numbers behind a reference. The names are references
+// and nothing moves. The expected lines are what each arm gives for the value matched.
+// expect-stdout: 5
+// expect-stdout: 102
+// expect-stdout: 1000
+// expect-stdout: 2000
+// expect-stdout: 15
+// expect-stdout: 20
+// expect-stdout: 30
+// expect-stdout: 52
+// expect-stdout: 12
+// expect-stdout: 50
+// expect-stdout: 60
+// expect-stdout: 705
+// expect-stdout: 10
+// expect-stdout: 8
+// expect-stdout: 42
+// expect-stdout: 103
+// expect-stdout: 5
+// expect-stdout: 5
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: -2
+// expect-stdout: 0
+// expect-stdout: 5
+// expect-stdout: -2
+// expect-stdout: -3
+// expect-stdout: 5
+// expect-stdout: -9
+// expect-stdout: 100
+// expect-stdout: 200
+// expect-stdout: 300
+// expect-stdout: 400
+
+enum Node {
+    Leaf(i32),
+    Items(Vector<u32>),
+    Empty,
+}
+
+struct Entry {
+    kind: Node;
+    size: u32;
+}
+
+struct Holder<region r> {
+    node: borrow(r) Node;
+    count: borrow(r) u32;
+}
+
+enum Wrap<region r> {
+    One(borrow(r) Node),
+    Pair(borrow(r) Node, borrow(r) Entry),
+    None,
+}
+
+fn find(nodes: Slice<Node>, i: usize) -> borrow Node? => if (i < nodes.length) Some(borrow nodes[i]) else null;
+
+fn describe(n: borrow Node?) -> u32 => match (n) {
+    Some(Node.Leaf(v)) => truncate<u32>(v),
+    Some(Node.Items(items)) => truncate<u32>(items.length) + 100,
+    Some(Node.Empty) => 1000,
+    null => 2000,
+};
+
+fn wrapped(w: Wrap) -> u32 => match (w) {
+    Wrap.One(Node.Leaf(3)) => 3,
+    Wrap.One(Node.Leaf(v)) => truncate<u32>(v) + 10,
+    Wrap.One(_) => 20,
+    Wrap.Pair(Node.Empty, Entry { size: 0..=9, .. }) => 30,
+    Wrap.Pair(Node.Empty | Node.Leaf(_), Entry { size, .. }) => 40 + size,
+    Wrap.Pair(_, Entry { kind: Node.Items(items), size }) => truncate<u32>(items.length) + size,
+    Wrap.Pair(_, _) => 50,
+    Wrap.None => 60,
+};
+
+fn held(h: Holder) -> u32 => match (h) {
+    Holder { node: Node.Leaf(v), count: 7 } => truncate<u32>(v) + 700,
+    Holder { node: Node.Items(items), count } => truncate<u32>(items.length) + count,
+    Holder { count, .. } => count,
+};
+
+fn bump(slot: (borrow mut Node)?) {
+    match (slot) {
+        Some(Node.Leaf(v)) => { v += 1; }
+        Some(Node.Items(items)) => { items.push(9)!; }
+        _ => {}
+    }
+}
+
+enum Outer<region r> {
+    One(borrow(r) Node),
+    None,
+}
+
+fn guarded(n: borrow Node?) -> i32 => match (n) {
+    Some(Node.Leaf(v)) if (v > 3) => v,
+    Some(Node.Leaf(_)) => 0,
+    Some(_) => -1,
+    null => -2,
+};
+
+fn deep(w: borrow Outer?) -> i32 => match (w) {
+    Some(Outer.One(Node.Leaf(v))) => v,
+    Some(Outer.One(Node.Items(items))) => truncate<i32>(items.length),
+    Some(Outer.One(Node.Empty)) => -1,
+    Some(Outer.None) => -2,
+    null => -3,
+};
+
+fn first(nodes: Slice<Node>) -> i32 {
+    let Some(Node.Leaf(v)) = find(nodes, 0) else {
+        return -9;
+    };
+    return v;
+}
+
+fn numbers(n: (borrow u8)?) -> u32 => match (n) {
+    Some(0) => 100,
+    Some(1..=9) => 200,
+    Some(_) => 300,
+    null => 400,
+};
+
+fn main() {
+    var items = Vector<u32>.create();
+    items.push(1)!;
+    items.push(2)!;
+    var nodes = Vector<Node>.create();
+    nodes.push(Node.Leaf(5))!;
+    nodes.push(Node.Items(items))!;
+    nodes.push(Node.Empty)!;
+    for (i in 0..4) {
+        Console.writeLine(describe(find(nodes.view(), i)));
+    }
+    let entry = Entry { kind: Node.Items(Vector<u32>.create()), size: 12 };
+    let small = Entry { kind: Node.Empty, size: 4 };
+    Console.writeLine(wrapped(Wrap.One(borrow nodes[0])));
+    Console.writeLine(wrapped(Wrap.One(borrow nodes[2])));
+    Console.writeLine(wrapped(Wrap.Pair(borrow nodes[2], borrow small)));
+    Console.writeLine(wrapped(Wrap.Pair(borrow nodes[0], borrow entry)));
+    Console.writeLine(wrapped(Wrap.Pair(borrow nodes[1], borrow entry)));
+    Console.writeLine(wrapped(Wrap.Pair(borrow nodes[1], borrow small)));
+    Console.writeLine(wrapped(Wrap.None));
+    let seven: u32 = 7;
+    let eight: u32 = 8;
+    Console.writeLine(held(Holder { node: borrow nodes[0], count: borrow seven }));
+    Console.writeLine(held(Holder { node: borrow nodes[1], count: borrow eight }));
+    Console.writeLine(held(Holder { node: borrow nodes[0], count: borrow eight }));
+    var leaf = Node.Leaf(41);
+    bump(Some(borrow mut leaf));
+    bump(Some(borrow mut nodes[1]));
+    bump(null);
+    Console.writeLine(describe(Some(borrow leaf)));
+    Console.writeLine(describe(find(nodes.view(), 1)));
+    if (find(nodes.view(), 0) is Some(Node.Leaf(v))) {
+        Console.writeLine(v);
+    }
+    for (i in 0..4) {
+        Console.writeLine(guarded(find(nodes.view(), i)));
+    }
+    let low = Node.Leaf(2);
+    Console.writeLine(guarded(Some(borrow low)));
+    let outer = Outer.One(borrow nodes[0]);
+    let nothing: Outer = Outer.None;
+    Console.writeLine(deep(Some(borrow outer)));
+    Console.writeLine(deep(Some(borrow nothing)));
+    Console.writeLine(deep(null));
+    Console.writeLine(first(nodes.view()));
+    Console.writeLine(first(nodes.view()[2..]));
+    let zero: u8 = 0;
+    let five: u8 = 5;
+    let big: u8 = 77;
+    Console.writeLine(numbers(Some(borrow zero)));
+    Console.writeLine(numbers(Some(borrow five)));
+    Console.writeLine(numbers(Some(borrow big)));
+    Console.writeLine(numbers(null));
+}

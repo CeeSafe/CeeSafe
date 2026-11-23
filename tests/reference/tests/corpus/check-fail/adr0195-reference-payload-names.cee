@@ -1,5 +1,7 @@
-// ADR 0195 §2.2 (G37): a nested pattern under a reference payload or field is refused (type-system.md §15.2), and
-// the names in it are declared with the error type, so their uses in the arm report nothing more: one error each.
+// ADR 0195 §2.2 (G37): a nested pattern that is refused under a reference payload or field (type-system.md §15.2)
+// has its names declared with the error type, so their uses in the arm report nothing more: one error each. Since
+// ADR 0212 a variant or struct pattern there matches the referent (run-pass/patterns-through-references.cee), and
+// what is still refused is `name @ P`, whose name would be the reference and whose pattern its referent.
 enum Node { Items(Vector<u32>), Leaf(u32) }
 struct Holder<region a> {
     node: borrow(a) Node;
@@ -13,12 +15,12 @@ fn first<region a>(all: borrow(a) Vector<Node>) -> borrow(a) Node? {
 }
 
 fn count(all: borrow Vector<Node>) -> usize => match (first(all)) {
-    Some(Node.Items(v)) => v.length, // error[N0205]
+    Some(n @ Node.Items(v)) => v.length, // error[N0205]
     _ => 0,
 };
 
 fn leaf(h: Holder) -> u32 => match (h) {
-    Holder { node: Node.Leaf(x) } => x + 1, // error[N0205]
+    Holder { node: n @ Node.Leaf(x) } => x + 1, // error[N0205]
     _ => 0,
 };
 

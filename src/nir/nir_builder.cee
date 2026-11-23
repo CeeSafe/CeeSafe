@@ -1403,6 +1403,9 @@ fn guardBindPattern(
     pattern: u32,
     place: u32,
 ) -> Result<void, AllocError> {
+    if (matchesReferent(c, n, b, pattern, place)) {
+        return bindPattern(c, n, b, pattern, place, false); // references into the referent: nothing moves
+    }
     match (c.hir.patterns[pattern as usize]) {
         HirPattern.Binding(hirLocal) => {
             if (c.types.isCopy(c.hir.locals[hirLocal as usize].typ)) {
@@ -1474,6 +1477,9 @@ fn movePattern(
     pattern: u32,
     place: u32,
 ) -> Result<void, AllocError> {
+    if (matchesReferent(c, n, b, pattern, place)) {
+        return bindPattern(c, n, b, pattern, place, false); // references into the referent: nothing moves
+    }
     var wholeValue = false;
     var structType = none();
     var structFields = emptyRange();
@@ -1553,8 +1559,42 @@ fn movePattern(
     return Ok();
 }
 
-/// Branches to `fail` unless the value at `place` matches (TestPattern); continues on success.
+/// Does a pattern on a place that holds a reference match what the reference refers to (type-system.md §15.2, ADR
+/// 0212)? A variant, struct, literal or range pattern, or alternatives, on a reference that is no slice and no view:
+/// the checker lets no other pattern but `_` and a name reach such a place.
+fn matchesReferent(c: borrow Checker, n: borrow NirProgram, b: borrow Lowering, pattern: u32, place: u32) -> bool {
+    let t = placeType(c, n, b, place);
+    if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t)) {
+        return false;
+    }
+    return match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Variant(_, _, _) => true,
+        HirPattern.Struct(_, _, _) => true,
+        HirPattern.Literal(_) => true,
+        HirPattern.Range(_, _) => true,
+        HirPattern.Or(_) => true,
+        _ => false,
+    };
+}
+
+/// Branches to `fail` unless the value at `place` matches (TestPattern); continues on success. A pattern on a
+/// reference payload tests the referent (matchesReferent).
 fn testPattern(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    pattern: u32,
+    place: u32,
+    fail: u32,
+) -> Result<void, AllocError> {
+    if (matchesReferent(c, n, b, pattern, place)) {
+        let referent = projectPlace(n, place, derefProjectionN())?;
+        return testPatternAt(c, n, b, pattern, referent, fail);
+    }
+    return testPatternAt(c, n, b, pattern, place, fail);
+}
+
+fn testPatternAt(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
     b: borrow mut Lowering,
@@ -1713,8 +1753,24 @@ fn bindLocal(
     return assign(n, b, target, rvalue);
 }
 
-/// Binds a matched pattern's names without moving (BindPattern): copies, or references on a reference.
+/// Binds a matched pattern's names without moving (BindPattern): copies, or references on a reference. Under a
+/// reference payload the names are references into its referent (matchesReferent).
 fn bindPattern(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    pattern: u32,
+    place: u32,
+    byReference: bool,
+) -> Result<void, AllocError> {
+    if (matchesReferent(c, n, b, pattern, place)) {
+        let referent = projectPlace(n, place, derefProjectionN())?;
+        return bindPatternAt(c, n, b, pattern, referent, true);
+    }
+    return bindPatternAt(c, n, b, pattern, place, byReference);
+}
+
+fn bindPatternAt(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
     b: borrow mut Lowering,

@@ -323,7 +323,7 @@ fn useful(
         }
         _ => {}
     }
-    let typ = viewTarget(c, types[0]);
+    let typ = testedType(c, types[0]);
     if (c.types.is(typ, TypeKind.Integer)) {
         return usefulInteger(c, wildcard, rows, q, types, witness);
     }
@@ -646,7 +646,7 @@ fn usefulInteger(
     types: Slice<u32>,
     witness: borrow mut Vector<Vector<u8>>,
 ) -> Result<bool, AllocError> {
-    let typ = types[0];
+    let typ = testedType(c, types[0]);
     var whole = intervalConstructor(integerBottom(c, typ), integerTop(c, typ));
     var named = noConstructor();
     if (constructorOf(c, q[0], mut named)) {
@@ -880,4 +880,13 @@ fn viewTarget(c: borrow Checker, typ: u32) -> u32 {
         return c.types.info(typ).pointee;
     }
     return typ;
+}
+
+/// The type a column's patterns test: a view's elements (viewTarget), and for any other reference what it refers
+/// to, since a nested pattern on a reference payload matches the referent (§15.2, ADR 0212).
+fn testedType(c: borrow Checker, typ: u32) -> u32 {
+    if (c.types.is(typ, TypeKind.Reference) && !c.types.isSlice(typ) && !c.types.isStringView(typ)) {
+        return c.types.info(typ).pointee;
+    }
+    return viewTarget(c, typ);
 }

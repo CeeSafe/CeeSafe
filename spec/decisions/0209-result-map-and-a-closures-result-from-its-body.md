@@ -84,7 +84,8 @@ The expected type of the call is still not used (§20.2), so this is one directi
   check-fail/infer-untyped-closure.cee, edited. The results are in ROADMAP §10.
 - Known and not changed here: a generic call whose bound fails with a closure argument also reports N0236 for the
   closure (`apply<i32, StringView>(4, (x) => "t")` does in 0.93.7), so `r.map((v) => "text")` has three diagnostics
-  where N0334 says it all.
+  where N0334 says it all. (Removed since, §6 question 3: a closure literal given for a type that has an error is not
+  asked for its parameter types, `checkClosureWith`; check-fail/result-map-errors.cee has the two that remain.)
 
 ## 6. Questions for the owner (answered 2026-11-23: accepted as recommended)
 
@@ -92,4 +93,4 @@ The expected type of the call is still not used (§20.2), so this is one directi
    look at `U: Send` (an optional of a view is common).
 2. Is "first `return`" the right rule for a block (§2.2)? Yes: it is §38.2's, and one rule is easier to teach than
    two.
-3. Should the extra N0236 of §5 be removed for every generic call? Yes, as a fix of its own (not done yet).
+3. Should the extra N0236 of §5 be removed for every generic call? Yes, as a fix of its own (done, §5).

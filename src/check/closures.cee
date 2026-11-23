@@ -287,6 +287,11 @@ fn checkClosureWith(
     given: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
+    if (expected != none() && c.types.isBottom(expected)) {
+        // The type the literal is given for has an error, reported where it is (a generic call whose bound fails,
+        // ADR 0209 §6): asking for parameter types here (N0236) would name the wrong thing.
+        return c.errorResult(span.start, span.end);
+    }
     let literal = c.front.ast.closures[closure as usize];
     let moveLiteral = isMoveLiteral || moveInto != none();
     // Only the literal its caller names is run-once; literals nested in its body are checked without the mark.

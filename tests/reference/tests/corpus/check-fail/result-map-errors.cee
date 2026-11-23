@@ -6,7 +6,7 @@ fn parse(n: i32) -> Result<i32, bool> => if (n > 0) Ok(n) else Err(false);
 fn main() {
     let u: Result<void, i32> = Ok();
     let a = u.map((v) => 1);                 // error[N0226]
-    let b = parse(2).map((v) => "text");     // error[N0334] // error[N0274] // error[N0236]
+    let b = parse(2).map((v) => "text");     // error[N0334] // error[N0274]
     let c = parse(2).map();                  // error[N0209]
     let d = parse(2).mapErr((e) => e + 1);   // error[N0207]
     let e = parse(2).isOk<i32>();            // error[N0209]

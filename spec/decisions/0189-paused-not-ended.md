@@ -1,7 +1,7 @@
 # ADR 0189 — Paused, not ended: an isolated unit past its slice yields on a stack of its own
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept all the above ADRs as written": §8's nine questions as
-  recommended); implemented, not released (§10). Proposed the same day. Asked for by the owner ("We need to tackle where
+  recommended); implemented, released in ceesafec 0.82.0 (§10). Proposed the same day. Asked for by the owner ("We need to tackle where
   Elixir is ahead", then "Draft ADRs for all gaps"), after httpserver's step 7 of ADR 0186 compared httpserver's
   isolation with Elixir's. This is the first gap: Erlang's scheduler takes the CPU from a process and gives it back
   later; ADR 0186 can only end the task. The other gaps are other documents (a CeeSafe.Web ADR for a request's own unit

@@ -1,7 +1,7 @@
 # ADR 0065 — Agent-facing reference: the library API in llms-full.txt, `ceesafe_api`, and "did you mean"
 
 - Status: **Accepted** by the owner, 2026-11-04 ("Go ahead implement 1-4"), after the review of the agent-facing
-  documentation that followed the ClayWind port. Implemented on the working tree; not released.
+  documentation that followed the ClayWind port. Implemented on the working tree; released in ceesafec 0.11.0.
 - Scope: documentation (`spec/api/std.md`, new; `guide/builtins.md`, new; `guide/for-agents.md`; `templates/AGENTS.md`;
   the site's `llms.txt` and `llms-full.txt`), the MCP server (`ceesafe_api`), and diagnostics (N0100, N0200, N0230,
   N0234 messages). No language change.

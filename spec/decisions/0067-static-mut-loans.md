@@ -1,7 +1,7 @@
 # ADR 0067 — A write to a `static mut` carries no loan
 
 - Status: **Accepted** by the owner, 2026-11-04 ("fix the static mut hole too"). Implemented on the working tree;
-  not released. Found while testing ADR 0066.
+  released in ceesafec 0.12.0. Found while testing ADR 0066.
 - Scope: the borrow checker (`src/nir/borrow.cee`, `checkStaticWrites`). Spec: type-system.md §39.3, diagnostics.md
   (N0272). No new code.
 

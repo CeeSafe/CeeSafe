@@ -4,7 +4,7 @@
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
   S7). Not implementable as written (§7); the owner chose B ("take B now", 2026-11-18): **implemented for one argument
-  list a type** (§8); not released.
+  list a type** (§8); released in ceesafec 0.68.0.
 - Scope: the checker's impls (`src/check/interfaces.cee`: `processImpl`, `implements`, `implMethodFor`), the lookup
   of a method on a concrete type, the `dyn` tables; type-system.md §21 and §20.4, diagnostics.md (N0265, N0267), the
   guide's generics page. No change to the grammar, to the backends, to a library or to the runtime.

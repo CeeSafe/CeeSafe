@@ -1,7 +1,7 @@
 # ADR 0172 — Named shared memory
 
 - Status: **Accepted** by the owner, 2026-11-18 ("Yes, I accept it."): the five questions of §6 as recommended.
-  Implemented the same day (§8); not released. **Not run on Windows.** Written at the owner's request ("Write named-shared-memory ADR"): ADR 0169 §5
+  Implemented the same day (§8); released in ceesafec 0.71.0. **Not run on Windows.** Written at the owner's request ("Write named-shared-memory ADR"): ADR 0169 §5
   question 2 left "a later ADR for named shared memory and for passing a descriptor", and httpserver's supervisor
   cannot leave `fork` for `Process.spawn` without the first (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
   "What ceesafec 0.65.1 to 0.70.0 changed").

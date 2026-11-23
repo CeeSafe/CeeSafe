@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-03 ("I accept the ADR", then "Both 0063 and 0064"): §5 questions 1 and 3
   as recommended (the narrow index rule; no `min`/`max` on `char` or `bool`). Question 2: "Both", so §2.5 adds a
-  panicking `abs` and a never-panicking `unsignedAbs`. Implemented on the working tree; not released. Raised by the ClayWind
+  panicking `abs` and a never-panicking `unsignedAbs`. Implemented on the working tree; released in ceesafec 0.11.0. Raised by the ClayWind
   port (`~/dev/CeeSafeApps/CEESAFE-FINDINGS.md`, items A1, A4 and B), a ~25k-line pure CeeSafe program: a Clay layout
   engine, a software rasterizer matched to ThorVG, a TrueType reader, controls and three hosts.
 - Scope: the checker (`src/check/body.cee`, `src/check/expr.cee`, `src/check/io.cee`, `src/check/members.cee`, the new

@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S4). Implemented 2026-11-18 (§7); not released. **Its Windows half is written and has not been run.**
+  S4). Implemented 2026-11-18 (§7); released in ceesafec 0.70.0. **Its Windows half is written and has not been run.**
 - Scope: lib/std (`ChildProcess`, `ChildOptions`, `ChildExit`; `Process.spawn`, `Process.id`), the hosted runtime
   (`runtime/hosted/ceesafe_rt_hosted.c`: POSIX, Windows, CosmoOS), the interpreter's host services; type-system.md
   §26 (a new §26.16), `spec/api/std.md`, the guide's processes page. No change to the language or to the backends.

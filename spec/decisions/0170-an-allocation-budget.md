@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S5). Implemented 2026-11-18 (§6), with another API than §2.1's; not released. **Not run on Windows.**
+  S5). Implemented 2026-11-18 (§6), with another API than §2.1's; released in ceesafec 0.70.0. **Not run on Windows.**
 - Scope: the hosted runtime (the allocator's slow path, `runtime/core/ceesafe_rt_core.c`; the executor's switch of
   tasks, `runtime/hosted/ceesafe_rt_async.c`), lib/core (`Async.budget`, `Budget`), the interpreter; type-system.md
   §40 (a new §40.x), `spec/api/core.md`, the guide's async page. No change to the language, to the generated C's

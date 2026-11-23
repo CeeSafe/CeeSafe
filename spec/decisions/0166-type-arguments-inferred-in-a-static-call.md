@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S15, second part). Implemented 2026-11-18 (§6); not released.
+  S15, second part). Implemented 2026-11-18 (§6); released in ceesafec 0.67.0.
 - Scope: the checker's static calls (`src/check/generics.cee`, `staticOwner`; `src/check/inherent.cee`,
   `enumStaticOwner`; the call that follows them); type-system.md §20.2, diagnostics.md (N0265), the guide's generics
   page. No change to the grammar, to the backends, to a library or to the runtime.

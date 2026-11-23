@@ -1,7 +1,7 @@
 # ADR 0066 — Static tables of views
 
 - Status: **Accepted** by the owner, 2026-11-04 ("fix the static view table finding in CeeSafe"). Implemented on the
-  working tree; not released. Raised by the ClayWind cleanup on 0.11.0 (`~/dev/CeeSafeApps/CEESAFE-FINDINGS.md` §G).
+  working tree; released in ceesafec 0.12.0. Raised by the ClayWind cleanup on 0.11.0 (`~/dev/CeeSafeApps/CEESAFE-FINDINGS.md` §G).
 - Scope: the checker (`src/check/statics.cee`). Spec: type-system.md §10 and §39.2. No new diagnostic.
 
 ## 1. Context

@@ -1,8 +1,8 @@
 # ADR 0174 — Patching a dependency: one source for a package, chosen by the build's root
 
 - Status: **Accepted** by the owner, 2026-11-19 (asked how IPos should depend on both a local ClayWind and
-  CeeSafeReporting, which pins ClayWind by git: "Add [patch] to CeeSafe"). Implemented the same day (§5); not
-  released.
+  CeeSafeReporting, which pins ClayWind by git: "Add [patch] to CeeSafe"). Implemented the same day (§5); released
+  in ceesafec 0.74.0.
 - Scope: the manifest (`[patch]`), the resolver (`src/packages/manifest.cee`, `src/packages/resolve.cee`),
   tooling.md §4.1, §4.2, the diagnostics table, the guide's packages page. No change to the language.
 

@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S11). Implemented 2026-11-18 (§6), not as §5 planned; not released.
+  S11). Implemented 2026-11-18 (§6), not as §5 planned; released in ceesafec 0.67.0.
 - Scope: a new warning, N0407, reported where uses after a move are (`src/nir/move_check.cee`); type-system.md
   §16.4 (iterators), diagnostics.md, the guide's loops page. No change to what a program means, to the grammar, to
   the backends, to a library or to the runtime.

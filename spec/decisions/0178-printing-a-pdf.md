@@ -1,7 +1,7 @@
 # ADR 0178 — Printing a PDF through the system's print dialog
 
 - Status: **Accepted** by the owner, 2026-11-19 (asked what IPos's Print should do for the A4 invoice and the voucher:
-  "System print dialog"). macOS, iOS and Android implemented the same day (§5); not released. Amendment 1 (§6,
+  "System print dialog"). macOS, iOS and Android implemented the same day (§5); released in ceesafec 0.78.0. Amendment 1 (§6,
   Windows) accepted by the owner the same day.
 - Scope: lib/std's `FileDialog.printFile` (type-system.md §26.13), the window runtime's dialogs (a sixth kind), the
   guide. No change to the language.

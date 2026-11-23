@@ -1,7 +1,7 @@
 # ADR 0068 — `static` in signatures: rejected on parameters, enforced on results
 
 - Status: **Accepted** by the owner, 2026-11-04 ("Tackle ADR 0067 §4 too", then "Reject on params, enforce on
-  results"). Implemented on the working tree; not released.
+  results"). Implemented on the working tree; released in ceesafec 0.12.0.
 - Scope: the checker (`src/check/references.cee`: `writesStatic`, `staticParameterError`, `resolveFlows`;
   `src/check/interfaces.cee`), the borrow checker's N0245 message (`src/nir/borrow.cee`). Spec: type-system.md
   §25.2, §25.6, §39.3; diagnostics.md (N0273).

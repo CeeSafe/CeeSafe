@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept all the ADRs as written"): every question of the
   "Questions for the owner" section as recommended. Written at the owner's request ("go ahead and write those ADRs")
   from the findings of the HTTP server written in CeeSafe (`~/dev/CeeSafeApps/httpserver/CEESAFE_FINDINGS.md`,
-  S14, its first half). Implemented 2026-11-18 (§6); not released.
+  S14, its first half). Implemented 2026-11-18 (§6); released in ceesafec 0.67.0.
 - Scope: the flows of a signature (`src/check/references.cee`, `resolveFlows`); type-system.md §25.6, the guide's
   ownership page. No change to the grammar, to the borrow checker's rules (§25.7), to the backends, to a library or
   to the runtime.

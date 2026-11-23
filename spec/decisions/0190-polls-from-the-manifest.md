@@ -1,7 +1,7 @@
 # ADR 0190 — Polls asked for by the manifest
 
 - Status: **Accepted** by the owner, 2026-11-20 ("I accept all the above ADRs as written": §8's five questions as
-  recommended); implemented, not released (§10). Proposed the same day. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
+  recommended); implemented, released in ceesafec 0.82.0 (§10). Proposed the same day. Written at the owner's request ("Draft ADRs for all gaps"), from the review of
   httpserver against Elixir's process isolation that followed ceesafec 0.80.0. Of the five places where Elixir is
   still ahead, this is the compiler's part of the third, "isolation is opt-in": a server package cannot make the
   bound of ADR 0186 its default, because polls exist only in a build whose command line says

@@ -5,7 +5,7 @@
   package), §2 questions 1 and 2 (the collections' rule; `const` tables of static views), §3 question 1 (an inferred
   "behind references only" condition). For §3 question 2 the order is part 1, then OD-10a. Implementation follows in
   the sections' order. The smaller items from the same port are ADR 0063.
-- Implemented on the working tree (2026-11-04), not released; §5 records how each part was built and checked.
+- Implemented on the working tree (2026-11-04), released in ceesafec 0.11.0; §5 records how each part was built and checked.
 - Source: `~/dev/CeeSafeApps/CEESAFE-FINDINGS.md` (A1–A3), from a ~25k-line pure CeeSafe port of ClayWind (layout,
   rasterizer, fonts, controls, PNG, hosts). Each section says what the port had to do instead, so the cost of
   leaving things as they are is concrete.

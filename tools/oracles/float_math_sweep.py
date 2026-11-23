@@ -44,23 +44,30 @@ def operands32(rng, count):
 
 
 def program(count):
+    """Constant arrays of operands and one loop per type (a statement per result made a `main` that clang -O2
+    took more than ten minutes over)."""
     rng = random.Random(20261124)
-    lines = ["fn main() {"]
+    lines = []
     for t, u, width, make in (("f64", "u64", 16, operands64), ("f32", "u32", 8, operands32)):
-        xs = make(rng, count)
-        ys = make(rng, count)
-        zs = make(rng, count)
-        for k in range(count):
-            x = f"{t}.fromBits(0x{xs[k]:0{width}X})"
-            y = f"{t}.fromBits(0x{ys[k]:0{width}X})"
-            z = f"{t}.fromBits(0x{zs[k]:0{width}X})"
-            for m in UNARY:
-                lines.append(f"    Console.writeLine({x}.{m}().bits());")
-            for m in BINARY:
-                lines.append(f"    Console.writeLine({x}.{m}({y}).bits());")
-            lines.append(f"    Console.writeLine({x}.fma({y}, {z}).bits());")
-            lines.append(f"    Console.writeLine({x}.scaleB({rng.randrange(-1200, 1200)}).bits());")
-    lines.append("}")
+        for name in ("X", "Y", "Z"):
+            values = ", ".join(f"0x{v:0{width}X}" for v in make(rng, count))
+            lines.append(f"const {name}{t.upper()}: [{u}; {count}] = [{values}];")
+        powers = ", ".join(str(rng.randrange(-1200, 1200)) for _ in range(count))
+        lines.append(f"const N{t.upper()}: [i32; {count}] = [{powers}];")
+        lines.append(f"fn sweep{t}() {{")
+        lines.append(f"    for (k in 0..{count}) {{")
+        lines.append(f"        let x = {t}.fromBits(X{t.upper()}[k]);")
+        lines.append(f"        let y = {t}.fromBits(Y{t.upper()}[k]);")
+        lines.append(f"        let z = {t}.fromBits(Z{t.upper()}[k]);")
+        for m in UNARY:
+            lines.append(f"        Console.writeLine(x.{m}().bits());")
+        for m in BINARY:
+            lines.append(f"        Console.writeLine(x.{m}(y).bits());")
+        lines.append("        Console.writeLine(x.fma(y, z).bits());")
+        lines.append(f"        Console.writeLine(x.scaleB(N{t.upper()}[k]).bits());")
+        lines.append("    }")
+        lines.append("}")
+    lines.append("fn main() {\n    sweepf64();\n    sweepf32();\n}")
     return "\n".join(lines) + "\n"
 
 

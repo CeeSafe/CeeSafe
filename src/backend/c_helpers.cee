@@ -541,6 +541,22 @@ fn emitDropGlue(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, Alloc
             e.line("")?;
             continue;
         }
+        if (c.types.is(t, TypeKind.Array)) {
+            // Destroys the elements from index 0 upward (§14.5, ADR 0198 §2.1).
+            emitDropGlueHead(e, c, t, "p")?;
+            e.t("    for (uint64_t i = 0; i < ")?;
+            e.d(truncate<u64>(info.arrayLength))?;
+            e.t("u; i++) {")?;
+            e.emit()?;
+            e.t("        ")?;
+            appendDropGlueName(c, mut e.buf, info.element)?;
+            e.t("(&p->e[i]);")?;
+            e.emit()?;
+            e.line("    }")?;
+            e.line("}")?;
+            e.line("")?;
+            continue;
+        }
         if (c.types.isDynBox(t)) {
             // Destroys the contents through the table, then frees them (§37.3).
             emitDropGlueHead(e, c, t, "p")?;

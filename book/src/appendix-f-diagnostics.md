@@ -216,7 +216,7 @@ The move checker also runs only on a program that type-checks. A move of a value
 | N0254 | error | `return`, `break`, `continue`, `defer` or `?` is inside a deferred statement. A deferred statement runs to its end, so handle an error inside it. | [15.2](./ch15-02-destruction) |
 | N0256 | error | A `match` does not cover every value of what it matches. Add the missing variants or a `_` arm. An arm with a guard does not count. | [3.5](./ch03-05-control-flow), [6.2](./ch06-02-match), [18.2](./ch18-02-when-to-use-it), [19.2](./ch19-02-patterns-that-can-fail) |
 | N0257 | error | A `match` arm can never run - its pattern repeats an earlier one, or it comes after `_`. Remove it, or move it up. | [6.2](./ch06-02-match), [19.2](./ch19-02-patterns-that-can-fail) |
-| N0259 | error | An array that cannot exist - a length that is not a constant of at least 1, an element type that is not Copy (`[Res; 2]`), more than 2^31 − 1 bytes, or `[]` where no slice is expected. Also `fill`, `copyFrom`, `extend` or `resize` with elements that are not Copy. Use a `Vector` for such elements, and for a length known only at run time. | [8.1](./ch08-01-vectors) |
+| N0259 | error | An array that cannot exist - a length that is not a constant of at least 1, a repeat `[v; N]` of a value that is not Copy and no constant (`[String.create(); 2]`: build it with `arrayFrom`), more than 2^31 − 1 bytes, or `[]` where no slice is expected. Also `fill`, `copyFrom`, `extend` or `resize` with elements that are not Copy. Use a `Vector` for a length known only at run time. | [8.1](./ch08-01-vectors) |
 
 ## Results, the heap, generics and interfaces (N0260 to N0268)
 

@@ -2,7 +2,9 @@
 
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's G41 (`CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): a master
   key's words were to live in `[AtomicU64; 4]`, which N0259 refuses outside a static. It finishes what ADR 0075 §2.15
-  left out ("Arrays of non-Copy elements outside statics", its §3). Phase 1 implemented for 0.87.0.
+  left out ("Arrays of non-Copy elements outside statics", its §3). Phase 1 implemented for 0.87.0. Phase 2 implemented
+  2026-11-23 on the optimization and DX roadmap (its Phase 3, item 4; the owner: "continue"), not released: "As built
+  (phase 2)" below.
 - Scope: type-system.md §14.1, §14.5, §16.1 to §16.5, §21.3, §39.4; diagnostics.md N0259 and N0251; the checker
   (`src/check/arrays.cee`, `src/types/types.cee`), NIR (one new rvalue), the C backend's drop glue
   (`src/backend/c_helpers.cee`) and the interpreter's (`src/interpreter/runtime.cee`); the guide's arrays page and
@@ -180,3 +182,29 @@ An array owns its `N` elements, which are always all initialised. Whatever the e
 - **One exception:** an array of C state stays Copy, as before.
 - **One expectation changed:** `check-fail/adr0075-errors.cee`. `[AtomicU64.constant(0); 2]` is accepted now, so
   that line uses `AtomicU64.create(0)`.
+
+## As built (phase 2, 2026-11-23, not released)
+
+- **Drop glue.** The C backend gives an array type a `ceeD_` function that destroys `p->e[i]` for `i` from 0 upward
+  (`emitDropGlue`), named by the type's mangled name; struct, enum, optional, box, vector and frame glue reach it
+  through `needsDrop`, which already followed the element. The interpreter's `destroyStep` pushes the elements in
+  reverse, so they are destroyed in index order.
+- **The element test is gone** (`checkElementCopy` keeps the size test): `[String; 2]`, an array of structs with a
+  `drop` block and an unbounded `[T; N]` are types.
+- **`arrayFrom`** writes an element that needs drop through a raw pointer to it, so the zero bytes the array starts
+  from are not destroyed as a value (§27.3's `p.write(v)`); for other elements its NIR is unchanged, and so are the
+  emit-c snapshots.
+- **A repeat of a value that needs drop is N0259, a struct literal included.** `[Res { id: 1 }; 2]` passed §2.2's
+  static-initialiser test, which only phase 1's element rule kept from laying one value down twice and destroying
+  it twice. A static's own initialiser is not refused: a static is never destroyed.
+- **The audit of §2.4** found nothing to change: an array that is not Copy moves as a whole since phase 1, and
+  the cases are in the corpus (an async function's argument and locals across awaits, a boxed `move` closure's
+  capture, a thread's, a struct's field, a vector's element, a `match` that takes a payload, a `return` of one of
+  two).
+- **Not done:** tail iteration (§18.5) does not go through an array field, so a chain linked through
+  `[Box<Node>?; 1]` is destroyed by recursion (20,000 links run); `tryArrayFrom` (§5 question 5).
+- **Tests:** run-pass/arrays-that-drop.cee and arrays-that-drop-frames.cee (the destruction order the specification
+  gives, equal in the C build and the interpreter, with `--check-leaks`); check-fail/arrays-that-drop-moves.cee and
+  arrays-that-drop-errors.cee; tests/support/fault/arrays-that-drop-sweep.cee in the contract suite (every
+  allocation failed in turn: no leak); check-fail/arrays.cee and arrays-of-atomics-limits.cee edited (four lines
+  that were N0259 in phase 1 are allowed).

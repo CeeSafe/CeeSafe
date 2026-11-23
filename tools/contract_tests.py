@@ -164,6 +164,9 @@ def main():
                                     os.path.join(ROOT, "tests", "support", "fault", "alloc-sweep.cee")] + support),
             ("hashmap sweep", py + [f"{HERE}/fault_sweep.py", "--compiler", cee,
                                     os.path.join(ROOT, "tests", "support", "fault", "hash-map-sweep.cee")]),
+            # Arrays whose elements need drop (ADR 0198 phase 2): no leak whichever allocation fails.
+            ("arrays sweep", py + [f"{HERE}/fault_sweep.py", "--compiler", cee,
+                                   os.path.join(ROOT, "tests", "support", "fault", "arrays-that-drop-sweep.cee")]),
             ("mutations", py + [f"{HERE}/mutation_suite.py", "--compiler", cee]),
             ("fault sweep", py + [f"{HERE}/fault_injection.py", "--compiler", cee, "--corpus", corpus]),
             ("cancel sweep", py + [f"{HERE}/cancel_sweep.py", "--compiler", cee, "--corpus", corpus]),

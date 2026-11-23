@@ -33,11 +33,13 @@ prove the index is in range, as in both loops above.
 
 ### Arrays of atomics and other move types
 
-The elements may be of a type that is not Copy, as long as it needs no drop (yet): atomics, structs of them, and
-`@noncopy` structs of plain data. Such an array is a move type. Its elements are places, borrowed or assigned but
-never moved out one by one (`let x = a[0];` is N0251): `replace(mut a[i], v)` and `a[..].swap(i, j)` take one out
-without leaving a hole. `[v; N]` copies its value, so for these types `v` must be a constant such as
-`AtomicU64.constant(0)`; `arrayFrom(f)` builds the elements one by one, calling `f(0)` to `f(N - 1)`.
+The elements may be of a type that is not Copy: atomics, structs of them, `@noncopy` structs of plain data, and
+types that need drop, such as `[String; 3]` or `[Vector<u8>; 4]`. Such an array is a move type, and when it ends
+its elements are destroyed from index 0 upward. Its elements are places, borrowed or assigned but never moved out
+one by one (`let x = a[0];` is N0251): `replace(mut a[i], v)` and `a[..].swap(i, j)` take one out without leaving a
+hole, and `a[i] = v` destroys the old element. `[v; N]` copies its value, so for these types `v` must be a constant
+such as `AtomicU64.constant(0)`; `arrayFrom(f)` builds the elements one by one, calling `f(0)` to `f(N - 1)`:
+`let names: [String; 3] = arrayFrom((i) => String.create());`.
 
 ```ceesafe
 struct Counters {

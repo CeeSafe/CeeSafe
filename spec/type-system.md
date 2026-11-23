@@ -1087,10 +1087,11 @@ fn area(s: Shape) -> u32 {
     for a non-Copy `T`) is N0251; `replace(mut a[i], v)` and `a[..].swap(i, j)` (§16.5) take one out without
     leaving a hole, so no array needs per-element drop flags. Array patterns bind only Copy elements by value
     (ADR 0085 §2.7).
-  - **Phase 1 restriction** (ADR 0198 §2.4): `T` must not need drop (N0259): atomics, structs and enums of them,
-    `@noncopy` structs of plain data. `[String; 2]` waits for arrays' drop glue. With a type parameter, `[T; N]`
-    needs `T: Copy` (N0259 for an unbounded `T`, which may need drop); each instance decides its own copy-ness.
-    Slices may have move-type elements since M6b (§21.3).
+  - `T` may need drop (ADR 0198 §2.4, phase 2): `[String; 2]`, `[Vector<u8>; 4]`, an array of structs with a
+    `drop` block. The array then needs drop, and destroying it destroys its elements from index 0 upward (§14.5);
+    `a[i] = v` evaluates `v`, destroys the old element, then writes. With a type parameter, `[T; N]` takes any `T`;
+    each instance decides its own copy-ness and drop glue. A repeat `[e; N]` still needs a Copy `e` or a static
+    initialiser (N0259); `arrayFrom(f)` builds any other. Slices may have move-type elements since M6b (§21.3).
   - Otherwise arrays may appear anywhere a value may: locals, parameters, results, struct fields,
     enum payloads and other arrays. Constants of array type are not supported yet (N0216).
 - `Slice<T>` / `SliceMut<T>` are **borrowed views** `(pointer, length)` of a run of `T`s in an array

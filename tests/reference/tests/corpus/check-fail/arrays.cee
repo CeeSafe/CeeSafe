@@ -4,7 +4,7 @@ struct Res {
 }
 struct Holder {
     view: Slice<i32>; // error[N0270]
-    items: [Res; 2];  // error[N0259]
+    items: [Res; 2];  // an element that needs drop: allowed since ADR 0198 phase 2 (was N0259)
 }
 const TABLE: [i32; 2] = [1, 2]; // a constant array (C9, §10)
 
@@ -29,7 +29,7 @@ fn f(n: i32, s: Slice<i32>) {
     let l = [0; 0];             // error[N0259]
     let m: SliceMut<i32> = s;   // error[N0205]
     var o = a[..];              // a shared slice in a `var`: allowed since ADR 0138 §4 (was N0246)
-    let p = [Res { id: 1 }];    // error[N0259]
+    let p = [Res { id: 1 }];    // allowed since ADR 0198 phase 2 (was N0259)
     let q = [f(n, s), f(n, s)]; // error[N0224]
 }
 

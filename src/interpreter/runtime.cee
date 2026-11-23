@@ -675,6 +675,16 @@ fn destroyStep(
         }
         return Ok();
     }
+    if (c.types.is(t, TypeKind.Array)) {
+        // The elements from index 0 upward (§14.5, ADR 0198 §2.1): pushed in reverse.
+        let size = typeSize(c, info.element)? as u64;
+        var i = truncate<u64>(info.arrayLength);
+        while (i > 0) {
+            i -= 1;
+            work.push(DropWork.Value(info.element, addr + i * size))!;
+        }
+        return Ok();
+    }
     if (c.types.is(t, TypeKind.StableVector)) {
         let element = elementOf(c, info.pointee);
         // the chunks after every element, in order: pushed first, and in reverse

@@ -130,21 +130,8 @@ fn checkElementCopy(
     span: Span,
 ) -> Result<void, AllocError> {
     // An array owns its elements, which are never moved out of one by one, so it needs no per-element drop flags
-    // (ADR 0198 §2.1). Arrays of elements that need drop wait for drop glue (its phase 2); slices only view theirs
-    // (§21.3). ADR 0075 §2.15's rule for statics is now the rule everywhere.
-    if (length >= 0 && c.types.needsDrop(element) && !c.types.isCLaidOut(element, 0)) {
-        var message = Vector<u8>.create();
-        if (c.types.is(element, TypeKind.TypeParameter)) {
-            appendText(mut message, "an array's elements must not need drop yet, and ")?;
-            appendQuotedType(mut message, c, element)?;
-            appendText(mut message, " may: bound it 'Copy' (type-system.md §16.1)")?;
-        } else {
-            appendText(mut message, "an array's elements must not need drop yet; ")?;
-            appendQuotedType(mut message, c, element)?;
-            appendText(mut message, " has a drop block or contains one (type-system.md §16.1)")?;
-        }
-        return c.error(invalidArray(), span.start, span.end, message);
-    }
+    // (ADR 0198 §2.1), and an element of any type may need drop: the array's drop glue destroys them in index order
+    // (its phase 2). What is checked here is the size.
     if (length > 0 && elementHasLayout(c, element)?) {
         let size = c.types.layoutOf(element).size;
         // size × length > int.MaxValue, without overflow: both are below 2^63 / 2^48.
@@ -440,7 +427,10 @@ fn synthArrayRepeat(
         appendQuotedType(mut message, c, elementType)?;
         appendText(
             mut message,
-            " is not Copy: give a static initialiser (a '@constant' call such as 'AtomicU64.constant(0)', or a struct literal of them) or build the array with 'arrayFrom' (type-system.md §16.2)",
+            if (c.types.needsDrop(
+                elementType,
+            )) " needs drop, so every element must be a value of its own: build the array with 'arrayFrom' (type-system.md §16.2)"
+                else " is not Copy: give a static initialiser (a '@constant' call such as 'AtomicU64.constant(0)', or a struct literal of them) or build the array with 'arrayFrom' (type-system.md §16.2)",
         )?;
         c.error(invalidArray(), valueSpan.start, valueSpan.end, message)?;
         return c.errorResult(span.start, span.end);
@@ -449,11 +439,15 @@ fn synthArrayRepeat(
 }
 
 /// May `[value; N]` lay its value down `N` times (ADR 0198 §2.2)? A Copy value may; a non-Copy one only if it is a
-/// static initialiser, which has no effects and no drop. A static's initialiser and a `@constant` body are checked
-/// as such already (§39.4).
+/// static initialiser, which has no effects, of a type that needs no drop. A static's initialiser and a `@constant`
+/// body are checked as such already (§39.4).
 fn repeatable(c: borrow Checker, elementType: u32, value: u32) -> bool {
     if (!c.copyKnown || c.types.isCopy(elementType) || c.isBottom(value) || c.inStaticInitializer) {
         return true;
+    }
+    if (c.types.needsDrop(elementType)) {
+        // `N` copies of one value would each be destroyed (ADR 0198 phase 2): only a static's are not.
+        return false;
     }
     if (c.function != none() && containsU32(c.constantFunctions, c.hir.functions[c.function as usize].syntax)) {
         return true;

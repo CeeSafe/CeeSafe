@@ -1,0 +1,222 @@
+// Arrays whose elements need drop (type-system.md §16.1, §14.5; ADR 0198 phase 2). An array is one value: it moves
+// as a whole, and destroying it destroys its elements from index 0 upward: at the end of its scope, when the whole
+// array is reassigned, when it is moved on one path only, as a struct's field (after the struct's `drop` block), in
+// a vector, nested, as an enum's payload, in an optional and in a box. `a[i] = v` destroys the old element; `replace`
+// and `swap` take one out without a hole. `arrayFrom` builds one without destroying the zero bytes it starts from.
+// A generic `[T; 2]` takes any `T`. The expected lines are the order the specification gives.
+// expect-stdout: -- arrayFrom
+// expect-stdout: 102
+// expect-stdout: 100
+// expect-stdout: 101
+// expect-stdout: 102
+// expect-stdout: -- reassign
+// expect-stdout: 10
+// expect-stdout: 11
+// expect-stdout: 12
+// expect-stdout: reassigned
+// expect-stdout: 20
+// expect-stdout: 21
+// expect-stdout: 22
+// expect-stdout: -- moved on one path
+// expect-stdout: taken
+// expect-stdout: 30
+// expect-stdout: 31
+// expect-stdout: 32
+// expect-stdout: after
+// expect-stdout: after
+// expect-stdout: 40
+// expect-stdout: 41
+// expect-stdout: 42
+// expect-stdout: -- struct field
+// expect-stdout: pack
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: -- vector of arrays
+// expect-stdout: 50
+// expect-stdout: 51
+// expect-stdout: 52
+// expect-stdout: 53
+// expect-stdout: -- nested arrays
+// expect-stdout: 60
+// expect-stdout: 61
+// expect-stdout: 62
+// expect-stdout: 63
+// expect-stdout: -- enum, optional, box
+// expect-stdout: 71
+// expect-stdout: 70
+// expect-stdout: 71
+// expect-stdout: 74
+// expect-stdout: 75
+// expect-stdout: 72
+// expect-stdout: 73
+// expect-stdout: -- generic
+// expect-stdout: 80
+// expect-stdout: left
+// expect-stdout: 80
+// expect-stdout: 81
+// expect-stdout: -- replace and swap
+// expect-stdout: replaced
+// expect-stdout: 92
+// expect-stdout: 90
+// expect-stdout: 92
+// expect-stdout: 91
+// expect-stdout: 99
+// expect-stdout: -- strings and vectors
+// expect-stdout: ccc!
+// expect-stdout: 1
+// expect-stdout: -- closure capture
+// expect-stdout: 111
+// expect-stdout: 110
+// expect-stdout: 111
+// expect-stdout: 112
+// expect-stdout: -- choose
+// expect-stdout: 310
+// expect-stdout: 311
+// expect-stdout: chosen
+// expect-stdout: 300
+// expect-stdout: 301
+// expect-stdout: -- through and temporaries
+// expect-stdout: 601
+// expect-stdout: 600
+// expect-stdout: 601
+// expect-stdout: temp gone
+// expect-stdout: 610
+// expect-stdout: 611
+// expect-stdout: field reassigned
+// expect-stdout: 620
+// expect-stdout: 621
+// expect-stdout: struct reassigned
+// expect-stdout: 630
+// expect-stdout: 631
+// expect-stdout: end
+
+struct Counted {
+    id: i32;
+    drop { Console.writeLine(this.id); }
+}
+
+struct Pack {
+    items: [Counted; 2];
+    tail: i32;
+    drop { Console.writeLine("pack"); }
+}
+
+enum Maybe {
+    Two([Counted; 2]),
+    None,
+}
+
+fn make(base: i32) -> [Counted; 3] => [Counted { id: base }, Counted { id: base + 1 }, Counted { id: base + 2 }];
+
+fn take(a: [Counted; 3]) { Console.writeLine("taken"); }
+
+fn first<T>(a: borrow [T; 2]) -> borrow T => borrow a[0];
+
+fn pair<T>(x: T, y: T) -> [T; 2] => [x, y];
+
+struct Frame {
+    items: [Counted; 2];
+}
+
+fn make2(base: i32) -> [Counted; 2] => [Counted { id: base }, Counted { id: base + 1 }];
+
+fn choose(flag: bool) -> [Counted; 2] {
+    let a = make2(300);
+    let b = make2(310);
+    return if (flag) a else b;
+}
+
+fn through(a: [Counted; 2]) -> [Counted; 2] => a;
+
+fn main() {
+    Console.writeLine("-- arrayFrom");
+    {
+        let made: [Counted; 3] = arrayFrom((i) => Counted { id: 100 + truncate<i32>(i) });
+        Console.writeLine(made[2].id);
+    }
+    Console.writeLine("-- reassign");
+    {
+        var a = make(10);
+        a = make(20);
+        Console.writeLine("reassigned");
+    }
+    Console.writeLine("-- moved on one path");
+    for (k in 0..2) {
+        let a = make(30 + k * 10);
+        if (k == 0) {
+            take(a);
+        }
+        Console.writeLine("after");
+    }
+    Console.writeLine("-- struct field");
+    {
+        let p = Pack { items: [Counted { id: 1 }, Counted { id: 2 }], tail: 0 };
+    }
+    Console.writeLine("-- vector of arrays");
+    {
+        var v = Vector<[Counted; 2]>.create();
+        v.push([Counted { id: 50 }, Counted { id: 51 }])!;
+        v.push([Counted { id: 52 }, Counted { id: 53 }])!;
+    }
+    Console.writeLine("-- nested arrays");
+    {
+        let n: [[Counted; 2]; 2] = [[Counted { id: 60 }, Counted { id: 61 }], [Counted { id: 62 }, Counted { id: 63 }]];
+    }
+    Console.writeLine("-- enum, optional, box");
+    {
+        let m = Maybe.Two([Counted { id: 70 }, Counted { id: 71 }]);
+        let o: [Counted; 2]? = Some([Counted { id: 72 }, Counted { id: 73 }]);
+        let b = Box.create([Counted { id: 74 }, Counted { id: 75 }])!;
+        match (m) {
+            Maybe.Two(items) => { Console.writeLine(items[1].id); }
+            Maybe.None => {}
+        }
+    }
+    Console.writeLine("-- generic");
+    {
+        let g = pair(Counted { id: 80 }, Counted { id: 81 });
+        Console.writeLine(first(borrow g).id);
+        let s = pair(String.from("left")!, String.from("right")!);
+        Console.writeLine(first(borrow s).view());
+    }
+    Console.writeLine("-- replace and swap");
+    {
+        var a = make(90);
+        let old = replace(mut a[0], Counted { id: 99 });
+        Console.writeLine("replaced");
+        a[..].swap(0, 2);
+        Console.writeLine(a[0].id);
+    }
+    Console.writeLine("-- strings and vectors");
+    {
+        var names: [String; 3] = [String.from("a")!, String.from("bb")!, String.from("ccc")!];
+        names[1] = String.from("zz")!;
+        names[2].append("!")!;
+        Console.writeLine(names[2].view());
+        var lists: [Vector<u8>; 4] = arrayFrom((i) => Vector<u8>.create());
+        lists[3].push(7)!;
+        Console.writeLine(lists[3].length);
+    }
+    Console.writeLine("-- closure capture");
+    {
+        let a = make(110);
+        let f = () => a[1].id;
+        Console.writeLine(f());
+    }
+    Console.writeLine("-- choose");
+    {
+        let c = choose(true);
+        Console.writeLine("chosen");
+    }
+    Console.writeLine("-- through and temporaries");
+    {
+        Console.writeLine(through(make2(600))[1].id);
+        Console.writeLine("temp gone");
+        var s = Frame { items: make2(610) };
+        s.items = make2(620);
+        Console.writeLine("field reassigned");
+        s = Frame { items: through(make2(630)) };
+        Console.writeLine("struct reassigned");
+    }
+    Console.writeLine("end");
+}

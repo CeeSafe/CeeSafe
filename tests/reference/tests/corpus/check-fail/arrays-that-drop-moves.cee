@@ -1,0 +1,23 @@
+// What the move checker still refuses of an array whose elements need drop (type-system.md §16.1, ADR 0198 §2.1):
+// an element is never moved out (N0251), and the array moves as a whole (N0250 after).
+struct Res {
+    id: i32;
+    drop {}
+}
+
+fn take(r: Res) {}
+
+fn readsOne(a: [Res; 2]) {
+    let x = a[0]; // error[N0251]
+}
+
+fn passesOne(a: [Res; 2]) {
+    take(a[1]); // error[N0251]
+}
+
+fn movesTwice(a: [Res; 2]) {
+    let b = a;
+    let c = a; // error[N0250]
+}
+
+fn main() {}

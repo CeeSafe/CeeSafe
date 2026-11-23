@@ -1,0 +1,25 @@
+// Allocation failures around arrays whose elements need drop (ADR 0198 phase 2). tools/fault_sweep.py fails each
+// allocation in turn: the function returns the error, and the arrays built so far, the one moved, the element
+// replaced and the one half-filled are destroyed once each, so every run ends with no live allocation. The program
+// prints "consistent" and how it ended.
+fn build() -> Result<usize, AllocError> {
+    var names: [String; 3] = arrayFrom((i) => String.create());
+    names[0].append("first")?;
+    names[1].append("second")?;
+    var lists: [Vector<u8>; 2] = [Vector<u8>.create(), Vector<u8>.create()];
+    lists[1].push(7)?;
+    var moved = names;
+    moved[2].append("third")?;
+    moved[1] = String.from("replaced")?;
+    let old = replace(mut moved[0], String.from("swapped")?);
+    return Ok(moved[0].length + moved[1].length + moved[2].length + lists[1].length + old.length);
+}
+
+fn main() {
+    match (build()) {
+        Ok(n) => {
+            Console.writeLine(if (n == 26) "consistent complete" else "inconsistent total");
+        }
+        Err(_) => { Console.writeLine("consistent failed"); }
+    }
+}

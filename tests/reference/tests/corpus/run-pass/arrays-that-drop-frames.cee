@@ -1,0 +1,72 @@
+// Arrays whose elements need drop, where the array is copied into a frame or an environment (ADR 0198 phase 2's
+// audit): an async function's argument and locals across awaits (the drops are counted, since an async function's
+// drop may not do console I/O), a boxed `move` closure's capture, and a thread's. Each is a move of the whole array,
+// destroyed once, where its new owner ends.
+// expect-stdout: 512
+// expect-stdout: 1023
+// expect-stdout: -- boxed closure
+// expect-stdout: 401
+// expect-stdout: 400
+// expect-stdout: 401
+// expect-stdout: -- thread
+// expect-stdout: 700
+// expect-stdout: 701
+// expect-stdout: 700
+// expect-stdout: end
+
+struct Counted {
+    id: i32;
+    drop { Console.writeLine(this.id); }
+}
+
+fn make(base: i32) -> [Counted; 2] => [Counted { id: base }, Counted { id: base + 1 }];
+
+static DROPS: AtomicU64 = AtomicU64.constant(0);
+
+struct Quiet {
+    id: u64;
+    drop { let _ = DROPS.fetchAdd(this.id); }
+}
+
+struct QuietFrame {
+    items: [Quiet; 2];
+}
+
+fn quiet(base: u64) -> [Quiet; 2] => [Quiet { id: base }, Quiet { id: base + 1 }];
+
+async fn later(a: [Quiet; 2]) -> u64 {
+    let _ = await Timer.sleep(1);
+    return a[1].id;
+}
+
+async fn held() -> u64 {
+    let a = quiet(200);
+    let _ = await Timer.sleep(1);
+    let f = QuietFrame { items: quiet(210) };
+    let _ = await Timer.sleep(1);
+    return a[0].id + f.items[1].id;
+}
+
+async fn run() -> u64 {
+    let first = await later(quiet(100));
+    let second = await held();
+    return first + second;
+}
+
+fn main() {
+    Console.writeLine(Async.run(run()));
+    Console.writeLine(DROPS.load());
+    Console.writeLine("-- boxed closure");
+    {
+        let a = make(400);
+        let f: Box<dyn fn() -> i32> = Box.create(move () => a[1].id)!;
+        Console.writeLine(f());
+    }
+    Console.writeLine("-- thread");
+    {
+        let a = make(700);
+        let t = Thread.spawn(move () => a[0].id)!;
+        Console.writeLine(t.join());
+    }
+    Console.writeLine("end");
+}

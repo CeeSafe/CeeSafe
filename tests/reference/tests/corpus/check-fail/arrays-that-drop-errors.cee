@@ -1,0 +1,23 @@
+// What an array whose elements need drop still refuses in its types (type-system.md §16.1 and §16.2, ADR 0198 §2.2):
+// a repeat copies its value, so a value that needs drop cannot be repeated, a struct literal included (N0259), the
+// slice methods that copy need Copy elements (N0259), and an array pattern binds only Copy elements by value
+// (N0205).
+struct Res {
+    id: i32;
+    drop {}
+}
+
+fn main() {
+    let r = [Res { id: 1 }; 2];       // error[N0259]
+    let names = [String.create(); 2]; // error[N0259]
+    var s = [String.create(), String.create()];
+    let t = [String.create(), String.create()];
+    s[..].copyFrom(t[..]);       // error[N0259]
+    s[..].fill(String.create()); // error[N0259]
+}
+
+fn bind(a: [Res; 2]) {
+    match (a) {
+        [p, q] => {} // error[N0205] // error[N0205]
+    }
+}

@@ -3503,7 +3503,8 @@ fn reachesElement(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as 
 
 /// `arrayFrom(f)` (ADR 0198 §2.2): the array, zero-filled, then `f(i)` moved into element `i` for `i` from 0 to `N - 1`
 /// in order. Nothing reads the array before every element is written, and a panic in `f` aborts (OD-5), so its zero
-/// bytes are never seen. Its elements have no drop glue (phase 1), so writing over a zero element destroys nothing.
+/// bytes are never seen. An element that needs drop is written through a raw pointer, so the zero bytes under it are
+/// not destroyed as a value (ADR 0198 phase 2).
 fn lowerArrayFrom(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
@@ -3568,7 +3569,25 @@ fn lowerArrayFrom(
     let slot = projectPlace(n, resultPlace, indexProjectionN(counterOperand))?;
     let moved = readPlace(c, n, b, valuePlace)?;
     let movedUse = useRvalue(n, moved)?;
-    assign(n, b, slot, movedUse)?;
+    if (c.types.needsDrop(element)) {
+        // The element's zero bytes are no value to destroy (ADR 0198 phase 2): the result is written through a raw
+        // pointer to the element, which neither reads nor destroys what was there (§27.3).
+        let elementReference = c.types.referenceTo(element, true)?;
+        let slotLoan = newTemp(b, elementReference)?;
+        let slotLoanPlace = localPlace(n, slotLoan)?;
+        let borrowed = n.rvalue(NirRvalue.Ref(true, slot), elementReference, span)?;
+        assign(n, b, slotLoanPlace, borrowed)?;
+        let pointerType = c.types.pointerTo(element, true)?;
+        let pointer = newTemp(b, pointerType)?;
+        let pointerPlace = localPlace(n, pointer)?;
+        let loanRead = readPlace(c, n, b, slotLoanPlace)?;
+        let cast = n.rvalue(NirRvalue.Cast(loanRead), pointerType, span)?;
+        assign(n, b, pointerPlace, cast)?;
+        let target = projectPlace(n, pointerPlace, derefProjectionN())?;
+        assign(n, b, target, movedUse)?;
+    } else {
+        assign(n, b, slot, movedUse)?;
+    }
     // counter < N, so the increment cannot overflow.
     let one = constOperand(n, 1, usize)?;
     let add = n.rvalue(NirRvalue.Binary(BinaryOp.Add, counterOperand, one), usize, span)?;

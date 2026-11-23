@@ -514,7 +514,8 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
     }
     let builtin = isResultType(c, t) || c.types.optionType(t) != none() || c.types.is(t, TypeKind.Box) ||
         c.types.is(t, TypeKind.Vector) || c.types.is(t, TypeKind.StableVector) || c.types.is(t, TypeKind.SlotMap) ||
-        isInstanceType(c, t) || isClosureEnvironmentType(c, t) || c.types.is(t, TypeKind.Thread);
+        isInstanceType(c, t) || isClosureEnvironmentType(c, t) || c.types.is(t, TypeKind.Thread) ||
+        c.types.is(t, TypeKind.Array);
     appendText(out, "ceeD_")?;
     if (builtin) {
         return appendMangle(c, out, t);

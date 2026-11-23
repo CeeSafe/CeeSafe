@@ -36,6 +36,10 @@ fn main() {
 100
 ```
 
+A box is read through without `*`: `b.f` and `b.m()` reach the contents. To take the contents out, write the box
+where its contents' type is expected, `let inner: Account = account;`: the box is consumed, its memory freed, and the
+`Account` has a new owner. (`*b` is for references, and on a box it is an error that says this.)
+
 The declared type of a box reaches the value under `!` and `?`: `let wide: Box<i64> = Box.create(5)!;` holds an
 `i64`, and `let s: String<FailingAllocator> = String.from("a")!;` allocates from that allocator.
 

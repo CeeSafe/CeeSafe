@@ -58,7 +58,7 @@ diagnostics, so any cascade fails the test.
 | N0105 | Expected a type, or `Self` where it names no type (outside an interface, an `impl` or a struct's or enum's body, ADR 0086 §2.2) | `fn f(x: ) {}` |
 | N0106 | Namespace declaration not first in the file | `fn a() {}` then `namespace X;` |
 | N0107 | Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2) | `struct A { 42; }` |
-| N0108 | Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`) | `match (n) { + => { } }` |
+| N0108 | Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`); a float literal, which is no pattern: bind the value and compare it with `==` (ADR 0228 §2.3) | `match (n) { + => { } }`; `v is V.Real(1.5)` |
 | N0109 | An `import` declaration after an item | `fn a() {}` then `import geometry;` |
 | N0110 | Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed | 1,000 nested parentheses; a sum of 1,001 terms |
 
@@ -173,9 +173,9 @@ errors carry notes ("borrowed here", "the borrow is used later here").
 | N0242 | Read of a place while it is mutably borrowed | `let m = borrow mut x; print(x); m = 1;` |
 | N0243 | A place or temporary goes out of scope while borrowed | `let r = same(five()); use(r)` |
 | N0244 | Returning a reference to a local or temporary (E1) | `return borrow x;` with `x` local |
-| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5); in a closure's body, a result that may hold a loan and is made from a capture, since the closure's environment is no source of its result (§36.2) | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
+| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5); in a closure's body, a result that may hold a loan and is made from a capture, since the closure's environment is no source of its result (§36.2). For a result that holds a reference without being one (`Result<Slice<u8>, E>`), the message names a region parameter, not a source list (ADR 0228 §2.2); for a slice result of a function with no scoped parameter, a `static` table and `Slice<static, T>` | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
 | N0246 | Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1) | `struct S { r: borrow i64; }` |
-| N0247 | `borrow` of something that is not a place | `borrow 5`, `take(mut five())` |
+| N0247 | `borrow mut` or `mut` of something that is not a place (a shared `borrow 5` lends a temporary for the statement, ADR 0227 §2.1) | `borrow mut five()`, `take(mut five())` |
 | N0248 | `borrow mut` (or a `borrow mut this` call) on an immutable place | `borrow mut param`, `shared.grow()` |
 | N0249 | `mut` argument marker missing or misplaced | `take(x)` for `borrow mut`, `look(mut x)` for `borrow` |
 

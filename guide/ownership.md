@@ -180,6 +180,14 @@ fn main() {
 A `borrow T` parameter accepts the value itself, borrowed implicitly. A `borrow mut T` parameter needs `mut` before
 the argument, so that every place where a value may change is visible where it is called, as C#'s `ref` is.
 
+A value that is not a variable, a literal or a call's result, can be borrowed too: `map.contains(borrow 1u32)` lends
+a temporary that lives until the end of the statement. Kept in a `let` and used after the statement, it is an error
+(N0243); bind the value to a local instead. Only shared borrows of temporaries exist: `borrow mut five()` would let a
+call change a value no one sees again (N0247).
+
+A field of a value that `?` or `!` unwraps can be moved out directly: `let name = load()?.name;` keeps `name` and
+destroys the rest of the loaded value at the end of the expression.
+
 ### The rule
 
 While a borrow is **live**, meaning the borrow or anything made from it is still used later, the borrowed value
@@ -243,6 +251,10 @@ fn main() {
 7
 4
 ```
+
+A result that holds a borrow without being one, such as `Result<Slice<u8>, E>`, cannot carry a `borrow(a)` list
+(that would make the whole `Result` a borrow). It names a region instead, written on the parameter and in the result:
+`fn take<region r>(bytes: Slice<r, u8>, n: usize) -> Result<Slice<r, u8>, E>` ([regions](#borrows-in-structs-regions)).
 
 The caller then knows how long the result stays valid: as long as the arguments it borrows from. Returning a
 borrow of a local is rejected, since the local is gone when the function returns:

@@ -356,8 +356,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   another constant of the type. A use is the value, like the literal: its fields are read (`KEY.fmtid.data4[7]`),
   and it is copied, passed and bound as any value. A struct that owns memory or holds a loan is N0216 (N0246 for a
   region parameter), at the constant's type.
-- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool`, `StringView`,
-  `Slice<u8>` (static bytes, below) or a plain struct (ADR 0180), and
+- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, a float type, `CChar` (ADR 0226
+  §2.3), `bool`, `StringView`, `Slice<u8>` (static bytes, below) or a plain struct (ADR 0180), and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
   sliced or borrowed. A table to
@@ -521,8 +521,13 @@ The algorithm that enforces these rules is in `lifetimes.md`.
 
 ### 13.2 Creating references
 - `borrow p` / `borrow mut p`, where `p` is a **place**: a local, `this`, a field path, or a path
-  through a reference such as `r.f` (`(*r).f`). Borrowing anything else is N0247; bind the value
+  through a reference such as `r.f` (`(*r).f`). Borrowing anything else mutably is N0247; bind the value
   to a local first.
+- `borrow e` of a value that is no place (ADR 0227 §2.1): a literal, a call's result, or a field or element path
+  from one (`borrow 1u32`, `borrow make()`, `borrow make().name`) is a shared borrow of a temporary that lives until
+  the end of its statement, as a receiver's is (below). It may be passed or used within the statement
+  (`map.contains(borrow 1u32)`); kept in a `let` used after the statement, it is N0243. `borrow mut e` of a value is
+  still N0247: what a call would change is a temporary no one could read.
 - `borrow mut p` requires `p` to be mutable: rooted at a `var` local, or reached through a
   `borrow mut` reference (N0248). A `let` binding, a parameter, a by-value `this`, and anything
   reached through a shared reference are immutable. That holds through a `borrow mut` or
@@ -549,7 +554,8 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   not a place, `make().view()` or `text.split(",").next()`, is evaluated into a temporary that lives until the end of
   its statement (§14.5), and the receiver borrows it; so is a field path on one (`holder().name.view()`). A result
   derived from it may be used within the statement; kept in a `let` used after it, it is N0243. A path through a
-  reference is not copied: it is borrowed as a place. An explicit `borrow e` or `mut e` of a value is still N0247.
+  reference is not copied: it is borrowed as a place. An explicit `borrow e` of a value is the same shared borrow of a
+  temporary (above; ADR 0227 §2.1); `borrow mut e` or `mut e` of a value is still N0247.
 
 ### 13.3 Using references
 - **Auto-deref.** Where a value of type `T` is needed (an operand, a by-value argument, an
@@ -656,6 +662,11 @@ struct File {
   `p` to `f` has a `drop` block. `p` is then partially initialised. `p.f` may be reassigned, after
   which `p` is whole again. Reading `p` as a whole, or borrowing it, needs all of it initialised
   (N0250).
+- **A field of an unwrapped temporary** (ADR 0227 §2.2). `e?.f` and `e!.f`, where `e` is no place (a call's result:
+  `make()?.name`, `replace(mut best, null)!.seek`) and `f` is not Copy, are `{ let unwrapped = e?; unwrapped.f }`:
+  the unwrapped value is held in a hidden local of its own, `f` is moved out of it (a partial move, so a struct with a
+  `drop` block on the path is N0252), and the rest of it is destroyed at the end of that block, the end of the
+  expression. Of a place, `opt!.f` stays N0251: `opt!` would consume `opt` to read one field of it.
 - **Not allowed:**
   - moving out of a place reached through a reference (N0251), because the referent must stay
     valid; this includes `this` in `borrow`/`borrow mut` methods;
@@ -782,6 +793,10 @@ Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
 A payload that is a single identifier is a binding, unless it names a constant (below); `Some(…)`, `Ok(…)`, `Err(…)`
 and `E.V…` there are patterns.
+- **No float patterns** (ADR 0228 §2.3). A float literal where a pattern is expected (`V.Real(1000.0)`, `-0.5 =>`) is
+  parsed, and refused with N0108, which says to bind the value and compare it (`V.Real(r) if r == 1000.0`, or
+  `v is V.Real(r) && r == 1000.0`); a `match` on a float is N0207, which says to write an `if` chain. Floats are
+  compared by `==` (§35): exactly, with `NaN` equal to nothing and `-0.0 == 0.0`, which a pattern would hide.
 - **Struct patterns** (ADR 0123). `P { x, var y, z: 0, .. }` matches a value of the struct `P`, or a reference to
   one, when each field pattern matches its field. `match`, `is` and `let` take a struct scrutinee.
   - `P` names the value's struct as a literal does, without type arguments (`Point`, `Pair`, `geometry.Point`,
@@ -1115,7 +1130,14 @@ fn area(s: Shape) -> u32 {
 
 ### 16.2 Values
 - `[e1, …, en]`: all elements have the same type (the expected element type, or the first
-  element's), n ≥ 1.
+  element's), n ≥ 1. The expected element type is that of an expected array type `[T; N]`, or (ADR 0226 §2.1) of an
+  expected slice type `Slice<T>`: a literal sliced where a slice is expected (`[1, 2][..]` returned as a
+  `Slice<u64>`) or passed for a `Slice<T>` parameter (`sum([1, 2][..])`); and a literal indexed where a number type
+  `T` is expected has `T` elements (`let g: u64 = [7, 8][i];`). An array passed for a slice parameter
+  without `[..]` is N0205, whose sure fix writes `[..]`. A literal with no expected type takes the first element's:
+  `let a = [1, 2];` is `[i32; 2]`, as `let x = 1;` is an `i32` (§4), however `a` is used later; an N0205 on one of its
+  elements says to give the type where it is declared (`let a: [u64; 2] = [1, 2];`) or a suffix to the first element
+  (`[1u64, 2]`).
 - `[v; N]`: N copies of `v`. For a Copy `v`, `v` is evaluated once and copied. For a non-Copy `v` (ADR 0198
   §2.2), `v` must be a static initialiser (§39.4: a `@constant` call such as `AtomicU64.constant(0)`, or a struct
   literal of them), which has no effects and no drop, so its value is laid down `N` times and once or `N`
@@ -1518,6 +1540,8 @@ Diagnostics: N0263 (an allocator argument that is not an allocator type).
   `list = rest;` with `rest: Box<List>`, an argument for a `T` parameter. The box is consumed like any moved value
   and its memory is returned to the allocator; `T` is not destroyed (it has a new owner), so a `T` with a `drop`
   block may be moved out whole. Through a reference it is rejected (N0251), as above.
+- `*b` of a box is N0205 (`*` reads through a reference, §13.3); the message says that a box is read through without
+  `*` and that its contents move out where a `T` is expected, `let inner: T = b;` (ADR 0228 §2.1).
 
 ### 18.4 Moving payloads out in `match` (M3c; replaces N0258)
 ```text
@@ -2794,7 +2818,11 @@ Each parameter and the result of a function have **flow names**:
   parameter (v0 elision). With several scoped parameters and none written: in a method whose receiver is one of
   them, the receiver's (ADR 0160 §2: `fn find(borrow this, name: StringView) -> Slice<u8>?` borrows from `this`, and
   is tied to it as by `borrow(this)`, not a deep result), unless the result's written type names a type parameter;
-  otherwise N0245 (as in v0).
+  otherwise N0245 (as in v0). Where the result is no reference itself but holds one (`Result<Slice<u8>, E>`, an
+  optional of a view), a source list `borrow(a) T` would make the whole result a reference, so N0245's message names
+  a region parameter instead: `fn f<region r>(a: Slice<r, u8>, b: Slice<u8>) -> Result<Slice<r, u8>, E>`; so does
+  the N0245 of a method whose result borrows from a parameter other than the receiver (ADR 0228 §2.2). A function
+  with no scoped parameter that returns a slice is told to return a `static` table as `Slice<static, T>`.
 - for a result `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions written on the
   reference itself, whose pointee names regions (`-> borrow HeaderList<r>`): the reference's own region is elided
   as above, when there is a single scoped parameter. So the result is tied to that parameter, and is not a deep

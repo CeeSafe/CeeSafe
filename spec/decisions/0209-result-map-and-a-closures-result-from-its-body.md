@@ -1,8 +1,9 @@
 # ADR 0209 — `Result.map` and `mapErr`, and a closure's result type from its body
 
-- Status: **Proposed** 2026-11-23, and implemented on the working tree under the owner's instruction ("rebase on
-  origin/main and continue with Result.map"; the optimization and DX roadmap's Phase 3, item 2); not released. §2.1 is
-  ADR 0075 §2.3, accepted 2026-11-05 and left out in its §7.3; §2.2 is new. §6's questions are the owner's to decide.
+- Status: **Accepted** by the owner, 2026-11-23 ("I accept ADR 0209."), with §6's three questions taken as
+  recommended; proposed the same day and implemented under the owner's instruction ("rebase on origin/main and
+  continue with Result.map"; the optimization and DX roadmap's Phase 3, item 2); not released. §2.1 is ADR 0075 §2.3,
+  accepted 2026-11-05 and left out in its §7.3; §2.2 is new.
 - Scope: type-system.md §17.6 and §20.2; `lib/core/results.cee`; `src/check/members.cee`, `src/check/generics.cee`,
   `src/check/closures.cee`; spec/api/core.md; guide/builtins.md; the book's chapter 9.2 and appendix C.
 
@@ -85,10 +86,10 @@ The expected type of the call is still not used (§20.2), so this is one directi
   closure (`apply<i32, StringView>(4, (x) => "t")` does in 0.93.7), so `r.map((v) => "text")` has three diagnostics
   where N0334 says it all.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered 2026-11-23: accepted as recommended)
 
-1. `T?` has no `map`. Recommended: not in this ADR; `o.okOr(e).map(f)` and `match` cover it, and an optional's
-   `map` wants its own look at `U: Send` (an optional of a view is common).
-2. Is "first `return`" the right rule for a block (§2.2)? Recommended: yes, it is §38.2's, and one rule is easier to
-   teach than two.
-3. Should the extra N0236 of §5 be removed for every generic call? Recommended: yes, as a fix of its own.
+1. `T?` has no `map`. Not in this ADR; `o.okOr(e).map(f)` and `match` cover it, and an optional's `map` wants its own
+   look at `U: Send` (an optional of a view is common).
+2. Is "first `return`" the right rule for a block (§2.2)? Yes: it is §38.2's, and one rule is easier to teach than
+   two.
+3. Should the extra N0236 of §5 be removed for every generic call? Yes, as a fix of its own (not done yet).

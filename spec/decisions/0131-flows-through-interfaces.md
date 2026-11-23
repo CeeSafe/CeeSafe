@@ -234,6 +234,7 @@ rest on A8 plus the existing rules for where a closure may be kept.
   which capture is stored**: the store is accounted for every other capture, so a closure that captures a
   `borrow mut` parameter, a view of a local it only reads, and stores some third thing through the parameter is
   N0272. Written with the store outside the closure, or the view passed as an argument where it is read.
+  (ADR 0210 lifts this: the body says which captures it stores.)
 - **`Async.tasks` with an error type that is not Send** (2.6).
 - A result that may hold the loans of more arguments than before, at callers: of every scoped argument of a
   function that takes a function value (2.2), and of what is stored through an argument the result flows from.

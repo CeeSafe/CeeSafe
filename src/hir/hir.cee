@@ -272,6 +272,9 @@ struct HirFunction {
     /// A closure: the captures (by index) through which its body stores what the others hold (ADR 0131), known once
     /// its body is borrow-checked, which is before the function it is written in.
     captureStores: Vector<u32>;
+    /// With captureStores, which captures: (the capture stored through << 32) | the capture whose loans the body
+    /// stores there, or 0xFFFFFFFF for every capture (ADR 0210).
+    captureStoreSources: Vector<u64>;
 }
 
 struct HirConstant {
@@ -520,6 +523,7 @@ struct HirProgram {
             repeatsGeneric: false,
             keepsInterfaceFlows: false,
             captureStores: Vector<u32>.create(),
+            captureStoreSources: Vector<u64>.create(),
         })?;
         return Ok(truncate<u32>(this.functions.length - 1));
     }

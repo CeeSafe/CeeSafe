@@ -1,0 +1,101 @@
+// A closure that stores through one capture is a store of the captures its body stores there, not of every other
+// capture (type-system.md §36.2, ADR 0210): `dispatch` may store its receiver into the context (they share `S`), and
+// the closure also counts in `out`, or passes `out` on, without storing anything in or from it. Both were N0272
+// before (httpserver's finding S16).
+// expect-stdout: 3
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: 1
+// expect-stdout: abc
+
+struct Out<region r> {
+    sink: borrow(r) Vector<u8>;
+    n: u32;
+}
+
+struct Ctx<region r, S> {
+    state: borrow(r) S;
+    seen: u32;
+}
+
+interface App {
+    fn serve(borrow this, out: borrow mut Out) -> u32;
+    fn pass(borrow this, out: borrow mut Out) -> u32;
+}
+
+struct Server<S> {
+    state: S;
+}
+
+impl<S> Server<S> {
+    fn dispatch(borrow this, ctx: borrow mut Ctx<S>) -> u32 {
+        ctx.seen += 1;
+        return ctx.seen;
+    }
+
+    fn dispatchTo(borrow this, ctx: borrow mut Ctx<S>, out: borrow mut Out) -> u32 {
+        ctx.seen += 1;
+        out.n += ctx.seen;
+        return ctx.seen;
+    }
+}
+
+fn twice(f: borrow mut fn() -> u32) -> u32 => f() + f();
+
+impl<S> App for Server<S> {
+    fn serve(borrow this, out: borrow mut Out) -> u32 {
+        var ctx = Ctx { state: borrow this.state, seen: 0 };
+        return twice(() => {
+            out.n += 1;
+            return this.dispatch(mut ctx);
+        });
+    }
+
+    fn pass(borrow this, out: borrow mut Out) -> u32 {
+        var ctx = Ctx { state: borrow this.state, seen: 0 };
+        return twice(() => this.dispatchTo(mut ctx, mut out));
+    }
+}
+
+struct Holder<region r> {
+    text: StringView<r>;
+    n: u32;
+}
+
+impl<region r> Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+
+fn run(f: borrow mut fn()) {
+    f();
+}
+
+// The view of a local is stored into a local holder; the parameter is only counted in.
+fn count(into: borrow mut Holder, s: borrow String) {
+    let v = s.view();
+    var local = Holder { text: "none", n: 0 };
+    run(() => {
+        local.keep(v);
+        into.n += 1;
+    });
+    Console.writeLine(into.n);
+    Console.writeLine(local.text);
+}
+
+fn main() {
+    var bytes = Vector<u8>.create();
+    let server = Server<i32> { state: 1 };
+    var first = Out { sink: borrow bytes, n: 0 };
+    Console.writeLine(server.serve(mut first));
+    Console.writeLine(first.n);
+    var second = Out { sink: borrow bytes, n: 0 };
+    Console.writeLine(server.pass(mut second));
+    Console.writeLine(second.n);
+    var s = String.create();
+    s.append("abc")!;
+    var holder = Holder { text: "start", n: 0 };
+    count(mut holder, s);
+}

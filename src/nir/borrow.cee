@@ -51,6 +51,9 @@ struct ThroughWrite {
     sources: Vector<u32>;
     /// By source: the parameter whose outer placeholder it does not carry (a deep flow's source, ADR 0131), or none.
     drops: Vector<u32>;
+    /// The locals the stored values were read from where the write is written: `sources`, but for a deep flow the
+    /// argument given, which `sources` replaces by what it refers into (ADR 0210).
+    origins: Vector<u32>;
     shared: bool;
     span: Span;
 }
@@ -145,6 +148,7 @@ struct Borrows {
     pointsToBits: Vector<Vector<u64>>; // by local: membership, sized when every loan is known
     loanAt: Vector<Vector<u32>>;       // by block position and statement: the loan made there, or none
     throughWrites: Vector<ThroughWrite>;
+    edges: Vector<LoanEdge>;       // how loans go from local to local, once computeLoans has run
     blockOf: Vector<u32>;          // block id to position
     reached: Vector<Vector<bool>>; // by loan: the blocks reachable from where it is made, once asked
     holders: Vector<u64>;          // (scope site << 32) | local: a spawned child's environment (ADR 0033 §3.2)
@@ -483,13 +487,22 @@ fn recordWrite(
         return Ok();
     }
     var drops = Vector<u32>.create();
+    var origins = Vector<u32>.create();
     for (source in sources.view()) {
         addEdge(edges, source, holder)?;
         drops.push(none())?;
+        origins.push(source)?;
     }
     if (throughReference) {
         b.throughWrites.push(
-            ThroughWrite { holder: holder, sources: sources, drops: drops, shared: shared, span: span },
+            ThroughWrite {
+                holder: holder,
+                sources: sources,
+                drops: drops,
+                origins: origins,
+                shared: shared,
+                span: span,
+            },
         )?;
     }
     return Ok();
@@ -547,7 +560,7 @@ fn collectWrites(
     match (n.rvalues[value as usize]) {
         // A closure whose body stores what it captures through one of its captures (`() => into.keep(v)`): the
         // statements are the enclosing function's, so the store is too, where the closure is made (§36.2, ADR 0131).
-        // The capture that is written through receives the loans of every other capture.
+        // The capture that is written through receives the loans of the captures its body stores there (ADR 0210).
         NirRvalue.Aggregate(fields) => {
             let made = match (n.statements[s as usize]) {
                 NirStatement.Assign(target, _) => closureOfEnvironment(c, n, b, n.places[target as usize].local),
@@ -564,7 +577,7 @@ fn collectWrites(
                     }
                     var operands = Vector<u32>.create();
                     for (j in 1..fields.count) {
-                        if (j != k + 1) {
+                        if (j != k + 1 && storesFromCapture(c, made, k, j - 1)) {
                             operands.push(n.at(fields, j))?;
                         }
                     }
@@ -608,11 +621,14 @@ fn collectWrites(
                             drops.push(edge.dropOuter)?;
                         }
                         if (sources.length > 0) {
+                            var origins = Vector<u32>.create();
+                            origins.push(given)?;
                             b.throughWrites.push(
                                 ThroughWrite {
                                     holder: receiver,
                                     sources: sources,
                                     drops: drops,
+                                    origins: origins,
                                     shared: false,
                                     span: span,
                                 },
@@ -658,7 +674,9 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
         return Ok();
     }
     let definition = c.types.info(environment).structDef;
+    let origins = captureOrigins(c, n, b, definition)?;
     var found = Vector<u32>.create();
+    var pairs = Vector<u64>.create();
     for (write in b.throughWrites.view()) {
         var given = false;
         for (k in 0..write.sources.length) {
@@ -680,12 +698,22 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
                 !(loan.isMutable || write.shared)) {
                 continue;
             }
-            let second = n.projections[(loan.place.projections.start + 1) as usize];
-            for (k in 1..c.types.structs[definition as usize].fields.length) {
-                if (c.types.structs[definition as usize].fields[k] == second.field &&
-                    !containsU32(found, truncate<u32>(k - 1))) {
-                    found.push(truncate<u32>(k - 1))?;
+            let k = captureOfPlace(c, n, definition, loan.place);
+            if (k == none()) {
+                continue;
+            }
+            if (!containsU32(found, k)) {
+                found.push(k)?;
+            }
+            var any = false;
+            for (origin in write.origins.view()) {
+                if (carriesEnvironment(b, origin)) {
+                    any = true;
+                    addStoredCaptures(mut pairs, k, origins, origin)?;
                 }
+            }
+            if (!any) {
+                addPair(mut pairs, k, none())?; // given, by a way that is not followed: every capture
             }
         }
     }
@@ -714,11 +742,23 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
                     if (!given) {
                         continue;
                     }
-                    let second = n.projections[(t.projections.start + 1) as usize];
-                    for (k in 1..c.types.structs[definition as usize].fields.length) {
-                        if (c.types.structs[definition as usize].fields[k] == second.field &&
-                            !containsU32(found, truncate<u32>(k - 1))) {
-                            found.push(truncate<u32>(k - 1))?;
+                    let k = captureOfPlace(c, n, definition, t);
+                    if (k == none()) {
+                        continue;
+                    }
+                    if (!containsU32(found, k)) {
+                        found.push(k)?;
+                    }
+                    for (o in operands.view()) {
+                        let place = operandPlace(n, o);
+                        if (place == none() || !mayHoldLoans(c, n.operandTypes[o as usize])) {
+                            continue;
+                        }
+                        let p = toPlaceRef(n, place);
+                        if (p.local == 0) {
+                            addPair(mut pairs, k, captureOfPlace(c, n, definition, p))?;
+                        } else if (carriesEnvironment(b, p.local)) {
+                            addStoredCaptures(mut pairs, k, origins, p.local)?;
                         }
                     }
                 }
@@ -727,7 +767,174 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
         }
     }
     c.hir.functions[source as usize].captureStores = found;
+    c.hir.functions[source as usize].captureStoreSources = pairs;
     return Ok();
+}
+
+/// Every capture: what a value whose way from the environment is not followed may hold.
+fn everyCapture() -> u32 => 0xFFFFFFFF;
+
+/// The capture (by index) under which the place `(*env).capture…` lies, or none (the environment itself).
+fn captureOfPlace(c: borrow Checker, n: borrow NirProgram, definition: u32, p: PlaceRef) -> u32 {
+    if (p.projections.count < 2 || !isDerefProjectionN(n.projections[p.projections.start as usize])) {
+        return none();
+    }
+    let second = n.projections[(p.projections.start + 1) as usize];
+    if (!isFieldProjectionN(second)) {
+        return none();
+    }
+    for (k in 1..c.types.structs[definition as usize].fields.length) {
+        if (c.types.structs[definition as usize].fields[k] == second.field) {
+            return truncate<u32>(k - 1);
+        }
+    }
+    return none();
+}
+
+/// Does the local hold a loan the environment gave: one of a place under it, or its placeholder?
+fn carriesEnvironment(b: borrow Borrows, local: u32) -> bool {
+    for (id in b.pointsTo[local as usize].view()) {
+        let loan = borrow b.loans[id as usize];
+        if ((loan.hasPlace && loan.place.local == 0) || (!loan.hasPlace && loan.parameterIndex == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn addPair(pairs: borrow mut Vector<u64>, receiver: u32, from: u32) -> Result<void, AllocError> {
+    let pair = (receiver as u64) << 32 | (if (from == none()) everyCapture() else from) as u64;
+    if (!containsU64(pairs, pair)) {
+        pairs.push(pair)?;
+    }
+    return Ok();
+}
+
+/// The captures a local's value may come from, as pairs with the capture `receiver` it is stored through: every
+/// capture when the local is the environment or its captures are not known.
+fn addStoredCaptures(
+    pairs: borrow mut Vector<u64>,
+    receiver: u32,
+    origins: borrow Vector<Vector<u32>>,
+    local: u32,
+) -> Result<void, AllocError> {
+    if (local == 0 || origins[local as usize].length == 0) {
+        return addPair(pairs, receiver, none());
+    }
+    for (from in origins[local as usize].view()) {
+        addPair(pairs, receiver, from)?;
+    }
+    return Ok();
+}
+
+fn addOrigin(origins: borrow mut Vector<Vector<u32>>, local: u32, capture: u32) -> Result<bool, AllocError> {
+    if (containsU32(origins[local as usize], capture)) {
+        return Ok(false);
+    }
+    origins[local as usize].push(capture)?;
+    return Ok(true);
+}
+
+/// In a closure's body, by local: the captures whose loans the local may hold (`everyCapture` when not known), for
+/// noteCaptureStores (ADR 0210). It over-approximates on purpose, and by the statements, not by the loans: every
+/// local a statement writes, or may write through (a local it names that is not a shared reference, and what that
+/// local's loans borrow), takes the captures of every place the statement reads. The loan edges are followed too, and
+/// a local that the environment's loans reach by an edge and by no statement has every capture.
+fn captureOrigins(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    definition: u32,
+) -> Result<Vector<Vector<u32>>, AllocError> {
+    var origins = Vector<Vector<u32>>.create();
+    for (k in 0..n.functions[b.function as usize].locals.length) {
+        origins.push(Vector<u32>.create())?;
+    }
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (block in n.functions[b.function as usize].blocks.view()) {
+            for (statement in block.statements.view()) {
+                var accesses = Vector<Access>.create();
+                statementAccesses(n, statement, mut accesses)?;
+                var read = Vector<u32>.create();
+                var written = Vector<u32>.create();
+                for (a in accesses.view()) {
+                    let local = a.place.local;
+                    if (a.kind == accessDead()) {
+                        continue;
+                    }
+                    if (a.kind != accessWrite()) {
+                        if (local == 0) {
+                            let capture = captureOfPlace(c, n, definition, a.place);
+                            let from = if (capture == none()) everyCapture() else capture;
+                            if (!containsU32(read, from)) {
+                                read.push(from)?;
+                            }
+                        } else {
+                            for (from in origins[local as usize].view()) {
+                                if (!containsU32(read, from)) {
+                                    read.push(from)?;
+                                }
+                            }
+                        }
+                    }
+                    if (local == 0) {
+                        continue;
+                    }
+                    if (a.kind == accessWrite() && !containsU32(written, local)) {
+                        written.push(local)?;
+                    }
+                    if (holdsLoans(c, n, b, local) && !b.readOnly[local as usize]) {
+                        if (!containsU32(written, local)) {
+                            written.push(local)?;
+                        }
+                        for (id in b.pointsTo[local as usize].view()) {
+                            let loan = borrow b.loans[id as usize];
+                            if (loan.hasPlace && loan.place.local != 0 && !containsU32(written, loan.place.local)) {
+                                written.push(loan.place.local)?;
+                            }
+                        }
+                    }
+                }
+                for (local in written.view()) {
+                    for (from in read.view()) {
+                        if (addOrigin(mut origins, local, from)?) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        for (edge in b.edges.view()) {
+            if (edge.to == 0 || edge.from == edge.to) {
+                continue;
+            }
+            if (edge.from == 0) {
+                if (origins[edge.to as usize].length == 0) {
+                    origins[edge.to as usize].push(everyCapture())?;
+                    changed = true;
+                }
+                continue;
+            }
+            let count = origins[edge.from as usize].length;
+            for (k in 0..count) {
+                let from = origins[edge.from as usize][k];
+                if (addOrigin(mut origins, edge.to, from)?) {
+                    changed = true;
+                }
+            }
+        }
+    }
+    return Ok(origins);
+}
+
+/// Does the closure's body store what its capture `from` holds through its capture `receiver` (HirFunction.
+/// captureStoreSources)?
+fn storesFromCapture(c: borrow Checker, closure: u32, receiver: u32, from: u32) -> bool {
+    let pairs = borrow c.hir.functions[closure as usize].captureStoreSources;
+    return containsU64(pairs, (receiver as u64) << 32 | everyCapture() as u64) ||
+        containsU64(pairs, (receiver as u64) << 32 | from as u64);
 }
 
 /// LoanEdge.dropOuter for an edge that carries no parameter's own loan (its outer placeholder), whichever it is.
@@ -1024,6 +1231,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
             break;
         }
     }
+    b.edges = edges;
     return Ok();
 }
 
@@ -2240,6 +2448,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         pointsToBits: Vector<Vector<u64>>.create(),
         loanAt: Vector<Vector<u32>>.create(),
         throughWrites: Vector<ThroughWrite>.create(),
+        edges: Vector<LoanEdge>.create(),
         blockOf: Vector<u32>.create(),
         reached: Vector<Vector<bool>>.create(),
         holders: Vector<u64>.create(),

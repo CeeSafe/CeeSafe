@@ -141,7 +141,8 @@ What the callee can still do with its receiver's loan is what the remaining name
   (`Async.timeout(ms, late, async () => await this.dispatch(found, mut ctx, request, exchange))`, its findings'
   S16) is accepted too once the interface bounds `S`: what was charged to the other capture was the store that the
   shared name allowed, and there is none now. Without the bound it is refused as before, and why that store is
-  charged to the wrong capture is still not understood.
+  charged to the wrong capture is still not understood. (It is since ADR 0210, which accepts the closure without
+  the bound: the store was charged to every other capture by rule, not by fault.)
 - **Tests:** run-pass/adr0168-send-parameter-no-flow (a dispatcher handed a context calls two boxed handlers with
   it; the output is the program's arithmetic) and check-fail/adr0168-unbounded-parameter-flows (no bound, and
   `Copy` alone: N0272 as before). The corpus: 0 failures.

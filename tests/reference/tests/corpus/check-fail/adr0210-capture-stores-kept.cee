@@ -1,0 +1,79 @@
+// What ADR 0210 must not accept (type-system.md §36.2): a closure that does store a view of a local through a
+// `borrow mut` parameter it captured is N0272 where it is made (an inner closure's, where that is made too), by whatever way the view gets there: a local of the
+// body, a call's result, a struct, a call that fills a local, another capture, an inner closure, a branch, a loop.
+struct Holder<region r> {
+    text: StringView<r>;
+    n: u32;
+}
+
+struct Pair<region r> {
+    a: StringView<r>;
+    b: StringView<r>;
+}
+
+impl<region r> Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+
+fn run(f: borrow mut fn()) {
+    f();
+}
+
+fn pick<region r>(a: StringView<r>, b: StringView<r>) -> StringView<r> => if (a.length > b.length) a else b;
+
+fn fill<region r>(p: borrow mut Pair<r>, v: StringView<r>) {
+    p.a = v;
+}
+
+fn stores(into: borrow mut Holder, s: borrow String) {
+    let v = s.view();
+    let w = "literal";
+    var local = Holder { text: "a", n: 0 };
+    run(() => { // error[N0272]
+        let t = v;
+        into.keep(t);
+    });
+    run(() => into.keep(pick(v, w))); // error[N0272]
+    run(() => {                       // error[N0272]
+        let p = Pair { a: w, b: v };
+        into.keep(p.b);
+    });
+    run(() => { // error[N0272]
+        var p = Pair { a: "x", b: "y" };
+        fill(mut p, v);
+        into.keep(p.a);
+    });
+    run(() => { // error[N0272]
+        local.keep(v);
+        into.keep(local.text);
+    });
+    run(() => {                  // error[N0272]
+        run(() => into.keep(v)); // error[N0272]
+    });
+    run(() => { // error[N0272]
+        if (into.n > 0) {
+            into.keep(v);
+        } else {
+            into.n += 1;
+        }
+    });
+    run(() => { // error[N0272]
+        var t: StringView = "x";
+        for (i in 0..2) {
+            into.keep(t);
+            t = v;
+        }
+    });
+}
+
+// Two closures: one fills a local holder, the other stores what it holds.
+fn inTwo(into: borrow mut Holder, s: borrow String) {
+    let v = s.view();
+    var local = Holder { text: "a", n: 0 };
+    run(() => local.keep(v));
+    run(() => into.keep(local.text)); // error[N0272]
+}
+
+fn main() {}

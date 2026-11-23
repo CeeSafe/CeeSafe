@@ -5432,9 +5432,14 @@ it does with its captures is accounted where the closure is made:
   Neither is reported when the result's type holds no loan (`T: Send`);
 - a closure whose body stores what it captures through one of its captures (`() => into.keep(v)`, `() =>
   out.push(v)`, `() => { into.text = v; }`, `() => { into = Holder { text: v }; }`, an inner closure that does) is a
-  store, where the closure is made, of every other capture's loans through that capture: N0272 there if `into` is a
-  `borrow mut` parameter and `v` a view of a local, exactly as the statement written inline. Whether the closure is
-  called does not matter. A closure's own parameter stored through a capture is N0272 in its body, as before.
+  store, where the closure is made, through that capture, of the loans of the captures whose values the body may
+  store there (ADR 0210): N0272 there if `into` is a `borrow mut` parameter and `v` a view of a local, exactly as the
+  statement written inline. A capture the body only reads, counts in or passes on is not stored:
+  `() => { out.n += 1; return this.dispatch(mut ctx); }` stores `this` through `ctx` and nothing through or from
+  `out`. Which captures a stored value may come from is found by the body's statements, and errs on the side of more:
+  a local that a statement writes, or could write through, may hold what any place the statement reads holds; where
+  that cannot be followed, it is every other capture, as it was for every store before. Whether the closure is called does not matter.
+  A closure's own parameter stored through a capture is N0272 in its body, as before.
 
 ```ceesafe
 fn countIf(values: Slice<i32>, keep: borrow fn(i32) -> bool) -> i32 {

@@ -6,8 +6,10 @@ ceesafe_pool_take, ceesafe_vec_grow, ceesafe_svec_slot or ceesafe_async_spawn) i
 with CEESAFE_ALLOC_REPORT=1 to count its allocation attempts n; then once per failure point k
 (CEESAFE_FAIL_ALLOC_AT=k): every k <= n, or for n > 200
 the first 50, the last 50 and 100 evenly spaced. Every run must end with a normal return and no live allocations, or
-with the panic of `!` on the failed allocation (exit 134), or the panic of a task's frame stack that cannot grow (ADR
-0056 §3.3: "async frame stack: out of memory"); a leak, any other panic or a sanitizer report fails.
+with the panic of `!` on the failed allocation (exit 134), the panic of a task's frame stack that cannot grow (ADR
+0056 §3.3: "async frame stack: out of memory"), or the panic of a constant Mutex whose lock cannot be made at its first
+use (ADR 0211 §2.4: "out of memory making a constant Mutex's lock"); a leak, any other panic or a sanitizer report
+fails.
 
 With --reference, another ceesafec's build of each program (an earlier one, say) must give the same stdout, stderr
 and status at every point. Both compilers build in the default form (P7), or in P5's with --flat.
@@ -66,7 +68,8 @@ def problem(outcome):
         return "sanitizer report"
     if "ceesafe panic: " in stderr:
         expected = ("ceesafe panic: unwrapped an Err value" in stderr or
-                    "ceesafe panic: async frame stack: out of memory" in stderr)  # ADR 0056 §3.3
+                    "ceesafe panic: async frame stack: out of memory" in stderr or  # ADR 0056 §3.3
+                    "ceesafe panic: out of memory making a constant Mutex's lock" in stderr)  # ADR 0211 §2.4
         return None if expected and status == 134 else "unexpected panic"
     m = REPORT.search(stderr)
     if not m:

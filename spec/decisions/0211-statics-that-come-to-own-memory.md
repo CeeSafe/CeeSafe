@@ -90,6 +90,12 @@ not, as they run no destructor. A run that does not count allocations never dest
   lock three threads make at once (300 pushes, their sum), a mutex of a string and of a number; with `--check-leaks`
   nothing is live, natively (also `--split`) and in the interpreter. check-fail/static-locks-errors.cee: five
   initialisers that are still N0338. The results are in ROADMAP §10.
+- **The allocation sweeps** (found by the contract suite before 0.94.5): `tools/fault_injection.py` fails every
+  allocation of run-pass/static-locks.cee in turn, and where the failed one is a constant mutex's lock the run ends in
+  §2.4's panic, "out of memory making a constant Mutex's lock". That is this ADR's defined outcome, as ADR 0056
+  §3.3's "async frame stack: out of memory" is, so the sweep accepts it as it accepts that one (exit 134, no leak).
+  `ceesafec test --sweep alloc` still counts it as a failure; setting it apart there, as ADR 0147 does the frame
+  stack's, is a change to the test command that is not made here.
 
 ## 6. Questions for the owner (answered 2026-11-23: accepted as recommended)
 

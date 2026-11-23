@@ -196,6 +196,10 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_format_f")) {
             out.push(runtimeFile(4, "")?)?;
         }
+        // The float methods that are libm's functions (§35.8, ADR 0218); the link then adds -lm (toolchain.cee).
+        if (containsBytes(mainText.view(), "ceesafe_math_")) {
+            out.push(runtimeFile(12, "")?)?;
+        }
         // Channels (`ceesafe_chan_*`, ADR 0032 §5) are in the async runtime's file, and a program of threads alone
         // may use them: without this its build did not link.
         let tasks = containsBytes(mainText.view(), "ceesafe_async_") || containsBytes(mainText.view(), "ceesafe_chan_");

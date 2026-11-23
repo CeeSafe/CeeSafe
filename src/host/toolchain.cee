@@ -414,6 +414,7 @@ fn compileExecutable(
         pushBytes(mut arguments, o.view())?;
     }
     pushGnuLinkFlags(mut arguments, native)?;
+    pushMathLibrary(mut arguments, files, freestanding)?;
     if (!freestanding && hostIsWindows()) {
         // MinGW's ld, or the MSVC linker clang drives.
         let gcc = isGccName(compiler.path.view());
@@ -684,6 +685,7 @@ fn compileUnitsAndLink(
         pushBytes(mut link, o.view())?;
     }
     pushGnuLinkFlags(mut link, native)?;
+    pushMathLibrary(mut link, files, freestanding)?;
     if (!freestanding && hostIsWindows()) {
         let gcc = isGccName(compiler.path.view());
         if (gcc) {
@@ -770,6 +772,25 @@ fn hostIsFreeBsd() -> bool {
     }
     let text = outcome.stdout.view();
     return sameText(text[..7], "FreeBSD");
+}
+
+/// `-lm` after the objects, for a hosted program with `ceesafe_rt_math.c` (the float methods that are libm's, ADR
+/// 0218 §2.5), except on Windows, whose C runtime holds them. glibc's and FreeBSD's libm are libraries of their own;
+/// macOS's libm is libSystem, which `-lm` names too.
+fn pushMathLibrary(
+    arguments: borrow mut Vector<Vector<u8>>,
+    files: borrow Vector<CFile>,
+    freestanding: bool,
+) -> Result<void, AllocError> {
+    if (freestanding || hostIsWindows()) {
+        return Ok();
+    }
+    for (file in files.view()) {
+        if (sameText(file.name.view(), "ceesafe_rt_math.c")) {
+            return pushText(arguments, "-lm");
+        }
+    }
+    return Ok();
 }
 
 /// FreeBSD's threads are libthr, which libc does not hold as glibc 2.34 and macOS's do: a hosted program links it

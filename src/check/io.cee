@@ -364,8 +364,10 @@ fn checkIoErrorMessage(c: borrow mut Checker, receiver: u32, span: Span) -> Resu
 fn integerMethodNames() -> StringView =>
     "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul mulHigh min max abs unsignedAbs rotateLeft rotateRight wrappingShl wrappingShr leadingZeros trailingZeros countOnes byteSwap";
 
-/// The names of the built-in methods of a float value (FloatMethod, §35.5, §35.8), as integerMethodNames.
-fn floatMethodNames() -> StringView => "bits sqrt abs floor ceil min max";
+/// The names of the built-in methods of a float value (FloatMethod, §35.5, §35.8), as integerMethodNames: the
+/// first seven, then ADR 0218's in the order of their builtins (bfFloatExp …).
+fn floatMethodNames() -> StringView =>
+    "bits sqrt abs floor ceil min max exp exp2 expM1 ln log2 log10 ln1p sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh cbrt logB pow atan2 hypot remainder truncatingRemainder fma scaleB trunc round roundEven copySign";
 
 /// Which word of `names` (words separated by one space) `name` is, counting from 0, or none.
 fn wordIndex(names: StringView, name: Slice<u8>) -> u32 {
@@ -433,7 +435,23 @@ fn floatMethod(name: Slice<u8>) -> u32 {
         bfFloatMin(),
         bfFloatMax(),
     ];
+    if (index >= 7) {
+        return bfFloatExp() + (index - 7); // ADR 0218's, in their builtins' order
+    }
     return functions[index as usize];
+}
+
+/// How many arguments a float method takes (§35.8, ADR 0218): `fma` two, `min`, `max`, `scaleB` and the other
+/// methods of two operands one, the rest none.
+fn floatMethodArity(function: u32) -> u32 {
+    if (function == bfFloatFma()) {
+        return 2;
+    }
+    if (function == bfFloatMin() || function == bfFloatMax() || function == bfFloatScaleB() ||
+        function == bfFloatCopySign() || (function >= bfFloatPow() && function <= bfFloatTruncatingRemainder())) {
+        return 1;
+    }
+    return 0;
 }
 
 /// `x.wrappingAdd(y)`, `x.min(y)` and the rest (CheckIntegerMethod): one argument of the receiver's type; never panics.
@@ -578,12 +596,26 @@ fn checkFloatMethod(
     function: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let binary = function == bfFloatMin() || function == bfFloatMax();
-    if (arguments.count != (if (binary) 1u32 else 0u32)) {
+    let arity = floatMethodArity(function);
+    if (arguments.count != arity) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
-        appendText(mut message, if (binary) " takes one argument" else " takes no arguments")?;
+        appendText(
+            mut message,
+            if (arity == 2) " takes two arguments"
+                else if (arity == 1) " takes one argument"
+                else " takes no arguments",
+        )?;
         c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (isLibmBuiltin(function) && c.freestanding) {
+        // The C library's math functions (ADR 0218 §2.4): CosmoOS has no libm.
+        var what = Vector<u8>.create();
+        appendQuotedName(mut what, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(mut what, ", a C library math function,")?;
+        hostedOnly(c, span, what.view())?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -594,17 +626,19 @@ fn checkFloatMethod(
         let list = c.hir.list(values[..])?;
         return c.expr(HirExpr.BuiltinCall(function, list), bitsType, span.start, span.end);
     }
-    if (!binary) {
-        let values = [receiver];
-        let list = c.hir.list(values[..])?;
-        return c.expr(HirExpr.BuiltinCall(function, list), typ, span.start, span.end);
+    var values = Vector<u32>.create();
+    values.push(receiver)?;
+    for (k in 0..arity) {
+        // `scaleB`'s power of two is an `i32`, as C's scalbn takes an int; every other operand has `x`'s type, so a
+        // flexible literal takes it.
+        let expected = if (function == bfFloatScaleB()) c.types.i32 else typ;
+        let otherSyntax = c.front.ast.at(arguments, k);
+        let other = checkExpr(c, otherSyntax, expected)?;
+        if (c.isBottom(other)) {
+            return c.errorResult(span.start, span.end);
+        }
+        values.push(other)?;
     }
-    let otherSyntax = c.front.ast.at(arguments, 0);
-    let other = checkExpr(c, otherSyntax, typ)?;
-    if (c.isBottom(other)) {
-        return c.errorResult(span.start, span.end);
-    }
-    let values = [receiver, other];
-    let list = c.hir.list(values[..])?;
+    let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), typ, span.start, span.end);
 }

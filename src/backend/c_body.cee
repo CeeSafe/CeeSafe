@@ -1236,7 +1236,9 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfCallPointer() || b == bfCallFunction() || b == bfCallClosure() || b == bfFloatBits() ||
         b == bfFloatFromBits() ||
         b == bfFloatSqrt() || b == bfFloatAbs() || b == bfFloatFloor() || b == bfFloatCeil() ||
-        b == bfFloatMin() || b == bfFloatMax() || b == bfThreadSpawn() || b == bfThreadJoin() ||
+        b == bfFloatMin() || b == bfFloatMax() || isFloatMathBuiltin(
+        b,
+    ) || b == bfThreadSpawn() || b == bfThreadJoin() ||
         b == bfThreadSpawnBoxed() ||
         b == bfThreadService() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
         b == bfAsyncWorkers() || b == bfIntAbs() || b == bfIntUnsignedAbs() ||
@@ -2262,6 +2264,26 @@ fn appendBuiltinRvalue(
                 else if (b == bfFloatCeil()) "cee_ceil_f"
                 else if (b == bfFloatMin()) "cee_min_f"
                 else "cee_max_f",
+        )?;
+        appendDecimal(out, c.types.info(t).bits as u64)?;
+        return appendBuiltinCall(e, c, n, sources, f, out, "".bytes(), arguments);
+    }
+    if (isLibmBuiltin(b)) {
+        // ADR 0218: the C library's function, through ceesafe_rt_math.c, where no constant argument reaches it.
+        appendText(out, "ceesafe_math_")?;
+        appendText(out, libmName(b))?;
+        appendText(out, "_f")?;
+        appendDecimal(out, c.types.info(t).bits as u64)?;
+        return appendBuiltinCall(e, c, n, sources, f, out, "".bytes(), arguments);
+    }
+    if (isFloatMathBuiltin(b)) {
+        // ADR 0218 §2.3: exact portable C in rt.h, as floor and ceil.
+        appendText(
+            out,
+            if (b == bfFloatTrunc()) "cee_trunc_f"
+                else if (b == bfFloatRound()) "cee_round_f"
+                else if (b == bfFloatRoundEven()) "cee_round_even_f"
+                else "cee_copy_sign_f",
         )?;
         appendDecimal(out, c.types.info(t).bits as u64)?;
         return appendBuiltinCall(e, c, n, sources, f, out, "".bytes(), arguments);

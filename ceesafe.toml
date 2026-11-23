@@ -4,3 +4,11 @@ version = "0.1.0"
 kind = "executable"
 
 [dependencies]
+
+# The interpreter calls libm's math functions for the float methods of ADR 0218 (src/interpreter/math.cee): a library
+# of its own on Linux and FreeBSD; macOS's and Windows' C libraries hold them.
+[target.linux]
+links = ["m"]
+
+[target.freebsd]
+links = ["m"]

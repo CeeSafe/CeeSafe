@@ -1654,6 +1654,29 @@ fn builtin(
         }
         return Ok(floatValue(c, roundFloat(result, bits), resultType)?);
     }
+    if (isFloatMathBuiltin(b)) {
+        // ADR 0218: libm's own functions (math.cee), the ones a build calls; the exact ones as rt.h computes them.
+        let bits = c.types.info(resultType).bits;
+        let x = toDouble(c, argument(it, c, n, frame, arguments, 0)?, resultType)?;
+        if (b == bfFloatScaleB()) {
+            let power = truncate<i32>(argument(it, c, n, frame, arguments, 1)?.bits(0, 4)?);
+            let scaled = if (bits == 32) libmF32(b, round<f32>(x), 0.0, 0.0, power) as f64
+                else libmF64(b, x, 0.0, 0.0, power);
+            return Ok(floatValue(c, scaled, resultType)?);
+        }
+        let y = if (arguments.count > 1) toDouble(c, argument(it, c, n, frame, arguments, 1)?, resultType)? else 0.0;
+        let z = if (arguments.count > 2) toDouble(c, argument(it, c, n, frame, arguments, 2)?, resultType)? else 0.0;
+        var result: f64 = 0.0;
+        if (isLibmBuiltin(b)) {
+            result = if (bits == 32) libmF32(b, round<f32>(x), round<f32>(y), round<f32>(z), 0) as f64
+                else libmF64(b, x, y, z, 0);
+        } else if (b == bfFloatCopySign()) {
+            result = withSign(x, y);
+        } else {
+            result = roundIntegral(b, x, bits);
+        }
+        return Ok(floatValue(c, result, resultType)?);
+    }
     if (b >= bfIntRotateLeft() && b <= bfIntByteSwap()) {
         let t = builtinArgumentType(n, arguments, 0);
         let size = typeSize(c, t)?;

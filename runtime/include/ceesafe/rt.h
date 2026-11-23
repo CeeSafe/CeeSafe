@@ -674,8 +674,8 @@ CEE_FTOI(uint16_t, u16, x > -1.0, 65536.0, 0u, UINT16_MAX)
 CEE_FTOI(uint32_t, u32, x > -1.0, 4294967296.0, 0u, UINT32_MAX)
 CEE_FTOI(uint64_t, u64, x > -1.0, 18446744073709551616.0, 0u, UINT64_MAX)
 
-/* Math methods (type-system.md §35.8), never a libm call: CosmoOS has no libm, and baseline x86-64 has no instruction
-   for floor or ceil (roundsd needs SSE4.1). */
+/* Math methods (type-system.md §35.8). These are never a libm call: CosmoOS has no libm, and baseline x86-64 has no
+   instruction for floor or ceil (roundsd needs SSE4.1). The transcendental ones, below, are (ADR 0218). */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <math.h> /* MSVC's sqrt is in its C runtime, which every program links */
 #endif
@@ -761,6 +761,89 @@ static inline float cee_max_f32(float a, float b) {
     if (a == b) return (cee_f32_bits(a) >> 31) != 0 ? b : a;
     return a > b ? a : b;
 }
+/* trunc, round (half away from zero) and roundEven (half to even), exact and portable as floor and ceil are (ADR
+   0218 §2.3): a value with |x| >= 2^52 (2^23), an infinity or NaN is already integral; otherwise t, x toward zero, is
+   exact, and so is d = x - t (|d| < 1, Sterbenz), which decides the step. A zero result takes x's sign. */
+static inline double cee_trunc_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    return cee_with_sign_f64((double)(int64_t)x, x);
+}
+static inline double cee_round_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    double t = (double)(int64_t)x, d = x - t;
+    if (d >= 0.5) t += 1.0;
+    else if (d <= -0.5) t -= 1.0;
+    return cee_with_sign_f64(t, x);
+}
+static inline double cee_round_even_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    int64_t i = (int64_t)x;
+    double t = (double)i, d = x - t;
+    bool odd = (i % 2) != 0;
+    if (d > 0.5 || (d == 0.5 && odd)) t += 1.0;
+    else if (d < -0.5 || (d == -0.5 && odd)) t -= 1.0;
+    return cee_with_sign_f64(t, x);
+}
+static inline float cee_trunc_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    return cee_with_sign_f32((float)(int32_t)x, x);
+}
+static inline float cee_round_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    float t = (float)(int32_t)x, d = x - t;
+    if (d >= 0.5f) t += 1.0f;
+    else if (d <= -0.5f) t -= 1.0f;
+    return cee_with_sign_f32(t, x);
+}
+static inline float cee_round_even_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    int32_t i = (int32_t)x;
+    float t = (float)i, d = x - t;
+    bool odd = (i % 2) != 0;
+    if (d > 0.5f || (d == 0.5f && odd)) t += 1.0f;
+    else if (d < -0.5f || (d == -0.5f && odd)) t -= 1.0f;
+    return cee_with_sign_f32(t, x);
+}
+static inline double cee_copy_sign_f64(double x, double y) { return cee_with_sign_f64(x, y); }
+static inline float cee_copy_sign_f32(float x, float y) { return cee_with_sign_f32(x, y); }
+/* The methods that are the C library's math functions (§35.8, ADR 0218), in ceesafe_rt_math.c (hosted only; the
+   checker rejects them in the freestanding profile). */
+#define CEE_MATH_DECLARE1(NAME)                                                                                    \
+    double ceesafe_math_##NAME##_f64(double x);                                                                    \
+    float ceesafe_math_##NAME##_f32(float x);
+#define CEE_MATH_DECLARE2(NAME)                                                                                    \
+    double ceesafe_math_##NAME##_f64(double x, double y);                                                          \
+    float ceesafe_math_##NAME##_f32(float x, float y);
+CEE_MATH_DECLARE1(exp)
+CEE_MATH_DECLARE1(exp2)
+CEE_MATH_DECLARE1(expm1)
+CEE_MATH_DECLARE1(log)
+CEE_MATH_DECLARE1(log2)
+CEE_MATH_DECLARE1(log10)
+CEE_MATH_DECLARE1(log1p)
+CEE_MATH_DECLARE1(sin)
+CEE_MATH_DECLARE1(cos)
+CEE_MATH_DECLARE1(tan)
+CEE_MATH_DECLARE1(asin)
+CEE_MATH_DECLARE1(acos)
+CEE_MATH_DECLARE1(atan)
+CEE_MATH_DECLARE1(sinh)
+CEE_MATH_DECLARE1(cosh)
+CEE_MATH_DECLARE1(tanh)
+CEE_MATH_DECLARE1(asinh)
+CEE_MATH_DECLARE1(acosh)
+CEE_MATH_DECLARE1(atanh)
+CEE_MATH_DECLARE1(cbrt)
+CEE_MATH_DECLARE1(logb)
+CEE_MATH_DECLARE2(pow)
+CEE_MATH_DECLARE2(atan2)
+CEE_MATH_DECLARE2(hypot)
+CEE_MATH_DECLARE2(remainder)
+CEE_MATH_DECLARE2(fmod)
+double ceesafe_math_fma_f64(double x, double y, double z);
+float ceesafe_math_fma_f32(float x, float y, float z);
+double ceesafe_math_scalbn_f64(double x, int32_t n);
+float ceesafe_math_scalbn_f32(float x, int32_t n);
 #endif /* CEE_FLOATS */
 
 /* ---- Bounds checks (type-system.md §16.3) ------------------------------------------------- */

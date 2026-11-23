@@ -28,6 +28,7 @@ FILES = (
     ("ceesafe/embed.h", "include/ceesafe/embed.h"),
     ("ceesafe_rt_bluetooth.c", "hosted/ceesafe_rt_bluetooth.c"),
     ("ceesafe/android.h", "include/ceesafe/android.h"),
+    ("ceesafe_rt_math.c", "hosted/ceesafe_rt_math.c"),
 )
 
 
@@ -62,7 +63,7 @@ def main():
 // since C compilers need accept string literals of only 4,095 (C11 §5.2.4.1).
 
 /// 0 rt.h, 1 the core, 2 hosted, 3 I/O, 4 the float formatter, 5 threads, 6 async, 7 foreign.h, 8 windows, 9 embed.h,
-/// 10 Bluetooth, 11 android.h.
+/// 10 Bluetooth, 11 android.h, 12 the libm methods.
 fn runtimeFileName(k: usize) -> StringView => match (k) {{
 {names}
     _ => "{files[-1][0]}",

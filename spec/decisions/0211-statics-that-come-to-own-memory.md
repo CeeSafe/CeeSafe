@@ -1,9 +1,10 @@
 # ADR 0211 — Statics that come to own memory: `null` and an empty vector as static initialisers, `OnceLock.constant`, `Mutex.constant`
 
-- Status: **Proposed** 2026-11-23, and implemented on the working tree under the owner's instruction ("continue", the
-  optimization and DX roadmap's Phase 3, item 5: ADR 0075's leftover, G21); not released. Asked which to build, a
-  constant `OnceLock`, `Mutex<T>.constant` as ADR 0075 §2.15 wrote it, or both, with the constant mutex's
-  out-of-memory panic stated, the owner answered "Both". §6's questions are the owner's to decide.
+- Status: **Accepted** by the owner, 2026-11-23 ("I accept ADR 0211."), with §6's three questions taken as
+  recommended; proposed the same day and implemented under the owner's instruction ("continue", the optimization and
+  DX roadmap's Phase 3, item 5: ADR 0075's leftover, G21); not released. Asked which to build, a constant
+  `OnceLock`, `Mutex<T>.constant` as ADR 0075 §2.15 wrote it, or both, with the constant mutex's out-of-memory panic
+  stated, the owner answered "Both".
 - Scope: type-system.md §39.4; `src/check/statics.cee`, `src/check/vectors.cee`; the C backend's static initialisers
   and generated `main`; the interpreter's; `runtime/core` (one accessor); `lib/core/cells.cee`, `lib/std/sync.cee`;
   spec/api; guide/threads.md and guide/builtins.md.
@@ -90,11 +91,10 @@ not, as they run no destructor. A run that does not count allocations never dest
   nothing is live, natively (also `--split`) and in the interpreter. check-fail/static-locks-errors.cee: five
   initialisers that are still N0338. The results are in ROADMAP §10.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered 2026-11-23: accepted as recommended)
 
-1. Is destroying statics only in a run that counts allocations (§2.5) acceptable? Recommended: yes; the other two
-   ways are in §3.
-2. Should `Vector<T>.create()` stay accepted in a static beside `empty()` (§2.2)? Recommended: yes; it is the same
-   value, and refusing one spelling of it would need a rule of its own.
-3. Should lib/kernel's `Mutex` and `SpinLock` get `constant` too? Recommended: a separate change; they hold no
-   allocated lock, and a kernel's statics are reviewed with CosmoOS.
+1. Is destroying statics only in a run that counts allocations (§2.5) acceptable? Yes; the other two ways are in §3.
+2. Should `Vector<T>.create()` stay accepted in a static beside `empty()` (§2.2)? Yes; it is the same value, and
+   refusing one spelling of it would need a rule of its own.
+3. Should lib/kernel's `Mutex` and `SpinLock` get `constant` too? A separate change; they hold no allocated lock,
+   and a kernel's statics are reviewed with CosmoOS.

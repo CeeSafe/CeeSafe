@@ -22,6 +22,7 @@
 - [struct Crc32c](#struct-crc32c)
 - [struct Crc64Nvme](#struct-crc64nvme)
 - [struct Adler32](#struct-adler32)
+- [struct Xxh64](#struct-xxh64)
 - [struct Md5](#struct-md5)
 - [struct Sha1](#struct-sha1)
 - [struct Sha256](#struct-sha256)
@@ -41,6 +42,8 @@
 - [struct Zlib](#struct-zlib)
 - [struct Gzip](#struct-gzip)
 - [struct Snappy](#struct-snappy)
+- [struct Zstd](#struct-zstd)
+- [struct ZstdDecoder](#struct-zstddecoder)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
@@ -1426,6 +1429,50 @@ public fn of(bytes: Slice<u8>) -> u32
 
 The checksum of `bytes`, in one call.
 
+## struct Xxh64
+
+```ceesafe
+public struct Xxh64
+```
+
+XXH64 (xxHash's specification), a fast 64-bit hash with a seed: zstd's content checksum is the low 32 bits of the
+XXH64 of a frame's bytes with seed 0 (ADR 0196). `Xxh64.of("123456789".bytes(), 0)` is 0x8CB841DB40E6AE83. It is
+not a cryptographic hash: anyone can make collisions, so it detects accidents only.
+
+### Xxh64.create
+
+```ceesafe
+public fn create(seed: u64) -> Xxh64
+```
+
+A hash of no bytes yet, with `seed`.
+
+### Xxh64.update
+
+```ceesafe
+@effects()
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`: 32 at a time, the rest kept for the next call or `finish`.
+
+### Xxh64.finish
+
+```ceesafe
+@effects()
+public fn finish(borrow this) -> u64
+```
+
+The hash of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Xxh64.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>, seed: u64) -> u64
+```
+
+The hash of `bytes` with `seed`, in one call.
+
 ## struct Md5
 
 ```ceesafe
@@ -2104,6 +2151,76 @@ public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> 
 Encodes `input` onto the end of `out` as one raw block, as libsnappy does. Snappy has one level: `level` is
 ignored. The block is at most 32 + n + n / 6 bytes for n of input. An input of more than 2^32 - 1 bytes, which
 the preamble cannot state, panics.
+
+## struct Zstd
+
+```ceesafe
+public struct Zstd
+```
+
+Zstandard's frame format (RFC 8878) in whole buffers: Parquet's `ZSTD` pages (PyIceberg's default, and Iceberg's
+since 1.4) and Avro's `zstandard` blocks. Decoding only: there is no encoder yet (ADR 0196, phase 4).
+
+No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time.
+
+### Zstd.decompress
+
+```ceesafe
+public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError>
+```
+
+Decodes all of `input`, one or more frames in turn, onto the end of `out`, at most `limit` bytes in all.
+Skippable frames are skipped (an input of them alone decodes to nothing); an empty input, and bytes after the
+last frame that do not begin another, are `Malformed`. A frame that needs a dictionary is `Unsupported`; one
+whose window is above 2 GiB is `TooLarge`, and so is one whose stated content size is above what `limit`
+leaves, before anything is allocated (`out` grows to the stated size at once, or as blocks need it if no size
+is stated). Output that disagrees with the stated size, or a content size no frame of its length could
+produce, is `Malformed`; a wrong checksum is `ChecksumMismatch`. On an error, `out` is as it was.
+
+## struct ZstdDecoder
+
+```ceesafe
+public struct ZstdDecoder
+```
+
+A Zstandard decoder that streams (RFC 8878): each `step` reads what it can of the input and writes what it can
+into the caller's slice, and returns where it stopped. `create` allocates all its memory, at most `windowLimit` +
+406 KiB: a ring of the largest window it accepts and a block, a block's input, and the tables. `step` allocates
+nothing (`@effects()`), so async code and a `drop` block may call it; its work is in proportion to the slices it is
+given, so async code decodes some 64 KiB at a time, or hands a whole buffer to `Async.blocking`.
+
+A frame whose window is above `windowLimit` is `TooLarge`: a frame may ask for up to 2 GiB here (3.75 TiB by the
+format), and libzstd's own default limit is 2^27 bytes (128 MiB), a reasonable choice. A single-segment frame's
+window is its content size. The `limit` applies to everything the decoder writes, over all steps and frames: output
+past it is `TooLarge`, found before it is written, and so is a frame whose stated content size is above what the
+limit leaves. The other refusals are `Zstd.decompress`'s, and after one, each later step returns it again.
+
+`done` is true at the end of a frame (its checksum read, if it has one), when all its bytes are written; `read`
+then says where the next data begins. A step after `done` that is given input decodes the next frame. Skippable
+frames are skipped: a step goes on past one to the next frame, and is `done` if the input ends after it.
+
+Decoding is not constant time.
+
+### ZstdDecoder.create
+
+```ceesafe
+public fn create(limit: u64, windowLimit: usize) -> Result<ZstdDecoder, AllocError>
+```
+
+A decoder that writes at most `limit` bytes in all and takes windows of up to `windowLimit` bytes (at most
+2 GiB). Allocates its ring (`windowLimit` and a block: 128 KiB, or `windowLimit` if that is smaller), a block's
+input (as large), and its tables and a block's literals, about 150 KiB.
+
+### ZstdDecoder.step
+
+```ceesafe
+@effects()
+public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError>
+```
+
+Decodes from `input` into `out` until the input is used up, `out` is full, or a frame ends (`done`). Input it
+reads but cannot use yet (part of a header or of a compressed block) it keeps, so the next step continues with
+the bytes after `read`.
 
 ## enum PathKind
 

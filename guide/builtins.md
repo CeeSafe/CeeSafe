@@ -379,26 +379,29 @@ fn main() {
 42
 ```
 
-## Compression: `Deflate`, `Zlib`, `Gzip` and `Snappy`
+## Compression: `Deflate`, `Zlib`, `Gzip`, `Snappy` and `Zstd`
 
 lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, and snappy's raw block format,
-both ways, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
+both ways, and Zstandard (RFC 8878) decoding, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
 signature):
 
 | Function or type | Type |
 |---|---|
 | `Deflate.decompress(input, limit, mut out)`, and `Zlib.…`, `Gzip.…` | `Result<void, DecodeError>`: all of `input` onto the end of `out`, at most `limit` bytes; on an error `out` is as it was |
 | `Deflate.compress(input, level, mut out)`, and `Zlib.…`, `Gzip.…` | `Result<void, AllocError>`; `level` 0 (stored) to 9, 6 the usual default |
-| `DecodeError` | `Malformed` (not a stream, cut short, or bytes after it), `TooLarge` (past the limit), `Unsupported` (a zlib preset dictionary), `ChecksumMismatch`, `OutOfMemory(AllocError)` |
+| `DecodeError` | `Malformed` (not a stream, cut short, or bytes after it), `TooLarge` (past the limit, or a zstd window past the window limit), `Unsupported` (a zlib preset dictionary, a zstd dictionary), `ChecksumMismatch`, `OutOfMemory(AllocError)` |
 | `Inflater.create(format, limit)`, `i.step(input, mut out)` | a decoder that streams into the caller's `SliceMut<u8>`: `Result<Progress, DecodeError>`, with `read`, `written` and `done`; `format` is a `DeflateFormat` (`Raw`, `Zlib`, `Gzip`) |
 | `i.setWindow(history)` | a preset dictionary, before the first step |
 | `Deflater.create(format, level)`, `d.update(input, mut out)`, `d.flush(mut out)`, `d.finish(mut out)` | an encoder that appends to a `Vector<u8>`; `flush` is a sync flush (all so far decodes) |
 | `Adler32` | zlib's checksum, with `create`, `update`, `finish` and `of`, as `Crc32` (gzip's) |
 | `Snappy.decompress(input, limit, mut out)`, `Snappy.compress(input, level, mut out)` | snappy's raw block (Parquet's `SNAPPY` pages; Avro's `snappy` blocks, which add the big-endian `Crc32` of the bytes), as `Deflate`'s calls; snappy has one level, so `level` is ignored |
 | `Snappy.length(input)` | `usize?`: the length a block's preamble states, read alone, or `null`; `decompress` refuses one above its limit before allocating |
+| `Zstd.decompress(input, limit, mut out)` | Zstandard frames (Parquet's `ZSTD` pages, PyIceberg's default; Avro's `zstandard` blocks), as `Deflate`'s call; skippable frames are skipped, a stated content size above `limit` is refused before allocating; no encoder yet |
+| `ZstdDecoder.create(limit, windowLimit)`, `z.step(input, mut out)` | a zstd decoder that streams, as `Inflater`; it allocates a window of `windowLimit` bytes at `create` (libzstd's default limit is 2^27) and refuses a frame whose window is larger |
+| `Xxh64` | XXH64 with a seed, zstd's checksum, with `create(seed)`, `update`, `finish` and `of(bytes, seed)` |
 
 Every decoder takes a limit, so a decompression bomb costs at most `limit` bytes, and no input panics one: every
-refusal is a `DecodeError`. `Inflater.step` allocates nothing after `create` and has no effect (`@effects()`), so
+refusal is a `DecodeError`. `Inflater.step` and `ZstdDecoder.step` allocate nothing after `create` and has no effect (`@effects()`), so
 async code may call it, but its CPU time is in proportion to the slices it is given: async code decodes some 64 KiB
 at a time, or hands a whole buffer to `Async.blocking`. Compression leaks content through the output's length (CRIME,
 BREACH): do not compress a secret together with bytes an attacker chooses.
@@ -448,6 +451,20 @@ fn main() {
             }
         }
     }
+    // A frame written by the `zstd` tool (level 19, with a checksum).
+    let frame = [
+        0x28u8, 0xB5, 0x2F, 0xFD, 0x24, 0x3E, 0x55, 0x01, 0x00, 0x42, 0xC2, 0x07, 0x0C, 0xC0, 0x3D, 0x24, 0x87, 0x60,
+        0x8A, 0xBF, 0x1A, 0x65, 0xAE, 0xE5, 0x04, 0x8F, 0x43, 0xE3, 0xA5, 0xCE, 0x53, 0xF1, 0xD7, 0xCE, 0x52, 0x7C,
+        0xC6, 0xBB, 0xE2, 0x81, 0xE6, 0xC8, 0x01, 0x02, 0x00, 0x9C, 0x4A, 0x4D, 0x64, 0x53, 0x09, 0x42, 0xFF, 0xBC,
+        0x60,
+    ];
+    var unpacked = Vector<u8>.create();
+    Zstd.decompress(frame[..], 1 << 20, mut unpacked)!;
+    Console.writeLine(StringView.fromUtf8(unpacked.view()) ?? "");
+    var decoder = ZstdDecoder.create(1 << 20, 1 << 20)!;
+    let p = decoder.step(frame[..], mut buffer[..])!;
+    Console.writeLine(p.written);
+    Console.writeLine(Xxh64.of("123456789".bytes(), 0));
 }
 ```
 
@@ -458,6 +475,9 @@ cut short
 152961502
 62
 more than 10 bytes
+to be, or not to be, that is the question: to be, or not to be
+16
+10139926970967174787
 ```
 
 ## Every signature above

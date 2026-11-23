@@ -1,0 +1,12 @@
+// A closure whose parameters have no types takes them from the call (type-system.md §36.2), so it cannot say what a
+// type parameter is: where nothing else does, that is N0265, which names the two ways out (§20.2). It was an internal
+// error (N0216) in 0.93.5. A closure whose types the other arguments settle is fine.
+fn apply<T, U: Send>(x: T, f: fn(T) -> U) -> U => f(x);
+
+fn keep<T>(x: T, f: fn(T) -> T) -> T => f(x);
+
+fn main() {
+    Console.writeLine(apply(21, (x) => x + 1)); // error[N0265]
+    Console.writeLine(keep(21, (x) => x + 1));
+    Console.writeLine(apply(21, (x: i32) => x + 1));
+}

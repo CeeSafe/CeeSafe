@@ -1,0 +1,49 @@
+// A function type is matched part by part when type arguments are inferred (type-system.md §20.2): a function's
+// name, a local of function type or a closure whose parameters are typed, given for `fn(T) -> U`, says what `U` is.
+// The result's `U: Send` is what lets a value of `U` come from a parameter (§25.6).
+// expect-stdout: 42
+// expect-stdout: 43
+// expect-stdout: 63
+// expect-stdout: 44
+// expect-stdout: true
+// expect-stdout: 7
+
+struct Holder<T> {
+    v: T;
+}
+
+impl<T> Holder<T> {
+    fn mapTo<U: Send>(this, f: fn(T) -> U) -> Holder<U> => Holder<U> { v: f(this.v) };
+}
+
+fn apply<T, U: Send>(x: T, f: fn(T) -> U) -> U => f(x);
+
+fn applyWith<T, U: Send>(x: T, f: borrow mut fn(T) -> U) -> U => f(x);
+
+fn both<A, B, R: Send>(a: A, b: B, f: fn(A, B) -> R) -> R => f(a, b);
+
+fn mapOk<T, U: Send, E>(r: Result<T, E>, f: fn(T) -> U) -> Result<U, E> => match (r) {
+    Ok(v) => Ok(f(v)),
+    Err(e) => Err(e),
+};
+
+fn twice(x: i32) -> i64 => (x as i64) * 2;
+
+fn isLong(a: i64, b: u8) -> bool => a > (b as i64);
+
+fn main() {
+    Console.writeLine(apply(21, twice));
+    let g: fn(i32) -> i64 = twice;
+    Console.writeLine(apply(21, g) + 1);
+    let k: i64 = 3;
+    Console.writeLine(applyWith(21, (x: i32) => (x as i64) * k));
+    let h = Holder<i32> { v: 22 };
+    let wide = h.mapTo(twice);
+    Console.writeLine(wide.v);
+    Console.writeLine(both(wide.v, 9u8, isLong));
+    let r: Result<i32, bool> = Ok(3);
+    match (mapOk(r, twice)) {
+        Ok(v) => { Console.writeLine(v + 1); }
+        Err(_) => {}
+    }
+}

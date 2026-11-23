@@ -1145,6 +1145,21 @@ fn unify(
     if (c.types.is(actual, TypeKind.Box) && !c.types.is(declared, TypeKind.Box)) {
         return unify(c, declared, a.pointee, parameters, found); // a box converts to its contents (§18.2)
     }
+    if (isFunctionKind(c, declared) && isFunctionKind(c, actual)) {
+        // A function type is matched part by part, whichever of the three kinds each side is: a function's name or a
+        // closure given for `fn(T) -> U` says what `T` and `U` are (§20.2).
+        if (d.parameters.count == a.parameters.count) {
+            for (k in 0..d.parameters.count) {
+                let declaredParameter = c.types.listAt(d.parameters, k);
+                let actualParameter = c.types.listAt(a.parameters, k);
+                unify(c, declaredParameter, actualParameter, parameters, found)?;
+            }
+            if (d.result != none() && a.result != none()) {
+                unify(c, d.result, a.result, parameters, found)?;
+            }
+        }
+        return Ok();
+    }
     if (typeKindIndex(d.kind) != typeKindIndex(a.kind)) {
         return Ok();
     }
@@ -1221,6 +1236,10 @@ fn unify(
     return Ok();
 }
 
+/// A function pointer, function or closure type: the three that have parameters and a result (§32).
+fn isFunctionKind(c: borrow Checker, t: u32) -> bool =>
+    c.types.is(t, TypeKind.FunctionPointer) || c.types.is(t, TypeKind.Function) || c.types.is(t, TypeKind.Closure);
+
 /// One (declared type, expression) pair for inference.
 struct InferencePair {
     declared: u32;
@@ -1275,11 +1294,21 @@ fn typeArgumentsFor(
     }
     var found = Vector<Found>.create();
     var erroneous = false;
+    var untypedClosure = false;
     for (p in pairs) {
         let value = match (c.front.ast.exprs[p.value as usize]) {
             ExprNode.MutArg(operand) => operand,
             _ => p.value,
         };
+        let takesItsTypes = match (c.front.ast.exprs[value as usize]) {
+            ExprNode.Closure(closure) => closureNeedsTypes(c, closure),
+            _ => false,
+        };
+        if (takesItsTypes) {
+            // A closure whose parameters have no types takes them from the call (§36.2): it says nothing here.
+            untypedClosure = true;
+            continue;
+        }
         let mark = diagnosticsMark(c);
         let actual = synth(c, value, none())?;
         if (diagnosticsMark(c) > mark || c.isBottom(actual)) {
@@ -1315,6 +1344,12 @@ fn typeArgumentsFor(
         appendText(mut message, "' here; write the type arguments: '")?;
         appendBytes(mut message, what)?;
         appendText(mut message, "<…>'")?;
+        if (untypedClosure) {
+            appendText(
+                mut message,
+                ", or the types of the closure's parameters, '(x: T) => …': a closure without them takes its types from the call and cannot give it any",
+            )?;
+        }
         c.error(cannotInferTypeArguments(), span.start, span.end, message)?;
         return Ok(false);
     }

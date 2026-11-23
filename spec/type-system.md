@@ -1788,10 +1788,14 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 - **Types:** `Pair<i32>`, `Maybe<Pair<u8>>`. A generic struct or enum must always be given all its
   type arguments in a type (N0204).
 - **Calls:** `largest<i32>(p, true)` gives the arguments explicitly. `largest(p, true)` infers
-  them from the argument types: each parameter type is matched against its argument's type. An
+  them from the argument types: each parameter type is matched against its argument's type. A
+  function type is matched part by part, its parameters and its result, whether the argument is a function's name, a
+  value of function type or a closure whose parameters are typed: `apply(21, twice)`, for
+  `apply<T, U: Send>(x: T, f: fn(T) -> U)` and `twice(x: i32) -> i64`, has `U` = `i64`. An
   integer literal argument is `i32` unless the parameter type fixes it. A parameter that the
   arguments do not determine is N0265 ("write the type arguments"): the call's expected type is not used, so
-  `let m: Maybe<i32> = make();` needs `make<i32>()`.
+  `let m: Maybe<i32> = make();` needs `make<i32>()`. A closure whose parameters have no types takes them from the
+  call (§36.2) and determines nothing: `apply(21, (x) => x + 1)` is N0265, which also offers `(x: i32) => x + 1`.
 - **Values:** `Pair { first: 1, second: 2 }` infers `T` from the field values, or takes it from the
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.

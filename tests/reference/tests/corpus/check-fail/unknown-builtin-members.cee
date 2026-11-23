@@ -1,0 +1,8 @@
+// A member of a built-in type that does not exist (N0200) is offered that type's own close members first
+// (diagnostics.md, "Suggestions"): a name that differs only in its case is found, whatever other types' members are
+// as close (`writeU8BE` and the like of every writer).
+fn main() {
+    Console.WriteLine("x"); // error[N0200]: did you mean 'writeLine' or 'write'?
+    Console.Writeline("x"); // error[N0200]: did you mean 'writeLine' or 'write'?
+    let a = Process.args(1); // error[N0200]: did you mean 'argument', 'argumentCount' or 'run'?
+}

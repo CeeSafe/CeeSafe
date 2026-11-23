@@ -28,6 +28,7 @@ CASES = [
     ("Environment.args", None, "Environment.variable"),  # the type's real members
     ("Vector.pushBack", None, "Vector.push"),
     ("Strng", None, "String"),                     # one edit away
+    ("Console.WriteLine", None, "Console.writeLine"),  # the type's own close member, not crowded out by others'
 ]
 
 

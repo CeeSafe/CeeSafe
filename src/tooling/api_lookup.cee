@@ -364,6 +364,17 @@ fn apiLookup(
     }
     let member = memberPart(query);
     let typeName = typePart(query);
+    // The query's own type first: its close members must not be crowded out of the eight by other types' names
+    // (`Console.WriteLine` is `Console.writeLine`, not one of the `write…` of every writer).
+    if (typeName.length > 0) {
+        for (n in names.view()) {
+            let candidate = n.view();
+            if (hasDot(candidate) && sameSlices(typePart(candidate), typeName) && isCloseName(query, candidate) &&
+                suggestions.length < 8) {
+                addApiName(suggestions, candidate)?;
+            }
+        }
+    }
     for (n in names.view()) {
         let candidate = n.view();
         let close = if (hasDot(candidate)) hasDot(query) && isCloseName(

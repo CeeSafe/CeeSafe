@@ -827,6 +827,12 @@ fn checkOperatorApplies(c: borrow mut Checker, op: BinaryOp, typ: u32, span: Spa
                 "; bitwise operators and shifts require unsigned operands (reinterpret with truncate<uN>(x))",
             )?;
         }
+        if ((index == 2 || index == 3) && (c.types.is(typ, TypeKind.Struct) || c.types.is(typ, TypeKind.Enum))) {
+            appendText(
+                mut message,
+                "; a struct or an enum with payloads has '==' once its declaration has '@derive(Equal)' (type-system.md §28.7)",
+            )?;
+        }
         c.error(invalidOperandTypes(), span.start, span.end, message)?;
     }
     return Ok(ok);
@@ -983,8 +989,40 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
         (t == x.pointee || c.types.is(t, TypeKind.Box)) && isNamedPlace(c, e)) {
         // Only an argument is lent without the word (§13.2): `let r: borrow T = x;` wants `borrow x`, for a variable
         // or field of the referent's type or a box (which lends its contents, §18.2).
-        appendText(mut message, if (x.mutableReference) "; write 'borrow mut'" else "; write 'borrow'")?;
-        appendText(mut message, " before the value to lend it (only an argument is lent without it)")?;
+        let word: StringView = if (x.mutableReference) "borrow mut" else "borrow";
+        appendText(mut message, "; write '")?;
+        appendText(mut message, word)?;
+        appendText(mut message, "' before the value to lend it (only an argument is lent without it)")?;
+        // The sure fix (tooling.md §5.2): the word before the place.
+        var title = Vector<u8>.create();
+        appendText(mut title, "write '")?;
+        appendText(mut title, word)?;
+        appendText(mut title, "' before the value")?;
+        var text = Vector<u8>.create();
+        appendText(mut text, word)?;
+        appendText(mut text, " ")?;
+        c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.start, span.start, text)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let number = c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Float);
+    let wanted = c.types.is(expected, TypeKind.Integer) || c.types.is(expected, TypeKind.Float);
+    if (number && wanted && c.types.isLosslessCast(t, expected)) {
+        // A number is never widened silently (§7): `as` converts it, and here without loss.
+        appendText(mut message, "; no number converts by itself: write 'as ")?;
+        appendBytes(mut message, c.typeName(expected))?;
+        appendText(mut message, "' after the value, which loses nothing here")?;
+        if (isNamedPlace(c, e)) {
+            // The sure fix (tooling.md §5.2), for a variable or a field: nothing binds tighter than `as` there.
+            var title = Vector<u8>.create();
+            appendText(mut title, "write 'as ")?;
+            appendBytes(mut title, c.typeName(expected))?;
+            appendText(mut title, "' after the value")?;
+            var text = Vector<u8>.create();
+            appendText(mut text, " as ")?;
+            appendBytes(mut text, c.typeName(expected))?;
+            c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.end, span.end, text)?;
+            return c.errorResult(span.start, span.end);
+        }
     }
     c.error(typeMismatch(), span.start, span.end, message)?;
     return c.errorResult(span.start, span.end);

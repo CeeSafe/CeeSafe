@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.94.4
+## Releases 0.25.0 to 0.94.5
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.94.5 | 2026-11-23 | `r.map(f)` and `r.mapErr(f)` on a `Result`, and a closure's result type inferred from its body (ADR 0209); arrays whose elements need drop, `[String; 3]` (ADR 0198 phase 2); a nested pattern through a reference payload, `Some(Node.Items(v))` on a `borrow Node?` (ADR 0212); `null`, an empty vector, `OnceLock<T>.constant()` and `Mutex<T>.constant(v)` in a static (ADR 0211); a generic enum at `void` (ADR 0213); a closure that stores through one capture charged only with the captures it stores (ADR 0210); one error, naming CeeSafe's form, for `if x > 2 {`, tuples, `type` aliases, `let mut` and other languages' forms; the MCP server checks a package with its dependencies (ADR 0208); the language server rechecks open files on save and on changes on disk; a Zed extension (`editors/zed`) with a Tree-sitter grammar | [9.2](./ch09-02-result), [Appendix C](./appendix-c-built-in-types), [Appendix E](./appendix-e-ceesafec) |
 | 0.94.4 | 2026-11-23 | Zstandard decoding in lib/std: `Zstd.decompress` for whole buffers of frames (Parquet's `ZSTD` pages, Avro's `zstandard` blocks), `ZstdDecoder` to decode in steps with a window limit, and `Xxh64`; the decoder takes a limit, refuses a stated size above it before allocating, and no input panics it (ADR 0196, phase 3) | [Appendix C](./appendix-c-built-in-types) |
 | 0.94.3 | 2026-11-23 | On iOS and Android a table's named row is always read whole by a screen reader, its cells left out (ADR 0207 §12) | [Appendix E](./appendix-e-ceesafec) |
 | 0.94.2 | 2026-11-23 | Containers for screen readers on Android: the virtual views' parents and children, `CollectionInfo` on lists, menus, tab lists and tables, and `CollectionItemInfo` on what they hold (ADR 0207 step 5); every system now has the tree | [Appendix E](./appendix-e-ceesafec) |

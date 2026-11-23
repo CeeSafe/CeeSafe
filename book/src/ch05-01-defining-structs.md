@@ -191,7 +191,7 @@ fn main() {
 ```
 
 ```text
-main.cee:9:23: error[N0207]: operator '==' cannot be applied to type 'Player'
+main.cee:9:23: error[N0207]: operator '==' cannot be applied to type 'Player'; a struct or an enum with payloads has '==' once its declaration has '@derive(Equal)' (type-system.md §28.7)
   |
 9 |     Console.writeLine(a == b);
   |                       ^^^^^^

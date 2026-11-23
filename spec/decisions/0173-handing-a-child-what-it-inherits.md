@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-18 ("I accept it as written."): the six questions of §7 as
   recommended. Implemented the same day (§9), **not as written in several places**, which §9 lists; released in
-  ceesafec 0.73.1 (0.73.0 was tagged and never published).
+  ceesafec 0.73.0 (tagged and never published: 0.73.1 is what was published, with a FreeBSD build fix).
   Its checks pass on Linux, macOS, Windows 11 x64 (built with GCC and with MSVC) and Windows on ARM64 (built with MSVC). Written at the owner's request ("Write the descriptor passing ADR"): it is the
   second half of ADR 0169 §5 question 2, which ADR 0172 §6 question 2 left as "the next ADR". Not accepted: §7 has
   the questions.

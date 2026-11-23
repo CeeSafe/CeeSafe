@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G35 and G40
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): its Iceberg table maintenance (CosmoStore ADR-0086) reads
   Avro and Parquet that other writers compressed, its compaction (ADR-0098) was designed around never
-  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`.
+  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`. Phase 2 implemented for 0.94.0: `Snappy`, both ways, and `Snappy.length`.
 - Scope: `lib/std` (new `compress_deflate.cee`, `compress_snappy.cee`, `compress_zstd.cee`; `Adler32`
   and `Xxh64` added to `checksums.cee`; `Crc32` is ADR 0194's, their tables by `tools/gen_checksums.py`), `spec/api/std.md`, the guide's
   built-in types page and the book's Appendix on lib/std, `tools/oracles/`, the corpus, a fuzzer under `tests/fuzz/`,
@@ -289,3 +289,41 @@ adds, in CosmoStore's repository, the change that drops its copies; CeeSafe.Web'
     3,600 of ours read by zlib, and an allocation sweep of 202 points;
   - a fuzzer under `tests/fuzz/deflate`: 44.8 million inputs and 174,711 round trips under ASan and UBSan, none
     failing, with a differential decoder from CosmoStore's.
+
+## As built (0.94.0, phase 2)
+
+- **`Snappy`** is `lib/std/compress_snappy.cee`, 357 lines, with `length`, `decompress` and `compress` as §2.2 has
+  them, and no stream type (§2.3).
+- **The decoder** reads the preamble, refuses a length above the limit (`TooLarge`), then allocates it once and
+  writes every element into that space with its bounds checked. Copies move 8 bytes at a time: from the offset when
+  it is 8 or more, else from the least multiple of it that is. Literals of up to 64 bytes move a word at a time.
+- **Behaviour §2 did not say:**
+  - a stated length longer than 22 times the bytes after the preamble is `Malformed` before anything is allocated.
+    No block can be that long, since a 3-byte copy writes at most 64 bytes, so a block whose limit is generous still
+    cannot make the decoder allocate for a length it cannot reach;
+  - `length` reads the preamble alone (at most 5 bytes and 32 bits, libsnappy's rule) and checks nothing else;
+  - a literal whose length takes more bytes than it needs is accepted, as libsnappy accepts it (Rust's `snap`, in
+    `cramjam`, refuses it);
+  - `compress` panics on more than 2^32 - 1 bytes, which the preamble cannot state, as `Aes256Gcm` panics past its
+    bound; its output is at most 32 + n + n / 6 bytes.
+- **The encoder** is libsnappy's algorithm: fragments of 64 KiB, a hash table of up to 2^14 entries, and the skip.
+  On codec_check's 96 inputs it writes the same bytes as libsnappy 1.2 for 83 of them, and is 0.3% larger in all.
+- **Measured** (M1, best of 3, MB/s; `guide/performance.md`; load average about 30):
+  - decode 1,072 to 1,324, which is 40 to 84% of libsnappy's, so the 1,000 MB/s target is met;
+  - encode 510 to 707, which is 68 to 84% of libsnappy's;
+  - sizes within 1% of libsnappy's.
+- **lib/std's size:** `ceesafec check` of a hello world took 0.249 s against 0.93.6's 0.243 s on the Linux host
+  (Xeon D, the mean of 20). That is about 2% more, for 357 more lines.
+- **Tests:**
+  - `run-pass/snappy.cee`: 115 lines, each from libsnappy and the model, compiled and interpreted;
+  - `check-fail/adr0196-snappy-api.cee` and `-effects.cee`;
+  - `tools/oracles/snappy_model.py`: a decoder written from `format_description.txt`, and an encoder of every
+    element. It agrees with libsnappy on 40,000 blocks and their mutants;
+  - `tools/codec_check.py` (the "codecs" step): 32,264 blocks with libsnappy installed (libsnappy's, the model's,
+    72 hand-written, prefixes and 30,000 mutants), each verdict the model's, which libsnappy matched on every block.
+    Our blocks of 96 inputs were read back by the model and libsnappy. An allocation sweep of 205 points;
+  - `tests/fuzz/snappy`, with a second decoder of its own: 9.3 million inputs and 36,406 round trips in 15 minutes
+    under ASan and UBSan on the M1, and 1.8 million in 5 minutes on Linux, none failing. Ubuntu 24.04 (gcc 13.3,
+    clang 18.1), from the 0.93.6 release: the fixed point; the codec corpus under both compilers with the leak check;
+    and `codec_check.py` with the model as the only oracle (31,595 blocks): 0 problems.
+

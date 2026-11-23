@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.93.7
+## Releases 0.25.0 to 0.94.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.94.0 | 2026-11-23 | Snappy in lib/std: `Snappy.decompress` and `Snappy.compress` for snappy's raw blocks (Parquet's `SNAPPY` pages, Avro's `snappy` blocks), and `Snappy.length` for the length a block states; the decoder takes a limit and refuses a length above it before allocating, and no input panics it (ADR 0196, phase 2) | [Appendix C](./appendix-c-built-in-types) |
 | 0.93.7 | 2026-11-23 | Containers for screen readers on Linux and FreeBSD: AT-SPI's tree, the containers' roles, items' `posinset` and `setsize`, and a table's Table interface with its cells' TableCell (ADR 0207 step 3) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.6 | 2026-11-23 | Containers for screen readers on Windows: UI Automation's tree, the containers' control types, items' places (`PositionInSet`, `SizeOfSet`), and a table's Grid and Table patterns with its cells' GridItem and TableItem (ADR 0207 step 2) | [Appendix E](./appendix-e-ceesafec) |
 | 0.93.5 | 2026-11-23 | Containers for screen readers: a `WindowAccessNode`'s `parent`, its place (`row`, `column`) and a container's counts (`rows`, `columns`, for virtual lists), and the roles `Group`, `List`, `Menu`, `MenuBar`, `TabList`, `Table`, `Row`, `Cell` and `ColumnHeader`; macOS first, the other systems keep the flat list until their steps (ADR 0207) | [Appendix E](./appendix-e-ceesafec) |

@@ -1,0 +1,54 @@
+name: zed-extension
+
+# The Zed extension (editors/zed) in Zed's registry, for a release tag: a pull request to zed-industries/extensions that
+# moves the `ceesafe` submodule to the tag's commit and sets its version (docs/release.md, "zed-registry"). release.yml
+# calls it after each release; it can also be run by hand (Actions, "Run workflow") for a tag already released.
+#
+# It only updates: CeeSafe's first entry in the registry is a pull request a person opens, in their own words, after
+# trying the extension in Zed (Zed's publishing guide, and zed-industries/extensions' AI_POLICY.md: autonomous agents
+# may not contribute). It needs the repository variable ZED_EXTENSIONS_FORK (owner/extensions, a fork on a personal
+# account) and the secret ZED_COMMITTER_TOKEN (a personal access token of that account, scopes repo and workflow).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag, v<version>
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, v<version>
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The fork, the token, and CeeSafe in the registry
+        env:
+          FORK: ${{ vars.ZED_EXTENSIONS_FORK }}
+          TOKEN: ${{ secrets.ZED_COMMITTER_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$FORK" ] || [ -z "$TOKEN" ]; then
+            echo "::error::set the variable ZED_EXTENSIONS_FORK and the secret ZED_COMMITTER_TOKEN (docs/release.md)"
+            exit 1
+          fi
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::$TAG is not a release tag v<version>"; exit 1 ;; esac
+          curl -fsSL https://raw.githubusercontent.com/zed-industries/extensions/main/extensions.toml -o extensions.toml
+          if ! grep -q '^\[ceesafe\]$' extensions.toml; then
+            echo "::error::ceesafe is not in Zed's registry yet: its first pull request is opened by hand (docs/release.md)"
+            exit 1
+          fi
+      - uses: huacnlee/zed-extension-action@8cd592a0d24e1e41157740f1a529aeabddc88a1b # v2.0.0
+        with:
+          extension-name: ceesafe
+          tag: ${{ inputs.tag }}
+          push-to: ${{ vars.ZED_EXTENSIONS_FORK }}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.ZED_COMMITTER_TOKEN }}

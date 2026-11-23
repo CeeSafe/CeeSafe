@@ -36,12 +36,20 @@ One C seed for every platform, so every binary is built from the same C and chec
 7. **stores**: the same `.vsix` on the VS Code Marketplace and on Open VSX, publisher (namespace) `ceesafe`. It runs
    after the GitHub release, so a store's failure never holds a release back, and `--skip-duplicate` makes a rerun
    harmless.
-8. **zed-registry**: a pull request to [zed-industries/extensions](https://github.com/zed-industries/extensions) that
-   moves the `ceesafe` submodule to the tag and sets its version (`huacnlee/zed-extension-action`, pinned to v2.0.0's
-   commit), pushed to the fork the repository variable `ZED_EXTENSIONS_FORK` names. It is off while that variable is
-   unset: the extension's first pull request is opened by hand (Zed's publishing guide), after it has been tried in
-   Zed at the commit it names, and the variable is set once the registry has it. After the GitHub release, so its
-   failure never holds a release back; Zed's maintainers merge the pull request.
+8. **zed-registry**: `.github/workflows/zed-extension.yml`, which opens a pull request to
+   [zed-industries/extensions](https://github.com/zed-industries/extensions) that moves the `ceesafe` submodule to the
+   tag's commit and sets its version (`huacnlee/zed-extension-action`, pinned to v2.0.0's commit, the action Zed's
+   "Updating an Extension" page names), pushed to the fork the variable `ZED_EXTENSIONS_FORK` names. It runs after
+   the GitHub release, so its failure never holds a release back, and it is off while the variable is unset. It can
+   also be run by hand for a tag already released (Actions, **zed-extension**, "Run workflow", the tag). Zed's
+   maintainers merge the pull request.
+
+   It only updates. CeeSafe's **first** entry in the registry is a pull request a person opens by hand, after trying
+   the extension in Zed at the commit it names: Zed's publishing guide asks for that test, and zed-industries/extensions'
+   `AI_POLICY.md` allows no autonomous agent to contribute and wants the pull request in its author's own words. The
+   first pull request adds the submodule `extensions/ceesafe` (`https://github.com/CeeSafe/CeeSafe.git`, at the
+   release's commit, which is on `main`) and, to `extensions.toml`, `[ceesafe]` with `submodule =
+   "extensions/ceesafe"`, `path = "editors/zed"` and the version; `pnpm sort-extensions` sorts both files.
 
 | Archive | Built on | Contents |
 |---|---|---|

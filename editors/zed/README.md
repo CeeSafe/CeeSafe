@@ -46,9 +46,12 @@ The last parses every CeeSafe source of the compiler, the libraries and the corp
 ## Publishing
 
 Zed's registry lists an extension from the [zed-industries/extensions](https://github.com/zed-industries/extensions)
-repository: a pull request adds it as a submodule (this repository, `path = "editors/zed"`) with its version. The
-first is opened by hand, after the extension has been tried in Zed at the commit it names; after that, the release
-workflow opens one for each release (docs/release.md).
+repository: a pull request adds it as a submodule (this repository, `path = "editors/zed"`) with its version.
+
+- **The first time**, by hand: try the extension in Zed at the release's commit, then open the pull request in your
+  own words (Zed's publishing guide; the repository's `AI_POLICY.md` allows no autonomous agent to contribute).
+- **Each release after that**, by the release workflow: `.github/workflows/zed-extension.yml` opens the update pull
+  request, or run it by hand for a tag (docs/release.md, "zed-registry").
 
 ## Licence
 

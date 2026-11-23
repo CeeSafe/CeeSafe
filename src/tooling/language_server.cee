@@ -299,61 +299,28 @@ fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Res
         null => { return Ok(null); }
     };
     var report = PackageReport.create();
-    let noUpdate = Vector<Vector<u8>>.create();
-    let workspace = match (resolveWorkspace(directory.view(), mut report, false, true, false, noUpdate)?) {
-        Some(w) => w,
+    var program = match (packageProgram(directory.view(), mut report)?) {
+        Some(p) => p,
         null => { return Ok(null); }
     };
     let full = joinPath("/".bytes(), path)?;
-    var rootFiles = Vector<Vector<u8>>.create();
-    manifestSourceFiles(workspace.root, mut rootFiles)?;
     var found = false;
-    for (f in rootFiles.view()) {
-        found = found || sameBytes(f.view(), full.view());
+    for (k in 0..program.rootFiles) {
+        if (!found && sameBytes(program.files[k].path.view(), full.view())) {
+            found = true;
+            file = truncate<u32>(k);
+            program.files[k].text = copyBytes(text)?;
+        }
     }
     if (!found) {
         return Ok(null);
     }
-    var packages = Vector<PackageInfo>.create();
-    var files = Vector<InputFile>.create();
-    for (p in 0..workspace.resolved.length + 1) {
-        let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
-        packages.push(workspace.packageInfo(p)?)?;
-        var paths = Vector<Vector<u8>>.create();
-        manifestSourceFiles(manifest, mut paths)?;
-        for (f in paths.view()) {
-            if (sameBytes(f.view(), full.view())) {
-                file = truncate<u32>(files.length);
-                files.push(
-                    InputFile {
-                        path: copyBytes(f.view())?,
-                        text: copyBytes(text)?,
-                        package: truncate<u32>(p),
-                        diskPath: copyBytes(f.view())?,
-                    },
-                )?;
-            } else {
-                let bytes = match (readFile(StringView.fromUtf8(f.view())!)) {
-                    Ok(b) => b,
-                    Err(_) => Vector<u8>.create(),
-                };
-                files.push(
-                    InputFile {
-                        path: copyBytes(f.view())?,
-                        text: bytes,
-                        package: truncate<u32>(p),
-                        diskPath: copyBytes(f.view())?,
-                    },
-                )?;
-            }
-        }
-    }
     let compiled = compileInMemory(
-        files,
-        packages,
-        workspace.root.freestanding,
-        !workspace.root.floatAllowed,
-        workspace.root.kernel,
+        program.files,
+        program.packages,
+        program.freestanding,
+        program.noFloat,
+        program.kernel,
     )?;
     file = file + truncate<u32>(compiled.firstUser);
     return Ok(compiled);

@@ -61,6 +61,12 @@ Its tools:
 | `ceesafe_symbol` | the type and declaration of what is at a position |
 | `ceesafe_api` | a library or built-in name looked up (`TextWriter.decimal`, `Process.argument`): its signature and documentation, or the closest names |
 
+The tools that compile take the program as `files` (texts), as `paths` (files on disk, compiled alone as one package),
+or as `package`: a directory, for the package of the nearest `ceesafe.toml` with the dependencies of its lock. In a
+package, give `{"package": "."}`: `paths` reads no manifest, so it cannot find a dependency. A `files` entry beside
+`package` replaces a source's text for that call, which checks an edit before it is saved, and `ceesafe_fix` then
+returns only the files it changed.
+
 The prompt `write-ceesafe` gives an agent this page and the loop below. The specification and this guide are resources
 (`ceesafe://docs/…`). The [tooling reference](../spec/tooling.md) §6 has the details.
 
@@ -744,7 +750,11 @@ fn main() {
 `ceesafe_fix` and `ceesafec fix` repair these without being asked twice: a `let` that is assigned (`var`), an argument for a
 `borrow mut` parameter without `mut`, a `mut` where the parameter is a shared `borrow`, `as` between integer types that
 can lose information (`truncate<T>(…)`, which wraps), a `;` missing after a statement, and a `::` from Rust or C++
-(`.`, or nothing before type arguments: `Vector<i32>.create()`, `pick<i32>(1, 2)`).
+(`.`, or nothing before type arguments: `Vector<i32>.create()`, `pick<i32>(1, 2)`). It also makes a `let` that is
+borrowed mutably a `var`, writes `borrow x` where a variable is given for a reference and `x as i64` where a variable's
+number only needs widening, writes `x.asBorrow()` where a borrow of an optional should be an optional borrow, declares the
+type of a `var` that was meant to copy the value behind a reference, boxes a recursive awaited call
+(`Async.boxed(SystemHeap {}, …)!`), and removes an extern declaration that repeats a dependency's.
 
 ## Where to read more
 

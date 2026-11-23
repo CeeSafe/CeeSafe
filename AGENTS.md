@@ -33,7 +33,8 @@ position and its fixes.
 
 ## The MCP server
 
-If you have the `ceesafe` MCP server (`ceesafec mcp`), use its tools: `ceesafe_check` after every edit, `ceesafe_fix` for the
+If you have the `ceesafe` MCP server (`ceesafec mcp`), use its tools: `ceesafe_check` after every edit (in a package,
+with `{"package": "."}`, which sees the dependencies; `files` beside it checks text you have not saved), `ceesafe_fix` for the
 fixes it offers, `ceesafe_explain` for a code, `ceesafe_spec_search` and `ceesafe_spec_section` for the rules, `ceesafe_run` to
 run code in a sandbox. The specification is embedded in `ceesafec`, so its answers match the compiler.
 
@@ -45,9 +46,10 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 
 ## Common mistakes
 
-- `~x`, `& | ^` and shifts take unsigned integers only; `!` is for `bool`. There are no type aliases or tuples, and no
-  `==` on structs.
-- An optional's fallback is `o ?? value`; `o.isSome()` and `o.isNull()` test it. `let _ = f();` discards a value.
+- `~x`, `& | ^` and shifts take unsigned integers only; `!` is for `bool`. There are no type aliases or tuples, and
+  `==` on a struct needs `@derive(Equal)`.
+- An optional's fallback is `o ?? value`, or a block that leaves, `o ?? { return Err(e); }`; `o.isSome()` and
+  `o.isNull()` test it, and `o == Some(3)` compares. `let _ = f();` discards a value.
 - Indexes are `usize`. `0..4` is a `usize` range when the body indexes with its variable, else `i32`; `0..values.length` is `usize`.
 - `if` and `match` expressions take expressions, `let s = if (x < 0) -1 else 1;`, or blocks that end with their value
   without `;`; a statement's block has no value.

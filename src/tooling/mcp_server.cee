@@ -1,7 +1,7 @@
 // `ceesafec mcp` (the reference's Tooling/McpServer.cs; tooling.md §6): the Model Context Protocol over JSON-RPC 2.0,
 // one message per line, serving the checker, fixes, formatter, sandboxed interpreter, C generator, specification and
-// language index as tools, the embedded documents as resources, and two prompts. It reads nothing but its input and the
-// paths a tool names. Messages are written as ToJsonString writes them with UnsafeRelaxedJsonEscaping.
+// language index as tools, the embedded documents as resources, and two prompts. It reads nothing but its input, the
+// paths a tool names and, for a `package` source (ADR 0208), that package's manifests, lock and sources. Messages are written as ToJsonString writes them with UnsafeRelaxedJsonEscaping.
 
 fn mcpInvalidRequest() -> i64 => -32600;
 fn mcpInvalidParams() -> i64 => -32602;
@@ -367,7 +367,7 @@ fn dispatchMcp(
         json.endObject()!;
         json.name("instructions")!;
         json.string(
-            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules; ceesafe_api to look up a library or built-in name before concluding it does not exist. ceesafe_run runs a program in a sandboxed interpreter. The prompt write-ceesafe has the agent guide.",
+            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit, in a package with {\"package\": \".\"} so that its dependencies are seen; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules; ceesafe_api to look up a library or built-in name before concluding it does not exist. ceesafe_run runs a program in a sandboxed interpreter. The prompt write-ceesafe has the agent guide.",
         )!;
         json.endObject()!;
         return mcpResult(json);
@@ -574,11 +574,17 @@ fn sourceProperties(json: borrow mut JsonWriter) {
     json.name("text")!;
     typeSchema(json, "string", "the file's CeeSafe source");
     schemaEnd(json, "path text");
-    arrayEnd(json, "the program's files, compiled as one package (give files or paths)");
+    arrayEnd(json, "the program's files, compiled as one package (give files, paths or package)");
     json.name("paths")!;
     arrayStart(json);
     typeSchema(json, "string", "a .cee file");
     arrayEnd(json, "paths of .cee files on disk, relative to the server's working directory (give files or paths)");
+    json.name("package")!;
+    typeSchema(
+        json,
+        "string",
+        "a directory of a package ('.' is the working directory): the package of the nearest ceesafe.toml with its locked dependencies, read from disk; use this, not paths, in a package; files then replace the text of its sources",
+    );
     json.name("profile")!;
     enumSchema(json, "the compilation profile (default hosted)", "hosted|freestanding");
     json.name("noFloat")!;
@@ -926,8 +932,23 @@ fn runMcpTool(
     };
 }
 
-/// The program's files (Sources): `files`, then `paths` read from the working directory.
-fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<Vector<InputFile>, McpFailure> {
+/// What a tool compiles (Sources; tooling.md §6.2): the files and their packages, the settings, and for a package
+/// (ADR 0208) how many of the files, the first ones, are the root package's.
+struct McpSources {
+    files: Vector<InputFile>;
+    packages: Vector<PackageInfo>;
+    settings: McpSettings;
+    fromPackage: bool;
+    rootFiles: usize;
+}
+
+/// The program's files: `package`, or `files`, then `paths` read from the working directory.
+fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<McpSources, McpFailure> {
+    match (optionalString(doc, arguments, "package")?) {
+        Some(directory) => { return packageSourcesOf(server, doc, arguments, directory.view()); }
+        null => {}
+    }
+    let settings = settingsOf(doc, arguments)?;
     var files = Vector<InputFile>.create();
     let given = doc.member(arguments, "files");
     if (doc.kind(given) == jsonArray()) {
@@ -951,7 +972,11 @@ fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
         }
     }
     if (files.length == 0) {
-        return Err(invalidParams(copyBytes("give the program as 'files' ([{path, text}]) or 'paths'".bytes())!));
+        return Err(
+            invalidParams(
+                copyBytes("give the program as 'files' ([{path, text}]), 'paths' or 'package' (a directory)".bytes())!,
+            ),
+        );
     }
     for (a in 0..files.length) {
         for (b in a + 1..files.length) {
@@ -960,7 +985,117 @@ fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
             }
         }
     }
-    return Ok(files);
+    let count = files.length;
+    return Ok(
+        McpSources {
+            files: files,
+            packages: alonePackages()!,
+            settings: settings,
+            fromPackage: false,
+            rootFiles: count,
+        },
+    );
+}
+
+/// `package` (ADR 0208): the package of the nearest manifest at or above `directory`, with its lock's packages, read
+/// from disk and never fetched; its files named from the working directory; `files` replacing the root package's
+/// sources they name; the settings the root manifest's.
+fn packageSourcesOf(
+    server: borrow McpServer,
+    doc: borrow JsonDoc,
+    arguments: u32,
+    directory: Slice<u8>,
+) -> Result<McpSources, McpFailure> {
+    if (doc.kind(doc.member(arguments, "paths")) != jsonNull()) {
+        return Err(invalidParams(copyBytes("give 'package' or 'paths', not both".bytes())!));
+    }
+    if (doc.kind(doc.member(arguments, "profile")) != jsonNull() ||
+        doc.kind(doc.member(arguments, "noFloat")) != jsonNull()) {
+        return Err(
+            invalidParams(
+                copyBytes("with 'package', the profile and no-float are the manifest's: give neither".bytes())!,
+            ),
+        );
+    }
+    let start = serverPath(server, directory);
+    let home = match (findManifestDirectory(start.view())!) {
+        Some(d) => d,
+        null => { return Err(toolFailure(textOf("no ceesafe.toml in '", directory, "' or above it"))); }
+    };
+    var report = PackageReport.create();
+    var program = match (packageProgram(home.view(), mut report)!) {
+        Some(p) => p,
+        null => {
+            var message = textOf("the package in '", directory, "' does not resolve");
+            if (report.diagnostics.items.length > 0) {
+                appendText(mut message, ": ")!;
+                appendBytes(mut message, report.diagnostics.items[0].message.view())!;
+            }
+            return Err(toolFailure(message));
+        }
+    };
+    let given = doc.member(arguments, "files");
+    if (doc.kind(given) == jsonArray()) {
+        for (k in 0..doc.childCount(given)) {
+            let file = doc.child(given, k);
+            if (doc.kind(file) != jsonObject()) {
+                continue;
+            }
+            let path = requiredString(doc, file, "path")?;
+            let text = requiredString(doc, file, "text")?;
+            let full = serverPath(server, path.view());
+            var found = false;
+            for (f in 0..program.rootFiles) {
+                if (!found && sameBytes(program.files[f].diskPath.view(), full.view())) {
+                    found = true;
+                    program.files[f].text = copyBytes(text.view())!;
+                }
+            }
+            if (!found) {
+                return Err(toolFailure(textOf("'", path.view(), "' is not a source of the package")));
+            }
+        }
+    }
+    let base = joinPath("/".bytes(), server.workingDirectory.view())!;
+    for (f in 0..program.files.length) {
+        program.files[f].path = relativePath(base.view(), program.files[f].diskPath.view())!;
+    }
+    let settings = McpSettings { freestanding: program.freestanding, noFloat: program.noFloat, kernel: program.kernel };
+    return Ok(
+        McpSources {
+            files: program.files,
+            packages: program.packages,
+            settings: settings,
+            fromPackage: true,
+            rootFiles: program.rootFiles,
+        },
+    );
+}
+
+/// A copy of the packages, which a compilation takes.
+fn copyPackages(packages: borrow Vector<PackageInfo>) -> Vector<PackageInfo> {
+    var out = Vector<PackageInfo>.create();
+    for (p in packages.view()) {
+        var dependencies = Vector<Vector<u8>>.create();
+        for (d in p.dependencies.view()) {
+            dependencies.push(copyBytes(d.view())!)!;
+        }
+        var embedRoots = Vector<Vector<u8>>.create();
+        for (r in p.embedRoots.view()) {
+            embedRoots.push(copyBytes(r.view())!)!;
+        }
+        out.push(
+            PackageInfo {
+                name: copyBytes(p.name.view())!,
+                dependencies: dependencies,
+                trusted: p.trusted,
+                directory: copyBytes(p.directory.view())!,
+                embedRoots: embedRoots,
+                embedBoundary: copyBytes(p.embedBoundary.view())!,
+            },
+        )!;
+    }
+    return out;
 }
 
 /// A file's text as File.ReadAllText reads it (a byte order mark dropped, an invalid sequence made U+FFFD), or the
@@ -1020,6 +1155,7 @@ fn readSource(server: borrow McpServer, path: Slice<u8>) -> Result<Vector<u8>, M
 struct McpSettings {
     freestanding: bool;
     noFloat: bool;
+    kernel: bool;
 }
 
 fn settingsOf(doc: borrow JsonDoc, arguments: u32) -> Result<McpSettings, McpFailure> {
@@ -1040,33 +1176,42 @@ fn settingsOf(doc: borrow JsonDoc, arguments: u32) -> Result<McpSettings, McpFai
         Some(b) => b,
         null => false,
     };
-    return Ok(McpSettings { freestanding: freestanding, noFloat: noFloat });
+    return Ok(McpSettings { freestanding: freestanding, noFloat: noFloat, kernel: false });
 }
 
-fn compileFilesWith(settings: McpSettings, files: borrow Vector<InputFile>) -> Compiled =>
-    compileInMemory(files, alonePackages()!, settings.freestanding, settings.noFloat, false)!;
+fn compileSources(sources: borrow McpSources) -> Compiled => compileInMemory(
+    sources.files,
+    copyPackages(sources.packages),
+    sources.settings.freestanding,
+    sources.settings.noFloat,
+    sources.settings.kernel,
+)!;
 
 fn checkTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
-    let settings = settingsOf(doc, arguments)?;
-    let files = sourcesOf(server, doc, arguments)?;
-    let compiled = compileFilesWith(settings, files);
+    let sources = sourcesOf(server, doc, arguments)?;
+    let compiled = compileSources(sources);
     return Ok(ToolResult { content: compiledDiagnosticsJson(compiled)!, isError: false });
 }
 
 /// Every fix the compiler is sure of, in rounds as `fix` takes them (tooling.md §5.3); nothing is written.
 fn fixTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
-    var files = sourcesOf(server, doc, arguments)?;
+    var sources = sourcesOf(server, doc, arguments)?;
+    var changed = Vector<bool>.create();
+    for (k in 0..sources.files.length) {
+        changed.push(false)!;
+    }
     var applied: usize = 0;
     var remaining = Vector<u8>.create();
     for (round in 0..8) {
-        let settings = settingsOf(doc, arguments)?;
-        let compiled = compileFilesWith(settings, files);
+        let compiled = compileSources(sources);
         remaining = compiledDiagnosticsJson(compiled)!;
         let diagnostics = compiledDiagnostics(compiled);
         var fixable = Vector<bool>.create();
         var any = false;
         for (d in diagnostics.items.view()) {
-            let yes = d.hasFix && (d.file as usize) >= compiled.firstUser;
+            // A fix is applied to the program's own files: not to the libraries', nor to a dependency's (ADR 0208).
+            let yes = d.hasFix && (d.file as usize) >= compiled.firstUser &&
+                (d.file as usize) - compiled.firstUser < sources.rootFiles;
             fixable.push(yes)!;
             any = any || yes;
         }
@@ -1077,14 +1222,15 @@ fn fixTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Res
         var appliedNow = Vector<usize>.create();
         takeFixes(diagnostics, fixable, mut taken, mut appliedNow)!;
         applied += appliedNow.length;
-        for (k in 0..files.length) {
+        for (k in 0..sources.files.length) {
             let file = truncate<u32>(compiled.firstUser + k);
             var touched = false;
             for (e in taken.view()) {
                 touched = touched || e.file == file;
             }
             if (touched) {
-                files[k].text = fixedText(diagnostics, compiled.sources[file as usize], file, taken)!;
+                sources.files[k].text = fixedText(diagnostics, compiled.sources[file as usize], file, taken)!;
+                changed[k] = true;
             }
         }
     }
@@ -1092,7 +1238,12 @@ fn fixTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Res
     json.startObject()!;
     json.name("files")!;
     json.startArray()!;
-    for (f in files.view()) {
+    for (k in 0..sources.files.length) {
+        // A package's files are on disk: only the ones a fix changed are given back.
+        if (sources.fromPackage && !changed[k]) {
+            continue;
+        }
+        let f = borrow sources.files[k];
         json.startObject()!;
         json.name("path")!;
         json.stringBytes(f.path.view())!;
@@ -1189,9 +1340,9 @@ fn generateCompiled(
 fn runProgramTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
     let steps = mcpInteger(doc, arguments, "maxSteps", mcpDefaultSteps())?;
     let outputBytes = mcpInteger(doc, arguments, "maxOutputBytes", mcpDefaultOutputBytes())?;
-    let files = sourcesOf(server, doc, arguments)?;
-    let settings = settingsOf(doc, arguments)?;
-    var compiled = compileFilesWith(settings, files);
+    let sources = sourcesOf(server, doc, arguments)?;
+    let settings = sources.settings;
+    var compiled = compileSources(sources);
     var cFiles = Vector<CFile>.create();
     if (!generateCompiled(mut compiled, true, settings.freestanding, mut cFiles)) {
         var json = JsonWriter.create();
@@ -1205,7 +1356,7 @@ fn runProgramTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32)
         return toolResult(json, false);
     }
     var programArguments = Vector<Vector<u8>>.create();
-    programArguments.push(copyBytes(files[0].path.view())!)!;
+    programArguments.push(copyBytes(sources.files[0].path.view())!)!;
     let given = doc.member(arguments, "args");
     if (doc.kind(given) == jsonArray()) {
         for (k in 0..doc.childCount(given)) {
@@ -1253,9 +1404,9 @@ fn runProgramTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32)
 }
 
 fn emitCTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
-    let settings = settingsOf(doc, arguments)?;
-    let files = sourcesOf(server, doc, arguments)?;
-    var compiled = compileFilesWith(settings, files);
+    let sources = sourcesOf(server, doc, arguments)?;
+    let settings = sources.settings;
+    var compiled = compileSources(sources);
     var cFiles = Vector<CFile>.create();
     if (!generateCompiled(mut compiled, false, settings.freestanding, mut cFiles)) {
         return diagnosticsResult(compiled, true);
@@ -1719,11 +1870,11 @@ fn sectionTool(doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFai
 }
 
 fn symbolTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
-    let files = sourcesOf(server, doc, arguments)?;
+    let sources = sourcesOf(server, doc, arguments)?;
     let path = requiredString(doc, arguments, "path")?;
     var which: usize? = null;
-    for (k in 0..files.length) {
-        if (which == null && sameBytes(files[k].path.view(), path.view())) {
+    for (k in 0..sources.files.length) {
+        if (which == null && sameBytes(sources.files[k].path.view(), path.view())) {
             which = k;
         }
     }
@@ -1731,8 +1882,7 @@ fn symbolTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> 
         Some(k) => k,
         null => { return Err(toolFailure(textOf("'", path.view(), "' is not one of the files"))); }
     };
-    let settings = settingsOf(doc, arguments)?;
-    let compiled = compileFilesWith(settings, files);
+    let compiled = compileSources(sources);
     let checker = match (borrow compiled.checker) {
         Some(c) => c,
         null => { return diagnosticsResult(compiled, true); }

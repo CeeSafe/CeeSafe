@@ -130,6 +130,64 @@ fn alonePackages() -> Result<Vector<PackageInfo>, AllocError> {
     return Ok(packages);
 }
 
+/// A package's program for the tools that compile in memory (ADR 0208; the language server's CheckInPackage): the
+/// root package's files first, `rootFiles` of them, then each locked package's, every one read from disk and named by
+/// its absolute path; and the root manifest's settings.
+struct PackageProgram {
+    files: Vector<InputFile>;
+    packages: Vector<PackageInfo>;
+    rootFiles: usize;
+    freestanding: bool;
+    noFloat: bool;
+    kernel: bool;
+}
+
+/// The program of the package whose manifest is in `directory`, through its lock, never fetching (tooling.md §4.4).
+/// Null after reporting to `report`.
+fn packageProgram(directory: Slice<u8>, report: borrow mut PackageReport) -> Result<PackageProgram?, AllocError> {
+    let noUpdate = Vector<Vector<u8>>.create();
+    let workspace = match (resolveWorkspace(directory, report, false, true, false, noUpdate)?) {
+        Some(w) => w,
+        null => { return Ok(null); }
+    };
+    var packages = Vector<PackageInfo>.create();
+    var files = Vector<InputFile>.create();
+    var rootFiles: usize = 0;
+    for (p in 0..workspace.resolved.length + 1) {
+        let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+        packages.push(workspace.packageInfo(p)?)?;
+        var paths = Vector<Vector<u8>>.create();
+        manifestSourceFiles(manifest, mut paths)?;
+        for (f in paths.view()) {
+            let bytes = match (readFile(StringView.fromUtf8(f.view())!)) {
+                Ok(b) => b,
+                Err(_) => Vector<u8>.create(),
+            };
+            files.push(
+                InputFile {
+                    path: copyBytes(f.view())?,
+                    text: bytes,
+                    package: truncate<u32>(p),
+                    diskPath: copyBytes(f.view())?,
+                },
+            )?;
+        }
+        if (p == 0) {
+            rootFiles = files.length;
+        }
+    }
+    return Ok(
+        PackageProgram {
+            files: files,
+            packages: packages,
+            rootFiles: rootFiles,
+            freestanding: workspace.root.freestanding,
+            noFloat: !workspace.root.floatAllowed,
+            kernel: workspace.root.kernel,
+        },
+    );
+}
+
 /// The compilation's diagnostics, as text-free JSON (DiagnosticJson.Serialize).
 fn compiledDiagnosticsJson(compiled: borrow Compiled) -> Result<Vector<u8>, AllocError> {
     match (borrow compiled.checker) {

@@ -8,7 +8,10 @@
   `ceesafec doc lib/std --title "lib/std"` write for the sources tools/gen_library.py embeds (Decision 0008);
 - names: no tracked file names the retired predecessor language or its compiler, in any case or as a C prefix, but
   COPYING.RUNTIME, whose notice says where CeeSafe came from (Decision 0010). The word is spelled in two pieces here
-  so that this file passes its own check.
+  so that this file passes its own check;
+- fixes: every diagnostic code the compiler's sources give a fix (errorWithFix, errorWithEdit, errorWithTwoEdits) has
+  a row in tooling.md §5.2's table;
+- agents: AGENTS.md's section between the markers is templates/AGENTS.md, what `ceesafec agents` writes.
 
 usage: python3 tools/spec_check.py --ceesafec out/ceesafec
 """
@@ -119,6 +122,48 @@ def check_names(problems):
     return count
 
 
+def check_fixes(problems):
+    """A fix lands with its row in tooling.md §5.2 (spec before code): each code named at a fix site is in the table."""
+    codes = {}
+    sites = []
+    call = re.compile(r"\berrorWith(?:Fix|Edit|TwoEdits)\(\s*([A-Za-z_][A-Za-z0-9_]*)\(\)")
+    code = re.compile(r"^fn ([A-Za-z_][A-Za-z0-9_]*)\(\) -> u32 => (\d+);", re.M)
+    for path in sorted(glob.glob(os.path.join(ROOT, "src", "**", "*.cee"), recursive=True)):
+        if os.sep + "library" + os.sep in path:
+            continue
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for name, number in code.findall(text):
+            codes.setdefault(name, int(number))
+        for m in call.finditer(text):
+            sites.append((os.path.relpath(path, ROOT), text.count("\n", 0, m.start()) + 1, m.group(1)))
+    with open(os.path.join(ROOT, "spec", "tooling.md"), encoding="utf-8") as f:
+        spec = f.read()
+    start = spec.index("### 5.2 Fixes")
+    table = set(re.findall(r"^\| N(\d{4}) \|", spec[start:spec.index("### 5.3", start)], re.M))
+    for path, line, name in sites:
+        if name not in codes:
+            problems.append(f"fixes: {path}:{line}: no code found for '{name}()'")
+        elif f"{codes[name]:04d}" not in table:
+            problems.append(f"fixes: {path}:{line}: N{codes[name]:04d} offers a fix that tooling.md §5.2 does not list")
+    return len(sites)
+
+
+def check_agents(problems):
+    """The repository's own AGENTS.md carries the template's section, as `ceesafec agents` would write it now."""
+    with open(os.path.join(ROOT, "templates", "AGENTS.md"), encoding="utf-8") as f:
+        template = f.read()
+    with open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8") as f:
+        own = f.read()
+    start, end = "<!--CEESAFE START-->", "<!--CEESAFE END-->"
+    if start not in own or end not in own:
+        problems.append("agents: AGENTS.md has no section between the markers")
+        return
+    section = own[own.index(start):own.index(end) + len(end)]
+    if section.strip() != template.strip():
+        problems.append("agents: AGENTS.md's section is not templates/AGENTS.md; run `out/ceesafec agents`")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ceesafec", required=True)
@@ -129,6 +174,8 @@ def main():
     links = check_links(problems)
     check_api(cee, problems)
     check_names(problems)
+    check_fixes(problems)
+    check_agents(problems)
     for p in problems:
         print("FAIL", p)
     print(f"spec_check: {len(documents())} documents, {codes} codes explained, {links} links, the API page, names: "

@@ -681,6 +681,11 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0211 | assignment to a `let` local declared in the function | `let` → `var` at its declaration |
 | N0248 | `borrow mut` (or a `borrow mut this` call) of a `let` local declared in the function | `let` → `var` at its declaration |
 | N0208 | `e as T` between integer types that can lose information | `truncate<T>(e)` (wrap-around, as the message says) |
+| N0205 | a `borrow (T?)` (or a local of type `T?`) where a `borrow T?` is expected, the value being a local or a borrow of one (type-system.md §13; ADR 0195) | the expression → `x.asBorrow()`, or `x.asBorrowMut()` for a `borrow mut T?` |
+| N0205 | a variable or field (or a box) where a `borrow T` or `borrow mut T` of its type is expected and no argument is being passed: `let r: borrow T = x;` (type-system.md §13.2) | insert `borrow ` (`borrow mut `) before the value |
+| N0205 | a variable or field of a number type where another number type is expected that holds every value of it (`i32` for `i64`, `u8` for `f64`; `as` without loss, type-system.md §7) | insert ` as T` after the value. Any other expression gets the message's hint and no fix |
+| N0246 | `var x = e;` without a declared type, where `e` is a reference to a Copy value that is not itself a reference, a view or a slice | insert `: T` after the name, which copies the value read through the reference (§13.3) |
+| N0343 | an awaited call that makes an async function's frame contain itself, the edge being one call (ADR 0031 §3.1.4) | the call → `Async.boxed(SystemHeap {}, <call>)!` |
 | N0201 | an extern declaration whose C name a dependency's `public` extern declaration has, identical to it in CeeSafe (type-system.md §28.2; ADR 0081 §2.2) | remove the declaration, with its doc comment and attributes; its call sites are left as they are |
 | N0100 | `expected ';'`, with no earlier error in the file, after a declaration, assignment, `return`, or a call statement (not after an expression that cannot be a statement, N0225) | insert `;` after the previous token |
 | N0100 | `::` (`grammar.md` §1.7), wherever it stands and whatever else the file has | `::` → `.`; before `<` (`f::<T>()`), remove it |
@@ -745,10 +750,23 @@ answers always match the compiler that gives them.
 
 Every tool that compiles takes its program as either
 - `files`: an array of `{ "path": "main.cee", "text": "…" }`, compiled as one package, with nothing read from disk; or
-- `paths`: an array of `.cee` file paths, read from disk relative to the server's working directory;
+- `paths`: an array of `.cee` file paths, read from disk relative to the server's working directory; or
+- `package` (ADR 0208): a directory, relative to the server's working directory (`"."` is it). The program is the
+  package of the nearest `ceesafe.toml` at or above it, with every package of its lock: their sources read from disk,
+  never fetching, as `check --offline` resolves them (§4.4).
 
-plus `profile` (`hosted`, the default, or `freestanding`) and `noFloat` (default false). Paths in results are the
-paths given.
+With `files` or `paths`, also `profile` (`hosted`, the default, or `freestanding`) and `noFloat` (default false), and
+paths in results are the paths given. The files are one package of their own: no manifest is read, so a package with
+dependencies is given as `package`.
+
+With `package`:
+- the profile, `no-float` and the kernel are the root manifest's; `profile`, `noFloat` or `paths` beside it is
+  `InvalidParams`;
+- a `files` entry whose path, taken from the server's working directory, names a source of the root package replaces
+  that file's text for the call (an edit checked before it is written); one that names no such source is a tool error;
+- a file is named in results by its path relative to the server's working directory, with `/`;
+- no manifest, or a manifest or lock that does not resolve (N0324, a dependency not fetched), is a tool error with the
+  first diagnostic's message. Nothing is fetched or written.
 
 `embed` and `embedText` (`type-system.md` §10.1) read files relative to the source's file on disk: a `paths` file
 embeds below its own directory, and a `files` source, which is no file, embeds nothing (N0362). The server reads
@@ -759,7 +777,7 @@ nothing else for them.
 | Tool | Input (besides §6.2) | Result |
 |---|---|---|
 | `ceesafe_check` | | the diagnostics document of §5.1, with fixes |
-| `ceesafe_fix` | | `files`: each file's text with every fix applied, over rounds as `ceesafec fix` does (§5.3); `applied`: the number of fixes; `diagnostics`: what remains. Nothing is written to disk |
+| `ceesafe_fix` | | `files`: each file's text with every fix applied, over rounds as `ceesafec fix` does (§5.3), and with `package` only the root package's files that a fix changed (fixes in a dependency are not applied); `applied`: the number of fixes; `diagnostics`: what remains. Nothing is written to disk |
 | `ceesafe_format` | `text`, `path` (optional) | `text`: formatted (`formatting.md`); or an error with the syntax diagnostics |
 | `ceesafe_run` | `stdin` (text), `args`, `maxSteps` (default 10,000,000), `maxOutputBytes` (default 65,536) | `outcome` (`exited`, `panicked`, `fault`, `not-compiled`), `exitCode`, `stdout`, `stderr`, `truncated`, and the diagnostics if it did not compile |
 | `ceesafe_emit_c` | `explain`: any of `allocations`, `bounds-checks`, `overflow-checks` | `files`: the generated C (`main.c`, and `ceesafe_exports.h` when there is one; not the runtime); `explanations`: the `--explain-*` text |
@@ -767,7 +785,7 @@ nothing else for them.
 | `ceesafe_spec_search` | `query`, `limit` (default 10) | `results`: the sections whose heading or text contain every word of the query, best first: `document`, `heading`, `snippet`, `uri` |
 | `ceesafe_spec_section` | `document` (`type-system`, `grammar`, …), `section` (`31.2`, or heading text) | `text` of that section, with its subsections |
 | `ceesafe_symbol` | `path`, `line`, `column` (1-based) | the type or signature under the position, and its declaration's location, as hover and definition give them (§2.2) |
-| `ceesafe_api` | `name`: a type (`TextWriter`), a member (`TextWriter.decimal`) or a bare member name (`decimal`) | `results`: the entries of `spec/api/core.md`, `spec/api/std.md` and `guide/builtins.md` that document the name (`document`, `heading`, `text`): a type's whole section, a member's entry, or the built-in table rows naming it. With no entry, `suggestions`: up to eight names, the closest by edit distance, the type's real members for `Type.member`, and the entries whose text mentions the member's name |
+| `ceesafe_api` | `name`: a type (`TextWriter`), a member (`TextWriter.decimal`) or a bare member name (`decimal`) | `results`: the entries of `spec/api/core.md`, `spec/api/std.md` and `guide/builtins.md` that document the name (`document`, `heading`, `text`): a type's whole section, a member's entry, or the built-in table rows naming it. With no entry, `suggestions`: up to eight names, the closest by edit distance (for `Type.member`, that type's close members first: `Console.WriteLine` gives `Console.writeLine`), the type's real members for `Type.member`, and the entries whose text mentions the member's name |
 
 `ceesafe_run` runs the program in the interpreter (`run --interp`) **sandboxed**:
 - files, sockets and processes are refused (a fault that names the refusal);

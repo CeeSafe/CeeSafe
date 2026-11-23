@@ -2,7 +2,7 @@
 title: Result, ? and !
 summary: A function that can fail returns a Result, either Ok with a value or Err with a reason. Matching one, passing an error on with ?, unwrapping with !, your own error enum, converting with @from, and the ignored Result.
 assumes: [ch06-01-defining-an-enum, ch06-02-match, ch06-03-optionals, ch09-01-panics]
-keywords: [Result, Ok, Err, "?", "!", "@from", error, enum, match, isOk, isErr, ok, err, okOr, "let _", "--deny-warnings"]
+keywords: [Result, Ok, Err, "?", "!", "@from", error, enum, match, isOk, isErr, ok, err, map, mapErr, okOr, "let _", "--deny-warnings"]
 diagnostics: [N0260, N0261, N0402]
 specification: ["type-system.md §17"]
 ---
@@ -310,13 +310,18 @@ inside a `Result` to another type; where `@from` does not fit, `match` and build
 
 ## Asking without matching
 
-A `Result` has four methods for the cases where a `match` is more than you need:
+A `Result` has six methods for the cases where a `match` is more than you need:
 
 | Method | Gives |
 |---|---|
 | `r.isOk()`, `r.isErr()` | a `bool` |
 | `r.ok()` | the value as an optional `T?`: `null` for an `Err`. The error is thrown away |
 | `r.err()` | the error as an optional `E?`: `null` for an `Ok` |
+| `r.map(f)` | a `Result<U, E>`: `Ok(f(value))` for an `Ok`, the same `Err` otherwise |
+| `r.mapErr(f)` | a `Result<T, F>`: `Err(f(error))` for an `Err`, the same `Ok` otherwise |
+
+`f` is a function's name or a closure, `parse(text).map((n) => n * 2)`, and the new type comes from it. That type
+cannot be one that borrows, such as a `StringView`: use a `match` for those.
 
 `o.okOr(e)` goes the other way: it turns an optional into a `Result`, with `e` as the error for `null`.
 

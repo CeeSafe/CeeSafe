@@ -1,0 +1,14 @@
+// `r.map(f)` and `r.mapErr(f)` (type-system.md §17.6, ADR 0209): a `Result<void, E>` has no value to map (N0226),
+// the new type is `Send`, so not a view (N0334), the two take one argument (N0209), and a closure's own error is the
+// one reported.
+fn parse(n: i32) -> Result<i32, bool> => if (n > 0) Ok(n) else Err(false);
+
+fn main() {
+    let u: Result<void, i32> = Ok();
+    let a = u.map((v) => 1);                 // error[N0226]
+    let b = parse(2).map((v) => "text");     // error[N0334] // error[N0274] // error[N0236]
+    let c = parse(2).map();                  // error[N0209]
+    let d = parse(2).mapErr((e) => e + 1);   // error[N0207]
+    let e = parse(2).isOk<i32>();            // error[N0209]
+    let f = parse(2).map(move (v) => v + 1); // error[N0265]
+}

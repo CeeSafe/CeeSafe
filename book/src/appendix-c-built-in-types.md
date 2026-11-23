@@ -238,6 +238,8 @@ A `Result<T, E>` is either `Ok(value)` or `Err(error)`. In the rows, `r` is a re
 | `r.isOk() -> bool`, `r.isErr() -> bool` | Whether a result is `Ok`, or is `Err`. | No | [9.2](./ch09-02-result) |
 | `r.ok() -> T?` | The `Ok` value of a result as an optional. The result is consumed. | `null` when the result is `Err` | [9.2](./ch09-02-result) |
 | `r.err() -> E?` | The `Err` value of a result as an optional. The result is consumed. | `null` when the result is `Ok` | [9.2](./ch09-02-result) |
+| `r.map(f) -> Result<U, E>` | The result with `f` applied to its `Ok` value; an `Err` as it is. The result is consumed. `U` is `Send`: not a type that borrows. | No | [9.2](./ch09-02-result) |
+| `r.mapErr(f) -> Result<T, F>` | The result with `f` applied to its `Err` value; an `Ok` as it is. The result is consumed. `F` is `Send`. | No | [9.2](./ch09-02-result) |
 | `r?` | The `Ok` value of a result; on `Err`, the enclosing function returns that error. A variant marked `@from` converts the error to the function's error type. | Returns the `Err` from the function | [9.2](./ch09-02-result) |
 | `r!` | The `Ok` value of a result, for when an error would be a mistake in the program. | Panics `unwrapped an Err value` when the result is `Err` | [9.2](./ch09-02-result), [9.1](./ch09-01-panics) |
 | `match (r) { Ok(v) => { } Err(e) => { } }` | Runs one arm for a successful result, with its value, and the other for a failed one, with its error. | No | [9.2](./ch09-02-result) |

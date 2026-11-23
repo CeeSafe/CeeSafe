@@ -1409,8 +1409,14 @@ error's `@into` method), N0262 (`?` or `!` on a non-`Result`, or a misused `@fro
 - `r.isOk()` and `r.isErr()` (`borrow this`): `bool`.
 - `r.ok()`: `T?`, and `r.err()`: `E?`. Both consume `r`; the other side is destroyed.
 - `o.okOr(e)` on a `T?`: `Result<T, E>`, consuming `o`; `e` is destroyed when there is a value.
-- They are lib/core's ResultMethods<T, E> and OptionalResults<T, E>. `map` and `mapErr` are not provided: they need
-  generic methods of generic structs, which the checker does not have yet.
+- `r.map(f)`: `Result<U, E>`, `Ok(f(v))` for `Ok(v)` and the `Err` as it is; `r.mapErr(f)`: `Result<T, F>`,
+  `Err(f(e))` for `Err(e)` and the `Ok` as it is (ADR 0209). Both consume `r`. `f` is a function's name, a function
+  value or a closure, `borrow mut fn(T) -> U` (`fn(E) -> F`), and the call has `f`'s effects. `U` (`F`) is inferred
+  from `f` (§20.2), or written: `r.map<i64>(f)`. It is `Send`, as the result of any call of a function value is
+  (§25.6): a result cannot be mapped to a type that borrows, a `StringView` included (N0334); use `match` there.
+  `map` on a `Result<void, E>` is N0226 (there is no value to give `f`); `mapErr` on one is allowed, and `f` may
+  return nothing (`Result<void, E>`).
+- They are lib/core's ResultMethods<T, E>, ResultMapping<T, E>, ResultErrorMapping<T, E> and OptionalResults<T, E>.
 
 ## 18. Boxes and allocators (M3b)
 
@@ -1795,7 +1801,12 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   integer literal argument is `i32` unless the parameter type fixes it. A parameter that the
   arguments do not determine is N0265 ("write the type arguments"): the call's expected type is not used, so
   `let m: Maybe<i32> = make();` needs `make<i32>()`. A closure whose parameters have no types takes them from the
-  call (§36.2) and determines nothing: `apply(21, (x) => x + 1)` is N0265, which also offers `(x: i32) => x + 1`.
+  call (§36.2), so it is matched last (ADR 0209): once the other arguments (and, for a method, the receiver's type)
+  say what each of its parameters is, the closure is checked with those types and its result type is matched: the
+  type of an expression body, or of a block's first `return` (every other `return` must have it, N0205; a block
+  that returns no value is `void`). So `apply(21, (x) => x + 1)` has `U` = `i32`. While a parameter of the closure
+  is still open, the closure determines nothing, and neither does a `move` literal: `id((x) => x)`, for
+  `id<T>(f: fn(T) -> T)`, is N0265, which also offers `(x: i32) => x`.
 - **Values:** `Pair { first: 1, second: 2 }` infers `T` from the field values, or takes it from the
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.

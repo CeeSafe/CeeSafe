@@ -238,7 +238,7 @@ fn main() {
 ```
 
 ```text
-main.cee:3:7: error[N0234]: 'Result<Vector<i32>, AllocError>' has no method 'push'; it has 'isOk()', 'isErr()', 'ok()' and 'err()', and 'match', '?' and '!' do the rest (type-system.md §17)
+main.cee:3:7: error[N0234]: 'Result<Vector<i32>, AllocError>' has no method 'push'; it has 'isOk()', 'isErr()', 'ok()', 'err()', 'map(f)' and 'mapErr(f)', and 'match', '?' and '!' do the rest (type-system.md §17)
   |
 3 |     v.push(1)!;
   |       ^^^^

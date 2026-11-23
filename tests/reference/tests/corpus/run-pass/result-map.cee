@@ -1,0 +1,116 @@
+// `r.map(f)` and `r.mapErr(f)` (type-system.md §17.6, ADR 0209): `f` a function's name, a closure that captures, a
+// closure with a block, and written type arguments; values that own (a String in, a struct that owns out); a
+// `Result<void, E>`'s error; a function to `void`; in a generic function. A closure's result type is inferred from
+// its body once its parameters are known (§20.2), in a free function's call too.
+// expect-stdout: 6
+// expect-stdout: 1
+// expect-stdout: 14
+// expect-stdout: 2
+// expect-stdout: 100
+// expect-stdout: true
+// expect-stdout: ok
+// expect-stdout: 9
+// expect-stdout: 7
+// expect-stdout: abab
+// expect-stdout: abab
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 5
+// expect-stdout: true
+
+enum ParseError {
+    Empty,
+    Bad(u8),
+}
+
+struct Wrapped {
+    code: i32;
+}
+
+struct Named {
+    text: String;
+}
+
+fn parse(text: StringView) -> Result<i32, ParseError> {
+    if (text.length == 0) {
+        return Err(ParseError.Empty);
+    }
+    return Ok(truncate<i32>(text.length));
+}
+
+fn name(n: i32) -> Result<String, AllocError> {
+    var s = String.create();
+    for (i in 0..n) {
+        s.append("ab")?;
+    }
+    return Ok(s);
+}
+
+fn twice(x: i32) -> i64 => (x as i64) * 2;
+
+fn code(e: ParseError) -> i32 => match (e) {
+    ParseError.Empty => 1,
+    ParseError.Bad(b) => b as i32,
+};
+
+fn show(r: Result<i64, i32>) {
+    match (r) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(e) => { Console.writeLine(e); }
+    }
+}
+
+fn wrap<T: Send>(r: Result<T, i32>, extra: i32) -> Result<T, Wrapped> =>
+    r.mapErr((e) => Wrapped { code: e + extra });
+
+fn apply<T, U: Send>(x: T, f: borrow mut fn(T) -> U) -> U => f(x);
+
+fn main() {
+    show(parse("abc").map(twice).mapErr(code));
+    show(parse("").map(twice).mapErr(code));
+    let k: i64 = 10;
+    show(parse("abcd").map((v) => (v as i64) + k).mapErr((e) => code(e) + 1));
+    show(parse("").map((v) => (v as i64) + k).mapErr((e) => code(e) + 1));
+    let size = parse("ab").map((v) => {
+        if (v > 1) {
+            return 100u8;
+        }
+        return 1u8;
+    });
+    match (size) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => {}
+    }
+    match (parse("xyz").map<bool>((v) => v == 3)) {
+        Ok(b) => { Console.writeLine(b); }
+        Err(_) => {}
+    }
+    let u: Result<void, i32> = Ok();
+    match (wrap(u.mapErr((e) => e + 1), 5)) {
+        Ok(_) => { Console.writeLine("ok"); }
+        Err(w) => { Console.writeLine(w.code); }
+    }
+    let bad: Result<bool, i32> = Err(4);
+    match (wrap(bad, 5)) {
+        Ok(_) => { Console.writeLine("ok"); }
+        Err(w) => { Console.writeLine(w.code); }
+    }
+    match (name(3).map((s) => s.length + 1)) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => {}
+    }
+    match (name(2).map((s) => Named { text: s })) {
+        Ok(n) => { Console.writeLine(n.text.view()); }
+        Err(_) => {}
+    }
+    match (name(2).mapErr((e) => 7)) {
+        Ok(s) => { Console.writeLine(s.view()); }
+        Err(_) => {}
+    }
+    var total = 0;
+    let done = parse("ab").map((v) => { total += v; });
+    Console.writeLine(done.isOk());
+    Console.writeLine(total);
+    Console.writeLine(apply(4, (x) => x + 1));
+    Console.writeLine(apply(4u8, (x) => { return x == 4; }));
+}

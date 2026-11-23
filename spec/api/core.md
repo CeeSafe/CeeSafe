@@ -48,6 +48,8 @@
 - [struct MmioPtr](#struct-mmioptr)
 - [struct NumberParsing](#struct-numberparsing)
 - [struct ResultMethods](#struct-resultmethods)
+- [struct ResultMapping](#struct-resultmapping)
+- [struct ResultErrorMapping](#struct-resulterrormapping)
 - [struct OptionalResults](#struct-optionalresults)
 - [struct SliceHalves](#struct-slicehalves)
 - [struct SliceHalvesMut](#struct-slicehalvesmut)
@@ -2851,6 +2853,41 @@ public fn err(r: Result<T, E>) -> E?
 ```
 
 The `Err` value, or null; an `Ok` value is destroyed.
+
+## struct ResultMapping
+
+```ceesafe
+public struct ResultMapping<T, E>
+```
+
+`r.map(f)`, apart from `ResultMethods` so that a `Result<void, E>`, which has no value to map, has the others.
+
+### ResultMapping.map
+
+```ceesafe
+@effectsOf(f)
+public fn map<U: Send>(r: Result<T, E>, f: borrow mut fn(T) -> U) -> Result<U, E>
+```
+
+`Ok(f(v))` for `Ok(v)`; an `Err` as it is. `U` is `Send`, as any result of a call of a function value is
+(type-system.md §25.6): a type that borrows cannot be mapped to.
+
+## struct ResultErrorMapping
+
+```ceesafe
+public struct ResultErrorMapping<T, E>
+```
+
+`r.mapErr(f)`.
+
+### ResultErrorMapping.mapErr
+
+```ceesafe
+@effectsOf(f)
+public fn mapErr<F: Send>(r: Result<T, E>, f: borrow mut fn(E) -> F) -> Result<T, F>
+```
+
+`Err(f(e))` for `Err(e)`; an `Ok` as it is. `F` is `Send`, as `map`'s `U` is.
 
 ## struct OptionalResults
 

@@ -441,7 +441,7 @@ C_PROBES = [
     ("Box's functions", "let b = Box.zzz(1);", ["`Box<T>`"]),
     ("a float type's functions", "let x = f64.zzz(1);", ["Floats"]),
 ]
-C_WHOLE = ["TextSearch", "ByteSearch", "ResultMethods", "OptionalResults", "SliceSplitting", "SliceAlgorithms",
+C_WHOLE = ["TextSearch", "ByteSearch", "ResultMethods", "ResultMapping", "ResultErrorMapping", "OptionalResults", "SliceSplitting", "SliceAlgorithms",
            "VectorEditing", "VectorCopying", "StringCopying", "VectorRaw", "VectorForeign", "HashMap", "OrderedMap"]
 C_FAMILIES = [("NumberParsing", r"parse[UI]", ["parseInt", "parseIntRadix"]), ("NumberParsing", r"parseF", ["parseFloat"]),
               ("VectorBytes", r"push[UI]\d+BE", ["pushBE"]), ("VectorBytes", r"push[UI]\d+LE", ["pushLE"]),

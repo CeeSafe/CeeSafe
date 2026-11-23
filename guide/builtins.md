@@ -317,6 +317,7 @@ Medium
 | `debugAssert(cond)`, `debugAssert(cond, message)` | as `assert`, but only in debug builds, tests and the interpreter; may change nothing that exists before it ([Debugging](debugging.md#debug-assertions)) |
 | `embed("path")`, `embedText("path")` | a file's bytes as a `Slice<u8>`, or as UTF-8 text, read when the package is checked; the path is relative to the source file and stays inside the package ([Constants](basics.md#embedded-files)) |
 | `r.isOk()`, `r.isErr()`, `r.ok()`, `r.err()`, `o.okOr(e)` | a `Result`'s tests and conversions; an optional as a `Result` |
+| `r.map(f)`, `r.mapErr(f)` | a `Result` with `f` applied to its `Ok` value, or to its `Err` value; the new type is `Send` (no `StringView`) |
 | `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
 | `@into fn name(this) -> F` (a method, one per type) | `?` turns an error of the method's type into an `F` by calling it, in a function returning `Result<_, F>`; lib/std's `SendError<T>.reason()` is one |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |

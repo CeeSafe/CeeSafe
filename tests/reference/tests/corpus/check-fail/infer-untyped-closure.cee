@@ -1,12 +1,24 @@
-// A closure whose parameters have no types takes them from the call (type-system.md §36.2), so it cannot say what a
-// type parameter is: where nothing else does, that is N0265, which names the two ways out (§20.2). It was an internal
-// error (N0216) in 0.93.5. A closure whose types the other arguments settle is fine.
+// A closure whose parameters have no types takes them from the call (type-system.md §36.2). Once the other arguments
+// say what its parameters are, its body says what its result is (§20.2, ADR 0209). While one of its parameters is
+// still open it cannot say what a type parameter is: where nothing else does, that is N0265, which names the two
+// ways out. It was an internal error (N0216) in 0.93.5.
 fn apply<T, U: Send>(x: T, f: fn(T) -> U) -> U => f(x);
 
 fn keep<T>(x: T, f: fn(T) -> T) -> T => f(x);
 
+fn id<T>(f: fn(T) -> T) -> bool => true;
+
 fn main() {
-    Console.writeLine(apply(21, (x) => x + 1)); // error[N0265]
+    Console.writeLine(apply(21, (x) => x + 1));
     Console.writeLine(keep(21, (x) => x + 1));
     Console.writeLine(apply(21, (x: i32) => x + 1));
+    Console.writeLine(id((x) => x)); // error[N0265]
+    Console.writeLine(id((x: i32) => x));
+    Console.writeLine(apply(21, (x) => x + missing)); // error[N0200]
+    Console.writeLine(apply(21, (x) => {
+        if (x > 1) {
+            return 1u8;
+        }
+        return true; // error[N0205]
+    }));
 }

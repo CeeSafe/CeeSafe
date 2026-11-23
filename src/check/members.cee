@@ -951,7 +951,8 @@ fn byteStringMember(c: borrow mut Checker, value: u32, fieldType: u32) -> Result
     return c.expr(HirExpr.StringConst(stored), fieldType, span.start, span.end);
 }
 
-/// `r.isOk()`, `r.isErr()` (through a shared borrow), `r.ok()` and `r.err()` (consuming `r`) on a `Result<T, E>`: lib/core's
+/// `r.isOk()`, `r.isErr()` (through a shared borrow), `r.ok()`, `r.err()`, `r.map(f)` and `r.mapErr(f)` (consuming `r`) on a
+/// `Result<T, E>`: lib/core's
 /// ResultMethods<T, E> (ADR 0075 §2.3).
 fn checkResultMethod(
     c: borrow mut Checker,
@@ -965,35 +966,66 @@ fn checkResultMethod(
     let name = c.name(memberIdent.symbol);
     let borrows = sameText(name, "isOk") || sameText(name, "isErr");
     let consumes = sameText(name, "ok") || sameText(name, "err");
-    if (!borrows && !consumes) {
+    let mapsOk = sameText(name, "map");
+    let maps = mapsOk || sameText(name, "mapErr");
+    if (!borrows && !consumes && !maps) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, resultType)?;
         appendText(mut message, " has no method ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
         appendText(
             mut message,
-            "; it has 'isOk()', 'isErr()', 'ok()' and 'err()', and 'match', '?' and '!' do the rest (type-system.md §17)",
+            "; it has 'isOk()', 'isErr()', 'ok()', 'err()', 'map(f)' and 'mapErr(f)', and 'match', '?' and '!' do the rest (type-system.md §17)",
         )?;
         c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if (arguments.count != 0) {
+    if (!maps && !noMemberTypeArguments(c, member, span)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != (if (maps) 1 else 0)) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, memberIdent.symbol)?;
-        appendText(mut message, " takes no arguments")?;
+        appendText(mut message, if (maps) " takes one argument, the function to call" else " takes no arguments")?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
     let definition = c.types.info(resultType).enumDef;
     let types = [c.types.enums[definition as usize].resultOk, c.types.enums[definition as usize].resultErr];
-    let function = libraryFunction(c, "ResultMethods", types[..], memberIdent.symbol, span)?;
+    if (mapsOk && c.types.is(types[0], TypeKind.Void)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a ")?;
+        appendQuotedType(mut message, c, resultType)?;
+        appendText(
+            mut message,
+            " has no success value for 'map' to give the function: use 'match', or 'mapErr(f)' for its error (type-system.md §17)",
+        )?;
+        c.error(voidNotAllowed(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let holder = if (mapsOk) "ResultMapping" else if (maps) "ResultErrorMapping" else "ResultMethods";
+    let function = libraryFunction(c, holder, types[..], memberIdent.symbol, span)?;
     if (function == none()) {
         c.notPorted(span.start, span.end, "this library method", "ADR 0075")?;
         return c.errorResult(span.start, span.end);
     }
     let receiverSpan = Span { start: c.hir.exprSpans[receiver as usize].start, end: memberIdent.start };
+    if (maps) {
+        // The method's own type parameter is inferred from the argument, as in any call (§20.2).
+        let consumed = autoDeref(c, receiver)?;
+        let template = c.hir.functions[function as usize].methodTemplate;
+        let explicit = c.front.ast.typeArgumentsOfMember(member);
+        let instance = instantiateMethod(c, template, memberIdent.symbol, explicit, arguments, 1, span)?;
+        if (instance == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return checkUserCallWith(c, instance, arguments, span, consumed);
+    }
     var value = none();
     if (borrows) {
         value = sharedBorrowOf(c, receiver, resultType, receiverSpan)?;

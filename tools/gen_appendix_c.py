@@ -422,6 +422,12 @@ TABLES.append(table(
          "`null` when the result is `Err`"),
         ("`r.err() -> E?`", "The `Err` value of a result as an optional. The result is consumed.",
          "`null` when the result is `Ok`"),
+        ("`r.map(f) -> Result<U, E>`",
+         "The result with `f` applied to its `Ok` value; an `Err` as it is. The result is consumed. `U` is `Send`: not a type that borrows.",
+         NO),
+        ("`r.mapErr(f) -> Result<T, F>`",
+         "The result with `f` applied to its `Err` value; an `Ok` as it is. The result is consumed. `F` is `Send`.",
+         NO),
         ("`r?`",
          "The `Ok` value of a result; on `Err`, the enclosing function returns that error. A variant marked `@from` converts the error to the function's error type.",
          "Returns the `Err` from the function", ["ch09-02"]),
@@ -909,7 +915,7 @@ REST_ROWS = [
 # as a program writes the call, so they cannot be copied from the API pages; API_REVIEWED records the signatures the
 # rows were written from, and the page is not written while spec/api/ says otherwise.
 API_PAGES = ["spec/api/core.md", "spec/api/std.md"]
-API_STRUCTS = ["TextSearch", "ByteSearch", "ResultMethods", "OptionalResults", "SliceSplitting", "SliceAlgorithms",
+API_STRUCTS = ["TextSearch", "ByteSearch", "ResultMethods", "ResultMapping", "ResultErrorMapping", "OptionalResults", "SliceSplitting", "SliceAlgorithms",
                "VectorEditing", "VectorCopying", "StringCopying", "VectorRaw", "VectorForeign", "VectorBytes",
                "NumberParsing", "ByteOrder", "AppendFormatted", "AppendText", "SliceCopying", "HashMap", "OrderedMap"]
 API_REVIEWED = book_appendix_gen.INPUTS + "/appendix-c.api.txt"

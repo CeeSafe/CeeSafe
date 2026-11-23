@@ -697,7 +697,7 @@ fn checkSetSpawn(
     let savedCopy = c.copyCaptures;
     c.copyCaptures = true;
     c.runOnceLiteral = true;
-    let closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
+    let closure = checkClosureWith(c, literal, none(), into, true, none(), argumentSpan)?;
     c.copyCaptures = savedCopy;
     if (c.isBottom(closure)) {
         return c.errorResult(span.start, span.end);
@@ -887,7 +887,7 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, send: bool, s
         // `async move`: the child owns what it captures, moved into its frame (ADR 0033 §3.3).
         let into = c.types.dynFunctionOf(none0.view(), resultType, maskEffects(), true, false)?;
         c.runOnceLiteral = true;
-        closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
+        closure = checkClosureWith(c, literal, none(), into, true, none(), argumentSpan)?;
     } else {
         closure = checkClosure(c, literal, expected, argumentSpan)?;
     }
@@ -1268,7 +1268,7 @@ fn checkJoinChild(c: borrow mut Checker, arguments: Range, k: u32, result: u32) 
             false,
         )? else none();
         c.runOnceLiteral = true;
-        return checkClosureWith(c, literal, none(), into, true, span);
+        return checkClosureWith(c, literal, none(), into, true, none(), span);
     }
     return checkClosure(c, literal, closureType, span);
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 // The methods of `Result<T, E>` and an optional's `okOr` (ADR 0075 §2.3): `r.isOk()`, `r.isErr()`, `r.ok()`,
-// `r.err()` and `o.okOr(e)` are calls of these, instantiated with the types (src/check/members.cee).
+// `r.err()`, `r.map(f)`, `r.mapErr(f)` and `o.okOr(e)` are calls of these, instantiated with the types (src/check/members.cee).
 
 /// `Result<T, E>`'s methods.
 public struct ResultMethods<T, E> {
@@ -26,6 +26,27 @@ public struct ResultMethods<T, E> {
     public fn err(r: Result<T, E>) -> E? => match (r) {
         Ok(_) => null,
         Err(e) => Some(e),
+    };
+}
+
+/// `r.map(f)`, apart from `ResultMethods` so that a `Result<void, E>`, which has no value to map, has the others.
+public struct ResultMapping<T, E> {
+    /// `Ok(f(v))` for `Ok(v)`; an `Err` as it is. `U` is `Send`, as any result of a call of a function value is
+    /// (type-system.md §25.6): a type that borrows cannot be mapped to.
+    @effectsOf(f)
+    public fn map<U: Send>(r: Result<T, E>, f: borrow mut fn(T) -> U) -> Result<U, E> => match (r) {
+        Ok(v) => Ok(f(v)),
+        Err(e) => Err(e),
+    };
+}
+
+/// `r.mapErr(f)`.
+public struct ResultErrorMapping<T, E> {
+    /// `Err(f(e))` for `Err(e)`; an `Ok` as it is. `F` is `Send`, as `map`'s `U` is.
+    @effectsOf(f)
+    public fn mapErr<F: Send>(r: Result<T, E>, f: borrow mut fn(E) -> F) -> Result<T, F> => match (r) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(f(e)),
     };
 }
 

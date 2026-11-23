@@ -165,7 +165,7 @@ fn checkBoxCreate(
         if (dynFunction == none()) {
             return misplacedMoveLiteral(c, literalSpan);
         }
-        let environment = checkClosureWith(c, moveLiteral, none(), dynFunction, true, literalSpan)?;
+        let environment = checkClosureWith(c, moveLiteral, none(), dynFunction, true, none(), literalSpan)?;
         if (c.isBottom(environment)) {
             return c.errorResult(span.start, span.end);
         }

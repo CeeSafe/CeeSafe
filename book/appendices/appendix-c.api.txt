@@ -102,6 +102,10 @@ OrderedMap.seek	public fn seek(borrow this, key: borrow K) -> OrderedCursor?
 OrderedMap.seekAfter	public fn seekAfter(borrow this, key: borrow K) -> OrderedCursor?
 OrderedMap.valueAt	public fn valueAt(borrow this, at: OrderedCursor) -> borrow(this) V
 OrderedMap.valueAtMut	public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
+ResultErrorMapping	public struct ResultErrorMapping<T, E>
+ResultErrorMapping.mapErr	@effectsOf(f) public fn mapErr<F: Send>(r: Result<T, E>, f: borrow mut fn(E) -> F) -> Result<T, F>
+ResultMapping	public struct ResultMapping<T, E>
+ResultMapping.map	@effectsOf(f) public fn map<U: Send>(r: Result<T, E>, f: borrow mut fn(T) -> U) -> Result<U, E>
 ResultMethods	public struct ResultMethods<T, E>
 ResultMethods.err	public fn err(r: Result<T, E>) -> E?
 ResultMethods.isErr	public fn isErr(r: borrow Result<T, E>) -> bool

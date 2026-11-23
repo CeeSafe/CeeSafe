@@ -268,7 +268,13 @@ fn namesInStmt(c: borrow Checker, s: u32, parameters: borrow Vector<u32>) -> boo
 /// or borrowed mutably. With captures (or a closure type expected) it gets an environment and is a closure; without,
 /// it is a plain function value.
 fn checkClosure(c: borrow mut Checker, closure: u32, expected: u32, span: Span) -> Result<u32, AllocError> =>
-    checkClosureWith(c, closure, expected, none(), false, span);
+    checkClosureWith(c, closure, expected, none(), false, none(), span);
+
+/// CheckClosure for a literal whose parameter types are known and whose result type is not (§20.2): the unwritten
+/// parameter types are `given`'s (a function type; only its parameters are read), and the result type is the body's:
+/// an expression's type, or a block's first `return`'s.
+fn checkClosureGiven(c: borrow mut Checker, closure: u32, given: u32, span: Span) -> Result<u32, AllocError> =>
+    checkClosureWith(c, closure, none(), none(), false, given, span);
 
 /// CheckClosure with its move arguments: a move literal (§36.5) for the `dyn fn` type `moveInto`, or, when that is none
 /// (a spawned body, §38.2), with its result type inferred from the body.
@@ -278,6 +284,7 @@ fn checkClosureWith(
     expected: u32,
     moveInto: u32,
     isMoveLiteral: bool,
+    given: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
     let literal = c.front.ast.closures[closure as usize];
@@ -315,6 +322,8 @@ fn checkClosureWith(
             t = c.resolveType(p.typ, false)?;
         } else if (callable != none()) {
             t = c.types.listAt(c.types.info(callable).parameters, k);
+        } else if (given != none() && k < c.types.info(given).parameters.count) {
+            t = c.types.listAt(c.types.info(given).parameters, k);
         } else {
             let id = c.front.ast.idents[p.name as usize];
             var message = Vector<u8>.create();
@@ -395,7 +404,7 @@ fn checkClosureWith(
     var body = none();
     if (literal.block != none()) {
         // A run-once literal's block with no expected type: its result type is its first `return`'s (§38.2).
-        let infers = callable == none() && moveLiteral;
+        let infers = callable == none() && (moveLiteral || given != none());
         let savedInfer = c.inferReturn;
         let savedTries = c.inferTriesStart;
         let savedReturns = c.inferReturnsStart;
@@ -453,7 +462,7 @@ fn checkClosureWith(
     c.closureContexts.truncate(last);
     c.function = savedFunction;
     c.loopDepth = savedLoop;
-    if (callable == none() && literal.block != none() && moveLiteral && returnsValue(c, body)) {
+    if (callable == none() && literal.block != none() && (moveLiteral || given != none()) && returnsValue(c, body)) {
         // A spawned body's result is its first `return`'s type; every other `return` must have it (§38.2).
         var returned = Vector<u32>.create();
         returnTypes(c, body, mut returned)?;
@@ -462,7 +471,10 @@ fn checkClosureWith(
         for (t in returned.view()) {
             if (t != first) {
                 var message = Vector<u8>.create();
-                appendText(mut message, "this thread's body returns both ")?;
+                appendText(
+                    mut message,
+                    if (moveLiteral) "this thread's body returns both " else "this closure's block returns both ",
+                )?;
                 appendQuotedType(mut message, c, first)?;
                 appendText(mut message, " and ")?;
                 appendQuotedType(mut message, c, t)?;

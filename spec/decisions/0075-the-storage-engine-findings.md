@@ -341,7 +341,7 @@ the interpreter must give the same results.
 2. **§2.9.** `[T; 0]` is not added. C has no zero-sized object, so the type would be laid out one way in C and another
    in CeeSafe (offsetOf, the interpreter). The empty slice is spelled `[]` where a `Slice<T>` or `SliceMut<T>` is
    expected, rather than `Slice<T>.empty()`. That is what the finding asked for (`buf[0..0]`).
-3. **§2.3.** `map` and `mapErr` are left out. A generic method in a generic struct cannot name the struct's type
+3. **§2.3.** `map` and `mapErr` are left out (they are in since ADR 0209). A generic method in a generic struct cannot name the struct's type
    parameters yet (`unknown type 'T'`), and that is a checker change of its own. `isOk`, `isErr`, `ok`, `err`, `okOr`
    and `@from` are in. `@from` is recorded per `?` expression in a checker side table, so `HirExpr.Try` keeps its
    shape.

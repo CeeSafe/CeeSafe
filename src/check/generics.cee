@@ -1295,6 +1295,7 @@ fn typeArgumentsFor(
     var found = Vector<Found>.create();
     var erroneous = false;
     var untypedClosure = false;
+    var deferred = Vector<InferencePair>.create();
     for (p in pairs) {
         let value = match (c.front.ast.exprs[p.value as usize]) {
             ExprNode.MutArg(operand) => operand,
@@ -1307,6 +1308,7 @@ fn typeArgumentsFor(
         if (takesItsTypes) {
             // A closure whose parameters have no types takes them from the call (§36.2): it says nothing here.
             untypedClosure = true;
+            deferred.push(InferencePair { declared: p.declared, value: value })?;
             continue;
         }
         let mark = diagnosticsMark(c);
@@ -1318,6 +1320,13 @@ fn typeArgumentsFor(
         let actualType = c.typeOf(actual);
         unify(c, p.declared, actualType, parameters, mut found)?;
     }
+    for (p in deferred.view()) {
+        // A closure without parameter types, once the other arguments have said what its parameters are: its body
+        // gives the result type (§20.2).
+        if (inferFromClosureBody(c, p, parameters, false, mut found)?) {
+            erroneous = true;
+        }
+    }
     inferFromBounds(c, parameters, mut found)?; // ADR 0086 §2.7
     var missing = Vector<u32>.create();
     for (p in parameters) {
@@ -1327,7 +1336,11 @@ fn typeArgumentsFor(
     }
     if (missing.length > 0 && erroneous) {
         // An argument has an error of its own, reported when the arguments are checked: inferring from it would
-        // only add a misleading N0265 (ADR 0075 §2.16, G17).
+        // only add a misleading N0265 (ADR 0075 §2.16, G17). A closure without parameter types is not checked again
+        // (checkArgumentsLoosely is quiet about it), so its errors are reported here.
+        for (p in deferred.view()) {
+            inferFromClosureBody(c, p, parameters, true, mut found)?;
+        }
         return Ok(false);
     }
     if (missing.length > 0) {
@@ -1357,6 +1370,66 @@ fn typeArgumentsFor(
         out.push(foundFor(found, p))?;
     }
     return Ok(true);
+}
+
+/// Inference from a closure literal whose parameters have no written types (§20.2): when the type parameters found so
+/// far say what every such parameter is, the literal is checked with them and its result type is matched against the
+/// declared one. Nothing is inferred from a `move` literal, or while a parameter's type is still open. True when the
+/// literal has an error of its own, which is dropped (the argument is checked again) unless `report`.
+fn inferFromClosureBody(
+    c: borrow mut Checker,
+    pair: InferencePair,
+    parameters: Slice<u32>,
+    report: bool,
+    found: borrow mut Vector<Found>,
+) -> Result<bool, AllocError> {
+    let closure = match (c.front.ast.exprs[pair.value as usize]) {
+        ExprNode.Closure(x) => x,
+        _ => none(),
+    };
+    var callable = pair.declared;
+    if (c.types.is(callable, TypeKind.Reference)) {
+        callable = c.types.info(callable).pointee;
+    }
+    if (closure == none() || !isFunctionKind(c, callable)) {
+        return Ok(false);
+    }
+    let literal = c.front.ast.closures[closure as usize];
+    let declaredParameters = c.types.info(callable).parameters;
+    if (literal.isMove || literal.parameters.count != declaredParameters.count) {
+        return Ok(false);
+    }
+    // Two substitutions that differ only in what an open parameter becomes: a type that mentions one differs.
+    var withError = Vector<TypeMapping>.create();
+    var withVoid = Vector<TypeMapping>.create();
+    for (p in parameters) {
+        let known = foundFor(found, p);
+        withError.push(TypeMapping { from: p, to: if (known != none()) known else c.types.error })?;
+        withVoid.push(TypeMapping { from: p, to: if (known != none()) known else c.types.voidType })?;
+    }
+    var given = Vector<u32>.create();
+    for (k in 0..declaredParameters.count) {
+        let written = c.front.ast.closureParameters[c.front.ast.at(literal.parameters, k) as usize].typ;
+        let declared = c.types.listAt(declaredParameters, k);
+        let t = substitute(c, declared, withError.view())?;
+        let other = substitute(c, declared, withVoid.view())?;
+        if (written == none() && t != other) {
+            return Ok(false);
+        }
+        given.push(t)?;
+    }
+    let voidType = c.types.voidType;
+    let givenType = c.types.functionTo(given.view(), voidType, allEffects())?;
+    let span = c.front.ast.exprSpans[pair.value as usize];
+    let mark = diagnosticsMark(c);
+    let actual = checkClosureGiven(c, closure, givenType, span)?;
+    let erroneous = diagnosticsMark(c) > mark || c.isBottom(actual);
+    if (!report) {
+        dropDiagnosticsSince(c, mark);
+    }
+    let actualType = c.typeOf(actual);
+    unify(c, pair.declared, actualType, parameters, found)?;
+    return Ok(erroneous);
 }
 
 /// Infers type parameters the arguments left open from a bound (§20.2, ADR 0086 §2.7): for `I: J<…T…>` where `I` is

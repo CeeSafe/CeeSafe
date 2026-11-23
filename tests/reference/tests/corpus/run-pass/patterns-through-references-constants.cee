@@ -1,0 +1,57 @@
+// A constant's name on a payload or a field that is a reference is compared with what the reference refers to, as
+// a literal there is (type-system.md §15.2; ADR 0212 §6, question 2): a constant, a struct's constant, and a field
+// written alone or with its pattern. The expected lines are the arm each value takes.
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 5
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+
+const LIMIT: u32 = 10;
+const ZERO: u8 = 0;
+
+struct Limits {
+    const MAX: u32 = 99;
+}
+
+struct Entry<region r> {
+    size: borrow(r) u32;
+    kind: borrow(r) u8;
+}
+
+fn classify(n: (borrow u32)?) -> u32 => match (n) {
+    Some(LIMIT) => 1,
+    Some(Limits.MAX) => 2,
+    Some(11) => 3,
+    Some(_) => 4,
+    null => 5,
+};
+
+fn entry(e: Entry) -> u32 => match (e) {
+    Entry { size: LIMIT, kind: ZERO } => 1,
+    Entry { size: LIMIT, .. } => 2,
+    Entry { kind: ZERO, .. } => 3,
+    _ => 4,
+};
+
+fn main() {
+    let ten: u32 = 10;
+    let big: u32 = 99;
+    let eleven: u32 = 11;
+    let other: u32 = 5;
+    Console.writeLine(classify(Some(borrow ten)));
+    Console.writeLine(classify(Some(borrow big)));
+    Console.writeLine(classify(Some(borrow eleven)));
+    Console.writeLine(classify(Some(borrow other)));
+    Console.writeLine(classify(null));
+    let zero: u8 = 0;
+    let one: u8 = 1;
+    Console.writeLine(entry(Entry { size: borrow ten, kind: borrow zero }));
+    Console.writeLine(entry(Entry { size: borrow ten, kind: borrow one }));
+    Console.writeLine(entry(Entry { size: borrow other, kind: borrow zero }));
+    Console.writeLine(entry(Entry { size: borrow other, kind: borrow one }));
+}

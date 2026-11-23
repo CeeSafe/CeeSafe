@@ -1221,7 +1221,7 @@ fn checkPattern(
                     let constant = constantNamed(c, binding.name);
                     let ident = c.front.ast.idents[binding.name as usize];
                     let at = Span { start: ident.start, end: ident.end };
-                    payload.push(constantPattern(c, constant, t, at, failed)?)?;
+                    payload.push(constantPattern(c, constant, referentOf(c, t), at, failed)?)?;
                 } else if (binding.name != none()) {
                     let local = declarePatternBinding(c, binding.name, binding.mutable, t, reference, alternatives)?;
                     payload.push(c.hir.addPattern(HirPattern.Binding(local))?)?;
@@ -1257,6 +1257,8 @@ fn matchesThroughReference(c: borrow Checker, pattern: u32, t: u32) -> bool {
         PatternNode.Struct(_, _, _) => { return true; }
         PatternNode.Literal(literal) => { return !isStringLiteral(c, literal); }
         PatternNode.Range(_, _, _) => { return true; }
+        // A constant's name is its value, as a literal is (ADR 0085 §2.6).
+        PatternNode.Binding(name, mutable) => { return !mutable && constantNamed(c, name) != none(); }
         PatternNode.Or(alternatives) => {
             for (k in 0..alternatives.count) {
                 if (!matchesThroughReference(c, c.front.ast.at(alternatives, k), t)) {
@@ -1268,6 +1270,14 @@ fn matchesThroughReference(c: borrow Checker, pattern: u32, t: u32) -> bool {
         _ => { return false; }
     }
 }
+
+/// What a constant's name on a payload or field of type `t` is compared with: a reference's referent (a slice and a
+/// `StringView` are compared as they are), else `t` (ADR 0212 §6, question 2).
+fn referentOf(c: borrow Checker, t: u32) -> u32 =>
+    if (c.types.is(
+        t,
+        TypeKind.Reference,
+    ) && !c.types.isSlice(t) && !c.types.isStringView(t)) c.types.info(t).pointee else t;
 
 /// The reference a pattern under the reference payload `t` binds through: `t`'s referent, mutably only if `t` is a
 /// `borrow mut` and the match is not through a shared reference itself.
@@ -1888,7 +1898,7 @@ fn checkStructPattern(
         if (b.nested != none()) {
             let plain = match (c.front.ast.patterns[b.nested as usize]) {
                 PatternNode.Wildcard => true,
-                PatternNode.Binding(_, _) => true,
+                PatternNode.Binding(name, mutable) => mutable || constantNamed(c, name) == none(),
                 _ => false,
             };
             if (!plain && matchesThroughReference(c, b.nested, t)) {
@@ -1916,7 +1926,7 @@ fn checkStructPattern(
         } else if (!b.mutable && constantNamed(c, b.name) != none()) {
             // A field written alone is `f: f`: a constant of that name in scope is that constant (ADR 0085 §2.6).
             let constant = constantNamed(c, b.name);
-            trees[index] = constantPattern(c, constant, t, at, failed)?;
+            trees[index] = constantPattern(c, constant, referentOf(c, t), at, failed)?;
         } else {
             let local = declarePatternBinding(c, b.name, b.mutable, t, reference, alternatives)?;
             trees[index] = c.hir.addPattern(HirPattern.Binding(local))?;

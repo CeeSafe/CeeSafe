@@ -71,4 +71,5 @@ pattern position does not say. A box payload is a value, as before.
 1. Should `name @ P` on a reference payload bind `name` as the reference and match `P` through it? Not now; it is
    rare, and the refusal says what to write.
 2. Should a constant's name on a reference payload (`Some(LIMIT)` on a `borrow u32?`) match through it as a literal
-   does? Yes, as a follow-up; it is not done here.
+   does? Yes, as a follow-up. (Done 2026-11-23: a constant's name on a reference payload, and as a reference field's
+   pattern or the field written alone, is compared with the referent; run-pass/patterns-through-references-constants.)

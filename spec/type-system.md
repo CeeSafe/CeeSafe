@@ -3673,11 +3673,14 @@ Diagnostics: none new.
     a row and column, a column's headers) and its `Cell`s and `ColumnHeader`s their row and column; iOS has no
     rows, so a `Row` that holds cells is not read itself, and one that holds none (nothing, or, with a name, only
     what says it again, which is left out) is a cell as wide as the table; iOS says no place for a list's or a
-    menu's item. Where a system's part has no containers yet (ADR 0207 §2.4:
-    Android so far),
-    its list is ADR 0164's: containers are left out and what they hold is the window's, a table's `Row` is a
-    `ListItem` and a `ColumnHeader` a `Button`; a `Row` with a name holds what is in it (left out), and in one with
-    none only the `Cell`s are left out.
+    menu's item. On Android a container is a virtual view whose children are what it holds, the view's the top level's;
+    a `Group` is a `ViewGroup`, a `List`, a `Menu`, a `MenuBar` and a `TabList` a `ListView` and a `Table` a
+    `GridView`, each with a `CollectionInfo` (a list's and a menu's `rows` in one column, a menu bar's and a tab
+    list's in one row, a table's `rows` and `columns`); what a list, menu, menu bar or tab list holds, and a table's
+    `Cell`s and `ColumnHeader`s (headings), have a `CollectionItemInfo` with their place from 0, so TalkBack says "2
+    of 6, in list, 6 items" and "row 4, in grid, 10001 rows, 4 columns"; a container that holds something is not
+    focusable, pressed or under an exploring finger; a `Row` is as on iOS: one that holds cells is a `ViewGroup`,
+    one that holds none is a button across the table's columns, and what a named one holds is left out.
   - **`w.takeAccessAction() -> WindowAccessRequest?`** (`borrow mut`) is the oldest request not yet taken, or
     null; it never blocks. A `WindowAccessRequest` is `id: u64` and `action: WindowAccessAction` (`Press`, `Focus`,
     `Increment`, `Decrement`). A request is queued when something asks it of an element of the current list (not
@@ -3726,7 +3729,8 @@ Diagnostics: none new.
     (`UIAccessibilityIsVoiceOverRunning`), read when the window takes its events. A field's `caret` and `anchor`
     are not used. Android: an `org.ceesafe.window.AccessView`, a view the size of the
     window that draws nothing and takes no touch, made when the program first gives a list; its
-    `AccessibilityNodeProvider` describes the list as virtual views, children of the view in the list's order. A
+    `AccessibilityNodeProvider` describes the list as virtual views, children of the view (or of their container's
+    view, ADR 0207) in the list's order. A
     virtual view's number is the element's `id` folded to 31 bits (two of a list that fold to one number: the
     first is kept). Each says the widget its role is (`TextView`, `Button`, `CheckBox`, `RadioButton`, `EditText`,
     `SeekBar`, `Spinner`, `ImageView`; a `Tab`, a `ListItem` and a `MenuItem` are buttons), its name as its

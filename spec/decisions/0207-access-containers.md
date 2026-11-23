@@ -267,3 +267,42 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
   that row.
 - **Not checked yet**: VoiceOver on a phone, which the Simulator does not have: what it says on the way into a list or
   a group, and its reading of a table by row and column.
+
+## 11. Step 5 as implemented: Android (2026-11-23)
+
+`runtime/android/org/ceesafe/window/AccessView.java` and its dex, `runtime/hosted/ceesafe_rt_window.c` (the Android
+part), type-system.md §26.13.
+
+- **The tree**: Android was the last system without it, so the runtime no longer flattens a list for any: §7's
+  "systems without containers yet", its function and `CEE_ACCESS_TREE` are gone. The packed list carries each node's
+  container (its index, -1 for the window), `row`, `column`, `rows` and `columns`. A container is a virtual view whose
+  children are what it holds and which is their parent; the view's children are the top level's. A container that
+  holds something is not focusable, not clickable, and not under an exploring finger: TalkBack moves through what it
+  holds.
+- **Widgets**: a `Group` is a `ViewGroup`, a `List`, a `Menu`, a `MenuBar` and a `TabList` a `ListView`, a `Table` a
+  `GridView`, a `ColumnHeader` a `Button` that is a heading, a `Cell` that holds nothing a `TextView`. A `TabList` was
+  first a `TabWidget`: TalkBack then said no place for a tab, which it says only in a list or a grid. A tab stays a
+  `Button`: as `ActionBar.Tab`, the system's own class for one, TalkBack 17 says no kind at all.
+- **Counts and places**: `CollectionInfo` on a list and a menu (`rows` by 1), a menu bar and a tab list (1 by `rows`)
+  and a table (`rows` by `columns`); `CollectionItemInfo`, from 0, on what a list, menu, menu bar or tab list holds
+  (its `row`), and on a `Cell` and a `ColumnHeader` (its `row` and `column`).
+- **Rows**, as on iOS (§10), by one function for both: a `Row` that holds cells or headers is a `ViewGroup`; one that
+  holds none is a button across the table's columns, and what a named one holds is not packed.
+- **Checked on the emulator** (Android 17, API 37, arm64, Google Play image, TalkBack 17.0), the tree read as a screen
+  reader reads it (a small program run by `app_process` that connects a `UiAutomation`, as `uiautomator dump` does,
+  and prints each node's class, children, `CollectionInfo` and `CollectionItemInfo`), and TalkBack's speech from its
+  own verbose log, its cursor moved by `ACTION_ACCESSIBILITY_FOCUS`. A program that gives window_check's tree and a
+  10,001 by 4 table of whole rows: the six containers with their children, counts and places (the list 40 by 1 with
+  its items at rows 2 to 4, the tab list 1 by 2, the table 2 by 3 with three headings and three cells, the second
+  10,001 by 4 with its rows across four columns); TalkBack: "list Fruit, Pear, Button, 4 of 40", "Two, Button, 2 of 2,
+  in list Views, 2 items", "Bob, Button, row 4, in grid People, 10001 rows 4 columns"; `ACTION_CLICK` on an item and
+  on a whole row arrives as `Press`, and a container refuses it; after a second list the row that came to hold a cell
+  is a group of it.
+- **ClayWind's demo** (its desktop host packed by `claywind-pack android` with this compiler): the menu bar a list of
+  1 by 4, "Edit, Button, 2 of 4"; the tabs 1 by 5, "Tasks, Button, 4 of 5, in list, 5 items"; each listbox 6 by 1,
+  "main.c, Button, 2 of 6, in list, 6 items"; the grid 10,001 by 4 with its four headings and its visible rows across
+  the columns, "Barbara Liskov, Button, row 4, in grid, 10001 rows 4 columns", "Customer, Button, column heading, row
+  1".
+- **Not checked**: TalkBack's own gestures (a swipe to the next element, its table navigation), which cannot be
+  injected (ADR 0164 §8); a phone. iOS was built and run again with this step's runtime (the Simulator check of §10:
+  the same output).

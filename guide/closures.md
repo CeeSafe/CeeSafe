@@ -255,9 +255,52 @@ fn main() {
 ```
 
 Integers become floats with `as` when exact (`i32 as f64`) or `round<f64>(n)`; floats become integers with
-`truncate<T>(x)` (toward zero; out of range stops the program), `checkedTruncate` or `saturatingTruncate`. The math
-methods are `sqrt`, `abs`, `floor`, `ceil`, `min` and `max`. Kernel code compiles with `--no-float`, which rejects
-float types altogether.
+`truncate<T>(x)` (toward zero; out of range stops the program), `checkedTruncate` or `saturatingTruncate`. Kernel
+code compiles with `--no-float`, which rejects float types altogether.
+
+### Math methods
+
+Every float has its math as methods, in its own type: an `f32`'s results are `f32`.
+
+| Methods | What they compute |
+|---|---|
+| `sqrt`, `abs`, `floor`, `ceil`, `min(g)`, `max(g)` | correctly rounded or exact; `min` and `max` give NaN if either is NaN |
+| `trunc`, `round`, `roundEven`, `copySign(g)` | toward zero, half away from zero, half to even; `x`'s magnitude with `g`'s sign |
+| `exp`, `exp2`, `expM1`, `ln`, `log2`, `log10`, `ln1p`, `pow(y)` | `expM1` is e^x − 1 and `ln1p` is ln(1 + x), exact near 0 |
+| `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(x)` | radians; `y.atan2(x)` is the angle of the point (x, y) |
+| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `cbrt`, `hypot(g)` | `hypot` is √(x² + g²) without overflow on the way |
+| `fma(y, z)`, `remainder(g)`, `truncatingRemainder(g)` | x × y + z rounded once; IEEE's remainder (to the nearest quotient) and C's `fmod` (to the quotient toward zero) |
+| `scaleB(n)`, `logB()` | x × 2ⁿ (`n` an `i32`), and x's exponent: `x.scaleB(-truncate<i32>(x.logB()))` lies in [1, 2) |
+
+```ceesafe
+fn main() {
+    let x = 2.0;
+    Console.writeLine(x.pow(10.0));
+    Console.writeLine(1.0.exp());
+    Console.writeLine(1000.0.log10());
+    Console.writeLine(0.0.atan2(-1.0));
+    Console.writeLine(2.5.round());
+    Console.writeLine(2.5.roundEven());
+    Console.writeLine(0.1.fma(10.0, -1.0));
+    Console.writeLine((-1.0).ln());
+}
+```
+
+```text
+1024
+2.718281828459045
+3
+3.141592653589793
+3
+2
+5.551115123125783e-17
+NaN
+```
+
+The transcendental ones (from `exp` to `logB` in the table) are the C library's functions, so a result's last bit
+is the platform's, and the interpreter gives the same as the build. They follow C: `(-1.0).ln()` is NaN, `0.0.ln()`
+is `-Infinity`, `1000.0.exp()` is `Infinity`, and none panics. `--profile freestanding` has only the others: the
+kernel has no C library.
 
 ## Next
 

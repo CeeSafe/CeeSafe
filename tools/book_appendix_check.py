@@ -534,7 +534,7 @@ def _appendix_c(root, ceesafec, where):
     numbers = read(root, "src/check/io.cee")
     for function, part, least in (("integerMethodNames", "Integers", 15), ("floatMethodNames", "Floats", 5)):
         body = between(numbers, f"fn {function}(", ";\n", "src/check/io.cee")
-        texts = re.findall(r'"([A-Za-z ]+)"', body)
+        texts = re.findall(r'"([A-Za-z0-9 ]+)"', body)  # digits: `log10`, `atan2` (ADR 0218)
         names = at_least(texts[0].split() if len(texts) == 1 else [], least,
                          f"the names of {function} (src/check/io.cee)")
         need(names, f"{function} (src/check/io.cee)", [part], all_of_it=True)

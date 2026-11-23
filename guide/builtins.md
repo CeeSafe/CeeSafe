@@ -324,6 +324,8 @@ Medium
 | `checkedTruncate<T>(x)`, `saturatingTruncate<T>(x)` | an integer or a float to an integer `T`: a `T?` that is `null` where `T` cannot hold the value (where `truncate` would wrap an integer or panic on a float); the nearest bound of `T` (NaN gives 0) |
 | `round<T>(x)` | to a float type, rounding to nearest |
 | `f.sqrt()`, `f.abs()`, `f.floor()`, `f.ceil()`, `f.min(g)`, `f.max(g)`, `f.bits()` | floats |
+| `f.trunc()`, `f.round()`, `f.roundEven()`, `f.copySign(g)` | floats: toward zero, half away from zero, half to even; `f`'s magnitude with `g`'s sign |
+| `f.exp()`, `f.exp2()`, `f.expM1()`, `f.ln()`, `f.log2()`, `f.log10()`, `f.ln1p()`, `f.pow(g)`, `f.sin()`, `f.cos()`, `f.tan()`, `f.asin()`, `f.acos()`, `f.atan()`, `f.atan2(g)`, `f.sinh()`, `f.cosh()`, `f.tanh()`, `f.asinh()`, `f.acosh()`, `f.atanh()`, `f.cbrt()`, `f.hypot(g)`, `f.fma(g, h)`, `f.remainder(g)`, `f.truncatingRemainder(g)`, `f.scaleB(n)`, `f.logB()` | floats: the C library's functions, hosted only ([Math methods](closures.md#math-methods)) |
 
 ```ceesafe
 fn main() {

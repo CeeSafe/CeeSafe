@@ -102,6 +102,16 @@ The float types are `f32` and `f64`. In the rows, `f` and `g` are two floats of 
 | `f.abs() -> T` | A float with its sign cleared. | No | [20.4](./ch20-04-arithmetic) |
 | `f.floor() -> T`, `f.ceil() -> T` | The nearest whole value below or above a float, still as a float. | No | [20.4](./ch20-04-arithmetic) |
 | `f.min(g: T) -> T`, `f.max(g: T) -> T` | The smaller or the larger of two floats; NaN if either is NaN. | No | [20.4](./ch20-04-arithmetic) |
+| `f.trunc() -> T`, `f.round() -> T`, `f.roundEven() -> T` | The nearest whole value toward zero, or the nearest with halves away from zero or to even, still as a float. | No | – |
+| `f.copySign(g: T) -> T` | A float with the magnitude of `f` and the sign of `g`. | No | – |
+| `f.exp() -> T`, `f.exp2() -> T`, `f.expM1() -> T`, `f.pow(g: T) -> T` | e or 2 to the power `f`, e to the power `f` minus 1, and `f` to the power `g`: the C library's functions, not in the freestanding profile, as every method from here to `logB`. | No | – |
+| `f.ln() -> T`, `f.log2() -> T`, `f.log10() -> T`, `f.ln1p() -> T` | The logarithm of a float in base e, 2 or 10, and the natural logarithm of 1 plus `f`. | No | – |
+| `f.sin() -> T`, `f.cos() -> T`, `f.tan() -> T`, `f.asin() -> T`, `f.acos() -> T`, `f.atan() -> T`, `f.atan2(x: T) -> T` | Trigonometry in radians; `y.atan2(x)` is the angle of the point (x, y). | No | – |
+| `f.sinh() -> T`, `f.cosh() -> T`, `f.tanh() -> T`, `f.asinh() -> T`, `f.acosh() -> T`, `f.atanh() -> T` | The hyperbolic functions and their inverses. | No | – |
+| `f.cbrt() -> T`, `f.hypot(g: T) -> T` | The cube root, and the square root of `f` squared plus `g` squared without overflow on the way. | No | – |
+| `f.fma(g: T, h: T) -> T` | `f` times `g` plus `h`, rounded once. | No | – |
+| `f.remainder(g: T) -> T`, `f.truncatingRemainder(g: T) -> T` | What is left after dividing by `g`, the quotient rounded to nearest (IEEE) or toward zero (C's `fmod`). | No | – |
+| `f.scaleB(n: i32) -> T`, `f.logB() -> T` | `f` times 2 to the power `n`, and the exponent of `f` as a float. | No | – |
 | `f.bits() -> u32` (`f32`), `f.bits() -> u64` (`f64`) | The IEEE 754 bit pattern of a float as an unsigned integer. | No | – |
 | `f32.fromBits(u: u32) -> f32`, `f64.fromBits(u: u64) -> f64` | The float that has the bit pattern `u`. Every pattern is a value, and some are NaN. | No | – |
 

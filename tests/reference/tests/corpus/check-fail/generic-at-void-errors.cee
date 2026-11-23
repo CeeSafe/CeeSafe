@@ -1,0 +1,35 @@
+// Where `void` for a type parameter has no meaning (type-system.md §20.4, ADR 0213): a struct's field, and a
+// variant's payload beside others. Each is N0226 where the instance is used, written or inferred; before, the
+// inferred ones reached the C compiler. A unit variant takes no value, or a `void` one (N0209).
+struct Holder<T> {
+    value: T;
+    count: u32;
+}
+
+enum Two<T> {
+    Both(T, u32),
+    Neither,
+}
+
+enum Maybe<T> {
+    Just(T),
+    Nothing,
+}
+
+fn hold<T>(r: Result<T, i32>) -> Holder<T>? => match (r) {
+    Ok(v) => Some(Holder<T> { value: v, count: 1 }),
+    Err(_) => null,
+};
+
+fn two<T>(r: Result<T, i32>) -> Two<T> => match (r) {
+    Ok(v) => Two<T>.Both(v, 1),
+    Err(_) => Two<T>.Neither,
+};
+
+fn main() {
+    let r: Result<void, i32> = Ok();
+    let h = hold(r); // error[N0226]
+    let s: Result<void, i32> = Ok();
+    let t = two(s);              // error[N0226]
+    let m = Maybe<void>.Just(3); // error[N0209]
+}

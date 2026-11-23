@@ -133,7 +133,7 @@ Semantic checks run only when every file parsed without errors.
 | N0223 | *(unassigned)* | |
 | N0224 | Value of type `void` used as a value, or a `let` of a `never` expression | `let d = nothing();` |
 | N0225 | Expression statement that is not a call, an `await`, or `?` or `!` (ADR 0138 §5) | `1 + 2;` |
-| N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
+| N0226 | `void` used other than as a return type, or `never` other than as a function's return type; since ADR 0213 an instance at `void` of a generic struct with a field of that type, or of a generic enum whose variant would have a `void` payload beside others (a variant's one `void` payload makes a unit variant, §20.4) | `var e: void;`, `fn f(x: never)`, `Pair<void>` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6) | `struct Node { next: Node; }` |
 | N0228 | Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107) | `struct D { a: i32; a: i64; }` |
 | N0229 | Struct literal does not initialise every field; a struct pattern without `..` does not name every field (ADR 0123) | `Point { x: 1 }` |

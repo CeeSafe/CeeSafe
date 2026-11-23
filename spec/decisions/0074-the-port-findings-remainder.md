@@ -51,7 +51,7 @@ conv(act())   // act() -> Result<void, A>: now accepted
   construction `Ok(e)` with a unit `e` keeps `e`'s effects and builds the payload-less variant. NIR, the C backend
   and the interpreter are unchanged.
 - This holds in generic instances and in ordinary code, so a generic body means the same written out by hand.
-- Not included: user generic enums instantiated at `void` (N0226), `Some(v)` with `void`.
+- Not included: user generic enums instantiated at `void` (N0226; ADR 0213 includes them), `Some(v)` with `void`.
 
 ### 2.2 `never`, a return type (§1, §15.3)
 

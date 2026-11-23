@@ -1,0 +1,75 @@
+// A generic enum instantiated at `void` (type-system.md §20.4, ADR 0213): a variant whose one payload has the type
+// `void` there is a unit variant, as the `Ok` of a `Result<void, E>`: it is made with no value or a `void` one,
+// and a pattern may bind one name to it. Written explicitly (`Outcome<void>`) and reached by inference from generic
+// code that also runs at `u32`.
+// expect-stdout: done
+// expect-stdout: failed 7
+// expect-stdout: retry
+// expect-stdout: done
+// expect-stdout: 42
+// expect-stdout: failed 3
+// expect-stdout: logged
+// expect-stdout: done
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 2
+
+enum Outcome<T> {
+    Done(T),
+    Failed(u32),
+    Retry,
+}
+
+fn outcome<T>(r: Result<T, u32>) -> Outcome<T> => match (r) {
+    Ok(v) => Outcome<T>.Done(v),
+    Err(code) => Outcome<T>.Failed(code),
+};
+
+fn finished<T>(o: borrow Outcome<T>) -> bool => o is Outcome.Done(_);
+
+fn count<T>(all: Slice<Outcome<T>>) -> u32 {
+    var done: u32 = 0;
+    for (o in all) {
+        match (o) {
+            Outcome.Done(v) => { done += 1; }
+            _ => {}
+        }
+    }
+    return done;
+}
+
+fn log() {
+    Console.writeLine("logged");
+}
+
+fn show(o: Outcome<void>) {
+    match (o) {
+        Outcome.Done() => { Console.writeLine("done"); }
+        Outcome.Failed(code) => {
+            Console.write("failed ");
+            Console.writeLine(code);
+        }
+        Outcome.Retry => { Console.writeLine("retry"); }
+    }
+}
+
+fn main() {
+    show(Outcome<void>.Done());
+    show(Outcome<void>.Failed(7));
+    show(Outcome<void>.Retry);
+    let ok: Result<void, u32> = Ok();
+    show(outcome(ok));
+    match (outcome<u32>(Ok(42))) {
+        Outcome.Done(v) => { Console.writeLine(v); }
+        _ => {}
+    }
+    let bad: Result<void, u32> = Err(3);
+    show(outcome(bad));
+    show(Outcome<void>.Done(log()));
+    let first: Outcome<void> = Outcome.Done();
+    Console.writeLine(finished(borrow first));
+    let second: Outcome<void> = Outcome.Retry;
+    Console.writeLine(finished(borrow second));
+    let all: [Outcome<void>; 3] = [Outcome.Done(), Outcome.Retry, Outcome.Done()];
+    Console.writeLine(count(all[..]));
+}

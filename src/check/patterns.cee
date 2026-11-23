@@ -45,6 +45,9 @@ fn isUnitPayload(c: borrow Checker, typ: u32, variant: u32) -> bool {
     if (!c.types.is(typ, TypeKind.Enum)) {
         return false;
     }
+    if (c.types.variants[variant as usize].unit) {
+        return true; // a generic enum's instance at `void` (ADR 0213)
+    }
     let d = borrow c.types.enums[c.types.info(typ).enumDef as usize];
     return d.resultOk != none() && c.types.is(d.resultOk, TypeKind.Void) && d.variants.length > 0 &&
         d.variants[0] == variant;
@@ -187,6 +190,35 @@ fn checkEnumValue(
         return c.errorResult(span.start, span.end);
     }
     let count = payloadCount(c, variant);
+    if (count == 0 && arguments.count == 1 && isUnitPayload(c, typ, variant)) {
+        // `Maybe<T>.Just(v)` in an instance at `void` (§20.4, ADR 0213): `v` is a `void` value, erased; its effects
+        // are kept.
+        let argument = c.front.ast.at(arguments, 0);
+        let payload = synth(c, argument, none())?;
+        if (c.isBottom(payload) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            return c.errorResult(span.start, span.end);
+        }
+        if (!c.types.is(c.typeOf(payload), TypeKind.Void) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            let argumentSpan = c.front.ast.exprSpans[argument as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "'")?;
+            appendVariantName(mut message, c, typ, variant)?;
+            appendText(mut message, "' takes no value, or a 'void' one, but this has type ")?;
+            appendQuotedType(mut message, c, c.typeOf(payload))?;
+            c.error(argumentCount(), argumentSpan.start, argumentSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let value = c.expr(HirExpr.EnumValue(variant, emptyRange()), typ, span.start, span.end)?;
+        if (isUnitValue(c, payload)) {
+            return Ok(value);
+        }
+        var statements = Vector<u32>.create();
+        statements.push(c.hir.addStmt(HirStmt.Expression(payload), span.start, span.end)?)?;
+        statements.push(c.hir.addStmt(HirStmt.Yield(value), span.start, span.end)?)?;
+        let list = c.hir.list(statements.view())?;
+        let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+        return c.expr(HirExpr.StmtValue(block), typ, span.start, span.end);
+    }
     if (arguments.count as usize != count) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;

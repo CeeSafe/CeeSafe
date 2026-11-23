@@ -209,7 +209,8 @@ fn resolveRegionItemType(
         // A `dyn I` argument is allowed where the instance holds it only behind references (ADR 0064 §3.1), checked
         // on the instance below.
         c.dynAllowed = true;
-        let t = c.resolveType(argumentSyntax, false)?;
+        // `void` for a generic enum's parameter makes unit variants (ADR 0213); a struct's field cannot be `void`.
+        let t = c.resolveType(argumentSyntax, !isStruct)?;
         c.dynAllowed = false;
         if (c.types.isBottom(t)) {
             return Ok(c.types.error);

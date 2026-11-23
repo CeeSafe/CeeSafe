@@ -347,8 +347,22 @@ fn resolveStructPart(c: borrow mut Checker, index: u32, fields: bool, functions:
         c.allowImported = true; // C state by value (§33.1)
         let savedSelf = c.selfType;
         c.selfType = entry.typ; // `Self` in the body (ADR 0086 §2.2)
-        let resolved = c.resolveType(field.typ, false)?;
+        var resolved = c.resolveType(field.typ, false)?;
         c.selfType = savedSelf;
+        if (c.types.is(resolved, TypeKind.Void) && entry.template != none()) {
+            // An instance at `void` (ADR 0213): a field holds a value, and `void` has none.
+            let fieldName = c.front.ast.idents[field.name as usize].symbol;
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, entry.typ)?;
+            appendText(mut message, ": the field ")?;
+            appendQuotedName(mut message, c, fieldName)?;
+            appendText(
+                mut message,
+                " would have the type 'void'; a struct cannot be used with 'void' for a type parameter one of its fields has (type-system.md §20.4)",
+            )?;
+            c.error(voidNotAllowed(), typeSpan.start, typeSpan.end, message)?;
+            resolved = c.types.error;
+        }
         let typ = checkMemberType(c, resolved, typeSpan, "a struct field", "struct", declarationName, hasRegions)?;
         let id = c.front.ast.idents[field.name as usize];
         if (containsSymbol(memberNames, id.symbol)) {
@@ -527,7 +541,15 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
 fn addVariant(c: borrow mut Checker, definition: u32, name: u32, start: u32, end: u32) -> Result<u32, AllocError> {
     let index = truncate<u32>(c.types.enums[definition as usize].variants.length);
     c.types.variants.push(
-        EnumVariant { name: name, index: index, start: start, end: end, payload: Vector<u32>.create(), isFrom: false },
+        EnumVariant {
+            name: name,
+            index: index,
+            start: start,
+            end: end,
+            payload: Vector<u32>.create(),
+            isFrom: false,
+            unit: false,
+        },
     )?;
     let variant = truncate<u32>(c.types.variants.length - 1);
     c.types.enums[definition as usize].variants.push(variant)?;
@@ -629,6 +651,23 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
             c.selfType = entry.typ; // `Self` in the body (ADR 0086 §2.2)
             let resolved = c.resolveType(typeSyntax, false)?;
             c.selfType = savedSelf;
+            if (c.types.is(resolved, TypeKind.Void) && entry.template != none()) {
+                // An instance at `void` (ADR 0213): the variant's one payload is a unit, and it has no slot.
+                if (v.payload.count == 1) {
+                    c.types.variants[variant as usize].unit = true;
+                } else {
+                    var message = Vector<u8>.create();
+                    appendQuotedType(mut message, c, entry.typ)?;
+                    appendText(mut message, ": the variant ")?;
+                    appendQuotedName(mut message, c, id.symbol)?;
+                    appendText(
+                        mut message,
+                        " would have a 'void' payload beside others; only a variant's one payload may be 'void' (type-system.md §20.4)",
+                    )?;
+                    c.error(voidNotAllowed(), typeSpan.start, typeSpan.end, message)?;
+                }
+                continue;
+            }
             let typ = checkMemberType(
                 c,
                 resolved,

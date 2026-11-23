@@ -1898,7 +1898,12 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
     N0209.
   - The checker erases units: a unit local is no HIR local, a unit read no operand, and nothing is captured, moved,
     borrowed or destroyed for one. NIR, the C backend and the interpreter never see them.
-  - Not included: user generic enums instantiated at `void` (N0226), and `Some(v)` with `void`.
+  - **A generic enum instantiated at `void`** (ADR 0213), written (`Outcome<void>`) or inferred in generic code:
+    a variant whose **one** payload has the type `void` there is a unit variant, with no payload slot, made and
+    matched as `Ok` above: `Outcome<void>.Done()`, `Outcome<T>.Done(v)` with a unit `v`, `Outcome.Done(v) => …`.
+    Its other variants are unchanged. A variant that would have a `void` payload beside others, and a generic struct
+    with a field of the type `void`, have no meaning: N0226 where the instance is used.
+  - Not included: `Some(v)` with `void` (`void?`), and a `void` type argument of a built-in generic (`Vector<void>`).
   - A call of an instance whose signature, with `void` for a type parameter, has `void` where §2 allows none (a
     parameter, `T?`, a `Result`'s error) is N0226 at the call (ADR 0138 §7): `r.ok()` on a `Result<void, E>` is one,
     and `isOk()` tests it. The instance is never compiled.

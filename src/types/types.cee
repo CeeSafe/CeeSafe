@@ -211,6 +211,9 @@ struct EnumVariant {
     end: u32;
     payload: Vector<u32>; // TypeTable.fields
     isFrom: bool;         // `@from`: `?` converts its payload's type into the enum (ADR 0075 §2.3)
+    /// A variant of a generic enum's instance whose one payload has the type `void` there (ADR 0213): it has no
+    /// payload slot, and takes and binds a unit as the `Ok` of a `Result<void, E>` does (§20.4).
+    unit: bool;
 }
 
 struct EnumDefinition {
@@ -926,7 +929,9 @@ struct TypeTable {
             })?;
             fields.push(truncate<u32>(this.fields.length - 1))?;
         }
-        this.variants.push(EnumVariant { name: name, index: index, start: 0, end: 0, payload: fields, isFrom: false })?;
+        this.variants.push(
+            EnumVariant { name: name, index: index, start: 0, end: 0, payload: fields, isFrom: false, unit: false },
+        )?;
         return Ok(truncate<u32>(this.variants.length - 1));
     }
 

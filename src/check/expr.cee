@@ -1587,7 +1587,9 @@ fn voidMisplaced(c: borrow Checker, t: u32, top: bool, depth: u32) -> bool {
                 voidMisplaced(c, e.resultErr, false, depth + 1);
         }
     }
-    return false; // `*void` is C's pointer to anything (§27.1), and no other type holds a `void` from a parameter
+    // `*void` is C's pointer to anything (§27.1). A generic enum's instance at `void` has unit variants, and a
+    // struct's is refused where it is made (ADR 0213).
+    return false;
 }
 
 /// N0226 at the call of an instance whose signature has `void` where §2 allows none (`voidMisplacedIn`).

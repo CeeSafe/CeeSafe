@@ -299,6 +299,16 @@ fn endInstance(
         c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
         return c.front.diagnostics.error(cellOfLoans(), file, span.start, span.end, firstMessage);
     }
+    if (failed && firstCode == voidNotAllowed() && instance == none()) {
+        // A struct's or enum's instance at `void` that has no meaning (ADR 0213): the use's error.
+        for (r in c.scopedInstanceReports.view()) {
+            if (r.file == file && r.start == span.start && r.end == span.end) {
+                return Ok();
+            }
+        }
+        c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
+        return c.front.diagnostics.error(voidNotAllowed(), file, span.start, span.end, firstMessage);
+    }
     if (failed && firstCode == invalidArray() && instance == none() && startsWithBytesText(
         firstMessage.view(),
         "an array length",
@@ -1280,7 +1290,7 @@ fn typeArgumentsFor(
                 parameters[k as usize],
                 what,
                 argumentSyntax,
-            )? else c.resolveType(argumentSyntax, false)?;
+            )? else c.resolveType(argumentSyntax, true)?; // `void`: as an inferred one, checked on the instance
             if (c.types.isBottom(t)) {
                 bottom = true;
             }

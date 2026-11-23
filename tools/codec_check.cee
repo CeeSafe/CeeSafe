@@ -1,13 +1,16 @@
-// tools/codec_check.py's program (ADR 0196 §4.2): lib/std's deflate codecs on the long lists, compiled only. It reads
+// tools/codec_check.py's program (ADR 0196 §4.2): lib/std's codecs on the long lists, compiled only. It reads
 // cases from the file named by its first argument and writes what it made of each to the second; the Python side
-// says what each should be, from its oracles (Python's zlib).
+// says what each should be, from its oracles (Python's zlib; libsnappy and tools/oracles/snappy_model.py).
 //
-// A case: op (u8: 1 decode, 2 encode, 3 Adler-32), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8), a pad byte,
+// A case: op (u8: 1 decode, 2 encode, 3 Adler-32, 4 snappy decode, 5 snappy encode, 6 snappy length), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8), a pad byte,
 // limit (u64), a and b (u32: a decode's step sizes in and out, an encode's piece size and flush interval), the length
 // of the data (u32) and the data, all little-endian.
 // Its result: a decode's status (u8: 0 ok, 1 Malformed, 2 TooLarge, 3 Unsupported, 4 ChecksumMismatch, 5
 // OutOfMemory), length (u64) and CRC-32 (u32) whole, then the same decoded in steps; an encode's whole output and its
-// streamed output, each a length (u32) and the bytes; an Adler-32's value (u32) fed whole and in three pieces.
+// streamed output, each a length (u32) and the bytes; an Adler-32's value (u32) fed whole and in three pieces; a
+// snappy decode's status, length and CRC-32 as a deflate decode's, decoded onto a vector that holds a byte already
+// (status 6 if that byte changed or a refusal left output); a snappy encode's output, a length (u32) and the bytes;
+// a snappy length, a u8 (1 if the preamble is one) and the length (u64).
 
 fn readAll(path: StringView) -> Vector<u8> {
     var f = File.open(path)!;
@@ -138,6 +141,30 @@ fn main() {
             encodeStreamed(format, data, level, a, b, mut y);
             results.pushLE(truncate<u32>(y.length))!;
             results.extend(y.view())!;
+        } else if (op == 4) {
+            var x = Vector<u8>.create();
+            x.push(7)!;
+            let rx = Snappy.decompress(data, truncate<usize>(limit), mut x);
+            let kept = x[0] == 7 && (statusOf(rx) == 0 || x.length == 1);
+            results.push(if (kept) statusOf(rx) else 6)!;
+            results.pushLE((x.length - 1) as u64)!;
+            results.pushLE(Crc32.of(x[1..]))!;
+        } else if (op == 5) {
+            var x = Vector<u8>.create();
+            Snappy.compress(data, level, mut x)!;
+            results.pushLE(truncate<u32>(x.length))!;
+            results.extend(x.view())!;
+        } else if (op == 6) {
+            match (Snappy.length(data)) {
+                Some(v) => {
+                    results.push(1)!;
+                    results.pushLE(v as u64)!;
+                }
+                null => {
+                    results.push(0)!;
+                    results.pushLE(0u64)!;
+                }
+            }
         } else {
             var c = Adler32.create();
             let third = n / 3;

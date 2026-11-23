@@ -1,0 +1,272 @@
+// A mutational fuzzer for lib/std's snappy decoder and encoder (ADR 0196 §4.3), built natively with ASan and UBSan:
+//
+//   ceesafec build --cflag -fsanitize=address,undefined --cflag -fno-sanitize-recover=all
+//   CEESAFE_FUZZ_SECONDS=600 CEESAFE_FUZZ_SEED=1 out/fuzz_snappy
+//
+// (CEESAFE_FUZZ_SECONDS defaults to 60, CEESAFE_FUZZ_SEED to 1; CEESAFE_ALLOC_REPORT=1 checks that nothing leaks.)
+// Seeds: blocks libsnappy wrote, blocks of every kind of element tools/oracles/snappy_model.py wrote (literals with
+// every length tag, copies with 1, 2 and 4 byte offsets, overlapping), and lib/std's own. Each mutant (bits flipped,
+// bytes changed, inserted, deleted, repeated, zeroed, the end cut, the preamble changed) is decoded, and none of these
+// may fail:
+//  1. no input panics the decoder, nor makes the sanitizers report (either ends the run by itself);
+//  2. the output is never above the limit, the bytes already in `out` are kept, and a refusal adds none;
+//  3. a second decoder (src/reference.cee, a byte at a time from the format's description) gives the same bytes, or
+//     both refuse; and `Snappy.length` is the length its preamble states;
+//  4. now and then, random and structured data, compressed, decodes to itself, within 32 + n + n / 6 bytes, by both
+//     decoders, and its block joins the seeds.
+// A broken invariant prints the input in hex and exits 1.
+
+/// xorshift64*.
+struct Rng {
+    s: u64;
+
+    fn next(borrow mut this) -> u64 {
+        this.s = this.s ^ (this.s >> 12);
+        this.s = this.s ^ (this.s << 25);
+        this.s = this.s ^ (this.s >> 27);
+        return this.s.wrappingMul(2685821657736338717);
+    }
+
+    fn below(borrow mut this, n: usize) -> usize => if (n == 0) 0 else truncate<usize>(this.next() % (n as u64));
+}
+
+fn setting(name: StringView, otherwise: u64) -> u64 {
+    let text = match (Environment.variable(name)) {
+        Some(t) => t,
+        null => { return otherwise; },
+    };
+    return text.parseInt<u64>() ?? otherwise;
+}
+
+fn fail(what: StringView, input: Slice<u8>) -> never {
+    Console.write("fuzz_snappy: invariant broken: ");
+    Console.writeLine(what);
+    var line = Vector<u8>.create();
+    let digits = "0123456789abcdef".bytes();
+    for (b in input) {
+        let _ = line.push(digits[(b >> 4) as usize]);
+        let _ = line.push(digits[(b & 15) as usize]);
+    }
+    Console.writeLine(StringView.fromUtf8(line.view()) ?? "");
+    Process.exit(1);
+}
+
+fn hexDigit(c: u8) -> u8 => if (c >= 97) c - 87 else c - 48;
+
+fn unhex(pieces: Slice<StringView>) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    for (p in pieces) {
+        let b = p.bytes();
+        var k: usize = 0;
+        while (k + 1 < b.length) {
+            v.push((hexDigit(b[k]) << 4) | hexDigit(b[k + 1]))!;
+            k += 2;
+        }
+    }
+    return v;
+}
+
+fn succeeded(r: Result<void, DecodeError>) -> bool => match (r) {
+    Ok() => true,
+    Err(_) => false,
+};
+
+fn same(a: Slice<u8>, b: Slice<u8>) -> bool => a == b;
+
+/// Random bytes, runs, and copies of earlier bytes from up to 70,000 back: data an encoder finds matches in, across
+/// fragments.
+fn structured(rng: borrow mut Rng, out: borrow mut Vector<u8>) {
+    let n = if (rng.below(8) == 0) rng.below(300000) else rng.below(3000);
+    let alphabet = 2 + rng.below(255);
+    while (out.length < n) {
+        let kind = rng.below(4);
+        if (kind == 0 || out.length < 4) {
+            for (k in 0..1 + rng.below(30)) {
+                out.push(truncate<u8>(rng.below(alphabet)))!;
+            }
+        } else if (kind == 1) {
+            let b = truncate<u8>(rng.below(alphabet));
+            for (k in 0..1 + rng.below(400)) {
+                out.push(b)!;
+            }
+        } else {
+            let back = 1 + rng.below(if (out.length < 70000) out.length else 70000);
+            let length = 3 + rng.below(300);
+            for (k in 0..length) {
+                let b = out[out.length - back];
+                out.push(b)!;
+            }
+        }
+    }
+    out.truncate(n);
+}
+
+fn mutate(rng: borrow mut Rng, from: Slice<u8>, out: borrow mut Vector<u8>) {
+    out.extend(from)!;
+    let edits = 1 + rng.below(if (rng.below(3) == 0) 12 else 3);
+    for (e in 0..edits) {
+        let n = out.length;
+        let kind = rng.below(8);
+        if (n == 0 || kind == 0) {
+            let at = rng.below(n + 1);
+            out.insert(at, truncate<u8>(rng.next()))!;
+        } else if (kind == 1) {
+            let at = rng.below(n);
+            out[at] ^= truncate<u8>(1u64 << (rng.next() % 8));
+        } else if (kind == 2) {
+            let at = rng.below(n);
+            out[at] = truncate<u8>(rng.next());
+        } else if (kind == 3) {
+            let at = rng.below(n);
+            let count = 1 + rng.below(if (n - at < 16) n - at else 16);
+            for (k in 0..count) {
+                let _ = out.remove(at);
+            }
+        } else if (kind == 4) {
+            out.truncate(rng.below(n));
+        } else if (kind == 5) {
+            let at = rng.below(n);
+            let count = 1 + rng.below(if (n - at < 64) n - at else 64);
+            let to = rng.below(out.length + 1);
+            for (k in 0..count) {
+                let b = out[at + k];
+                out.insert(to + k, b)!;
+            }
+        } else if (kind == 6) {
+            let at = rng.below(n);
+            let count = 1 + rng.below(if (n - at < 8) n - at else 8);
+            let b: u8 = if (rng.below(2) == 0) 0 else 255;
+            for (k in 0..count) {
+                out[at + k] = b;
+            }
+        } else {
+            // A byte of the preamble, where the length is.
+            let at = rng.below(if (n < 5) n else 5);
+            out[at] = truncate<u8>(rng.next());
+        }
+    }
+}
+
+/// Invariants 2 and 3 for one input.
+fn check(rng: borrow mut Rng, input: Slice<u8>) {
+    let limit = if (rng.below(4) == 0) rng.below(3000) else 1 << 20;
+    var a = Vector<u8>.create();
+    a.push(7)!;
+    let ra = Snappy.decompress(input, limit, mut a);
+    if (a.length - 1 > limit) { fail("more output than the limit", input); }
+    if (a[0] != 7) { fail("the bytes before the output changed", input); }
+    let ok = succeeded(ra);
+    if (!ok && a.length != 1) { fail("a refusal left output behind", input); }
+    var b = Vector<u8>.create();
+    let theirs = referenceDecode(input, limit, mut b);
+    if (ok != theirs) {
+        fail(
+            if (ok) "the reference refuses what lib/std decodes" else "the reference decodes what lib/std refuses",
+            input,
+        );
+    }
+    if (ok && !same(a[1..], b.view())) { fail("the reference decodes other bytes", input); }
+    let p = referencePreamble(input);
+    let stated = Snappy.length(input);
+    match (stated) {
+        Some(v) => { if (!p.valid || v as u64 != p.value) { fail("Snappy.length differs from the preamble", input); } }
+        null => { if (p.valid) { fail("Snappy.length finds no preamble", input); } }
+    }
+}
+
+/// Invariant 4: random data decodes to itself; returns the block.
+fn roundTrip(rng: borrow mut Rng, out: borrow mut Vector<u8>) {
+    var data = Vector<u8>.create();
+    structured(rng, mut data);
+    Snappy.compress(data.view(), truncate<u32>(rng.below(10)), out)!;
+    if (out.length > 32 + data.length + data.length / 6) { fail("a block above the bound", data.view()); }
+    var back = Vector<u8>.create();
+    let r = Snappy.decompress(out.view(), data.length, mut back);
+    if (!succeeded(r) || !same(back.view(), data.view())) { fail("a round trip", data.view()); }
+    var again = Vector<u8>.create();
+    if (!referenceDecode(out.view(), data.length, mut again) || !same(again.view(), data.view())) {
+        fail("a round trip, read by the reference", data.view());
+    }
+}
+
+fn main() {
+    let seconds = setting("CEESAFE_FUZZ_SECONDS", 60);
+    let seed = setting("CEESAFE_FUZZ_SEED", 1);
+    var rng = Rng { s: seed.wrappingMul(2654435761).wrappingAdd(1) };
+    var seeds = Vector<Vector<u8>>.create();
+    // libsnappy, words 400
+    let s1 = [
+        "90031464656c7461200906287a65746120616c70686120010a1c657073696c6f6e0a0117180a74686574610a",
+        "091d050c092e012805200062110a11410d3d0d080d620540000a096e090c1120050e1173102067616d6d190e",
+        "195c112e058205990d2b05310d59018a05630995050b113a053405051512055e0105090a01ce090505651127",
+        "092209a6052d052811900964051e0d24093d0125000a01900d29000a0d0805a4092f3867616d6d6120616c70",
+        "68610a657461",
+    ];
+    seeds.push(unhex(s1[..]))!;
+    // libsnappy, runs 600
+    let s2 = ["d8040000fe0100fe01006201000001fe0100fe0100fe01008a01000003fe0100fe0100fe0100620100"];
+    seeds.push(unhex(s2[..]))!;
+    // libsnappy, message 300
+    let s3 = [
+        "ac02f0ed0db45b02a950f79e45ec933ae1882fd67d24cb7219c0670eb55c03aa51f89f46ed943be28930d77e",
+        "25cc731ac1680fb65d04ab52f9a047ee953ce38a31d87f26cd741bc26910b75e05ac53faa148ef963de48b32",
+        "d98027ce751cc36a11b85f06ad54fba249f0973ee58c33da8128cf761dc46b12b96007ae55fca34af1983fe6",
+        "8e35dc832ad1781fc66d14bb6209b057fea54cf39a41e88f36dd842bd27920c76e15bc630ab158ffa64df49b",
+        "42e99037de852cd37a21c86f16bd640bb25900a74ef59c43ea9138df862dd47b22c97017be650cb35a01a84f",
+        "f69d44eb9239e0872ed57c23ca7118bf660db45b02a946e900080fb65da2d200",
+    ];
+    seeds.push(unhex(s3[..]))!;
+    // the model's, every kind of element, words 300
+    let s4 = [
+        "ac021874686574610a620b050000001c20616c706861207a010b03100000000610000310000000200a657073",
+        "696c6f6e0a1718000000006404656c0b1900000007140000001d14000a032c0000000f2c0000000b13000000",
+        "0e1300013907390000000e050003050000000e3e000b050000000705000000000a01040209000609000a0900",
+        "0d251467616d6d612005750b2c0000000b2c0000001211000224000e24002f800000002b160000000b2c0000",
+        "00072c000000022c000e0b00000a13160000002e0b000b0a000000237f0000000e3e00063e000aa6000da60b",
+        "a600000005201618000b0a0000000a8d00038d000000031a000000111a13280000000196129600120e002324",
+        "00000003820000000e82000f77000000037700000013820000000aec000bec0000000211000b11000000",
+    ];
+    seeds.push(unhex(s4[..]))!;
+    // the model's, every kind of element, runs 300
+    let s5 = [
+        "ac02fc00000000021b010000000301000000d6010000030201007f010000002f010000000101fa01001101f8",
+        "01000002000601002e01007f0100000001011b0100000003010000002a01000101a301000000",
+    ];
+    seeds.push(unhex(s5[..]))!;
+    let fixed = seeds.length;
+    for (k in 0..10) {
+        var out = Vector<u8>.create();
+        roundTrip(mut rng, mut out);
+        seeds.push(out)!;
+    }
+    let start = Clock.monotonicNanos();
+    var inputs: u64 = 0;
+    var trips: u64 = 0;
+    while (Clock.monotonicNanos() - start < seconds * 1000000000) {
+        for (k in 0..64) {
+            let pick = rng.below(seeds.length);
+            var mutant = Vector<u8>.create();
+            mutate(mut rng, seeds[pick].view(), mut mutant);
+            check(mut rng, mutant.view());
+            inputs += 1;
+        }
+        if (rng.below(4) == 0) {
+            var out = Vector<u8>.create();
+            roundTrip(mut rng, mut out);
+            trips += 1;
+            if (out.length < 200000) {
+                let at = fixed + rng.below(seeds.length - fixed);
+                seeds[at] = out;
+            }
+        }
+    }
+    Console.write("fuzz_snappy: ");
+    Console.write(inputs);
+    Console.write(" inputs, ");
+    Console.write(trips + 10);
+    Console.write(" round trips, seed ");
+    Console.write(seed);
+    Console.write(", ");
+    Console.write(seconds);
+    Console.writeLine(" seconds: no invariant broken");
+}

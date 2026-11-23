@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Checks of lib/std's deflate codecs (ADR 0196 §4.2, phase 1) that the corpus cannot make: the corpus runs each
-program in the interpreter too, so tests/reference/tests/corpus/run-pass/deflate.cee is short. Here, compiled only:
+"""Checks of lib/std's codecs (ADR 0196 §4.2: deflate, zlib and gzip in phase 1, snappy in phase 2) that the corpus
+cannot make: the corpus runs each program in the interpreter too, so tests/reference/tests/corpus/run-pass/deflate.cee
+and snappy.cee are short. Here, compiled only:
 
 1. the long lists: zlib's streams (Python's zlib, the oracle) of six shapes of data at sizes around every block size
    (1 to 4 bytes, 258, 16 Ki symbols, 32 KiB, 64 KiB, 200 KB), raw, zlib and gzip, at every level, with every
@@ -13,8 +14,15 @@ program in the interpreter too, so tests/reference/tests/corpus/run-pass/deflate
 4. everything above run with the runtime's allocation report: no allocation may be live at the end;
 5. tools/fault_sweep.py's allocation sweep over Inflater.create, Deflater.create, the whole-buffer calls and a step:
    every allocation failure comes back as an error (OutOfMemory) and nothing leaks;
-6. with --fuzz-seconds N, the mutational fuzzer tests/fuzz/deflate (ADR 0196 §4.3) built with ASan and UBSan and run
-   for N seconds, with the allocation report; it prints how many inputs it tried.
+6. with --fuzz-seconds N, the mutational fuzzers tests/fuzz/deflate and tests/fuzz/snappy (ADR 0196 §4.3) built with
+   ASan and UBSan and run for N seconds each, with the allocation report; each prints how many inputs it tried;
+7. snappy: blocks written by libsnappy and by cramjam where they are installed, and by tools/oracles/snappy_model.py
+   (every kind of element) always, of the six shapes at sizes around the 64 KiB fragment up to 1 MiB, with limits
+   at, below and above the length; the hand-written refusals of tools/oracles/gen_snappy_cases.py; every prefix of a
+   few blocks; and mutants of them all. The expected verdict is the model's, and each library's is compared with it
+   (libsnappy must agree; cramjam's differences are counted and printed). lib/std's own blocks of every input are
+   read back by the model and the libraries, and their size is reported against libsnappy's; Snappy.length against
+   the model's preamble.
 
 usage: python3 tools/codec_check.py --compiler out/ceesafec [--quick] [--fuzz-seconds N] [--fuzz-seed S]
 """
@@ -32,6 +40,8 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "oracles"))
 import gen_deflate_cases as g  # noqa: E402
+import gen_snappy_cases as gs  # noqa: E402
+import snappy_model as sm  # noqa: E402
 from fault_injection import SANITIZER_CC  # noqa: E402  clang, or GCC where there is none
 
 ROOT = os.path.dirname(HERE)
@@ -103,6 +113,65 @@ def decode_cases(quick):
     return cases
 
 
+def snappy_decode_cases(libs, quick):
+    """(label, block, limit, expected, mutant): the expected verdict is the model's."""
+    rng = random.Random(2)
+    sizes = [0, 1, 2, 3, 4, 14, 15, 16, 17, 100, 1000, 16384, 65535, 65536, 65537, 131072, 200000, 1 << 20]
+    if quick:
+        sizes = [0, 1, 15, 1000, 65537]
+    blocks = []
+    for n in sizes:
+        for shape, data in shapes(n, rng):
+            for lib in libs:
+                blocks.append((f"{lib.path} {shape} {n}", lib.compress(data), data))
+            blocks.append((f"model {shape} {n}", sm.variety(data, n), data))
+    cases = []
+    for label, block, data in blocks:
+        n = len(data)
+        cases.append((label, block, n, sm.verdict(block, n), False))
+        if n > 0 and n % 3 == 0:
+            cases.append((label + " limit - 1", block, n - 1, "TooLarge", False))
+        if n % 5 == 1:
+            cases.append((label + " limit + 1000", block, n + 1000, sm.verdict(block, n + 1000), False))
+    for label, block, limit, refused in gs.hand_cases():
+        cases.append(("hand " + label, block, limit, sm.verdict(block, limit), False))
+    for label, block, data in blocks:
+        if len(data) in (100, 1000) and ("words" in label or "runs" in label):
+            for k in range(len(block)):
+                cases.append((f"{label} prefix {k}", block[:k], len(data), sm.verdict(block[:k], len(data)), True))
+    seeds = [b for b in blocks if len(b[2]) <= 65537]
+    for k in range(3000 if quick else 30000):
+        label, block, data = seeds[rng.randrange(len(seeds))]
+        mutant = sm.hostile(rng, block)
+        limit = len(data) if rng.random() < 0.7 else rng.randrange(0, 2 * len(data) + 2)
+        cases.append((f"{label} mutant {k}", mutant, limit, sm.verdict(mutant, limit), True))
+    return cases
+
+
+def snappy_encode_inputs(quick):
+    rng = random.Random(1951)
+    sizes = [0, 1, 2, 3, 4, 14, 15, 16, 17, 258, 1000, 65535, 65536, 65537, 200000, 1 << 20]
+    if quick:
+        sizes = [0, 15, 1000, 65537]
+    return [(f"{shape} {n}", data) for n in sizes for shape, data in shapes(n, rng)]
+
+
+def snappy_oracles(libs, cases):
+    """Each library's verdict on every case's block against the model's: (agreements, disagreements) per library."""
+    tally = {}
+    for lib in libs:
+        agree = differ = 0
+        for label, block, limit, expected, mutant in cases:
+            if sm.decode(block) == lib.decompress(block):
+                agree += 1
+            else:
+                differ += 1
+                if differ <= 3:
+                    print(f"codec_check: {lib.path} and the model differ on {label}")
+        tally[lib.path] = (agree, differ)
+    return tally
+
+
 def encode_inputs(quick):
     rng = random.Random(1950)
     sizes = [0, 1, 2, 3, 258, 1000, 16384, 65536, 65537, 200000] if not quick else [0, 3, 1000, 65537]
@@ -117,7 +186,7 @@ def build(compiler, source, exe, flags):
     return True
 
 
-SWEEP = '''// Written by tools/codec_check.py: an allocation sweep (tools/fault_sweep.py) over lib/std's deflate codecs.
+SWEEP = '''// Written by tools/codec_check.py: an allocation sweep (tools/fault_sweep.py) over lib/std's codecs.
 fn main() {
     var consistent = true;
     var data = Vector<u8>.create();
@@ -169,15 +238,31 @@ fn main() {
             Err(_) => {}
         }
     }
+    var sp = Vector<u8>.create();
+    match (Snappy.compress(data.view(), 0, mut sp)) {
+        Ok() => {
+            var back = Vector<u8>.create();
+            match (Snappy.decompress(sp.view(), 3000, mut back)) {
+                Ok() => { if (back.view() != data.view()) { consistent = false; } }
+                Err(e) => {
+                    match (e) {
+                        DecodeError.OutOfMemory(_) => { if (back.length != 0) { consistent = false; } }
+                        _ => { consistent = false; }
+                    }
+                }
+            }
+        }
+        Err(_) => { if (sp.length != 0) { consistent = false; } }
+    }
     Console.writeLine(if (consistent) "consistent" else "inconsistent");
 }
 '''
 
 
-def fuzz(compiler, work, seconds, seed):
-    """Builds tests/fuzz/deflate with the sanitizers and runs it; the number of problems."""
-    exe = os.path.join(work, "fuzz_deflate")
-    package = os.path.join(ROOT, "tests", "fuzz", "deflate")
+def fuzz(compiler, work, seconds, seed, codec):
+    """Builds tests/fuzz/<codec> with the sanitizers and runs it; the number of problems."""
+    exe = os.path.join(work, "fuzz_" + codec)
+    package = os.path.join(ROOT, "tests", "fuzz", codec)
     p = subprocess.run([compiler, "build", "-o", exe, "--cc", SANITIZER_CC, "--cflag", "-O1", "--cflag", "-g",
                         "--cflag", "-fsanitize=address,undefined", "--cflag", "-fno-sanitize-recover=all"],
                        cwd=package, capture_output=True, text=True)
@@ -192,7 +277,7 @@ def fuzz(compiler, work, seconds, seed):
     if ran.returncode != 0 or not m or m.group(2) != "0":
         print(f"codec_check: the fuzzer failed (exit status {ran.returncode}):\n{out[-4000:]}")
         return 1
-    print("codec_check: " + [line for line in out.splitlines() if line.startswith("fuzz_deflate:")][-1])
+    print("codec_check: " + [line for line in out.splitlines() if line.startswith(f"fuzz_{codec}:")][-1])
     return 0
 
 
@@ -208,6 +293,17 @@ def main():
     dcases = decode_cases(args.quick)
     einputs = encode_inputs(args.quick)
     adlers = [g.message(n, 3) for n in (0, 1, 5551, 5552, 5553, 11104, 100000)] + [bytes([255]) * 1000000]
+    slibs = sm.oracles()
+    scases = snappy_decode_cases(slibs, args.quick)
+    sinputs = snappy_encode_inputs(args.quick)
+    stally = snappy_oracles(slibs, scases)
+    for lib in slibs:
+        agree, differ = stally[lib.path]
+        print(f"codec_check: snappy, {lib.path} against the model: {agree} blocks agree, {differ} differ")
+        if isinstance(lib, sm.LibSnappy):
+            problems += differ  # the reference implementation; cramjam's differences are reported only
+    if not slibs:
+        print("codec_check: snappy, no library installed (libsnappy, cramjam): the model is the only oracle")
     with tempfile.TemporaryDirectory(prefix="ceesafe-codecs-") as work:
         exe = os.path.join(work, "codec_check")
         if not build(compiler, os.path.join(HERE, "codec_check.cee"), exe, []):
@@ -222,6 +318,12 @@ def main():
                     blob += record(2, fmt, level, 0, piece, every, data)
         for data in adlers:
             blob += record(3, "raw", 0, 0, 0, 0, data)
+        for label, block, limit, expected, mutant in scases:
+            blob += record(4, "raw", 0, limit, 0, 0, block)
+        for label, data in sinputs:
+            blob += record(5, "raw", 6, 0, 0, 0, data)
+        for label, block, limit, expected, mutant in scases:
+            blob += record(6, "raw", 0, 0, 0, 0, block)
         cases_path = os.path.join(work, "cases.bin")
         results_path = os.path.join(work, "results.bin")
         with open(cases_path, "wb") as f:
@@ -277,6 +379,49 @@ def main():
             if v1 != zlib.adler32(data) or v2 != v1:
                 wrong += 1
                 print(f"codec_check: Adler32 of {len(data)} bytes: {v1} and {v2}, zlib {zlib.adler32(data)}")
+        swrong = 0
+        STATUS6 = dict(STATUS)
+        STATUS6[6] = "output disturbed"
+        for label, block, limit, expected, mutant in scases:
+            status, length, crc = struct.unpack_from("<BQI", res, at)
+            at += 13
+            got = f"ok {length} {crc}" if status == 0 else STATUS6[status]
+            if got != expected:
+                swrong += 1
+                if swrong <= 10:
+                    print(f"codec_check: snappy {label}: expected {expected}, got {got}")
+        sours = stheirs = same = 0
+        for label, data in sinputs:
+            (n,) = struct.unpack_from("<I", res, at)
+            packed = bytes(res[at + 4:at + 4 + n])
+            at += 4 + n
+            readers = [("the model", sm.decode(packed))] + [(lib.path, lib.decompress(packed)) for lib in slibs]
+            for who, back in readers:
+                if back != data:
+                    swrong += 1
+                    if swrong <= 10:
+                        print(f"codec_check: our snappy block of {label}: {who} reads "
+                              f"{'nothing' if back is None else len(back)}")
+            if n > 32 + len(data) + len(data) // 6:
+                swrong += 1
+                print(f"codec_check: our snappy block of {label} is {n} bytes, above the bound")
+            sours += n
+            if slibs:
+                reference = slibs[0].compress(data)
+                stheirs += len(reference)
+                same += reference == packed
+        for label, block, limit, expected, mutant in scases:
+            present, value = struct.unpack_from("<BQ", res, at)
+            at += 9
+            p = sm.preamble(block)
+            if (p is None) != (present == 0) or (p is not None and p[0] != value):
+                swrong += 1
+                if swrong <= 10:
+                    print(f"codec_check: Snappy.length of {label}: {value if present else 'none'}, model {p}")
+        wrong += swrong
+        if slibs:
+            print(f"codec_check: lib/std's snappy output against {slibs[0].path}'s: {sours / max(1, stheirs):.4f} "
+                  f"of its size, {same} of {len(sinputs)} blocks byte for byte the same")
         problems += wrong
         print("codec_check: lib/std's raw deflate output against zlib's, all inputs: " +
               ", ".join(f"{lv} {ours[lv] / max(1, theirs[lv]):.3f}" for lv in range(10)))
@@ -292,10 +437,14 @@ def main():
             print("codec_check: the allocation sweep failed:\n" + "\n".join(tail[-20:]))
         sweep_line = tail[-1] if tail else ""
         if args.fuzz_seconds > 0:
-            problems += fuzz(compiler, work, args.fuzz_seconds, args.fuzz_seed)
+            for codec in ("deflate", "snappy"):
+                problems += fuzz(compiler, work, args.fuzz_seconds, args.fuzz_seed, codec)
     encodes = len(einputs) * 3 * 10 * 2
+    mutants = sum(1 for c in scases if c[4])
     print(f"codec_check: {len(dcases)} streams decoded whole and in steps, {encodes} encodings read back by zlib, "
-          f"{len(adlers)} Adler-32s, leak check and allocation sweep ({sweep_line}): {problems} problems")
+          f"{len(adlers)} Adler-32s; snappy: {len(scases)} blocks decoded ({mutants} of them prefixes and mutants), "
+          f"{len(sinputs)} encodings read back by the model{' and ' + str(len(slibs)) + ' libraries' if slibs else ''}"
+          f"; leak check and allocation sweep ({sweep_line}): {problems} problems")
     return 1 if problems else 0
 
 

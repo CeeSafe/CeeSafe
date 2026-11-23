@@ -1,0 +1,9 @@
+// ADR 0196 §2.2, phase 2: Snappy's decoder takes a limit too, so no call decodes without one; and the length its
+// preamble states is an optional, for input that does not begin with one.
+fn noLimit(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    return Snappy.decompress(input, out); // error[N0209] // error[N0205]
+}
+
+fn stated(input: Slice<u8>) -> usize => Snappy.length(input); // error[N0205]
+
+fn main() {}

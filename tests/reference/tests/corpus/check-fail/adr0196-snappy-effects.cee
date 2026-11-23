@@ -1,0 +1,16 @@
+// ADR 0196 §2.2, phase 2: Snappy's whole-buffer calls allocate, so code declared with no effect cannot call them
+// (N0295); reading the length a preamble states allocates nothing, so it can.
+@effects()
+fn decodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    return Snappy.decompress(input, 100, out); // error[N0295]
+}
+
+@effects()
+fn encodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    return Snappy.compress(input, 0, out); // error[N0295]
+}
+
+@effects()
+fn reads(input: Slice<u8>) -> usize => Snappy.length(input) ?? 0;
+
+fn main() {}

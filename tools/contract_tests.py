@@ -217,6 +217,8 @@ def main():
             ("book", py + [f"{HERE}/book_check.py", "--ceesafec", cee]),
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
             ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
+            # The language server keeps open documents in step with the package's files (tooling.md §2.2).
+            ("lsp sync", py + [f"{HERE}/lsp_sync_check.py", "--compiler", cee]),
             # The parser's messages for forms other languages write (spec/diagnostics.md): one error each.
             ("habit messages", py + [f"{HERE}/habit_messages_check.py", "--compiler", cee]),
             ("mcp package", py + [f"{HERE}/mcp_package_check.py", "--compiler", cee]),

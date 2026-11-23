@@ -66,9 +66,9 @@ extension that does (§2.4).
 ### 2.1 What a document is checked with
 
 A document that is a source of a package (a `ceesafe.toml` above it whose sources include it) is checked with its
-package, as `ceesafec check` in the package would check it (§4.4): the editor's text for the document, the package's
-other files from disk, and the dependencies its `ceesafe.lock` names, never fetching; the manifest's profile and `float`
-apply. Any other document, or one whose package does not resolve, is checked as a package of its own, with
+package, as `ceesafec check` in the package would check it (§4.4): the editor's text for the document and for every
+other file of the package that is open, the package's remaining files from disk, and the dependencies its
+`ceesafe.lock` names, never fetching; the manifest's profile and `float` apply. Any other document, or one whose package does not resolve, is checked as a package of its own, with
 `lib/core`, as `ceesafec check file.cee` would check it, using the text the editor holds. Its profile is hosted, unless
 its first line is `// profile: freestanding` (the corpus convention, `testing.md` §3).
 
@@ -77,11 +77,19 @@ under the same rules as the command line: inside the package's directory and its
 checked alone, below the document's own directory. A document whose URI is not a file on disk embeds nothing. An
 embedded file is read again at each check, so a change to it shows at the document's next change or save.
 
+**When a document is checked again.** Its own open or change checks it. A save of any open document, and a change on
+disk that the client reports (`workspace/didChangeWatchedFiles`: a source, a manifest or a lock), check every open
+document again, each with the others' texts, and publish their diagnostics: a function renamed in one file shows in
+the file that calls it. A change typed into one open document and not saved does not check the others until then:
+each check is a whole compilation of the package.
+
 ### 2.2 Capabilities
 
 | Request or notification | What the server does |
 |---|---|
-| `initialize` | Answers with the capabilities below: full-text synchronisation, hover, definition, document symbols, formatting, quick fixes |
+| `initialize` | Answers with the capabilities below: full-text synchronisation with open, close and save, hover, definition, document symbols, formatting, quick fixes |
+| `initialized` | If the client registers file watchers on request (`workspace.didChangeWatchedFiles.dynamicRegistration`), the server asks it to watch `**/*.cee`, `**/ceesafe.toml` and `**/ceesafe.lock` (`client/registerCapability`) |
+| `textDocument/didSave`, `workspace/didChangeWatchedFiles` | Checks every open document again and publishes their diagnostics (§2.1) |
 | `textDocument/didOpen`, `didChange`, `didClose` | Keeps the text; after an open or change, checks the document (§2.1) and publishes its diagnostics. A close clears them |
 | `textDocument/publishDiagnostics` (sent) | Every diagnostic of the check: its range, severity, code (`N0205`) and message, with each note as related information |
 | `textDocument/hover` | On a name or an expression: its type, as CeeSafe writes it. On a local or parameter, `let x: T` or `var x: T`; on a function or method, its signature; on a field, `name: T` |

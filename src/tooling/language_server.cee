@@ -50,6 +50,7 @@ fn writeAndFlush(bytes: Slice<u8>) {
 
 struct LspDocument {
     uri: Vector<u8>;
+    text: Vector<u8>; // what the editor holds, which every check of its package reads instead of the file (§2.1)
     compiled: Compiled;
     file: u32; // the document's source in the compilation
     hasIndex: bool;
@@ -60,6 +61,9 @@ struct LanguageServer {
     input: InputReader;
     documents: Vector<LspDocument>;
     shutdown: bool;
+    /// The client registers file watchers on request (`workspace.didChangeWatchedFiles.dynamicRegistration`), so the
+    /// server asks for the package's files once it is initialised (§2.2).
+    watchesOnRequest: bool;
 }
 
 fn compiledAst(compiled: borrow Compiled) -> borrow Frontend {
@@ -289,7 +293,12 @@ fn checkAlone(path: Slice<u8>, text: Slice<u8>) -> Result<Compiled, AllocError> 
 
 /// A document that is a source of a package (CheckInPackage): checked with the package, its other files from disk and
 /// its locked dependencies, never fetching. Null when the document is not in a package that resolves.
-fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Result<Compiled?, AllocError> {
+fn checkInPackage(
+    path: Slice<u8>,
+    text: Slice<u8>,
+    open: borrow Vector<LspDocument>,
+    file: borrow mut u32,
+) -> Result<Compiled?, AllocError> {
     if (!isRooted(path)) {
         return Ok(null);
     }
@@ -314,6 +323,19 @@ fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Res
     }
     if (!found) {
         return Ok(null);
+    }
+    // The package's other files that are open are read as the editor holds them, not from disk (§2.1).
+    for (other in open.view()) {
+        let otherPath = pathOfUri(other.uri.view());
+        if (!isRooted(otherPath.view())) {
+            continue;
+        }
+        let otherFull = joinPath("/".bytes(), otherPath.view())?;
+        for (k in 0..program.rootFiles) {
+            if (truncate<u32>(k) != file && sameBytes(program.files[k].path.view(), otherFull.view())) {
+                program.files[k].text = copyBytes(other.text.view())?;
+            }
+        }
     }
     let compiled = compileInMemory(
         program.files,
@@ -368,7 +390,7 @@ fn writeDiagnostic(json: borrow mut JsonWriter, uri: Slice<u8>, d: borrow Diagno
 fn updateDocument(server: borrow mut LanguageServer, uri: Slice<u8>, text: Slice<u8>) {
     let path = pathOfUri(uri);
     var file: u32 = 0;
-    let inPackage = checkInPackage(path.view(), text, mut file)!;
+    let inPackage = checkInPackage(path.view(), text, server.documents, mut file)!;
     let alone = inPackage == null;
     let compiled = match (inPackage) {
         Some(c) => c,
@@ -389,6 +411,7 @@ fn updateDocument(server: borrow mut LanguageServer, uri: Slice<u8>, text: Slice
     }
     let document = LspDocument {
         uri: copyBytes(uri)!,
+        text: copyBytes(text)!,
         compiled: compiled,
         file: file,
         hasIndex: hasIndex,
@@ -404,6 +427,59 @@ fn updateDocument(server: borrow mut LanguageServer, uri: Slice<u8>, text: Slice
         server.documents.push(document)!;
     }
     publishOf(server, k, uri);
+}
+
+/// Checks every open document again, each with the others' texts, and publishes their diagnostics (§2.2): after a
+/// save, or a change on disk to a file of a package, a manifest or a lock, any of them may read differently.
+fn recheckAll(server: borrow mut LanguageServer) {
+    var uris = Vector<Vector<u8>>.create();
+    var texts = Vector<Vector<u8>>.create();
+    for (d in server.documents.view()) {
+        uris.push(copyBytes(d.uri.view())!)!;
+        texts.push(copyBytes(d.text.view())!)!;
+    }
+    for (k in 0..uris.length) {
+        updateDocument(server, uris[k].view(), texts[k].view());
+    }
+}
+
+/// The request that makes the client watch the files a check reads beside the open documents (§2.2).
+fn requestWatches() {
+    var json = JsonWriter.createStrict();
+    json.startObject()!;
+    json.name("jsonrpc")!;
+    json.string("2.0")!;
+    json.name("id")!;
+    json.string("ceesafec-watched-files")!;
+    json.name("method")!;
+    json.string("client/registerCapability")!;
+    json.name("params")!;
+    json.startObject()!;
+    json.name("registrations")!;
+    json.startArray()!;
+    json.startObject()!;
+    json.name("id")!;
+    json.string("ceesafec-watched-files")!;
+    json.name("method")!;
+    json.string("workspace/didChangeWatchedFiles")!;
+    json.name("registerOptions")!;
+    json.startObject()!;
+    json.name("watchers")!;
+    json.startArray()!;
+    let patterns = ["**/*.cee", "**/ceesafe.toml", "**/ceesafe.lock"];
+    for (pattern in patterns[..]) {
+        json.startObject()!;
+        json.name("globPattern")!;
+        json.string(pattern)!;
+        json.endObject()!;
+    }
+    json.endArray()!;
+    json.endObject()!;
+    json.endObject()!;
+    json.endArray()!;
+    json.endObject()!;
+    json.endObject()!;
+    writeLspMessage(json);
 }
 
 /// Publishes the diagnostics of document `k` in its file; none when there is no such document (didClose).
@@ -473,12 +549,24 @@ fn documentUri(doc: borrow JsonDoc, parameters: u32) -> Vector<u8>? =>
 
 fn handleLsp(server: borrow mut LanguageServer, doc: borrow JsonDoc, method: Slice<u8>, parameters: u32) -> LspAnswer {
     if (sameText(method, "initialize")) {
+        let watched = doc.member(
+            doc.member(doc.member(parameters, "capabilities"), "workspace"),
+            "didChangeWatchedFiles",
+        );
+        server.watchesOnRequest = doc.boolOf(doc.member(watched, "dynamicRegistration")) ?? false;
         var json = JsonWriter.createStrict();
         json.startObject()!;
         json.name("capabilities")!;
         json.startObject()!;
         json.name("textDocumentSync")!;
+        json.startObject()!;
+        json.name("openClose")!;
+        json.boolean(true)!;
+        json.name("change")!;
         json.number(1)!; // full text on every change
+        json.name("save")!;
+        json.boolean(true)!;
+        json.endObject()!;
         json.name("hoverProvider")!;
         json.boolean(true)!;
         json.name("definitionProvider")!;
@@ -505,8 +593,18 @@ fn handleLsp(server: borrow mut LanguageServer, doc: borrow JsonDoc, method: Sli
         json.endObject()!;
         return answerJson(json);
     }
-    if (sameText(method, "initialized") || sameText(method, "$/cancelRequest") || sameText(method, "$/setTrace") ||
+    if (sameText(method, "initialized")) {
+        if (server.watchesOnRequest) {
+            requestWatches();
+        }
+        return answer("null");
+    }
+    if (sameText(method, "$/cancelRequest") || sameText(method, "$/setTrace") ||
         sameText(method, "workspace/didChangeConfiguration")) {
+        return answer("null");
+    }
+    if (sameText(method, "textDocument/didSave") || sameText(method, "workspace/didChangeWatchedFiles")) {
+        recheckAll(server);
         return answer("null");
     }
     if (sameText(method, "shutdown")) {
@@ -856,6 +954,7 @@ fn lspCommand() -> i32 {
         input: InputReader.create(),
         documents: Vector<LspDocument>.create(),
         shutdown: false,
+        watchesOnRequest: false,
     };
     let empty = JsonDoc { nodes: Vector<JsonNodeData>.create() };
     loop {

@@ -3671,16 +3671,16 @@ Diagnostics: none new.
     (`List`, `Menu`, `MenuBar`, `TabList`) or a data table (`Table`); a `TabList` has the tab bar trait, so
     VoiceOver says a tab's place; a table answers `UIAccessibilityContainerDataTable` (its counts, the element at
     a row and column, a column's headers) and its `Cell`s and `ColumnHeader`s their row and column; iOS has no
-    rows, so a `Row` that holds cells is not read itself, and one that holds none (nothing, or, with a name, only
-    what says it again, which is left out) is a cell as wide as the table; iOS says no place for a list's or a
-    menu's item. On Android a container is a virtual view whose children are what it holds, the view's the top level's;
+    rows, so a `Row` with a name is one element as wide as the table, what it holds (its cells too) left out,
+    since its name says it; one with no name is only its cells' container, or, holding nothing, an element itself;
+    iOS says no place for a list's or a menu's item. On Android a container is a virtual view whose children are what it holds, the view's the top level's;
     a `Group` is a `ViewGroup`, a `List`, a `Menu`, a `MenuBar` and a `TabList` a `ListView` and a `Table` a
     `GridView`, each with a `CollectionInfo` (a list's and a menu's `rows` in one column, a menu bar's and a tab
     list's in one row, a table's `rows` and `columns`); what a list, menu, menu bar or tab list holds, and a table's
     `Cell`s and `ColumnHeader`s (headings), have a `CollectionItemInfo` with their place from 0, so TalkBack says "2
     of 6, in list, 6 items" and "row 4, in grid, 10001 rows, 4 columns"; a container that holds something is not
-    focusable, pressed or under an exploring finger; a `Row` is as on iOS: one that holds cells is a `ViewGroup`,
-    one that holds none is a button across the table's columns, and what a named one holds is left out.
+    focusable, pressed or under an exploring finger; a `Row` is as on iOS: one with a name is a button across the
+    table's columns and what it holds is left out; one with no name that holds cells is a `ViewGroup`.
   - **`w.takeAccessAction() -> WindowAccessRequest?`** (`borrow mut`) is the oldest request not yet taken, or
     null; it never blocks. A `WindowAccessRequest` is `id: u64` and `action: WindowAccessAction` (`Press`, `Focus`,
     `Increment`, `Decrement`). A request is queued when something asks it of an element of the current list (not

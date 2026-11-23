@@ -290,23 +290,23 @@ static inline int64_t cee_access_at(const struct cee_access_node *nodes, uint32_
 #define CEE_ACCESS_CONTAINER(role) ((role) >= CEE_ACCESS_GROUP && (role) <= CEE_ACCESS_CELL)
 
 /* iOS and Android have no rows (ADR 0207 §10, §11). Whether row k of `nodes` is read whole, as one element as wide
-   as its table: it holds nothing, or it has a name and none of what it holds is a cell or a column header (what
-   it holds then says the name again, and is left out). */
+   as its table: it has a name, which says what it holds (its cells too, which are then left out with their
+   contents, as a list's row holds its text), or it holds nothing. A row with no name that holds cells is only
+   their container. */
 #if defined(CEE_WINDOW_UIKIT) || defined(__ANDROID__)
 static int cee_access_whole_row(const struct cee_access_node *nodes, uint32_t count, uint32_t k) {
     if (nodes[k].role != CEE_ACCESS_ROW) {
         return 0;
     }
-    int holds = 0;
+    if (nodes[k].label_length > 0) {
+        return 1;
+    }
     for (uint32_t j = k + 1u; j < count; j++) {
         if (nodes[j].up == k) {
-            if (nodes[j].role == CEE_ACCESS_CELL || nodes[j].role == CEE_ACCESS_COLUMN_HEADER) {
-                return 0;
-            }
-            holds = 1;
+            return 0;
         }
     }
-    return !holds || nodes[k].label_length > 0;
+    return 1;
 }
 #endif
 #define CEE_ACCESS_PRESS 0
@@ -2636,7 +2636,8 @@ static cee_id cee_ios_access_cell_at(cee_id self, cee_sel cmd, unsigned long row
         if ((unsigned long)n->row != row + 1ul || cee_ios_access_table_of(w, n->up) != (uint32_t)index) {
             continue;
         }
-        if ((n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER) && (unsigned long)n->column == column + 1ul) {
+        if ((n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER) && (unsigned long)n->column == column + 1ul &&
+            !cee_access_whole_row(w->access, w->access_count, n->up)) { /* a row read whole has left its cells out */
             return m->access_elements[k];
         }
         if (whole == NULL && cee_access_whole_row(w->access, w->access_count, k)) {
@@ -2659,7 +2660,8 @@ static cee_id cee_ios_access_column_headers(cee_id self, cee_sel cmd, unsigned l
     for (uint32_t k = (uint32_t)index + 1u; k < w->access_count && k < m->access_count; k++) {
         const struct cee_access_node *n = &w->access[k];
         if (n->role == CEE_ACCESS_COLUMN_HEADER && (unsigned long)n->column == column + 1ul &&
-            m->access_elements[k] != NULL && cee_ios_access_table_of(w, n->up) == (uint32_t)index) {
+            m->access_elements[k] != NULL && cee_ios_access_table_of(w, n->up) == (uint32_t)index &&
+            !cee_access_whole_row(w->access, w->access_count, n->up)) {
             cee_ios_send_v_id(headers, "addObject:", m->access_elements[k]);
         }
     }

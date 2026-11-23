@@ -306,3 +306,21 @@ part), type-system.md §26.13.
 - **Not checked**: TalkBack's own gestures (a swipe to the next element, its table navigation), which cannot be
   injected (ADR 0164 §8); a phone. iOS was built and run again with this step's runtime (the Simulator check of §10:
   the same output).
+
+## 12. A named row is read whole on iOS and Android (2026-11-23)
+
+`runtime/hosted/ceesafe_rt_window.c` (`cee_access_whole_row`), type-system.md §26.13.
+
+- **The rule of §10 and §11 was too narrow**: a named row was read whole only when it held no cell. ClayWind's grid
+  rows are named (their cells joined), pressed and selected; once they hold `Cell`s, which the desktop readers need to
+  move by column, the row would have been only a container on the two phones: not an element, so not pressed, and each
+  cell a stop of its own.
+- **Now**: on iOS and Android a `Row` with a name is always one element across its table's columns, and what it holds,
+  its cells and their contents too, is left out; its name says them, as §7's flattening had it and as these systems'
+  own lists read a row. A row with no name is its cells' container (a header row), or, holding nothing, an element. A
+  program that wants a reader to move by cell on a phone gives its rows no name. The desktop systems are unchanged: a
+  row is a row and holds its cells.
+- **Checked**: the Simulator and emulator programs of §10 and §11, whose second list gives a named row a cell: the row
+  stays the same element (iOS: the same object, at its row across four columns, found at each column by
+  `accessibilityDataTableCellElementForRow:column:`; Android: a button, `CollectionItemInfo` row 4 across 4, and
+  `ACTION_CLICK` arrives as `Press`), and the cell is not there; everything else reads as before.

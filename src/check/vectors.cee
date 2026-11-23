@@ -26,7 +26,7 @@ fn resolveVectorType(c: borrow mut Checker, isString: bool, arguments: Range) ->
     var element = none();
     if (!isString) {
         let elementSyntax = c.front.ast.at(arguments, 0);
-        element = c.resolveType(elementSyntax, false)?;
+        element = c.resolveElementType(elementSyntax)?;
     }
     let allocatorIndex: u32 = if (isString) 0 else 1;
     var allocator = usedSystemHeap(c);

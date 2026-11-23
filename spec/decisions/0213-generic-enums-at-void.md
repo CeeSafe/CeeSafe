@@ -80,4 +80,28 @@ N0226, at the use that makes the instance, written or inferred:
 
 1. Is "one payload only" the right limit (§2.1, §3's second option)? Yes, until a program needs more.
 2. `Vector<T>`, `Box<T>` and `T?` at an inferred `void` are not looked at here. A follow-up that asks what each does
-   today, as §1 did for user types; not done yet.
+   today, as §1 did for user types. (Done 2026-11-23, below.)
+
+## 7. The follow-up: built-in generics at an inferred `void` (2026-11-23)
+
+Asked of 0.94.4 with this ADR's change, each in a generic function called with a `Result<void, i32>`:
+
+| In the instance | `check` | The interpreter | The C build |
+|---|---|---|---|
+| `let o: T? = …` in the body | passed | ran, and `o.isSome()` was false for `Some(v)` | failed in the C compiler |
+| `Vector<T>.create()` in the body, or `-> Vector<T>` | passed | ran | failed in the C compiler |
+| `let a: [T; 2] = [x, x];` | the compiler stopped (an index out of bounds in its layout code) | | |
+| a `Slice<T>` parameter | the compiler stopped, the same way | | |
+| `-> T?` | N0226 at the call (ADR 0138 §7) | | |
+| `Box.create(x)` | N0222 at the call | | |
+
+**Decision.** There is no value of `void`, so in an instance a type parameter that is `void` cannot be part of
+another type: an optional's value, an element, a referent, or a type argument other than a `Result`'s success type
+and a generic enum's (§2). In the instance's body the type resolver refuses it where it resolves the part
+(`Checker.typeDepth`, `resolveElementType`): N0222 at the call, as any error of an instance's body. In the instance's
+signature it is refused at the call (N0226), by the check ADR 0138 §7 made for `T?` (`voidMisplaced`), now for
+elements and referents too: not where the signature is declared, since a function of an instance that is never
+called is no error (`ok` of a `Result<void, E>`'s methods returns `T?`, and `isOk()` on one must stay callable; a
+first form that refused the declaration broke seven corpus programs).
+check-fail/generic-at-void-builtins.cee and generic-at-void-signature.cee have the first three rows; the slice is
+refused by the same code.

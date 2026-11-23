@@ -25,7 +25,7 @@ fn resolveArrayType(
 ) -> Result<u32, AllocError> {
     // An array of C state is C-laid-out (C9, §33.1) and allowed where its element is.
     c.allowImported = allowImported;
-    let element = c.resolveType(elementSyntax, false)?;
+    let element = c.resolveElementType(elementSyntax)?;
     let lengthValue = arrayLengthValue(c, lengthSyntax)?; // a constant expression or a const parameter (ADR 0083, 0143)
     if (lengthValue.reported) {
         return Ok(c.types.error);
@@ -181,7 +181,7 @@ fn elementHasLayout(c: borrow Checker, typ: u32) -> Result<bool, AllocError> {
 
 /// `Slice<T>` and `SliceMut<T>`.
 fn resolveSliceType(c: borrow mut Checker, elementSyntax: u32, mutable: bool) -> Result<u32, AllocError> {
-    let element = c.resolveType(elementSyntax, false)?;
+    let element = c.resolveElementType(elementSyntax)?;
     let elementSpan = c.front.ast.typeSpans[elementSyntax as usize];
     if (!checkElement(c, element, -1, elementSpan)?) {
         return Ok(c.types.error);

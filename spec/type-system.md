@@ -923,7 +923,8 @@ and `E.V…` there are patterns.
     `match` on that reference would. `Some(Node.Items(v))` on a `borrow Node?` binds `v` as a `borrow Vector<u32>`.
     Every name under it is a reference into the referent, mutable only where the payload is a `borrow mut` and the
     match is not itself through a shared reference; nothing moves, and coverage is decided over the referent's
-    constructors. A field of a struct pattern (ADR 0123) likewise. `name @ P` there is still N0205, "this payload
+    constructors. A constant's name there is compared with the referent, as a literal is (`Some(LIMIT)` on a
+    `borrow u32?`). A field of a struct pattern (ADR 0123) likewise. `name @ P` there is still N0205, "this payload
     is a reference ('borrow E'): bind it ('Some(n)') and match on 'n' separately": the name would be the reference
     and `P` its referent. The names a refused pattern binds are declared in the arm with the error type, so their
     uses report nothing more (ADR 0195 §2.2). A slice or `StringView` payload takes string and slice patterns, which
@@ -1903,7 +1904,10 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
     matched as `Ok` above: `Outcome<void>.Done()`, `Outcome<T>.Done(v)` with a unit `v`, `Outcome.Done(v) => …`.
     Its other variants are unchanged. A variant that would have a `void` payload beside others, and a generic struct
     with a field of the type `void`, have no meaning: N0226 where the instance is used.
-  - Not included: `Some(v)` with `void` (`void?`), and a `void` type argument of a built-in generic (`Vector<void>`).
+  - There is no value of `void`, so in an instance a type parameter that is `void` cannot be part of another type:
+    an optional's value (`T?`), an element (`Vector<T>`, `[T; N]`, `Slice<T>`), a referent (`borrow T`) or any other
+    type argument but a `Result`'s success type and a generic enum's. In the instance's signature that is N0226 at
+    the call; in its body, N0222 there, as any error of an instance's body.
   - A call of an instance whose signature, with `void` for a type parameter, has `void` where §2 allows none (a
     parameter, `T?`, a `Result`'s error) is N0226 at the call (ADR 0138 §7): `r.ok()` on a `Result<void, E>` is one,
     and `isOk()` tests it. The instance is never compiled.

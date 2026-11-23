@@ -1,0 +1,35 @@
+// A type parameter that is `void` in an instance cannot be part of another type (type-system.md §20.4, ADR 0213 §6
+// question 2): an optional's value, a vector's or an array's element. In the function's body that is N0222 at the
+// call (in its signature N0226: generic-at-void-signature.cee). Before, the optional and the vector passed `check`
+// and failed in the C compiler, and the array stopped the compiler.
+fn optional<T>(r: Result<T, i32>) -> u32 {
+    let o: T? = match (r) {
+        Ok(v) => Some(v),
+        Err(_) => null,
+    };
+    return if (o.isSome()) 1 else 0;
+}
+
+fn collected<T>(r: Result<T, i32>) -> usize {
+    var v = Vector<T>.create();
+    return v.length;
+}
+
+fn paired<T: Copy>(r: Result<T, i32>) -> u32 {
+    match (r) {
+        Ok(x) => {
+            let a: [T; 2] = [x, x];
+            return 2;
+        }
+        Err(_) => { return 0; }
+    }
+}
+
+fn main() {
+    let a: Result<void, i32> = Ok();
+    Console.writeLine(optional(a)); // error[N0222]
+    let b: Result<void, i32> = Ok();
+    Console.writeLine(collected(b)); // error[N0222]
+    let d: Result<void, i32> = Ok();
+    Console.writeLine(paired(d)); // error[N0222]
+}

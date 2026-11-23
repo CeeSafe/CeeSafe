@@ -64,7 +64,7 @@ fn builtinDebugAssert() -> u32 => 33; // ADR 0087 §2.5
 fn builtinEmbed() -> u32 => 34;       // ADR 0087 §2.8
 fn builtinEmbedText() -> u32 => 35;
 fn builtinArrayFrom() -> u32 => 36; // ADR 0198 §2.2
-fn builtinSecret() -> u32 => 37; // ADR 0197 §2.2
+fn builtinSecret() -> u32 => 37;    // ADR 0197 §2.2
 fn builtinCount() -> u32 => 38;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
@@ -145,6 +145,9 @@ struct Checker {
     registerNext: bool;  // false while declaring a signature only
     genericMethod: bool; // true while declaring a struct method that has type parameters of its own (ADR 0064 §1)
     dynAllowed: bool;    // set by resolvePointee for the next type resolved (the reference's _dynAllowed)
+    /// How many type resolutions are under way: above 1, the type being resolved is part of another (an element, a
+    /// referent, a type argument), where a type parameter that is `void` in an instance has no value (ADR 0213).
+    typeDepth: u32;
     dynTables: Vector<DynTable>;
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
     asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
@@ -445,6 +448,16 @@ struct Checker {
     fn resolveType(borrow mut this, typ: u32, allowVoid: bool) -> Result<u32, AllocError> =>
         this.resolveTypeWith(typ, allowVoid, false);
 
+    /// ResolveType for a type that is part of another whose own resolution does not pass here (a built-in generic's
+    /// argument written in an expression, an array's element): a type parameter that is `void` in an instance is
+    /// refused, as inside a written type (ADR 0213).
+    fn resolveElementType(borrow mut this, typ: u32) -> Result<u32, AllocError> {
+        this.typeDepth += 1;
+        let resolved = this.resolveType(typ, false)?;
+        this.typeDepth -= 1;
+        return Ok(resolved);
+    }
+
     /// ResolveType with `allowSources`: a source list `borrow(a, b) T` is allowed (a function's return type).
     fn resolveTypeWith(borrow mut this, typ: u32, allowVoid: bool, allowSources: bool) -> Result<u32, AllocError> {
         let allowImported = this.allowImported;
@@ -452,7 +465,9 @@ struct Checker {
         this.coreAllowImported = allowImported;
         this.coreAllowNever = this.allowNever;
         this.allowNever = false;
+        this.typeDepth += 1;
         let resolved = this.resolveTypeCore(typ, allowVoid, allowSources)?;
+        this.typeDepth -= 1;
         let structDef = this.types.info(resolved).structDef;
         if (structDef != none() && this.types.structs[structDef as usize].isImported && !allowImported) {
             let span = this.front.ast.typeSpans[typ as usize];
@@ -578,6 +593,21 @@ struct Checker {
                 let parameter = environmentType(this, ident.symbol);
                 if (parameter != none() && isConstKind(this, parameter)) {
                     return valueForType(this, span); // a const parameter is a value (ADR 0083 §2.4)
+                }
+                if (parameter != none() && this.typeDepth > 1 && !allowVoid && !this.inSignature &&
+                    this.types.is(parameter, TypeKind.Void)) {
+                    // In an instance at `void` (§20.4, ADR 0213): an element, a referent or a type argument of that
+                    // type would be a value of `void`, which there is none of. A signature is not refused here: a
+                    // function of an instance that is never called (`ok` of a `Result<void, E>`'s methods) is no
+                    // error, and its call is (voidMisplacedIn).
+                    var message = Vector<u8>.create();
+                    appendQuotedName(mut message, this, ident.symbol)?;
+                    appendText(
+                        mut message,
+                        " is 'void' here, and there is no value of 'void': it cannot be an element, an optional's value, a referent or a type argument",
+                    )?;
+                    this.error(voidNotAllowed(), span.start, span.end, message)?;
+                    return Ok(this.types.error);
                 }
                 if (parameter != none()) {
                     return Ok(parameter); // a type parameter in scope, or what it is instantiated with (§20)

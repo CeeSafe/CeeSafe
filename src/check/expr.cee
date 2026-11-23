@@ -1589,7 +1589,17 @@ fn voidMisplaced(c: borrow Checker, t: u32, top: bool, depth: u32) -> bool {
     }
     // `*void` is C's pointer to anything (§27.1). A generic enum's instance at `void` has unit variants, and a
     // struct's is refused where it is made (ADR 0213).
-    return false;
+    if (c.types.is(t, TypeKind.RawPointer)) {
+        return false;
+    }
+    // An element or a referent of the type `void` (ADR 0213 §7): `Vector<T>`, `[T; N]`, `Slice<T>`, `borrow T`,
+    // `Box<T>`.
+    if (info.element != none() && voidMisplaced(c, info.element, false, depth + 1)) {
+        return true;
+    }
+    let holds = c.types.is(t, TypeKind.Reference) || c.types.is(t, TypeKind.Box) || c.types.is(t, TypeKind.Vector) ||
+        c.types.is(t, TypeKind.StableVector);
+    return holds && info.pointee != none() && voidMisplaced(c, info.pointee, false, depth + 1);
 }
 
 /// N0226 at the call of an instance whose signature has `void` where §2 allows none (`voidMisplacedIn`).

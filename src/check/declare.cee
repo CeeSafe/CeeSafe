@@ -191,6 +191,7 @@ fn checkProgramWith(
         registerNext: true,
         genericMethod: false,
         dynAllowed: false,
+        typeDepth: 0,
         dynTables: Vector<DynTable>.create(),
         closureContexts: Vector<ClosureContext>.create(),
         asyncScopes: Vector<AsyncScopeContext>.create(),

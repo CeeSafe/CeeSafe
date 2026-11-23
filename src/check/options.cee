@@ -88,7 +88,7 @@ fn resolveGenericType(
     let n = text.view();
     if (sameText(n, "Result") && arguments.count == 2) {
         let ok = c.resolveType(c.front.ast.at(arguments, 0), true)?;
-        let err = c.resolveType(c.front.ast.at(arguments, 1), false)?;
+        let err = c.resolveElementType(c.front.ast.at(arguments, 1))?;
         // A result holding a reference or slice is itself scoped (§19.1).
         if (c.types.isBottom(ok) || c.types.isBottom(err)) {
             return Ok(c.types.error);
@@ -145,7 +145,7 @@ fn resolveGenericType(
         c.front.ast.at(arguments, 1),
     )) {
         // `Slice<u8, r>`: the region written last (sqlclient's finding 4).
-        let element = c.resolveType(c.front.ast.at(arguments, 0), false)?;
+        let element = c.resolveElementType(c.front.ast.at(arguments, 0))?;
         appendText(mut message, "a slice's region comes first: write '")?;
         appendBytes(mut message, n)?;
         appendText(mut message, "<")?;

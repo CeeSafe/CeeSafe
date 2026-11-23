@@ -29,7 +29,7 @@ fn containerType(c: borrow mut Checker, isMap: bool, element: u32, allocator: u3
 /// `SlotMap<T, A>` or `StableVector<T, A>` from type syntax (ResolveContainerType).
 fn resolveContainerType(c: borrow mut Checker, isMap: bool, arguments: Range) -> Result<u32, AllocError> {
     let elementSyntax = c.front.ast.at(arguments, 0);
-    let element = c.resolveType(elementSyntax, false)?;
+    let element = c.resolveElementType(elementSyntax)?;
     var allocator = usedSystemHeap(c);
     if (arguments.count > 1) {
         let allocatorSyntax = c.front.ast.at(arguments, 1);
@@ -63,7 +63,7 @@ fn resolveContainerType(c: borrow mut Checker, isMap: bool, arguments: Range) ->
 /// `Handle<T>`: a handle holds no loan, whatever it names (§25.3).
 fn resolveHandleType(c: borrow mut Checker, arguments: Range) -> Result<u32, AllocError> {
     let handledSyntax = c.front.ast.at(arguments, 0);
-    let handled = c.resolveType(handledSyntax, false)?;
+    let handled = c.resolveElementType(handledSyntax)?;
     if (c.types.isBottom(handled)) {
         return Ok(c.types.error);
     }

@@ -478,7 +478,13 @@ def main():
         agree, stricter, differ = zstd_oracle(zlib_, zcases)
         print(f"codec_check: zstd, libzstd {zlib_.version} against the model: {agree} frames agree, {stricter} "
               f"the model refuses as STRICTER says or reads as libzstd's one call does, {differ} differ")
-        problems += differ
+        if tuple(int(x) for x in zlib_.version.split(".")[:3]) >= (1, 5, 7):
+            problems += differ
+        elif differ:
+            # Older libzstd differs where later ones were fixed: 1.5.5's stream takes blocks larger than the window,
+            # and refuses a sequence count of 0 in two bytes (zstd's golden zeroSeq_2B.zst, added with the fix).
+            print("codec_check: zstd, libzstd before 1.5.7, which the model was checked against: its differences are "
+                  "reported only")
     else:
         print("codec_check: zstd, no libzstd installed: the corpus's frames and the model are the oracles")
     for lib in slibs:

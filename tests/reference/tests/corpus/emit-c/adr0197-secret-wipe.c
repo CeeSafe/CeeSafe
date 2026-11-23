@@ -12,8 +12,8 @@ static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 18u, 26u };
 
 typedef struct ceeT_Key ceeT_Key;
 typedef struct ceeSm_u32 ceeSm_u32;
-typedef struct ceeA4_u32 ceeA4_u32;
 typedef struct ceeA32_u8 ceeA32_u8;
+typedef struct ceeA4_u32 ceeA4_u32;
 
 struct ceeA32_u8 { uint8_t e[32]; };
 _Static_assert(sizeof(ceeA32_u8) == 32, "ceesafec layout: sizeof([u8; 32])");

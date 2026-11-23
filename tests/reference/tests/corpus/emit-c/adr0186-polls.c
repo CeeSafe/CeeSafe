@@ -29,8 +29,8 @@ static CEE_UNUSED const cee_loc ceeL_16 = { cee_file_0, 86u, 17u };
 typedef struct ceeSl_u8 ceeSl_u8;
 typedef struct ceeSl_u32 ceeSl_u32;
 typedef struct ceeSl_u64 ceeSl_u64;
-typedef struct ceeA3_u64 ceeA3_u64;
 typedef struct ceeA3_u32 ceeA3_u32;
+typedef struct ceeA3_u64 ceeA3_u64;
 typedef uint32_t (*ceeN_N1u32u32)(uint32_t);
 
 struct ceeSl_u8 { const uint8_t *ptr; cee_usize len; };
@@ -45,13 +45,13 @@ struct ceeSl_u64 { const uint64_t *ptr; cee_usize len; };
 _Static_assert(sizeof(ceeSl_u64) == 16, "ceesafec layout: sizeof(Slice<u64>)");
 _Static_assert(_Alignof(ceeSl_u64) == 8, "ceesafec layout: alignof(Slice<u64>)");
 
-struct ceeA3_u64 { uint64_t e[3]; };
-_Static_assert(sizeof(ceeA3_u64) == 24, "ceesafec layout: sizeof([u64; 3])");
-_Static_assert(_Alignof(ceeA3_u64) == 8, "ceesafec layout: alignof([u64; 3])");
-
 struct ceeA3_u32 { uint32_t e[3]; };
 _Static_assert(sizeof(ceeA3_u32) == 12, "ceesafec layout: sizeof([u32; 3])");
 _Static_assert(_Alignof(ceeA3_u32) == 4, "ceesafec layout: alignof([u32; 3])");
+
+struct ceeA3_u64 { uint64_t e[3]; };
+_Static_assert(sizeof(ceeA3_u64) == 24, "ceesafec layout: sizeof([u64; 3])");
+_Static_assert(_Alignof(ceeA3_u64) == 8, "ceesafec layout: alignof([u64; 3])");
 
 static CEE_UNUSED uint64_t ceeF_sum(ceeSl_u64);
 static CEE_UNUSED uint32_t ceeF_each(ceeSl_u32);

@@ -220,3 +220,50 @@ Each system is its own step and its own release, as ADR 0164's were; the API is 
   GNOME's real pointer and keys (Mutter's RemoteDesktop) while a logging Orca stood in for GNOME's (the screen
   reader setting off meanwhile, and back on after): "table with 10001 rows 4 columns", "Frances Allen", Down
   "Barbara Liskov"; "Selection page tab", Right "Lists page tab"; "List with 6 items", "README.md", Down "main.c".
+
+## 10. Step 4 as implemented: iOS (2026-11-23)
+
+`runtime/hosted/ceesafe_rt_window.c` (the UIKit part), type-system.md §26.13.
+
+- **The tree**: `CEE_ACCESS_TREE` for iOS. A container that holds something is a `UIAccessibilityElement` VoiceOver
+  does not stop on (`isAccessibilityElement` NO) whose `accessibilityElements` are its children in list order, and
+  it is their `accessibilityContainer`; the view's elements are the top level's. A container that holds nothing is
+  not read, but a row or a cell, which is then the element. The tree is laid out again when an element came or
+  went, changed its container, or came to hold something or nothing.
+- **Frames are in the container's space**: UIKit places a container's child from the container's frame, not from
+  the view, so each element is given its frame less its container's origin (found in the Simulator: the cells
+  were twice as far down as they are).
+- **Container types**: a `Group` is a semantic group (its name is said on the way in), a `List`, `Menu`, `MenuBar`
+  and `TabList` a list, a `Table` a data table. A `TabList` also has `UIAccessibilityTraitTabBar`, with which
+  UIKit itself gives its tabs their place ("tab, 1 of 2").
+- **Tables**: the table's element (a subclass, `CeeSafeAccessTable`) answers `UIAccessibilityContainerDataTable`:
+  `accessibilityRowCount` and `accessibilityColumnCount` (its `rows` and `columns`),
+  `accessibilityDataTableCellElementForRow:column:` (from 0) and `accessibilityHeaderElementsForColumn:` (its
+  `ColumnHeader`s of that column). A `Cell`, a `ColumnHeader` and what a cell holds (`CeeSafeAccessCell`) answer
+  `accessibilityRowRange` and `accessibilityColumnRange`. iOS has no rows: a `Row` that holds cells or headers is a
+  plain container. A `Row` that holds none is read whole, as a cell of its row as wide as the table and a button as a
+  list's row is: one that holds nothing, and one with a name that holds only what says it again (ClayWind's grid rows,
+  named by their cells joined, pressed and selected, hold their texts), whose contents are left out, as §7 leaves them
+  out where there are no containers. Found with ClayWind's demo: without it each text of a row was a stop of its own
+  and the row could not be pressed. An element is kept from list to list while its class is the same; a row that comes
+  to hold cells is a new one.
+- **No places in lists and menus**: UIKit has no question for "3 of 40" outside a tab bar and a data table (its
+  own table views say none either), so a `ListItem`'s and a `MenuItem`'s `row` is not said on iOS.
+- **Checked in the iOS Simulator** (iPhone 17, iOS 26.0), in the process, as ADR 0164's step was: a program that gives
+  window_check's tree and a table of 10,001 by 4 with two named rows that hold nothing, and a C file that asks UIKit
+  (its accessibility loaded as automation loads it, without which the Simulator answers no frames). UIKit reports the
+  six top-level containers with their types (list, list, list with the tab bar trait, data table, semantic group, data
+  table), each child's container and frame, the tabs' places from UIKit itself (the first and the second of 2), the
+  first table 2 by 3 with `Name`, `Size`, `Kind` as its columns' headers and its six elements by row and column, the
+  second 10,001 by 4 with `Ada` and `Bob` at rows 2 and 3 across all four columns. After a second list (an item gone,
+  the rows moved to 4 and 5, one row now holding a cell) every element is the same object but that row, the places
+  follow, and `accessibilityActivate` on a list's item and on a whole row arrives as `Press`.
+- **ClayWind's demo in the Simulator** (its desktop host packed by `claywind-pack ios-simulator` with this compiler; a
+  library inserted into it asks UIKit for the tree and activates elements by name, as VoiceOver's double tap does):
+  the menu bar is a list of its four menus; on Controls, the tabs are a list with the tab bar trait whose five tabs
+  UIKit places (1 to 5 of 5), the open one selected; on its Lists tab each listbox is a list of its six rows; on Data,
+  the grid is a data table of 10,001 by 4 whose headers are `Order`, `Customer`, `Amount` and `Status`, each visible
+  row one element at its row across the four columns, found by row and column; activating "Barbara Liskov" selects
+  that row.
+- **Not checked yet**: VoiceOver on a phone, which the Simulator does not have: what it says on the way into a list or
+  a group, and its reading of a table by row and column.

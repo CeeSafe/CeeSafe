@@ -2042,6 +2042,11 @@ static struct {
     /* Accessibility (ADR 0164): CeeSafeAccessElement, a UIAccessibilityElement that takes a reader's actions;
        UIAccessibilityPostNotification with its layout-changed and announcement numbers; whether VoiceOver runs. */
     cee_id access_class;
+    /* Containers (ADR 0207): the element's subclasses that answer the data table's questions, a table's and a
+       cell's, and UIAccessibilityTraitTabBar. */
+    cee_id access_table_class;
+    cee_id access_cell_class;
+    uint64_t access_tab_bar;
     void (*access_post)(uint32_t, cee_id);
     const uint32_t *access_layout_changed;
     const uint32_t *access_announcement;
@@ -2344,8 +2349,64 @@ static void cee_ios_wake_perform(void *info) { (void)info; }
    a list's row and a menu's item are buttons (selected when they are), a checkbox a toggle button whose value is
    1 or 0 (said "on" and "off"; a plain button with that value before iOS 17), a slider adjustable with its value as
    text. A text field is an element with a name and a value: its keyboard comes when it is activated, as a tap
-   does it. */
+   does it.
+
+   Containers (ADR 0207): a container that holds something is an element VoiceOver does not stop on
+   (isAccessibilityElement NO) whose accessibilityElements are its children, and their accessibilityContainer; the
+   view's are the top level's. Its accessibilityContainerType says what it is: a group a semantic group (its name
+   is said on the way in), a list, a menu, a menu bar and a tab list a list, a table a data table. A tab list has
+   the tab bar trait, so its tabs are said "tab, 2 of 4". A table answers UIAccessibilityContainerDataTable (its
+   counts, the element at a row and column, a column's headers) and its cells and headers
+   UIAccessibilityContainerDataTableCell (their row and column from 0); iOS has no rows, so a row that holds
+   cells is a plain container, and one that holds none (nothing at all, or, having a name, only what says it
+   again: its texts, which are then left out, as where there are no containers) is a cell as wide as the table,
+   a button as a list's row is. What a cell holds answers the cell's place. A container that holds nothing is
+   not there, but a row or a cell, which is then what is read. */
 #define CEE_WINDOW_ACCESS 1
+#define CEE_ACCESS_TREE 1
+
+/* How many elements each node of `nodes` holds, into `held` (count entries). */
+static void cee_ios_access_held(const struct cee_access_node *nodes, uint32_t count, uint32_t *held) {
+    for (uint32_t k = 0; k < count; k++) {
+        held[k] = 0;
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        if (nodes[k].up != CEE_ACCESS_TOP && nodes[k].up < count) {
+            held[nodes[k].up]++;
+        }
+    }
+}
+
+/* Whether row k of `nodes` is read whole, as one element: it holds nothing, or it has a name and none of what it
+   holds is a cell or a column header. */
+static int cee_ios_access_whole(const struct cee_access_node *nodes, uint32_t count, uint32_t k) {
+    if (nodes[k].role != CEE_ACCESS_ROW) {
+        return 0;
+    }
+    int holds = 0;
+    for (uint32_t j = k + 1u; j < count; j++) {
+        if (nodes[j].up == k) {
+            if (nodes[j].role == CEE_ACCESS_CELL || nodes[j].role == CEE_ACCESS_COLUMN_HEADER) {
+                return 0;
+            }
+            holds = 1;
+        }
+    }
+    return !holds || nodes[k].label_length > 0;
+}
+
+/* The class of node k's element: 2 a table's, 1 a cell's (a cell, a column header, a row read whole, and what a
+   cell holds), 0 the plain one. */
+static int cee_ios_access_kind(const struct cee_access_node *nodes, uint32_t count, uint32_t k) {
+    const struct cee_access_node *n = &nodes[k];
+    if (n->role == CEE_ACCESS_TABLE) {
+        return 2;
+    }
+    if (n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER || cee_ios_access_whole(nodes, count, k)) {
+        return 1;
+    }
+    return n->up != CEE_ACCESS_TOP && nodes[n->up].role == CEE_ACCESS_CELL ? 1 : 0;
+}
 
 static cee_id cee_ios_string_of(const char *text, size_t length) {
     cee_id string = cee_ios_send(cee_ios_cls("NSString"), "alloc");
@@ -2399,8 +2460,17 @@ static void cee_ios_access_decrement(cee_id self, cee_sel cmd) {
     cee_ios_access_asked(self, CEE_ACCESS_DECREMENT);
 }
 
-/* Gives `element` what node `n` says: its name, value, traits and place in the view. */
-static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n, const char *text) {
+/* Where node k's container is in the view, into x and y: an element's frame is given in its container's space,
+   which for a container's child is the container's frame (ADR 0207), not the view. */
+static void cee_ios_access_origin(const struct cee_access_node *nodes, uint32_t k, float *x, float *y) {
+    uint32_t up = nodes[k].up;
+    *x = up != CEE_ACCESS_TOP && up < k ? nodes[up].x : 0.0f;
+    *y = up != CEE_ACCESS_TOP && up < k ? nodes[up].y : 0.0f;
+}
+
+/* Gives `element` what node `n` says: its name, value, traits and place in its container, which is at (ox, oy) of
+   the view. */
+static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n, const char *text, float ox, float oy) {
     /* UIAccessibilityTraits, as UIKit's headers have had them since iOS 3 (toggle button since iOS 17). */
     const uint64_t button = 1u, image = 4u, selected = 8u, static_text = 0x40u, not_enabled = 0x100u,
                    adjustable = 0x1000u, toggle = (uint64_t)1 << 53;
@@ -2442,10 +2512,30 @@ static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n
     case 10:
         traits = image;
         break;
-    default: /* a button, a tab, a list's row, a menu's item */
+    case CEE_ACCESS_GROUP:
+    case CEE_ACCESS_LIST:
+    case CEE_ACCESS_MENU:
+    case CEE_ACCESS_MENU_BAR:
+    case CEE_ACCESS_TABLE:
+        break;
+    case CEE_ACCESS_TAB_LIST: /* its tabs are said "tab, 2 of 4" */
+        traits = cee_uikit.access_tab_bar;
+        break;
+    case CEE_ACCESS_CELL: /* one that holds nothing is read as its text */
+        traits = static_text;
+        break;
+    default: /* a button, a tab, a list's row, a menu's item, a table's row, a column header */
         traits = button;
         break;
     }
+    /* UIAccessibilityContainerType: 1 a data table, 2 a list, 4 a semantic group (iOS 13). */
+    long container = n->role == CEE_ACCESS_TABLE   ? 1
+                     : n->role == CEE_ACCESS_GROUP ? 4
+                     : n->role == CEE_ACCESS_LIST || n->role == CEE_ACCESS_MENU || n->role == CEE_ACCESS_MENU_BAR ||
+                               n->role == CEE_ACCESS_TAB_LIST
+                           ? 2
+                           : 0;
+    ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(element, cee_ios_sel("setAccessibilityContainerType:"), container);
     if ((n->flags & CEE_ACCESS_SELECTED) != 0) {
         traits |= selected;
     }
@@ -2455,7 +2545,7 @@ static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n
     cee_ios_send_v_id(element, "setAccessibilityLabel:", label);
     cee_ios_send_v_id(element, "setAccessibilityValue:", value);
     ((void (*)(cee_id, cee_sel, uint64_t))cee_uikit.send)(element, cee_ios_sel("setAccessibilityTraits:"), traits);
-    cee_rect frame = {{(double)n->x, (double)n->y}, {(double)n->width, (double)n->height}};
+    cee_rect frame = {{(double)(n->x - ox), (double)(n->y - oy)}, {(double)n->width, (double)n->height}};
     ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(element, cee_ios_sel("setAccessibilityFrameInContainerSpace:"),
                                                          frame);
 }
@@ -2463,6 +2553,115 @@ static void cee_ios_access_apply(cee_id element, const struct cee_access_node *n
 static int cee_ios_access_same_text(const char *a, uint32_t a_start, uint32_t a_length, const char *b, uint32_t b_start,
                                     uint32_t b_length) {
     return a_length == b_length && (a_length == 0 || memcmp(a + a_start, b + b_start, a_length) == 0);
+}
+
+/* The data table's questions (ADR 0207). UIKit counts rows and columns from 0; cee_ios_range is NSRange. */
+#define CEE_IOS_NOT_FOUND (~0ul >> 1) /* NSNotFound: NSIntegerMax */
+
+/* The index of the table node `index` is in (itself, if it is one), or CEE_ACCESS_TOP. */
+static uint32_t cee_ios_access_table_of(const struct cee_window *w, uint32_t index) {
+    while (index != CEE_ACCESS_TOP && index < w->access_count && w->access[index].role != CEE_ACCESS_TABLE) {
+        index = w->access[index].up;
+    }
+    return index < w->access_count ? index : CEE_ACCESS_TOP;
+}
+
+/* The node whose place a cell's element answers: itself, or the cell it is in. */
+static const struct cee_access_node *cee_ios_access_cell_node(cee_id self) {
+    long index = cee_ios_access_index(self);
+    if (index < 0) {
+        return NULL;
+    }
+    const struct cee_window *w = cee_ios_shown;
+    const struct cee_access_node *n = &w->access[index];
+    if (n->role != CEE_ACCESS_CELL && n->role != CEE_ACCESS_COLUMN_HEADER && n->role != CEE_ACCESS_ROW &&
+        n->up != CEE_ACCESS_TOP && w->access[n->up].role == CEE_ACCESS_CELL) {
+        n = &w->access[n->up];
+    }
+    return n;
+}
+
+static cee_ios_range cee_ios_access_row_range(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    const struct cee_access_node *n = cee_ios_access_cell_node(self);
+    cee_ios_range none = {CEE_IOS_NOT_FOUND, 0};
+    cee_ios_range range = {n != NULL ? (unsigned long)n->row - 1ul : 0ul, 1};
+    return n != NULL && n->row > 0 ? range : none;
+}
+
+static cee_ios_range cee_ios_access_column_range(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    const struct cee_access_node *n = cee_ios_access_cell_node(self);
+    cee_ios_range none = {CEE_IOS_NOT_FOUND, 0};
+    if (n == NULL) {
+        return none;
+    }
+    if (n->role == CEE_ACCESS_ROW) { /* a row read whole is as wide as its table */
+        const struct cee_window *w = cee_ios_shown;
+        uint32_t t = cee_ios_access_table_of(w, n->up);
+        cee_ios_range all = {0, t != CEE_ACCESS_TOP && w->access[t].columns > 0 ? w->access[t].columns : 1u};
+        return all;
+    }
+    cee_ios_range range = {(unsigned long)n->column - 1ul, 1};
+    return n->column > 0 ? range : none;
+}
+
+static unsigned long cee_ios_access_row_count(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    long index = cee_ios_access_index(self);
+    return index >= 0 ? cee_ios_shown->access[index].rows : 0ul;
+}
+
+static unsigned long cee_ios_access_column_count(cee_id self, cee_sel cmd) {
+    (void)cmd;
+    long index = cee_ios_access_index(self);
+    return index >= 0 ? cee_ios_shown->access[index].columns : 0ul;
+}
+
+/* The element at `row` and `column` of the table, from 0: its cell or column header there, or its row when the
+   row is read whole. */
+static cee_id cee_ios_access_cell_at(cee_id self, cee_sel cmd, unsigned long row, unsigned long column) {
+    (void)cmd;
+    long index = cee_ios_access_index(self);
+    if (index < 0) {
+        return NULL;
+    }
+    const struct cee_window *w = cee_ios_shown;
+    const struct cee_ios *m = (const struct cee_ios *)w->native;
+    cee_id whole = NULL;
+    for (uint32_t k = (uint32_t)index + 1u; k < w->access_count && k < m->access_count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        if ((unsigned long)n->row != row + 1ul || cee_ios_access_table_of(w, n->up) != (uint32_t)index) {
+            continue;
+        }
+        if ((n->role == CEE_ACCESS_CELL || n->role == CEE_ACCESS_COLUMN_HEADER) && (unsigned long)n->column == column + 1ul) {
+            return m->access_elements[k];
+        }
+        if (whole == NULL && cee_ios_access_whole(w->access, w->access_count, k)) {
+            whole = m->access_elements[k];
+        }
+    }
+    return whole;
+}
+
+/* The column headers of `column`, from 0, of the table. */
+static cee_id cee_ios_access_column_headers(cee_id self, cee_sel cmd, unsigned long column) {
+    (void)cmd;
+    long index = cee_ios_access_index(self);
+    if (index < 0) {
+        return NULL;
+    }
+    const struct cee_window *w = cee_ios_shown;
+    const struct cee_ios *m = (const struct cee_ios *)w->native;
+    cee_id headers = cee_ios_send(cee_ios_cls("NSMutableArray"), "array");
+    for (uint32_t k = (uint32_t)index + 1u; k < w->access_count && k < m->access_count; k++) {
+        const struct cee_access_node *n = &w->access[k];
+        if (n->role == CEE_ACCESS_COLUMN_HEADER && (unsigned long)n->column == column + 1ul &&
+            m->access_elements[k] != NULL && cee_ios_access_table_of(w, n->up) == (uint32_t)index) {
+            cee_ios_send_v_id(headers, "addObject:", m->access_elements[k]);
+        }
+    }
+    return cee_ios_send_long(headers, "count") > 0 ? headers : NULL;
 }
 
 /* The window's list changed (w->access is the new one; `old` the last, with its text): the elements follow it. */
@@ -2478,12 +2677,33 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
         old_count = m->access_count;
     }
     cee_id *elements = count > 0 ? (cee_id *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *elements) : NULL;
-    if (count > 0 && elements == NULL) {
+    /* Containers (ADR 0207): how many each node holds; later, by container (the window last), where its children
+       are in `kids`. */
+    uint32_t *held = count > 0 ? (uint32_t *)ceesafe_platform_alloc_zeroed(((size_t)count + 1u) * sizeof *held) : NULL;
+    uint32_t *old_held =
+        old_count > 0 ? (uint32_t *)ceesafe_platform_alloc_zeroed((size_t)old_count * sizeof *old_held) : NULL;
+    cee_id *kids = count > 0 ? (cee_id *)ceesafe_platform_alloc_zeroed((size_t)count * sizeof *kids) : NULL;
+    if (count > 0 && (elements == NULL || held == NULL || kids == NULL || (old_count > 0 && old_held == NULL))) {
+        ceesafe_platform_free(elements);
+        elements = NULL;
         count = 0; /* out of memory: the window has no elements until the next list */
     }
+    if (count > 0) {
+        cee_ios_access_held(w->access, count, held);
+        if (old_count > 0) {
+            cee_ios_access_held(old, old_count, old_held);
+        }
+    }
+    const cee_id classes[3] = {cee_uikit.access_class,
+                               cee_uikit.access_cell_class != NULL ? cee_uikit.access_cell_class : cee_uikit.access_class,
+                               cee_uikit.access_table_class != NULL ? cee_uikit.access_table_class
+                                                                    : cee_uikit.access_class};
     int layout = count != old_count;
     for (uint32_t k = 0; k < count; k++) {
         const struct cee_access_node *n = &w->access[k];
+        int kind = cee_ios_access_kind(w->access, count, k);
+        float ox, oy;
+        cee_ios_access_origin(w->access, k, &ox, &oy);
         uint32_t j = old_count;
         if (k < old_count && old[k].id == n->id) {
             j = k;
@@ -2496,24 +2716,32 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
             }
             layout = 1;
         }
-        if (j < old_count && m->access_elements[j] != NULL) {
+        /* An element is kept while its class is the same: a row that came to hold cells, say, is a new one. */
+        if (j < old_count && m->access_elements[j] != NULL && cee_ios_access_kind(old, old_count, j) == kind) {
             const struct cee_access_node *o = &old[j];
             elements[k] = m->access_elements[j];
             m->access_elements[j] = NULL;
+            if (n->parent != o->parent || (held[k] > 0) != (old_held[j] > 0) ||
+                (n->role == CEE_ACCESS_ROW && (n->label_length > 0) != (o->label_length > 0))) {
+                layout = 1;
+            }
+            float old_ox, old_oy;
+            cee_ios_access_origin(old, j, &old_ox, &old_oy);
             if (n->role != o->role || n->flags != o->flags || n->now != o->now || n->min != o->min || n->max != o->max ||
-                n->x != o->x || n->y != o->y || n->width != o->width || n->height != o->height ||
+                n->x - ox != o->x - old_ox || n->y - oy != o->y - old_oy || n->width != o->width ||
+                n->height != o->height ||
                 !cee_ios_access_same_text(w->access_text, n->label_start, n->label_length, old_text, o->label_start,
                                           o->label_length) ||
                 !cee_ios_access_same_text(w->access_text, n->value_start, n->value_length, old_text, o->value_start,
                                           o->value_length)) {
-                cee_ios_access_apply(elements[k], n, w->access_text);
+                cee_ios_access_apply(elements[k], n, w->access_text, ox, oy);
             }
         } else {
             cee_id element = ((cee_id(*)(cee_id, cee_sel, cee_id))cee_uikit.send)(
-                cee_ios_send(cee_uikit.access_class, "alloc"), cee_ios_sel("initWithAccessibilityContainer:"), m->view);
+                cee_ios_send(classes[kind], "alloc"), cee_ios_sel("initWithAccessibilityContainer:"), m->view);
             elements[k] = element;
             if (element != NULL) {
-                cee_ios_access_apply(element, n, w->access_text);
+                cee_ios_access_apply(element, n, w->access_text, ox, oy);
             }
             layout = 1;
         }
@@ -2527,19 +2755,74 @@ static void cee_native_access(struct cee_window *w, const struct cee_access_node
     ceesafe_platform_free(m->access_elements);
     m->access_elements = elements;
     m->access_count = count;
-    if (layout) {
-        /* An element that could not be made leaves the array there: the ones before it are the view's. */
-        uint32_t made = 0;
-        while (made < count && elements[made] != NULL) {
-            made++;
+    if (layout && count == 0) {
+        cee_ios_send_v_id(m->view, "setAccessibilityElements:", cee_ios_send(cee_ios_cls("NSArray"), "array"));
+        if (cee_uikit.access_post != NULL && cee_uikit.access_layout_changed != NULL) {
+            cee_uikit.access_post(*cee_uikit.access_layout_changed, NULL);
         }
-        cee_id array = ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_uikit.send)(
-            cee_ios_cls("NSArray"), cee_ios_sel("arrayWithObjects:count:"), elements, (unsigned long)made);
-        cee_ios_send_v_id(m->view, "setAccessibilityElements:", array);
+    } else if (layout) {
+        /* The tree (ADR 0207): each container's children in the list's order, the view's the top level's. `held`
+           becomes where each container's children start in `kids` (the window's at index count), and, once they
+           are in, where they end, which is where the next one's start. An element that could not be made is left
+           out. */
+        uint32_t next = 0;
+        for (uint32_t k = 0; k <= count; k++) {
+            uint32_t own = k < count ? held[k] : 0;
+            if (k == count) {
+                for (uint32_t i = 0; i < count; i++) {
+                    own += w->access[i].up == CEE_ACCESS_TOP ? 1u : 0u;
+                }
+            }
+            held[k] = next;
+            next += own;
+        }
+        for (uint32_t k = 0; k < count; k++) {
+            uint32_t up = w->access[k].up != CEE_ACCESS_TOP && w->access[k].up < k ? w->access[k].up : count;
+            kids[held[up]++] = elements[k]; /* held[up] is now the end of up's children */
+        }
+        cee_sel array_sel = cee_ios_sel("arrayWithObjects:count:");
+        cee_id array_class = cee_ios_cls("NSArray");
+        for (uint32_t k = 0; k <= count; k++) {
+            uint32_t end = held[k], start = k == 0 ? 0u : held[k - 1u];
+            uint32_t made = 0;
+            for (uint32_t i = start; i < end; i++) {
+                if (kids[i] != NULL) {
+                    kids[start + made++] = kids[i];
+                }
+            }
+            cee_id target = k < count ? elements[k] : m->view;
+            if (target == NULL) {
+                continue;
+            }
+            int whole = k < count && cee_ios_access_whole(w->access, count, k);
+            if (whole) {
+                made = 0; /* what it holds says it again: left out */
+            }
+            cee_id array = made > 0 || k == count
+                               ? ((cee_id(*)(cee_id, cee_sel, const cee_id *, unsigned long))cee_uikit.send)(
+                                     array_class, array_sel, kids + start, (unsigned long)made)
+                               : NULL;
+            cee_ios_send_v_id(target, "setAccessibilityElements:", array);
+            if (k < count) {
+                uint32_t up = w->access[k].up;
+                cee_id holder = up != CEE_ACCESS_TOP && up < k && elements[up] != NULL ? elements[up] : m->view;
+                cee_ios_send_v_id(target, "setAccessibilityContainer:", holder);
+                /* VoiceOver stops on what holds nothing, but a container that is neither a row nor a cell, and
+                   on a row read whole. */
+                uint32_t role = w->access[k].role;
+                signed char stop = whole || (made == 0 && (!CEE_ACCESS_CONTAINER(role) || role == CEE_ACCESS_ROW ||
+                                                           role == CEE_ACCESS_CELL));
+                ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(target, cee_ios_sel("setIsAccessibilityElement:"),
+                                                                         stop);
+            }
+        }
         if (cee_uikit.access_post != NULL && cee_uikit.access_layout_changed != NULL) {
             cee_uikit.access_post(*cee_uikit.access_layout_changed, NULL);
         }
     }
+    ceesafe_platform_free(held);
+    ceesafe_platform_free(old_held);
+    ceesafe_platform_free(kids);
     cee_uikit.pool_pop(pool);
 }
 
@@ -2650,6 +2933,43 @@ static int cee_uikit_load(void) {
         cee_uikit.register_class(access);
     }
     cee_uikit.access_class = access;
+    /* Containers (ADR 0207): a table's element and a cell's answer the data table's questions. */
+    const uint64_t *tab_bar = (const uint64_t *)dlsym(uikit, "UIAccessibilityTraitTabBar");
+    cee_uikit.access_tab_bar = tab_bar != NULL ? *tab_bar : 0u;
+    cee_id table = access != NULL ? cee_uikit.allocate_class(access, "CeeSafeAccessTable", 0) : NULL;
+    if (table == NULL) {
+        table = cee_ios_cls("CeeSafeAccessTable");
+    } else {
+        cee_uikit.add_method(table, cee_ios_sel("accessibilityRowCount"), (cee_fn)cee_ios_access_row_count, "Q@:");
+        cee_uikit.add_method(table, cee_ios_sel("accessibilityColumnCount"), (cee_fn)cee_ios_access_column_count, "Q@:");
+        cee_uikit.add_method(table, cee_ios_sel("accessibilityDataTableCellElementForRow:column:"),
+                             (cee_fn)cee_ios_access_cell_at, "@@:QQ");
+        cee_uikit.add_method(table, cee_ios_sel("accessibilityHeaderElementsForColumn:"),
+                             (cee_fn)cee_ios_access_column_headers, "@@:Q");
+        void *protocol =
+            cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIAccessibilityContainerDataTable") : NULL;
+        if (protocol != NULL && cee_uikit.add_protocol != NULL) {
+            cee_uikit.add_protocol(table, protocol);
+        }
+        cee_uikit.register_class(table);
+    }
+    cee_uikit.access_table_class = table;
+    cee_id cell = access != NULL ? cee_uikit.allocate_class(access, "CeeSafeAccessCell", 0) : NULL;
+    if (cell == NULL) {
+        cell = cee_ios_cls("CeeSafeAccessCell");
+    } else {
+        cee_uikit.add_method(cell, cee_ios_sel("accessibilityRowRange"), (cee_fn)cee_ios_access_row_range,
+                             "{_NSRange=QQ}@:");
+        cee_uikit.add_method(cell, cee_ios_sel("accessibilityColumnRange"), (cee_fn)cee_ios_access_column_range,
+                             "{_NSRange=QQ}@:");
+        void *protocol =
+            cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIAccessibilityContainerDataTableCell") : NULL;
+        if (protocol != NULL && cee_uikit.add_protocol != NULL) {
+            cee_uikit.add_protocol(cell, protocol);
+        }
+        cee_uikit.register_class(cell);
+    }
+    cee_uikit.access_cell_class = cell;
     cee_uikit.send_super = cee_ios_symbol(objc, "objc_msgSendSuper");
     cee_uikit.keyboard_changed = (cee_id *)dlsym(uikit, "UIKeyboardWillChangeFrameNotification");
     cee_uikit.keyboard_end = (cee_id *)dlsym(uikit, "UIKeyboardFrameEndUserInfoKey");

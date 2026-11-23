@@ -3666,7 +3666,15 @@ Diagnostics: none new.
     children its own, with the roles panel, list, menu, menu bar, page tab list, table, table row, table cell and
     table column header; an item has the attributes `posinset` and `setsize`; a table has the Table interface (its
     rows and columns, its cells by row and column, its column headers) and its cells and headers the TableCell
-    interface. Where a system's part has no containers yet (ADR 0207 §2.4: iOS and Android so far),
+    interface. On iOS a container that holds something is an accessibility container VoiceOver does not stop on,
+    whose elements are its children and whose `accessibilityContainerType` is a semantic group (`Group`), a list
+    (`List`, `Menu`, `MenuBar`, `TabList`) or a data table (`Table`); a `TabList` has the tab bar trait, so
+    VoiceOver says a tab's place; a table answers `UIAccessibilityContainerDataTable` (its counts, the element at
+    a row and column, a column's headers) and its `Cell`s and `ColumnHeader`s their row and column; iOS has no
+    rows, so a `Row` that holds cells is not read itself, and one that holds none (nothing, or, with a name, only
+    what says it again, which is left out) is a cell as wide as the table; iOS says no place for a list's or a
+    menu's item. Where a system's part has no containers yet (ADR 0207 §2.4:
+    Android so far),
     its list is ADR 0164's: containers are left out and what they hold is the window's, a table's `Row` is a
     `ListItem` and a `ColumnHeader` a `Button`; a `Row` with a name holds what is in it (left out), and in one with
     none only the `Cell`s are left out.

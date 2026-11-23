@@ -13,7 +13,7 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 | sha256 | `62558b8a648e9d86c1a7f0f554a55a7feaa93829da1147da9c1429623d381afe` (linux-x64), `de082908d70b8411c602abaa9143d0f180bf73ce55f60f18a51d8eac470c3754` (osx-arm64) (v0.94.5's `SHA256SUMS`) |
 | Chain | none: 0.94.5 builds the tree directly (`tools/bootstrap_release.sh`) |
 | Workflows | `release.yml` and `checks.yml`, `windows.yml`, `freebsd.yml` and `linux32.yml`: every one builds the tree from this release (before 2026-11-23, `freebsd.yml` used 0.51.1 and `linux32.yml` 0.82.0) |
-| Checked | CHECKEDROW |
+| Checked | 2026-11-23 at the commit that makes it stage 0: macOS arm64 (the released, notarized binary) and Ubuntu 24.04 x86-64 (its linux-x64 archive, with clang 18), `tools/bootstrap_release.sh` with no chain, fixed point reached on both, the same seed `main.c` on both (sha-256 `35e3eb3d7a9e011b…`) |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.

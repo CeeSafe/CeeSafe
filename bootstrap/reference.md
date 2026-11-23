@@ -9,10 +9,11 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 
 | Item | Value |
 |---|---|
-| Compiler | `ceesafec 0.78.1`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.78.1/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
-| sha256 | `e0a437eb4ef4c43ee241e1f5f1f08d33557806b9d453019424161d5fe926f80a` (linux-x64), `3771acd3cd13fb1703247bff82465a6708f88ae0c1e4f20b283c3737d1b3d91a` (osx-arm64) (v0.78.1's `SHA256SUMS`) |
-| Chain | none: 0.78.1 builds the tree directly (`tools/bootstrap_release.sh`) |
-| Checked | 2026-11-20 at the 0.79.0 release commit: macOS arm64 (the released, notarized binary) and Ubuntu 24.04 x86-64 (its linux-x64 archive), fixed point reached on both, seed `main.c` `a4214ab9…` on both |
+| Compiler | `ceesafec 0.94.5`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.94.5/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
+| sha256 | `62558b8a648e9d86c1a7f0f554a55a7feaa93829da1147da9c1429623d381afe` (linux-x64), `de082908d70b8411c602abaa9143d0f180bf73ce55f60f18a51d8eac470c3754` (osx-arm64) (v0.94.5's `SHA256SUMS`) |
+| Chain | none: 0.94.5 builds the tree directly (`tools/bootstrap_release.sh`) |
+| Workflows | `release.yml` and `checks.yml`, `windows.yml`, `freebsd.yml` and `linux32.yml`: every one builds the tree from this release (before 2026-11-23, `freebsd.yml` used 0.51.1 and `linux32.yml` 0.82.0) |
+| Checked | CHECKEDROW |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.
@@ -34,6 +35,7 @@ A platform with no release builds a first `ceesafec` from a release's C seed (`c
 | 2026-11-01 | ceesafec 0.2.0 (Decision 0009) | the reference compiler's releases are no longer public |
 | 2026-11-01 | ceesafec 0.3.2 | the first release built from a CeeSafe release; it builds the tree with no chain (`tools/bootstrap_release.sh` keeps 0.2.0's) |
 | 2026-11-20 | ceesafec 0.78.1 | the owner: "we need to replace it with a latest version": 0.3.2's chain ended in 0.8.0, which held the compiler's own sources to 0.8.0's language (no `let _`, no two-phase borrows) |
+| 2026-11-23 | ceesafec 0.94.5 | the owner: "We need to unify the ceesafec version … to the latest released one instead of 0.51.0 and 0.78.1": one stage 0 for every workflow, the latest release; `freebsd.yml`'s 0.51.1 had refused a line 0.78.1 accepts |
 
 ## Fixed points
 

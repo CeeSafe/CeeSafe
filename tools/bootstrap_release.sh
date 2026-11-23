@@ -23,9 +23,14 @@ OUTPUT=${3:-out/ceesafec}
 version=$("$STAGE0" --version)
 CHAIN_FLAGS=""
 case "$version" in
+"ceesafec 0.94.5")
+    # The release's stage 0 since 2026-11-23, for every workflow (the owner: "unify the ceesafec version … to the latest
+    # released one"): it builds the tree at once, so the compiler's sources may use what 0.94.5 accepts.
+    CHAIN=""
+    ;;
 "ceesafec 0.78.1")
-    # The release's stage 0 since 2026-11-20 (the owner: "we need to replace it with a latest version"): it builds the
-    # tree at once, so the compiler's sources may use what 0.78.1 accepts, not only 0.8.0's language.
+    # The release's stage 0 from 2026-11-20 to 2026-11-23 (the owner: "we need to replace it with a latest version"): it
+    # builds the tree at once, so the compiler's sources may use what 0.78.1 accepts, not only 0.8.0's language.
     CHAIN=""
     ;;
 "ceesafec 0.3.2")

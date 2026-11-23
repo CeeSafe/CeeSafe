@@ -985,7 +985,7 @@ fn checkResultMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if (arguments.count != (if (maps) 1u32 else 0u32)) { // suffixed: ceesafec 0.51.1 (freebsd.yml's stage 1) types them i32
+    if (arguments.count != (if (maps) 1u32 else 0u32)) { // suffixed, as v0.94.5's freebsd.yml needed
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, memberIdent.symbol)?;
         appendText(mut message, if (maps) " takes one argument, the function to call" else " takes no arguments")?;

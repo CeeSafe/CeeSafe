@@ -1,7 +1,8 @@
 # Benchmarks: CeeSafe against Rust
 
 The latest results and what they mean: [`guide/performance.md`](../guide/performance.md). `codecs/` is apart:
-lib/std's deflate, zlib and gzip against the system's zlib (`python3 benchmarks/codecs/run.py`, ADR 0196 §4.4).
+lib/std's deflate, zlib, gzip and snappy against the system's zlib and libsnappy (`python3 benchmarks/codecs/run.py`,
+ADR 0196 §4.4).
 
 Seventeen workloads, each written in CeeSafe (`main.cee`), Rust (`main.rs`) and C (`main.c`, the baseline). Every
 version implements the **same algorithm with the same data structures** and prints one checksum line, which must be

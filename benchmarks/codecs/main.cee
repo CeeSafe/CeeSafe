@@ -1,6 +1,8 @@
-// benchmarks/codecs (ADR 0196 §4.4): lib/std's zlib codec on a file, best of `reps` runs.
-//   main inflate <file.zlib> <size> <reps>   prints the MB/s of output
-//   main deflate <file> <level> <reps>       prints the MB/s of input and the compressed size
+// benchmarks/codecs (ADR 0196 §4.4): lib/std's zlib and snappy codecs on a file, best of `reps` runs.
+//   main inflate <file.zlib> <size> <reps>     prints the MB/s of output
+//   main deflate <file> <level> <reps>         prints the MB/s of input and the compressed size
+//   main unsnappy <file.snappy> <size> <reps>  as inflate, for a raw snappy block
+//   main snappy <file> 0 <reps>                as deflate
 
 fn readAll(path: StringView) -> Vector<u8> {
     var f = File.open(path)!;
@@ -28,6 +30,10 @@ fn main() {
         let t = Clock.monotonicNanos();
         if (mode == "inflate") {
             Zlib.decompress(input.view(), truncate<usize>(number(3)), mut out)!;
+        } else if (mode == "unsnappy") {
+            Snappy.decompress(input.view(), truncate<usize>(number(3)), mut out)!;
+        } else if (mode == "snappy") {
+            Snappy.compress(input.view(), 0, mut out)!;
         } else {
             Zlib.compress(input.view(), truncate<u32>(number(3)), mut out)!;
         }
@@ -35,7 +41,7 @@ fn main() {
         if (d < best) { best = d; }
         size = out.length;
     }
-    let bytes = if (mode == "inflate") size else input.length;
+    let bytes = if (mode == "inflate" || mode == "unsnappy") size else input.length;
     Console.write((bytes as u64 * 1000) / best);
     Console.write(" ");
     Console.writeLine(size);

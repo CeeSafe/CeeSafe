@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""lib/std's deflate codecs against the system's zlib (ADR 0196 §4.4), on the same machine.
+"""lib/std's deflate and snappy codecs against the system's zlib and libsnappy (ADR 0196 §4.4), on the same machine.
 
 Three inputs of 32 MiB, made here from a fixed seed: an inventory-shaped CSV with a random 128-bit hex column (ADR
 0196 §1's), a Parquet-like column of 64-bit integers (sorted timestamps, little-endian), and text of words. Each is
 compressed by Python's zlib at levels 1, 6 and 9 into zlib streams that both decoders read (main.cee, lib/std's
 Zlib.decompress; main.c, zlib's uncompress), and both encoders compress it at those levels (Zlib.compress, zlib's
 compress2). Every figure is the best of --runs runs, in MB/s (10^6 bytes of the uncompressed data per second);
-sizes are the compressed bytes. The results are recorded in guide/performance.md.
+sizes are the compressed bytes. Then snappy, where libsnappy is installed (snappy.c, built with --snappy-prefix's
+include and lib directories): both decoders read libsnappy's block of each input (Snappy.decompress;
+snappy_uncompress), and both encoders compress it (Snappy.compress; snappy_compress). The results are recorded in
+guide/performance.md.
 
 usage: python3 benchmarks/codecs/run.py [--ceesafec out/ceesafec] [--cc cc] [--runs 3] [--size 33554432]
+                                        [--snappy-prefix /opt/homebrew] [--only zlib|snappy]
 """
 
 import argparse
@@ -22,6 +26,8 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "tools", "oracles"))
+import snappy_model  # noqa: E402  libsnappy through ctypes, for the blocks both decoders read
 
 
 def csv(n, rng):
@@ -73,6 +79,8 @@ def main():
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--size", type=int, default=32 << 20)
+    parser.add_argument("--snappy-prefix", default="/opt/homebrew" if os.path.isdir("/opt/homebrew") else "/usr")
+    parser.add_argument("--only", choices=("zlib", "snappy"))
     args = parser.parse_args()
     rng = random.Random(196)
     with tempfile.TemporaryDirectory(prefix="ceesafe-codecs-bench-") as work:
@@ -82,27 +90,55 @@ def main():
                            text=True)
         if b.returncode != 0:
             sys.exit(f"codecs: the CeeSafe build failed:\n{b.stdout}{b.stderr}")
-        subprocess.run([args.cc, "-O2", os.path.join(HERE, "main.c"), "-o", c, "-lz"], check=True)
-        print(f"zlib {zlib.ZLIB_RUNTIME_VERSION} (Python's, for the streams); best of {args.runs}; MB/s of "
-              f"uncompressed data")
-        print("| input | level | zlib size | lib/std size | inflate zlib | inflate lib/std | deflate zlib | "
-              "deflate lib/std |")
-        print("|---|---:|---:|---:|---:|---:|---:|---:|")
-        for name, make in (("CSV", csv), ("integers", integers), ("text", text)):
-            data = make(args.size, rng)
-            path = os.path.join(work, name)
-            with open(path, "wb") as f:
+        inputs = [(name, make(args.size, rng)) for name, make in (("CSV", csv), ("integers", integers), ("text", text))]
+        paths = {}
+        for name, data in inputs:
+            paths[name] = os.path.join(work, name)
+            with open(paths[name], "wb") as f:
                 f.write(data)
-            for level in (1, 6, 9):
-                stream = zlib.compress(data, level)
-                zpath = f"{path}.{level}.zlib"
-                with open(zpath, "wb") as f:
-                    f.write(stream)
-                zi, _ = run([c, "inflate", zpath, str(len(data)), str(args.runs)])
-                ci, _ = run([cee, "inflate", zpath, str(len(data)), str(args.runs)])
-                zd, zsize = run([c, "deflate", path, str(level), str(args.runs)])
-                cd, csize = run([cee, "deflate", path, str(level), str(args.runs)])
-                print(f"| {name} | {level} | {zsize:,} | {csize:,} | {zi:,} | {ci:,} | {zd:,} | {cd:,} |", flush=True)
+        if args.only != "snappy":
+            subprocess.run([args.cc, "-O2", os.path.join(HERE, "main.c"), "-o", c, "-lz"], check=True)
+            print(f"zlib {zlib.ZLIB_RUNTIME_VERSION} (Python's, for the streams); best of {args.runs}; MB/s of "
+                  f"uncompressed data")
+            print("| input | level | zlib size | lib/std size | inflate zlib | inflate lib/std | deflate zlib | "
+                  "deflate lib/std |")
+            print("|---|---:|---:|---:|---:|---:|---:|---:|")
+            for name, data in inputs:
+                path = paths[name]
+                for level in (1, 6, 9):
+                    stream = zlib.compress(data, level)
+                    zpath = f"{path}.{level}.zlib"
+                    with open(zpath, "wb") as f:
+                        f.write(stream)
+                    zi, _ = run([c, "inflate", zpath, str(len(data)), str(args.runs)])
+                    ci, _ = run([cee, "inflate", zpath, str(len(data)), str(args.runs)])
+                    zd, zsize = run([c, "deflate", path, str(level), str(args.runs)])
+                    cd, csize = run([cee, "deflate", path, str(level), str(args.runs)])
+                    print(f"| {name} | {level} | {zsize:,} | {csize:,} | {zi:,} | {ci:,} | {zd:,} | {cd:,} |",
+                          flush=True)
+        lib = snappy_model.libsnappy()
+        if args.only == "zlib":
+            return 0
+        if lib is None:
+            print("codecs: no libsnappy, so no snappy table")
+            return 0
+        s = os.path.join(work, "snappy")
+        subprocess.run([args.cc, "-O2", os.path.join(HERE, "snappy.c"), "-o", s, f"-I{args.snappy_prefix}/include",
+                        f"-L{args.snappy_prefix}/lib", "-lsnappy"], check=True)
+        print(f"libsnappy ({lib.path}); best of {args.runs}; MB/s of uncompressed data")
+        print("| input | libsnappy size | lib/std size | decode libsnappy | decode lib/std | encode libsnappy | "
+              "encode lib/std |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        for name, data in inputs:
+            path = paths[name]
+            spath = f"{path}.snappy"
+            with open(spath, "wb") as f:
+                f.write(lib.compress(data))
+            zi, _ = run([s, "unsnappy", spath, str(len(data)), str(args.runs)])
+            ci, _ = run([cee, "unsnappy", spath, str(len(data)), str(args.runs)])
+            zd, zsize = run([s, "snappy", path, "0", str(args.runs)])
+            cd, csize = run([cee, "snappy", path, "0", str(args.runs)])
+            print(f"| {name} | {zsize:,} | {csize:,} | {zi:,} | {ci:,} | {zd:,} | {cd:,} |", flush=True)
     return 0
 
 

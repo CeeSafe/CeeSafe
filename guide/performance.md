@@ -172,6 +172,25 @@ and 75 to 95% of zlib's speed above, with output within 0.6% of zlib's size at l
 at level 1. Of the decoder's time, a profile gives about a quarter to the copies of matches and a sixth to zlib's
 Adler-32 (1.8 GB/s alone), which raw deflate and gzip skip.
 
+## Snappy
+
+lib/std's `Snappy` (ADR 0196 phase 2), against the system's libsnappy 1.2 called from C (`benchmarks/codecs/snappy.c`),
+on the same three 32 MiB inputs. Both decoders read libsnappy's block of each input; MB/s of uncompressed data, the best
+of three, measured 2026-11-23 on the Apple M1 with Apple clang, `ceesafec build`, on a machine shared with other work
+(load average 28 to 32):
+
+| input | libsnappy size | lib/std size | decode libsnappy | decode lib/std | encode libsnappy | encode lib/std |
+|---|---:|---:|---:|---:|---:|---:|
+| CSV | 18,336,266 | 18,519,478 | 2,933 | 1,187 | 753 | 510 |
+| integers | 18,634,155 | 18,635,253 | 1,582 | 1,324 | 693 | 580 |
+| text | 10,517,475 | 10,522,728 | 2,655 | 1,072 | 938 | 707 |
+
+lib/std's decoder runs at 1,070 to 1,320 MB/s (ADR 0196 §4.4's target is 1,000), 40 to 84% of libsnappy's: it sizes
+the output once from the preamble, copies a match eight bytes at a time and a literal of up to 64 bytes a word at a
+time, and checks each element's bounds, where libsnappy's fast path reads ahead without them. Its encoder, libsnappy's
+algorithm, runs at 68 to 84% of libsnappy's speed, with output within 1% of its size (the same bytes on most inputs of
+`tools/codec_check.py`).
+
 ## Run it yourself
 
 ```sh

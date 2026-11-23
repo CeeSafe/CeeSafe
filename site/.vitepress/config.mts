@@ -59,7 +59,7 @@ const guide = [
   },
   {
     text: "Built with CeeSafe",
-    items: [{ text: "Clay: a UI toolkit", link: "/guide/clay" }],
+    items: [{ text: "CeeUI: a UI toolkit", link: "/guide/ceeui" }],
   },
 ];
 

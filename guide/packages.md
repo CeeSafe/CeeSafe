@@ -129,11 +129,11 @@ build:
 
 ```toml
 [dependencies]
-claywind = { path = "../Clay/claywind" }
-reporting = { git = "https://example.org/reporting.git", rev = "4805743" }   # it names claywind by git
+ceeui = { path = "../CeeUI/ceeui" }
+reporting = { git = "https://example.org/reporting.git", rev = "4805743" }   # it names ceeui by git
 
 [patch]
-claywind = { path = "../Clay/claywind" }    # every package of the build takes this one
+ceeui = { path = "../CeeUI/ceeui" }    # every package of the build takes this one
 ```
 
 - A patch is a path or git source, written as a dependency is; a path is relative to the application's directory.

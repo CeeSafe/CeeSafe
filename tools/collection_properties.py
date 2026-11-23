@@ -109,6 +109,24 @@ class Generator:
                 for i in model:
                     self.expect(f"d{i}")
                 model = []
+            elif choice < 97:
+                # v.drain() (ADR 0224): the first half, each printed and destroyed in turn, then the loop leaves and
+                # the iterator destroys the rest first to last; the capacity stays.
+                taken, item = self.fresh("t"), self.fresh("x")
+                stop = (len(model) + 1) // 2
+                self.line(f"var {taken} = 0;")
+                self.line(f"for ({item} in v.drain()) {{ Console.writeLine({item}.id); {taken} += 1; "
+                          f"if ({taken} == {stop}) {{ break; }} }}")
+                for i in model[:stop]:
+                    self.expect(i)
+                    self.expect(f"d{i}")
+                for i in model[stop:]:
+                    self.expect(f"d{i}")
+                model = []
+            elif choice < 99:
+                # v.sortStableBy (ADR 0225): equal keys keep their order, as Python's sort does.
+                self.line("v.sortStableBy((a, b) => a.id % 3 - b.id % 3);")
+                model.sort(key=lambda i: i % 3)
             else:
                 self.line("Console.writeLine(v.view().length);")
                 self.expect(len(model))

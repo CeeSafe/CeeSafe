@@ -223,6 +223,157 @@ public struct SliceAlgorithms<T> {
         }
     }
 
+    /// Orders `s` as `sortBy` does, and keeps the elements that `cmp` finds equal in the order they had: a stable
+    /// sort (ADR 0225). Allocates nothing: insertion sort of blocks of 20 elements, then the blocks merged in place,
+    /// pairwise and bottom up, by SymMerge (Kim and Kutzner, 2004), which rotates where a merge sort would copy to a
+    /// buffer. O(n log n) calls of `cmp` and O(n log² n) swaps, so it is slower than `sortBy` on long slices. An
+    /// inconsistent `cmp` leaves some permutation of `s`.
+    @effectsOf(cmp)
+    public fn sortStableBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
+        let n = s.length;
+        var block: usize = 20;
+        var a: usize = 0;
+        while (n - a >= block) {
+            SliceAlgorithms<T>.insertion(s, a, a + block, cmp);
+            a += block;
+        }
+        SliceAlgorithms<T>.insertion(s, a, n, cmp);
+        while (block < n) {
+            a = 0;
+            while (n - a >= 2 * block) {
+                SliceAlgorithms<T>.symMerge(s, a, a + block, a + 2 * block, cmp);
+                a += 2 * block;
+            }
+            if (n - a > block) {
+                SliceAlgorithms<T>.symMerge(s, a, a + block, n, cmp);
+            }
+            block *= 2;
+        }
+    }
+
+    /// Merges the sorted runs `s[lo..mid]` and `s[mid..hi]` in place, stably (SymMerge; Go's sort.Stable has the same
+    /// steps). Each step splits its range at the middle, so a range waits at each depth at most once and the depth is
+    /// at most log₂ of the length: 64 waiting ranges are enough for any slice. Iterative, as `introsort` is.
+    @effectsOf(cmp)
+    fn symMerge(s: SliceMut<T>, lo: usize, mid: usize, hi: usize, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
+        var los = [0usize; 64];
+        var mids = [0usize; 64];
+        var his = [0usize; 64];
+        var waiting: usize = 0;
+        var a = lo;
+        var m = mid;
+        var b = hi;
+        loop {
+            var more = false;
+            if (m - a == 1) {
+                // s[a] goes before the first element of s[m..b] that is not below it.
+                var i = m;
+                var j = b;
+                while (i < j) {
+                    let h = i + (j - i) / 2;
+                    if (cmp(borrow s[h], borrow s[a]) < 0) {
+                        i = h + 1;
+                    } else {
+                        j = h;
+                    }
+                }
+                var k = a;
+                while (k + 1 < i) {
+                    s.swap(k, k + 1);
+                    k += 1;
+                }
+            } else if (b - m == 1) {
+                // s[m] goes after the last element of s[a..m] that is not above it.
+                var i = a;
+                var j = m;
+                while (i < j) {
+                    let h = i + (j - i) / 2;
+                    if (cmp(borrow s[m], borrow s[h]) >= 0) {
+                        i = h + 1;
+                    } else {
+                        j = h;
+                    }
+                }
+                var k = m;
+                while (k > i) {
+                    s.swap(k, k - 1);
+                    k -= 1;
+                }
+            } else {
+                let half = a + (b - a) / 2;
+                let total = half + m;
+                var start = a;
+                var r = m;
+                if (m > half) {
+                    start = total - b;
+                    r = half;
+                }
+                let p = total - 1;
+                while (start < r) {
+                    let c = start + (r - start) / 2;
+                    if (cmp(borrow s[p - c], borrow s[c]) >= 0) {
+                        start = c + 1;
+                    } else {
+                        r = c;
+                    }
+                }
+                let end = total - start;
+                if (start < m && m < end) {
+                    SliceAlgorithms<T>.rotate(s, start, m, end);
+                }
+                let left = a < start && start < half;
+                let right = half < end && end < b;
+                if (left && right) {
+                    los[waiting] = half;
+                    mids[waiting] = end;
+                    his[waiting] = b;
+                    waiting += 1;
+                }
+                if (left) {
+                    m = start;
+                    b = half;
+                    more = true;
+                } else if (right) {
+                    a = half;
+                    m = end;
+                    more = true;
+                }
+            }
+            if (!more) {
+                if (waiting == 0) {
+                    return;
+                }
+                waiting -= 1;
+                a = los[waiting];
+                m = mids[waiting];
+                b = his[waiting];
+            }
+        }
+    }
+
+    /// Exchanges the blocks `s[a..m]` and `s[m..b]`, both non-empty, by swaps of equal blocks.
+    fn rotate(s: SliceMut<T>, a: usize, m: usize, b: usize) {
+        var i = m - a;
+        var j = b - m;
+        while (i != j) {
+            if (i > j) {
+                SliceAlgorithms<T>.swapRange(s, m - i, m, j);
+                i -= j;
+            } else {
+                SliceAlgorithms<T>.swapRange(s, m - i, m + j - i, i);
+                j -= i;
+            }
+        }
+        SliceAlgorithms<T>.swapRange(s, m - i, m, i);
+    }
+
+    /// Swaps `s[a + k]` and `s[b + k]` for each `k` below `count`.
+    fn swapRange(s: SliceMut<T>, a: usize, b: usize, count: usize) {
+        for (k in 0..count) {
+            s.swap(a + k, b + k);
+        }
+    }
+
     /// Calls `visit` on each element, in index order.
     @effectsOf(visit)
     public fn forEach(s: Slice<T>, visit: borrow mut fn(borrow T)) {
@@ -309,6 +460,79 @@ public struct SliceCopying<T: Copy> {
                 s[to + i] = s[from + i];
             }
         }
+    }
+}
+
+/// `v.drain()` (ADR 0224, type-system.md §23.1): the elements of a vector moved out one at a time, first to last, as
+/// an iterator, `for (x in v.drain())`, while the vector is borrowed exclusively. The vector is left empty with its
+/// capacity: elements that were not taken are destroyed with the iterator, first to last. `drain` reverses the
+/// elements once, by swaps, `next` pops the last, and the drop reverses what is left back, so draining n elements is
+/// O(n) and allocates nothing. `VectorDrainFailing` and
+/// `VectorDrainSecret` are the same for a vector of `FailingAllocator` and of `SecretHeap`, whose `pop` wipes the slot.
+public struct VectorDrain<region r, T> {
+    private items: borrow mut(r) Vector<T>;
+
+    /// `v.drain()`: an iterator over the elements of `v`, in order.
+    public fn drain(v: borrow mut(r) Vector<T>) -> VectorDrain<r, T> {
+        VectorDrain<T>.reverse(mut v.viewMut());
+        return VectorDrain<T> { items: v };
+    }
+
+    /// Reverses `s` in place.
+    fn reverse(s: SliceMut<T>) {
+        let n = s.length;
+        for (i in 0..n / 2) {
+            s.swap(i, n - 1 - i);
+        }
+    }
+
+    /// The next element, moved out of the vector; null once all have been taken.
+    public fn next(borrow mut this) -> T? => this.items.pop();
+
+    /// The elements not taken are destroyed first to last, as `clear` destroys them; the vector keeps its capacity.
+    drop {
+        VectorDrain<T>.reverse(mut this.items.viewMut());
+        this.items.clear();
+    }
+}
+
+/// `v.drain()` for a vector of `FailingAllocator`: as VectorDrain.
+public struct VectorDrainFailing<region r, T> {
+    private items: borrow mut(r) Vector<T, FailingAllocator>;
+
+    /// `v.drain()`: an iterator over the elements of `v`, in order.
+    public fn drain(v: borrow mut(r) Vector<T, FailingAllocator>) -> VectorDrainFailing<r, T> {
+        VectorDrain<T>.reverse(mut v.viewMut());
+        return VectorDrainFailing<T> { items: v };
+    }
+
+    /// The next element, moved out of the vector; null once all have been taken.
+    public fn next(borrow mut this) -> T? => this.items.pop();
+
+    /// The elements not taken are destroyed first to last, as `clear` destroys them; the vector keeps its capacity.
+    drop {
+        VectorDrain<T>.reverse(mut this.items.viewMut());
+        this.items.clear();
+    }
+}
+
+/// `v.drain()` for a vector of `SecretHeap`: as VectorDrain; each slot is wiped as its element leaves.
+public struct VectorDrainSecret<region r, T> {
+    private items: borrow mut(r) Vector<T, SecretHeap>;
+
+    /// `v.drain()`: an iterator over the elements of `v`, in order.
+    public fn drain(v: borrow mut(r) Vector<T, SecretHeap>) -> VectorDrainSecret<r, T> {
+        VectorDrain<T>.reverse(mut v.viewMut());
+        return VectorDrainSecret<T> { items: v };
+    }
+
+    /// The next element, moved out of the vector; null once all have been taken.
+    public fn next(borrow mut this) -> T? => this.items.pop();
+
+    /// The elements not taken are destroyed first to last, as `clear` destroys them; the vector keeps its capacity.
+    drop {
+        VectorDrain<T>.reverse(mut this.items.viewMut());
+        this.items.clear();
     }
 }
 

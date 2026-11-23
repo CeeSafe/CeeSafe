@@ -518,7 +518,8 @@ fn checkMethodCall(
         // methods that write or move elements.
         let name = c.name(memberIdent.symbol);
         let mutable = isByteWriter(name) || sameText(name, "copyFrom") || sameText(name, "fill") ||
-            sameText(name, "swap") || sameText(name, "sortBy") || sameText(name, "splitAtMut") ||
+            sameText(name, "swap") || sameText(name, "sortBy") || sameText(name, "sortStableBy") ||
+            sameText(name, "splitAtMut") ||
             sameText(name, "copyWithin");
         let slice = sliceOfChecked(c, receiver, targetSpan, none(), none(), mutable, targetSpan)?;
         if (c.isBottom(slice)) {
@@ -914,6 +915,7 @@ fn checkNonStructMethod(
 
 fn isSliceMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "copyFrom") || sameText(name, "fill") || sameText(name, "swap") || sameText(name, "sortBy") ||
+        sameText(name, "sortStableBy") ||
         sameText(
             name,
             "forEach",

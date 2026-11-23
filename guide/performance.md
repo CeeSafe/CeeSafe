@@ -191,13 +191,40 @@ time, and checks each element's bounds, where libsnappy's fast path reads ahead 
 algorithm, runs at 68 to 84% of libsnappy's speed, with output within 1% of its size (the same bytes on most inputs of
 `tools/codec_check.py`).
 
+## Zstandard
+
+lib/std's `Zstd.decompress` (ADR 0196 phase 3; decoding only), against the system's libzstd 1.5.7 called from C
+(`benchmarks/codecs/zstd.c`, `ZSTD_decompressDCtx`), on the same three 32 MiB inputs. Both decoders read libzstd's
+frame of each input at levels 1, 3 and 19. Figures are MB/s of uncompressed data, the best of three, measured 2026-11-23
+on the Apple M1 with Apple clang, `ceesafec build`. The machine was shared with other work (load average 70 to 145),
+so the figures move by a third from run to run:
+
+| input | level | size | decode libzstd | decode lib/std | lib/std / libzstd |
+|---|---:|---:|---:|---:|---:|
+| CSV | 1 | 10,484,267 | 1,513 | 463 | 31% |
+| CSV | 3 | 10,958,702 | 816 | 525 | 64% |
+| CSV | 19 | 9,706,712 | 877 | 276 | 31% |
+| integers | 1 | 8,732,993 | 1,151 | 369 | 32% |
+| integers | 3 | 8,732,322 | 885 | 438 | 49% |
+| integers | 19 | 8,728,417 | 1,020 | 505 | 50% |
+| text | 1 | 7,192,671 | 1,058 | 421 | 40% |
+| text | 3 | 6,940,874 | 1,227 | 335 | 27% |
+| text | 19 | 4,550,212 | 1,228 | 362 | 29% |
+
+lib/std's decoder runs at about 280 to 520 MB/s, a quarter to two thirds of libzstd's; ADR 0196 §4.4's target is 500.
+It decodes the four Huffman streams of a block's literals in turn and runs each sequence as it decodes it, with the bit
+reader in locals: clang does not inline the reader's methods into the large block function, and keeping them out of
+line cost a third. Its other costs are the bounds checks of each table lookup and copy, and the checked shifts.
+libzstd's loops have neither, and prefetch matches.
+
 ## Run it yourself
 
 ```sh
 python3 benchmarks/run.py                                    # every workload: cee, rust, rust-checked, c; 5 runs
 python3 benchmarks/run.py --workloads hash-map,nbody --runs 3
 python3 benchmarks/run.py --cee-flag --no-bce                # with bounds-check elimination off
-python3 benchmarks/codecs/run.py                             # deflate, zlib and gzip against the system's zlib
+python3 benchmarks/codecs/run.py                             # deflate, zlib and gzip against the system's zlib, then
+                                                             # snappy and zstd against libsnappy and libzstd
 ```
 
 Each workload is the same algorithm with the same data structures in every language, and prints one checksum, which

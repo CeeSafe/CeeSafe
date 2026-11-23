@@ -1,8 +1,9 @@
 # ADR 0214 — Loan sets finer than a value: what would be sound, and whether to build it now
 
-- Status: **Proposed** 2026-11-23, at the owner's instruction ("3.8 next": the optimization and DX roadmap's Phase 3,
-  item 8, which says "this needs an ADR first"). §2 recommends changing nothing in the rule now; §5 is one false
-  positive found on the way, fixed on the working tree; not released. §6's questions are the owner's to decide.
+- Status: **Accepted** by the owner, 2026-11-23 ("I accept ADR 0214."), with §6's two questions taken as
+  recommended: one loan set per value stays, and §2.1 is the design to take first if a finding asks. Proposed the
+  same day at the owner's instruction ("3.8 next": the optimization and DX roadmap's Phase 3, item 8, which says
+  "this needs an ADR first"). §5 is one false positive found on the way, fixed; not released.
 - Scope: lifetimes.md §8 ("one loan set per value"), type-system.md §25.5 to §25.7; ADR 0006 §3, ADR 0134 R7;
   `src/nir/borrow.cee`.
 
@@ -144,8 +145,8 @@ Every function those three files require to be refused is still refused.
 Tests: run-pass/field-to-field-through-reference.cee (a copy and a swap, three lines); check-fail of the same name
 (three stores still refused, `leaks`, and §1.2's caller, N0241). The results are in ROADMAP §10.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered 2026-11-23: accepted as recommended)
 
-1. Keep one loan set per value now, with §2.1 and §2.2 as the recorded designs? Recommended: yes.
-2. If a finding asks, take §2.1 (per field, locals never lent mutably) before §2.2 (per region)? Recommended: yes;
-   §2.1 serves the types programs have.
+1. Keep one loan set per value now, with §2.1 and §2.2 as the recorded designs? Yes.
+2. If a finding asks, take §2.1 (per field, locals never lent mutably) before §2.2 (per region)? Yes; §2.1 serves
+   the types programs have.

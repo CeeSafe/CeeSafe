@@ -108,6 +108,13 @@ main.cee:1:29: error[N0207]: operator '~' cannot be applied to type 'i32'; bitwi
 fn invert(x: u32) -> u32 => ~x;
 ```
 
+A signed value is shifted by methods, whose behaviour is defined for every amount: `x.wrappingShl(n)`, and
+`x.wrappingShr(n)`, which is arithmetic (it rounds towards negative infinity, as C's `>>` does on most targets):
+
+```ceesafe
+fn floorDiv1024(x: i64) -> i64 => x.wrappingShr(10);
+```
+
 ### There are no type aliases
 
 <!-- ceesafe: fail N0101 -->

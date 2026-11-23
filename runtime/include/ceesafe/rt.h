@@ -642,6 +642,19 @@ static inline int8_t cee_bswap_i8(int8_t x) { return x; }
 static inline int16_t cee_bswap_i16(int16_t x) { return cee_as_i16(cee_bswap_u16((uint16_t)x)); }
 static inline int32_t cee_bswap_i32(int32_t x) { return cee_as_i32(cee_bswap_u32((uint32_t)x)); }
 static inline int64_t cee_bswap_i64(int64_t x) { return cee_as_i64(cee_bswap_u64((uint64_t)x)); }
+/* The masking shifts on signed types (ADR 0223). The left shift is the unsigned one, converted back without
+   implementation-defined behaviour; the right shift is arithmetic, written so that only non-negative values are
+   shifted: for x < 0, ~x is non-negative and ~(~x >> n) is floor(x / 2^n). */
+#define CEE_SHIFTS_SIGNED(T, S, US, N)                                                                 \
+    static inline T cee_shl_wrap_##S(T x, uint32_t n) { return cee_as_##S(cee_shl_wrap_##US((uint##N##_t)x, n)); } \
+    static inline T cee_shr_wrap_##S(T x, uint32_t n) {                                                 \
+        n &= (N##u) - 1u;                                                                               \
+        return x < 0 ? (T)~(T)((T)~x >> n) : (T)(x >> n);                                               \
+    }
+CEE_SHIFTS_SIGNED(int8_t, i8, u8, 8)
+CEE_SHIFTS_SIGNED(int16_t, i16, u16, 16)
+CEE_SHIFTS_SIGNED(int32_t, i32, u32, 32)
+CEE_SHIFTS_SIGNED(int64_t, i64, u64, 64)
 
 #if defined(CEE_FLOATS)
 /* ---- Floats: representation and conversions (type-system.md §35.4–§35.6) ----------------------- */

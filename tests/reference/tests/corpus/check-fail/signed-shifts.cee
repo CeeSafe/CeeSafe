@@ -1,0 +1,16 @@
+// Signed integers have the masking shifts (ADR 0223) and no other bit method or operator (type-system.md §6): the
+// shifts take a `u32` amount, and their result is the receiver's type.
+
+fn main() {
+    let x: i32 = -8;
+    let a: i32 = x.wrappingShr(1);
+    let b: i32 = x.wrappingShl(1);
+    let c: i64 = x.wrappingShr(1); // error[N0205]
+    let amount: i32 = 1;
+    x.wrappingShr(amount); // error[N0205]
+    x.wrappingShl();       // error[N0209]
+    x.rotateLeft(1);       // error[N0234]
+    x.countOnes();         // error[N0234]
+    let d = x >> 1;        // error[N0207]
+    let e = x << 1;        // error[N0207]
+}

@@ -1660,7 +1660,14 @@ fn builtin(
         let x = argument(it, c, n, frame, arguments, 0)?.bits(0, size)?;
         let amount = if (arguments.count > 1) argument(it, c, n, frame, arguments, 1)?.bits(0, 4)? else 0;
         let counts = b == bfIntLeadingZeros() || b == bfIntTrailingZeros() || b == bfIntCountOnes();
-        return Ok(valueOf(integerBits(b, x, (size * 8) as u64, amount), if (counts) 4 else size));
+        let width = (size * 8) as u64;
+        var bits = integerBits(b, x, width, amount);
+        if (b == bfIntWrappingShr() && c.types.info(t).signed && ((x >> (width - 1)) & 1) != 0) {
+            // A signed right shift is arithmetic (ADR 0223): the bits shifted in are copies of the sign.
+            let mask = if (width == 64) 0xFFFF_FFFF_FFFF_FFFFu64 else (1u64 << width) - 1;
+            bits = bits | (mask & ~(mask >> (amount & (width - 1))));
+        }
+        return Ok(valueOf(bits, if (counts) 4 else size));
     }
     if (b == bfIntAbs() || b == bfIntUnsignedAbs()) {
         let t = builtinArgumentType(n, arguments, 0);

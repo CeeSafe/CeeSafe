@@ -43,7 +43,9 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
 - **Runtime per profile (M8c, `profiles.md` §4.2).** Hosted programs get `ceesafe/rt.h`, the
   core runtime `ceesafe_rt_core.c`, and the platform layer `ceesafe_rt_hosted.c` / `ceesafe_rt_io.c` (C library
   calls). A hosted program that prints a float also gets `ceesafe_rt_float.c`, the float formatter and its table
-  (type-system.md §35.7; M11 G7b). Freestanding programs get `ceesafe/rt.h` and `ceesafe_rt_core.c` compiled with `CEE_FREESTANDING`
+  (type-system.md §35.7; M11 G7b), and one that calls a float method of libm's (`exp`, `sin`, `pow` …;
+  type-system.md §35.8, ADR 0218) `ceesafe_rt_math.c`, whose functions call the C library's math functions and are
+  linked with `-lm` (except on Windows). Freestanding programs get `ceesafe/rt.h` and `ceesafe_rt_core.c` compiled with `CEE_FREESTANDING`
   (a `#define` at its top), which leaves out everything that needs a platform service; the
   environment defines `ceesafe_panic`. Freestanding builds add `-ffreestanding -fno-stack-protector
   -fno-asynchronous-unwind-tables -fno-unwind-tables` (the stack protector's `__stack_chk_*` symbols
@@ -53,7 +55,8 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   each with the flags above: the generated code (`<program>_main.o`, or with `--split` one per unit and
   `<program>_ceesafe_instances.o`), every runtime file the program needs, chosen as for an executable
   (`ceesafe_rt_core.o`, `ceesafe_rt_hosted.o`, `ceesafe_rt_io.o`, and `ceesafe_rt_float.o`, `ceesafe_rt_thread.o`,
-  `ceesafe_rt_async.o`, `ceesafe_rt_window.o` when its calls appear), and a package's separately compiled C files
+  `ceesafe_rt_async.o`, `ceesafe_rt_window.o`, `ceesafe_rt_math.o` when its calls appear; the host then links libm,
+  `-lm`), and a package's separately compiled C files
   (`<program>_ceesafe_package_<k>.o`); tooling.md §8.3 gives the names. Headers are not members: they are written
   beside the archive. The generated `main` is left out, since the host has its own; with `--lib-main` it is kept, in
   the generated code's member, so the archive of a program with a CeeSafe `main` links into an executable alone.

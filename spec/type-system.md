@@ -5317,7 +5317,8 @@ fn main() {
 - The interpreter computes in CeeSafe's own `f32` and `f64` (`ceesafec`'s C `float` and `double`), which round the same way. Compiled and interpreted programs
   give the same results, NaN bits aside (§35.3).
 - Not in G7 (ADR 0011 §3.8): `%`, a math library beyond §35.8, and other float formats. Parsing floats from text came
-  with ADR 0071 (§16.6).
+  with ADR 0071 (§16.6), the math library with ADR 0218 (§35.8; `x.truncatingRemainder(y)` is C's `fmod`, so `%`
+  remains undefined on floats). Hexadecimal float literals are not in the language.
 
 ### 35.7 Printing (M11 G7b)
 - `Console.write`, `Console.writeLine` and `String.appendNumber` accept `f32` and `f64` (and references to them).
@@ -5341,24 +5342,73 @@ fn main() {
   The file is linked only into programs that print a float. The interpreter finds the same digits by an exact search
   over rationals instead (`src/interpreter/float_format.cee`).
 
-### 35.8 Math methods (M11 G7c; ADR 0011 §5 Q5)
+### 35.8 Math methods (M11 G7c; ADR 0011 §5 Q5; ADR 0218)
 | Method | Result | Behaviour |
 |---|---|---|
 | `x.sqrt()` | same type | the square root, correctly rounded (IEEE `squareRoot`). `(-0.0).sqrt()` is `-0.0`; a negative operand or NaN gives NaN |
 | `x.abs()` | same type | `x` with its sign cleared, NaN included |
 | `x.floor()`, `x.ceil()` | same type | the nearest integral value below or above (IEEE `roundToIntegralTowardNegative`/`Positive`). Integral values, infinities and NaN are unchanged, and a zero result keeps `x`'s sign: `(-0.5).ceil()` is `-0.0` |
 | `x.min(y)`, `x.max(y)` | same type | IEEE 754-2019 `minimum`/`maximum`: NaN if either is NaN, and `-0.0` is below `0.0`. `y` is checked against `x`'s type, so a flexible literal takes it |
+| `x.trunc()` | same type | the nearest integral value toward zero (IEEE `roundToIntegralTowardZero`; C's `trunc`) |
+| `x.round()` | same type | the nearest integral value, halves away from zero (IEEE `roundToIntegralTiesToAway`; C's `round`): `2.5` gives `3.0`, `-0.5` gives `-0.0`, `0.49999999999999994` gives `0.0` |
+| `x.roundEven()` | same type | the nearest integral value, halves to even (IEEE `roundToIntegralTiesToEven`; C's `rint` in the default rounding mode): `2.5` gives `2.0` |
+| `x.copySign(y)` | same type | `x`'s magnitude with `y`'s sign bit, NaN included (IEEE `copySign`) |
 
-- None of them panics, and none calls a C math library: CosmoOS has no libm.
-  - `floor`, `ceil`, `abs`, `min` and `max` are exact portable C over integers and bits in `rt.h`. On baseline x86-64
-    there is no instruction for `floor` or `ceil`; `roundsd` needs SSE4.1.
+For `trunc`, `round` and `roundEven`, as for `floor` and `ceil`: integral values, infinities and NaN are unchanged,
+and a zero result keeps `x`'s sign.
+
+**The C library's functions (ADR 0218).** Each of these is the platform C library's function of the name given, for
+`f64`, or its `f` form (`expf` …) for `f32`; operands of two or three are checked against `x`'s type, as `min`'s are:
+
+| Method | C | Method | C | Method | C |
+|---|---|---|---|---|---|
+| `x.exp()` | `exp` | `x.sin()` | `sin` | `x.sinh()` | `sinh` |
+| `x.exp2()` | `exp2` | `x.cos()` | `cos` | `x.cosh()` | `cosh` |
+| `x.expM1()` | `expm1` | `x.tan()` | `tan` | `x.tanh()` | `tanh` |
+| `x.ln()` | `log` | `x.asin()` | `asin` | `x.asinh()` | `asinh` |
+| `x.log2()` | `log2` | `x.acos()` | `acos` | `x.acosh()` | `acosh` |
+| `x.log10()` | `log10` | `x.atan()` | `atan` | `x.atanh()` | `atanh` |
+| `x.ln1p()` | `log1p` | `y.atan2(x)` | `atan2(y, x)` | `x.cbrt()` | `cbrt` |
+| `x.pow(y)` | `pow` | `x.hypot(y)` | `hypot` | `x.logB()` | `logb` |
+| `x.fma(y, z)` | `fma`: `x × y + z`, rounded once | `x.remainder(y)` | `remainder` (IEEE `remainder`) | `x.truncatingRemainder(y)` | `fmod` |
+| `x.scaleB(n)` | `scalbn`: `x × 2ⁿ`, `n: i32` | | | | |
+
+- **Results.** Whatever the platform's libm gives, NaN, infinities, signed zeros and domain errors included, which
+  C11 Annex F specifies for a libm that follows it (glibc's, macOS's and FreeBSD's do; the Windows C runtime's
+  mostly): `(-1.0).ln()` is NaN, `0.0.ln()` is `-Infinity`, `1000.0.exp()` is `Infinity`, `(-0.0).sin()` is `-0.0`,
+  `0.0.atan2(-0.0)` is π. None panics, and `errno` is not part of the result. An inexact result's last bits are the
+  libm's and may differ from one platform to another: `fma`, `remainder`, `truncatingRemainder`, `scaleB` and `logB`
+  are exact, and the others are as accurate as the platform makes them (correctly rounded or within an ulp or two on
+  those named).
+- **frexp.** `x.logB()` is `x`'s exponent as a float (`-Infinity` for a zero, `Infinity` for an infinity, NaN for
+  NaN) and `x.scaleB(n)` scales by a power of two, so for a finite non-zero `x`,
+  `x.scaleB(-truncate<i32>(x.logB()))` is the significand in [1, 2). C's `frexp` returns two values, which CeeSafe has
+  no type for (ADR 0216).
+- **In C** each is a call of `ceesafe_math_<C name>_f64`/`_f32` in `ceesafe_rt_math.c`, a runtime file of its own that
+  calls the libm function and nothing more. Being a separate translation unit, it never sees a constant operand, so
+  no C compiler evaluates a call at compile time or rewrites it (gcc folds `exp(2.0)` with MPFR; clang turns
+  `pow(2.0, y)` into `exp2(y)`), and the result is the libm's at run time. A program links the file only if it calls
+  one of them, and the link then adds `-lm`, except on Windows (tooling.md §8.3). With `--emit lib` the host links
+  libm (c-backend.md §1).
+- **In the interpreter** each calls the same libm function, from ceesafec (`src/interpreter/math.cee`), so a program
+  prints the same under `run --interp` as its build does on the same machine.
+- **Hosted only.** With `--profile freestanding` a call of one is N0293: CosmoOS has no libm. `trunc`, `round`,
+  `roundEven` and `copySign`, like the methods above them, are in every profile.
+
+The rest:
+
+- None of the methods of the first table panics, and none calls a C math library: CosmoOS has no libm.
+  - `floor`, `ceil`, `trunc`, `round`, `roundEven`, `abs`, `copySign`, `min` and `max` are exact portable C over
+    integers and bits in `rt.h`. On baseline x86-64 there is no instruction for `floor` or `ceil`; `roundsd` needs
+    SSE4.1.
   - `sqrt` is the hardware square root, which is correctly rounded on both targets. It is reached through
     `__builtin_elementwise_sqrt` with clang and `__builtin_sqrt` with gcc, built with `-fno-math-errno` (ceesafec passes
     it), so it never sets `errno` or calls `sqrt`. MSVC uses its C runtime's `sqrt`.
-- The interpreter uses CeeSafe's own methods of the same names, so it computes what compiled code does.
-- The eight names `bits`, `fromBits`, `sqrt`, `abs`, `floor`, `ceil`, `min` and `max` are reserved on float types: an
-  interface method of one of those names cannot be implemented for a float type (N0228). Wrong argument counts are
-  N0209.
+- The interpreter uses CeeSafe's own methods of the same names, so it computes what compiled code does; `trunc`,
+  `round` and `roundEven` it computes as `rt.h` does, from `floor` and `ceil`.
+- The names of every method of this section, and `bits` and `fromBits`, are reserved on float types: an interface
+  method of one of those names cannot be implemented for a float type (N0228). Wrong argument counts are N0209, and an
+  operand of another type (`scaleB`'s of another than `i32`) N0205.
 
 ### 35.9 `--no-float` (M11 G7c; ADR 0011 §3.7)
 - `ceesafec build --no-float` and `ceesafec check --no-float` reject every float type, float literal and `f32.fromBits`/

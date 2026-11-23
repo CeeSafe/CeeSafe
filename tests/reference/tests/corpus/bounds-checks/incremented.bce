@@ -1,0 +1,5 @@
+bounds-checks/incremented.cee:11:16: kept
+bounds-checks/incremented.cee:19:34: removed
+bounds-checks/incremented.cee:29:18: removed
+bounds-checks/incremented.cee:39:18: kept
+bounds-checks/incremented.cee:49:18: kept

@@ -1,0 +1,65 @@
+// An upper bound after `x += 1` (optimisations.md §2.4, "An update in place", ADR 0218 §2.3): an old `x < u` gives
+// `x ≤ u`. The .bce snapshot lists each index check; the near misses must keep theirs.
+
+// The countdown's `digits[n]` is removed: `digits[n]` passed, so `n < 20`, and after `n += 1`, `n ≤ 20`. The fill's
+// `digits[n]` is kept: nothing says a u64 has at most 20 digits.
+fn reversedDigits(value: u64) -> u64 {
+    var digits = [0u8; 20];
+    var n: usize = 0;
+    var v = value;
+    loop {
+        digits[n] = truncate<u8>(v % 10);
+        n += 1;
+        v = v / 10;
+        if (v == 0) { break; }
+    }
+    var out: u64 = 0;
+    while (n > 0) {
+        n -= 1;
+        out = out * 10 + (digits[n] as u64);
+    }
+    return out;
+}
+
+// Removed: under `n < s.length`, `n += 1` leaves `n ≤ s.length`, so `s[n - 1]` is in range.
+fn lastOfPrefix(s: Slice<u32>, k: usize) -> u32 {
+    var n = k;
+    if (n < s.length) {
+        n += 1;
+        return s[n - 1];
+    }
+    return 0;
+}
+
+// Kept: after `n += 2`, `n < s.length` says nothing of `n - 1`.
+fn stepTwo(s: Slice<u32>, k: usize) -> u32 {
+    var n = k;
+    if (n < s.length) {
+        n += 2;
+        return s[n - 1];
+    }
+    return 0;
+}
+
+// Kept: `n <= s.length` before the step leaves `n ≤ s.length + 1`, so `n - 1` may be the length.
+fn atMostThenStep(s: Slice<u32>, k: usize) -> u32 {
+    var n = k;
+    if (n <= s.length) {
+        n += 1;
+        return s[n - 1];
+    }
+    return 0;
+}
+
+fn main() {
+    let a = [4u32, 8, 15, 16, 23, 42];
+    Console.writeLine(reversedDigits(12345));
+    Console.writeLine(lastOfPrefix(a[..], 5));
+    Console.writeLine(stepTwo(a[..], 3));
+    Console.writeLine(atMostThenStep(a[..], 3));
+}
+
+// expect-stdout: 12345
+// expect-stdout: 42
+// expect-stdout: 23
+// expect-stdout: 16

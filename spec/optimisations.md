@@ -104,10 +104,17 @@ Nothing is kept past §2.5's budget.
   the update cannot have made false. After `x = x - b` (and, unsigned, `x / b` and `x >> b`) the new value is at
   most the old one: each `x ≤ u`, `x < u` and `x = u` gives `x ≤ u`, or `x < u` if it was. After `x = x + b` the new
   value is at least the old one: each `l ≤ x`, `l < x` and `l = x` gives `l ≤ x`, or `l < x`. When `b` is a constant
-  of at least 1 and the operation is `+` or `-`, the result is strict: `x ≤ u` gives `x < u`. `b` must not be
+  of at least 1 and the operation is `+` or `-`, the result is strict: `x ≤ u` gives `x < u`. After `x = x + 1`, each `x < u`
+  also gives `x ≤ u` (ADR 0218): the old value was at most `u − 1`. `b` must not be
   negative: any unsigned operand, or a constant of at least 0 for a signed `x`. So in
   `var n = s.length; while (n > 0) { n -= 1; … s[n] … }` the check is removed. (§2.3 ends the facts of an assigned
   local because its old value is gone; these are the ones that hold of the new value whatever the old one was.)
+- **The interval of a checked result** (ADR 0218): after `x = a * b`, a signed `x = a + b` or `x = a - b`, or
+  `x = -a`, `low ≤ x` and `x ≤ high`, where `low` and `high` are the least and greatest values of the operation at
+  the corners of its operands' bounds (§3.2), each only where it is narrower than `x`'s type range; for `*`, none
+  when a corner lies outside the type. Execution goes past the operation only if its exact result is in the type, so
+  this holds whether its check is removed or kept. So under `i < 1000`, `7 * i` is at most 6993 and the `+` of
+  `7 * i + 1` cannot overflow. Unsigned `+` and `-` have their definitions instead.
 - **A reborrowed slice** (ADR 0102): `t = &(*s)` or `t = &mut (*s)` for slice locals `s` and `t`, the place being
   `s` dereferenced and nothing more, gives `len(t) = len(s)`. `s.swap(i, j)` on a `SliceMut` local makes one.
 - **Passed checks**: after `BoundsCheck(i < L)`, `i < L`; after `RangeCheck(lo, hi, L)`, `lo ≤ hi` and `hi ≤ L`;
@@ -282,6 +289,9 @@ the same.
   maximum, a sum of two unbounded values, a subtraction tested the wrong way, a signed negation that may be `MIN`).
   `tested.cee` (ADR 0100) has the subtractions after an equality test that left, and their near misses: the test of
   another local, a signed operand, a local changed after the test.
+  `interval.cee` (ADR 0218) has the operations whose operands are bounded by the interval of a checked result (a
+  product, a signed sum, difference and negation), and their near misses: an unbounded operand, a product past the
+  type, a negation that may be of `MIN`.
 
 ## 4. Placement (M5; on by default from M9e)
 

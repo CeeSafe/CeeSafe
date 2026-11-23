@@ -1104,6 +1104,7 @@ fn assignFacts(
         }
         resultFacts(c, n, context, x, r, state, mut facts)?;
         updateFacts(c, n, context, x, r, state, mut facts)?;
+        intervalFacts(c, n, context, x, r, state, mut facts)?;
     }
     // `x = a op b` computes what an existing `y = a op b` holds: x equals y.
     if (placeIsLocal(n, target) && context.values[x as usize]) {
@@ -1212,6 +1213,7 @@ fn updateFacts(
     var down = false;
     var up = false;
     var strict = false;
+    var plusOne = false; // `x = x + 1`: an old `x < u` gives `x ≤ u` (ADR 0218 §2.3)
     match (n.rvalues[r as usize]) {
         NirRvalue.Binary(op, left, right) => {
             let k = binaryIndex(op);
@@ -1242,6 +1244,7 @@ fn updateFacts(
             } else if (k == 13) {
                 up = true;
                 strict = atLeastOne;
+                plusOne = constant && wideEqual(other.value, wideOfU64(1));
             }
         }
         _ => {}
@@ -1262,6 +1265,113 @@ fn updateFacts(
         } else if (up && (isRight || (equal && isLeft))) {
             facts.push(compareFact(relation, if (isRight) f.a else f.b, self))?; // l (≤ or <) old x ≤ x
         }
+        if (plusOne && isLeft && f.relation == relationBelow()) {
+            facts.push(compareFact(relationAtMost(), self, f.b))?; // old x < u, so old x + 1 ≤ u
+        }
+    }
+    return Ok();
+}
+
+/// The interval of a checked result (ADR 0218): after `x = a * b`, a signed `a + b` or `a - b`, or `-a`, execution
+/// goes on only if the result was exact, so `x` lies between the operation's values at the corners of its operands'
+/// bounds (§3.2). That is recorded as constant bounds on `x`, each only where it is narrower than `x`'s type range.
+/// Unsigned `+` and `-` make a definition instead (§2.4).
+fn intervalFacts(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    context: borrow CheckContext,
+    x: u32,
+    r: u32,
+    state: borrow Vector<Fact>,
+    facts: borrow mut Vector<Fact>,
+) -> Result<void, AllocError> {
+    if (!context.values[x as usize] || !isOverflowChecked(c, n, r) || !withinBudget(state)) {
+        return Ok();
+    }
+    let signed = c.types.info(n.rvalueTypes[r as usize]).signed;
+    let range = context.ranges[x as usize];
+    var low = range.min;
+    var high = range.max;
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Binary(op, left, right) => {
+            let k = binaryIndex(op);
+            if ((k == 13 || k == 14) && !signed) {
+                return Ok(); // a definition (§2.4)
+            }
+            let a = termOf(c, n, context, left);
+            let b = termOf(c, n, context, right);
+            if (!isTerm(a) && !isTerm(b)) {
+                return Ok(); // nothing narrower than the operands' types
+            }
+            var queried = Vector<Term>.create();
+            if (isTerm(a)) {
+                queried.push(a)?;
+            }
+            if (isTerm(b)) {
+                queried.push(b)?;
+            }
+            let closure = buildClosure(context, state, queried)?;
+            let ba = operandBounds(c, context, closure, a, n.operandTypes[left as usize]);
+            let bb = operandBounds(c, context, closure, b, n.operandTypes[right as usize]);
+            if (k == 13) {
+                low = wideAdd(ba.min, bb.min);
+                high = wideAdd(ba.max, bb.max);
+            } else if (k == 14) {
+                low = wideSub(ba.min, bb.max);
+                high = wideSub(ba.max, bb.min);
+            } else {
+                // Two 64-bit bounds multiply to about 2^128, past Wide: a corner outside the type leaves that side to it.
+                let bigMin = wideToBig(range.min)?;
+                let bigMax = wideToBig(range.max)?;
+                var lowOut = false;
+                var highOut = false;
+                var first = true;
+                for (p in 0..4) {
+                    let u = if (p < 2) ba.min else ba.max;
+                    let v = if (p % 2 == 0) bb.min else bb.max;
+                    let corner = BigInt.mul(wideToBig(u)?, wideToBig(v)?)?;
+                    if (corner.compare(bigMin) < 0) {
+                        lowOut = true;
+                    }
+                    if (corner.compare(bigMax) > 0) {
+                        highOut = true;
+                    }
+                    if (!lowOut && !highOut) {
+                        let w = bigToWide(corner)?;
+                        if (first || wideLess(w, low)) {
+                            low = w;
+                        }
+                        if (first || wideLess(high, w)) {
+                            high = w;
+                        }
+                        first = false;
+                    }
+                }
+                if (lowOut || highOut) {
+                    return Ok(); // a corner past the type: the check may fail, and the type bounds x anyway
+                }
+            }
+        }
+        NirRvalue.Unary(_, o) => {
+            let a = termOf(c, n, context, o);
+            if (!isTerm(a)) {
+                return Ok();
+            }
+            var queried = Vector<Term>.create();
+            queried.push(a)?;
+            let closure = buildClosure(context, state, queried)?;
+            let ba = operandBounds(c, context, closure, a, n.operandTypes[o as usize]);
+            low = wideNegate(ba.max);
+            high = wideNegate(ba.min);
+        }
+        _ => { return Ok(); }
+    }
+    let self = localTerm(x);
+    if (wideLess(range.min, low) && wideAtMost(low, range.max)) {
+        facts.push(compareFact(relationAtMost(), constantTerm(low), self))?;
+    }
+    if (wideLess(high, range.max) && wideAtMost(range.min, high)) {
+        facts.push(compareFact(relationAtMost(), self, constantTerm(high)))?;
     }
     return Ok();
 }
@@ -1462,17 +1572,6 @@ fn newFacts(
             let leftType = n.operandTypes[left as usize];
             let a = termOf(c, n, context, left);
             let b = termOf(c, n, context, right);
-            if ((k == 13 || k == 14 || k == 17 || k == 10 || k == 12 || k == 16) && c.types.is(
-                t,
-                TypeKind.Integer,
-            ) && !c.types.info(t).signed &&
-                c.types.is(leftType, TypeKind.Integer) && !c.types.info(leftType).signed && isTerm(a) && isTerm(b)) {
-                facts.push(definitionFact(self, k, a, b))?;
-                if (k == 14) {
-                    facts.push(compareFact(relationAtMost(), b, a))?; // the checked subtraction did not panic
-                }
-                return Ok();
-            }
             let lc = match (n.operands[left as usize]) {
                 NirOperand.Const(v) => Some(v),
                 _ => null,
@@ -1485,7 +1584,8 @@ fn newFacts(
                 leftType,
                 TypeKind.Integer,
             )) {
-                // Constants: the exact result, if the operation does not panic (§2.4).
+                // Constants: the exact result, if the operation does not panic (§2.4). Before the definition, which
+                // gives a sum only lower bounds: `2..LIMIT + 1` bounds its index by the exact 1001 (ADR 0218 §2.2).
                 let exact = exactArithmetic(k, wideOfIntValue(lc!), wideOfIntValue(rc!))?;
                 let range = integerRangeOf(c, xType);
                 match (exact) {
@@ -1495,6 +1595,17 @@ fn newFacts(
                         }
                     }
                     null => {}
+                }
+                return Ok();
+            }
+            if ((k == 13 || k == 14 || k == 17 || k == 10 || k == 12 || k == 16) && c.types.is(
+                t,
+                TypeKind.Integer,
+            ) && !c.types.info(t).signed &&
+                c.types.is(leftType, TypeKind.Integer) && !c.types.info(leftType).signed && isTerm(a) && isTerm(b)) {
+                facts.push(definitionFact(self, k, a, b))?;
+                if (k == 14) {
+                    facts.push(compareFact(relationAtMost(), b, a))?; // the checked subtraction did not panic
                 }
                 return Ok();
             }

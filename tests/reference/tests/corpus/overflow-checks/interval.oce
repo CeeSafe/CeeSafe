@@ -1,0 +1,14 @@
+overflow-checks/interval.cee:10:16: removed
+overflow-checks/interval.cee:18:16: removed
+overflow-checks/interval.cee:26:17: removed
+overflow-checks/interval.cee:27:16: removed
+overflow-checks/interval.cee:35:17: removed
+overflow-checks/interval.cee:36:16: removed
+overflow-checks/interval.cee:43:12: kept
+overflow-checks/interval.cee:49:16: kept
+overflow-checks/interval.cee:56:13: kept
+overflow-checks/interval.cee:57:12: kept
+overflow-checks/interval.cee:66:5: removed
+overflow-checks/interval.cee:66:18: removed
+overflow-checks/interval.cee:67:13: removed
+overflow-checks/interval.cee:68:13: kept

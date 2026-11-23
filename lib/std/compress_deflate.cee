@@ -11,11 +11,12 @@
 public enum DecodeError {
     /// Not a valid stream, cut short, or bytes after its end.
     Malformed,
-    /// More output than the limit allows.
+    /// More output than the limit allows, or a zstd window above the window limit.
     TooLarge,
-    /// Valid but not handled: a zlib stream that needs a preset dictionary, given none.
+    /// Valid but not handled: a zlib stream that needs a preset dictionary, given none; a zstd frame that needs a
+    /// dictionary.
     Unsupported,
-    /// gzip's CRC-32 or length, or zlib's Adler-32, disagrees with the bytes decoded.
+    /// gzip's CRC-32 or length, zlib's Adler-32, or zstd's XXH64 disagrees with the bytes decoded.
     ChecksumMismatch,
     @from OutOfMemory(AllocError),
 }

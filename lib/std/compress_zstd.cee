@@ -1,0 +1,1587 @@
+// Compression (ADR 0196 phase 3): Zstandard's decoder (RFC 8878), in pure CeeSafe. A frame is a header (the window,
+// the content size, a dictionary ID, whether a checksum follows) and blocks of at most 128 KiB: raw, RLE, or
+// compressed, which is a literals section (raw, RLE, or Huffman-coded in one or four streams, with its own table or the
+// last one) and a sequences section, each sequence a literal length, an offset (or one of three repeated ones) and a
+// match length, coded by three FSE tables (predefined, RLE, described in the block, or the last ones) in one bit stream
+// read backward. The decoder runs each sequence as it decodes it: the literals, then the match, copied eight bytes at a
+// time. Decoding is table-driven, as libzstd's: an FSE table entry holds its symbol's base value and extra bits, and a
+// Huffman table of up to 2^12 entries is indexed by the next bits. `Zstd.decompress` decodes into the caller's vector;
+// a `ZstdDecoder` decodes into a ring of the window and one block, allocated at `create`, and copies out to the
+// caller's slices. Skippable frames are skipped; dictionaries are not handled.
+
+fn zstdMagic() -> u32 => 0xFD2FB528;
+/// The largest a block's content may be (RFC 8878 §3.1.1.2.4), or the window if that is smaller.
+fn zstdBlockMax() -> usize => 131072;
+/// Room past where a block may end that the copies may write over, so they move 8 or 16 bytes at a time.
+fn zstdSlack() -> usize => 32;
+/// The largest window `Zstd.decompress` takes: 2 GiB, libzstd's limit (ZSTD_WINDOWLOG_MAX on 64-bit systems).
+fn zstdWindowMax() -> u64 => 2147483648;
+/// The most bytes a frame's content may be per byte of the frame after its header: an RLE block of 4 bytes writes at
+/// most 128 KiB.
+fn zstdRatio() -> u64 => 32768;
+/// Where each sequence field's table is in `ZstdState.tables`: literal lengths, offsets, match lengths.
+fn zstdTableAt(which: usize) -> usize => if (which == 0) 0 else if (which == 1) 512 else 768;
+
+/// Each literal length code's (0 to 35) base value and extra bits (RFC 8878 §3.1.1.3.2.1).
+static ZSTD_LL_BASE: [u32; 36] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024,
+    2048, 4096, 8192, 16384, 32768, 65536,
+];
+static ZSTD_LL_BITS: [u8; 36] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+];
+/// Each match length code's (0 to 52) base value and extra bits.
+static ZSTD_ML_BASE: [u32; 53] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
+    34, 35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539,
+];
+static ZSTD_ML_BITS: [u8; 53] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3,
+    3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+];
+/// The predefined distributions (RFC 8878 §3.1.1.3.2.2): -1 is a probability below 1.
+static ZSTD_LL_DEFAULT: [i16; 36] = [
+    4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1,
+];
+static ZSTD_ML_DEFAULT: [i16; 53] = [
+    1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1,
+];
+static ZSTD_OF_DEFAULT: [i16; 29] = [
+    1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1,
+];
+
+/// The DecodeError of a failure code: 1 Malformed, 2 TooLarge, 3 Unsupported, 4 ChecksumMismatch.
+@effects()
+fn zstdError(code: u32) -> DecodeError {
+    if (code == 2) { return DecodeError.TooLarge; }
+    if (code == 3) { return DecodeError.Unsupported; }
+    if (code == 4) { return DecodeError.ChecksumMismatch; }
+    return DecodeError.Malformed;
+}
+
+@effects()
+fn zstdCode(e: DecodeError) -> u32 => match (e) {
+    DecodeError.Malformed => 1,
+    DecodeError.TooLarge => 2,
+    DecodeError.Unsupported => 3,
+    DecodeError.ChecksumMismatch => 4,
+    DecodeError.OutOfMemory(_) => 1,
+};
+
+/// The position of the highest set bit of `x`, which is not 0.
+@effects()
+fn zstdHighBit(x: u32) -> u32 => 31 - x.leadingZeros();
+
+// ---------------------------------------------------------------------------------------------------------------
+// Bit streams.
+
+/// A bit stream read backward (RFC 8878 §4.1): from its last byte, whose highest set bit marks where the stream
+/// ends, toward its first byte, most significant bits first. `buf` holds the next bits at its top, below them some of
+/// the stream's following bits, then zeros, so reading past the stream's first bit reads zeros; `count` then falls
+/// below 0. Between two refills a reader takes at most 56 bits.
+struct ZstdBits {
+    buf: u64;
+    count: i64; // how many of buf's top bits are the stream's next ones
+    at: usize;  // the bytes from `start` to `at` are not in buf yet
+    start: usize;
+
+    /// The stream `data[start..end]`, or null if it is empty or its last byte is 0 (it has no end mark).
+    @effects()
+    fn open(data: Slice<u8>, start: usize, end: usize) -> ZstdBits? {
+        if (end <= start) { return null; }
+        let last = data[end - 1] as u32;
+        if (last == 0) { return null; }
+        let mark = zstdHighBit(last);
+        var bits = ZstdBits { buf: 0, count: mark as i64, at: end - 1, start: start };
+        if (mark > 0) { bits.buf = (last as u64) << (64 - mark); }
+        bits.refill(data);
+        return bits;
+    }
+
+    /// Loads bytes until more than 56 bits are held or the stream has none left: eight at once while eight remain.
+    @effects()
+    fn refill(borrow mut this, data: Slice<u8>) {
+        if (this.count > 56) { return; }
+        if (this.at - this.start >= 8) {
+            let word = data.readLE<u64>(this.at - 8);
+            this.buf = this.buf | (word >> truncate<u32>(this.count));
+            let bytes = truncate<usize>(64 - this.count) / 8;
+            this.at -= bytes;
+            this.count += truncate<i64>(bytes * 8);
+            return;
+        }
+        while (this.count <= 56 && this.at > this.start) {
+            this.at -= 1;
+            this.buf = this.buf | ((data[this.at] as u64) << truncate<u32>(56 - this.count));
+            this.count += 8;
+        }
+    }
+
+    /// The next `n` bits (at most 56), consumed.
+    @effects()
+    fn read(borrow mut this, n: u32) -> u64 {
+        let v = (this.buf >> 1) >> (63 - n);
+        this.buf = this.buf << n;
+        this.count -= n as i64;
+        return v;
+    }
+
+    /// The next `n` bits (1 to 56), not consumed.
+    @effects()
+    fn peek(borrow this, n: u32) -> u64 => (this.buf >> 1) >> (63 - n);
+
+    @effects()
+    fn skip(borrow mut this, n: u32) {
+        this.buf = this.buf << n;
+        this.count -= n as i64;
+    }
+
+    /// Every bit was read, and no more.
+    @effects()
+    fn finished(borrow this) -> bool => this.count == 0 && this.at == this.start;
+
+    /// More bits were read than the stream has.
+    @effects()
+    fn overflowed(borrow this) -> bool => this.count < 0;
+}
+
+/// 32 bits of `data` from bit `bit` on, read forward (the least significant bit of the first byte first), with zeros
+/// past the end.
+@effects()
+fn zstdForward(data: Slice<u8>, bit: usize) -> u32 {
+    let at = bit >> 3;
+    var v: u64 = 0;
+    if (at < data.length && data.length - at >= 8) {
+        v = data.readLE<u64>(at);
+    } else {
+        var k: usize = 0;
+        while (k < 8 && at + k < data.length) {
+            v = v | ((data[at + k] as u64) << truncate<u32>(8 * k));
+            k += 1;
+        }
+    }
+    return truncate<u32>(v >> truncate<u32>(bit & 7));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// FSE tables (RFC 8878 §4.1). An entry is a u64: bits 0 to 7 the bits to read for the next state, 8 to 15 the
+// symbol's extra bits, 16 to 31 the next state's base, 32 to 63 the symbol's base value (for a table of Huffman
+// weights, the symbol itself).
+
+/// What an FSE table description said: the accuracy log, how many symbols it gave counts for, and its bytes.
+struct ZstdCounts {
+    log: u32;
+    symbols: usize;
+    used: usize;
+}
+
+/// Reads an FSE table description (RFC 8878 §4.1.1, as libzstd's FSE_readNCount) from the start of `data` into
+/// `norm`: each symbol's normalized count, -1 for a probability below 1. Null if its log is above `maxLog`, its
+/// counts do not add up, it names a symbol above `maxSymbol`, or it is cut short.
+@effects()
+fn zstdNormalized(data: Slice<u8>, maxSymbol: usize, maxLog: u32, norm: SliceMut<i16>) -> ZstdCounts? {
+    if (data.length == 0) { return null; }
+    let log = (zstdForward(data, 0) & 15) + 5;
+    if (log > maxLog) { return null; }
+    var bit: usize = 4;
+    var threshold: i32 = truncate<i32>(1u32 << log);
+    var remaining: i32 = threshold + 1;
+    var nbits: u32 = log + 1;
+    var n: usize = 0;
+    var previous0 = false;
+    while (remaining > 1 && n <= maxSymbol) {
+        if (previous0) {
+            var n0 = n;
+            while ((zstdForward(data, bit) & 3) == 3) {
+                n0 += 3;
+                bit += 2;
+                if (n0 > maxSymbol) { return null; }
+            }
+            n0 += (zstdForward(data, bit) & 3) as usize;
+            bit += 2;
+            if (n0 > maxSymbol) { return null; }
+            while (n < n0) {
+                norm[n] = 0;
+                n += 1;
+            }
+        }
+        let maximum = 2 * threshold - 1 - remaining;
+        let v = zstdForward(data, bit);
+        let low = truncate<i32>(v & truncate<u32>(threshold - 1));
+        var count: i32 = 0;
+        if (low < maximum) {
+            count = low;
+            bit += (nbits - 1) as usize;
+        } else {
+            count = truncate<i32>(v & truncate<u32>(2 * threshold - 1));
+            if (count >= threshold) { count -= maximum; }
+            bit += nbits as usize;
+        }
+        count -= 1;
+        remaining -= if (count < 0) -count else count;
+        norm[n] = truncate<i16>(count);
+        n += 1;
+        previous0 = count == 0;
+        if (remaining < threshold) {
+            if (remaining <= 1) { break; }
+            nbits = zstdHighBit(truncate<u32>(remaining)) + 1;
+            threshold = truncate<i32>(1u32 << (nbits - 1));
+        }
+        if (n > maxSymbol) { break; }
+    }
+    if (remaining != 1) { return null; }
+    let used = (bit + 7) >> 3;
+    if (used > data.length) { return null; }
+    return ZstdCounts { log: log, symbols: n, used: used };
+}
+
+/// One table entry.
+@effects()
+fn zstdEntry(base: u32, extra: u32, next: u32, bits: u32) -> u64 =>
+    ((base as u64) << 32) | ((next as u64) << 16) | ((extra as u64) << 8) | (bits as u64);
+
+/// The base value and extra bits of symbol `s` of field `which` (0 literal lengths, 1 offsets, 2 match lengths, 3 a
+/// Huffman weight, its own value), as an entry with no state bits.
+@effects()
+fn zstdSymbol(which: usize, s: usize) -> u64 {
+    if (which == 0) { return zstdEntry(ZSTD_LL_BASE[s], ZSTD_LL_BITS[s] as u32, 0, 0); }
+    if (which == 1) { return zstdEntry(1u32 << truncate<u32>(s), truncate<u32>(s), 0, 0); }
+    if (which == 2) { return zstdEntry(ZSTD_ML_BASE[s], ZSTD_ML_BITS[s] as u32, 0, 0); }
+    return zstdEntry(truncate<u32>(s), 0, 0, 0);
+}
+
+/// Builds the decoding table of 2^log states from normalized counts (RFC 8878 §4.1.1): symbols of probability below
+/// 1 at the end, the others spread with a step, and each state's bits and next base. False if the spread does not
+/// come back to the start (the counts do not fill the table).
+@effects()
+fn zstdFseTable(norm: Slice<i16>, log: u32, which: usize, table: SliceMut<u64>) -> bool {
+    let size = 1usize << log;
+    var symbols = [0u8; 512];
+    var high = size; // states from `high` on hold the symbols below 1
+    for (s in 0..norm.length) {
+        if (norm[s] == -1) {
+            high -= 1;
+            symbols[high] = truncate<u8>(s);
+        }
+    }
+    let step = (size >> 1) + (size >> 3) + 3;
+    let mask = size - 1;
+    var pos: usize = 0;
+    for (s in 0..norm.length) {
+        var k: i16 = 0;
+        while (k < norm[s]) {
+            symbols[pos] = truncate<u8>(s);
+            pos = (pos + step) & mask;
+            while (pos >= high) {
+                pos = (pos + step) & mask;
+            }
+            k += 1;
+        }
+    }
+    if (pos != 0) { return false; }
+    var next = [0u32; 256];
+    for (s in 0..norm.length) {
+        next[s] = if (norm[s] == -1) 1 else truncate<u32>(norm[s]);
+    }
+    for (state in 0..size) {
+        let s = symbols[state] as usize;
+        let x = next[s];
+        next[s] = x + 1;
+        let nb = log - zstdHighBit(x);
+        let base = (x << nb) - truncate<u32>(size);
+        table[state] = zstdSymbol(which, s) | zstdEntry(0, 0, base, nb);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Huffman (RFC 8878 §4.2). A table entry is a u16: the symbol in the high byte, its code's length in the low.
+
+/// A Huffman tree description: how many weights (the implied last one included), the table's log, and its bytes.
+struct ZstdWeights {
+    count: usize;
+    log: u32;
+    used: usize;
+}
+
+/// Reads a Huffman tree description from the start of `data` into `weights` (as libzstd's HUF_readStats): weights
+/// written 4 bits each, or compressed with FSE (two states, a log of at most 6), then the implied last weight. Null if
+/// it is cut short, a weight is above 12, the code would be longer than 12 bits, or the weights do not make a complete
+/// code.
+@effects()
+fn zstdWeights(data: Slice<u8>, weights: SliceMut<u8>) -> ZstdWeights? {
+    if (data.length == 0) { return null; }
+    let header = data[0] as usize;
+    var n: usize = 0;
+    var used: usize = 0;
+    if (header >= 128) {
+        n = header - 127;
+        let size = (n + 1) / 2;
+        if (size + 1 > data.length) { return null; }
+        for (k in 0..n) {
+            let b = data[1 + k / 2];
+            weights[k] = if (k % 2 == 0) b >> 4 else b & 15;
+        }
+        used = size + 1;
+    } else {
+        if (header + 1 > data.length) { return null; }
+        let body = data[1..1 + header];
+        var norm = [0i16; 256];
+        let counts = match (zstdNormalized(body, 255, 6, mut norm[..])) {
+            Some(c) => c,
+            null => { return null; },
+        };
+        var table = [0u64; 64];
+        if (!zstdFseTable(norm[0..counts.symbols], counts.log, 3, mut table[..])) { return null; }
+        var bits = match (ZstdBits.open(body, counts.used, body.length)) {
+            Some(b) => b,
+            null => { return null; },
+        };
+        var s1 = truncate<usize>(bits.read(counts.log));
+        var s2 = truncate<usize>(bits.read(counts.log));
+        while (true) {
+            if (n > 253) { return null; }
+            bits.refill(body);
+            let e1 = table[s1];
+            weights[n] = truncate<u8>(e1 >> 32);
+            n += 1;
+            s1 = truncate<usize>(((e1 >> 16) & 0xFFFF) + bits.read(truncate<u32>(e1 & 0xFF)));
+            if (bits.overflowed()) {
+                weights[n] = truncate<u8>(table[s2] >> 32);
+                n += 1;
+                break;
+            }
+            if (n > 253) { return null; }
+            let e2 = table[s2];
+            weights[n] = truncate<u8>(e2 >> 32);
+            n += 1;
+            s2 = truncate<usize>(((e2 >> 16) & 0xFFFF) + bits.read(truncate<u32>(e2 & 0xFF)));
+            if (bits.overflowed()) {
+                weights[n] = truncate<u8>(table[s1] >> 32);
+                n += 1;
+                break;
+            }
+        }
+        used = header + 1;
+    }
+    var total: u32 = 0;
+    for (k in 0..n) {
+        if (weights[k] > 12) { return null; }
+        total += (1u32 << (weights[k] as u32)) >> 1;
+    }
+    if (total == 0) { return null; }
+    let log = zstdHighBit(total) + 1;
+    if (log > 12) { return null; }
+    let rest = (1u32 << log) - total;
+    if ((rest & (rest - 1)) != 0) { return null; }
+    weights[n] = truncate<u8>(zstdHighBit(rest) + 1);
+    n += 1;
+    var ones: usize = 0;
+    for (k in 0..n) {
+        if (weights[k] == 1) { ones += 1; }
+    }
+    if (ones < 2 || ones % 2 == 1) { return null; }
+    return ZstdWeights { count: n, log: log, used: used };
+}
+
+/// Fills a table of 2^log entries from the weights: codes are given by weight, the lowest (longest code) first, and
+/// within a weight by symbol; a symbol of weight w has 2^(w - 1) entries and a code of log + 1 - w bits.
+@effects()
+fn zstdHuffmanTable(weights: Slice<u8>, log: u32, table: SliceMut<u16>) {
+    var position: usize = 0;
+    var w: u32 = 1;
+    while (w <= log) {
+        let span = 1usize << (w - 1);
+        let entry = log + 1 - w;
+        for (s in 0..weights.length) {
+            if (weights[s] as u32 == w) {
+                table[position..position + span].fill(truncate<u16>((truncate<u32>(s) << 8) | entry));
+                position += span;
+            }
+        }
+        w += 1;
+    }
+}
+
+/// Decodes the `n` symbols of the Huffman stream `data[from..to]` into `out[op..op + n]`: four symbols per refill
+/// while eight bytes remain, then one at a time. False if the stream has no end mark, or is not used up exactly.
+@effects()
+fn zstdHuffmanStream(
+    data: Slice<u8>,
+    from: usize,
+    to: usize,
+    table: Slice<u16>,
+    log: u32,
+    out: SliceMut<u8>,
+    op: usize,
+    n: usize,
+) -> bool {
+    var bits = match (ZstdBits.open(data, from, to)) {
+        Some(b) => b,
+        null => { return false; },
+    };
+    let end = op + n;
+    var p = op;
+    // The fast loop keeps the reader in locals (the C compiler does not inline its methods here): while eight bytes
+    // remain, a refill leaves at least 57 bits, and four symbols take at most 48.
+    var buf = bits.buf;
+    var count = bits.count;
+    var at = bits.at;
+    let start = bits.start;
+    let shift = 64 - log;
+    while (end - p >= 4 && at - start >= 8) {
+        if (count <= 56) {
+            buf = buf | (data.readLE<u64>(at - 8) >> truncate<u32>(count));
+            let k = truncate<usize>(64 - count) >> 3;
+            at -= k;
+            count += truncate<i64>(k << 3);
+        }
+        let e1 = table[truncate<usize>(buf >> shift)];
+        let n1 = (e1 & 255) as u32;
+        buf = buf << n1;
+        let e2 = table[truncate<usize>(buf >> shift)];
+        let n2 = (e2 & 255) as u32;
+        buf = buf << n2;
+        let e3 = table[truncate<usize>(buf >> shift)];
+        let n3 = (e3 & 255) as u32;
+        buf = buf << n3;
+        let e4 = table[truncate<usize>(buf >> shift)];
+        let n4 = (e4 & 255) as u32;
+        buf = buf << n4;
+        count -= (n1 + n2 + n3 + n4) as i64;
+        out[p] = truncate<u8>(e1 >> 8);
+        out[p + 1] = truncate<u8>(e2 >> 8);
+        out[p + 2] = truncate<u8>(e3 >> 8);
+        out[p + 3] = truncate<u8>(e4 >> 8);
+        p += 4;
+    }
+    bits.buf = buf;
+    bits.count = count;
+    bits.at = at;
+    return zstdHuffmanTail(mut bits, data, table, log, out, p, end);
+}
+
+/// Decodes the rest of a Huffman stream into `out[p..end]` one symbol at a time; whether it is used up exactly.
+@effects()
+fn zstdHuffmanTail(
+    bits: borrow mut ZstdBits,
+    data: Slice<u8>,
+    table: Slice<u16>,
+    log: u32,
+    out: SliceMut<u8>,
+    from: usize,
+    end: usize,
+) -> bool {
+    var p = from;
+    while (p < end) {
+        bits.refill(data);
+        let e = table[truncate<usize>(bits.peek(log))];
+        bits.skip((e & 255) as u32);
+        out[p] = truncate<u8>(e >> 8);
+        p += 1;
+    }
+    return bits.finished();
+}
+
+/// Decodes four Huffman streams, `data[bounds[k]..bounds[k + 1]]`, into four segments of `out` from 0, the first three
+/// `segment` symbols each and the last the rest of `n`: one symbol of each in turn while every stream has eight bytes
+/// left (the four are independent, so the processor works on them at once), then each to its end. False if one has
+/// no end mark or is not used up exactly.
+@effects()
+fn zstdHuffman4(
+    data: Slice<u8>,
+    bounds: [usize; 5],
+    table: Slice<u16>,
+    log: u32,
+    out: SliceMut<u8>,
+    segment: usize,
+    n: usize,
+) -> bool {
+    var b1 = match (ZstdBits.open(data, bounds[0], bounds[1])) {
+        Some(b) => b,
+        null => { return false; },
+    };
+    var b2 = match (ZstdBits.open(data, bounds[1], bounds[2])) {
+        Some(b) => b,
+        null => { return false; },
+    };
+    var b3 = match (ZstdBits.open(data, bounds[2], bounds[3])) {
+        Some(b) => b,
+        null => { return false; },
+    };
+    var b4 = match (ZstdBits.open(data, bounds[3], bounds[4])) {
+        Some(b) => b,
+        null => { return false; },
+    };
+    let shift = 64 - log;
+    var p: usize = 0; // each stream's position in its segment
+    let last = n - 3 * segment;
+    var x1 = b1.buf;
+    var x2 = b2.buf;
+    var x3 = b3.buf;
+    var x4 = b4.buf;
+    while (last - p >= 4 && b1.at - b1.start >= 8 && b2.at - b2.start >= 8 && b3.at - b3.start >= 8 &&
+        b4.at - b4.start >= 8) {
+        b1.buf = x1;
+        b2.buf = x2;
+        b3.buf = x3;
+        b4.buf = x4;
+        b1.refill(data);
+        b2.refill(data);
+        b3.refill(data);
+        b4.refill(data);
+        x1 = b1.buf;
+        x2 = b2.buf;
+        x3 = b3.buf;
+        x4 = b4.buf;
+        var used1: u32 = 0;
+        var used2: u32 = 0;
+        var used3: u32 = 0;
+        var used4: u32 = 0;
+        for (j in 0..4usize) {
+            let e1 = table[truncate<usize>(x1 >> shift)];
+            let e2 = table[truncate<usize>(x2 >> shift)];
+            let e3 = table[truncate<usize>(x3 >> shift)];
+            let e4 = table[truncate<usize>(x4 >> shift)];
+            let n1 = (e1 & 255) as u32;
+            let n2 = (e2 & 255) as u32;
+            let n3 = (e3 & 255) as u32;
+            let n4 = (e4 & 255) as u32;
+            x1 = x1 << n1;
+            x2 = x2 << n2;
+            x3 = x3 << n3;
+            x4 = x4 << n4;
+            used1 += n1;
+            used2 += n2;
+            used3 += n3;
+            used4 += n4;
+            out[p + j] = truncate<u8>(e1 >> 8);
+            out[segment + p + j] = truncate<u8>(e2 >> 8);
+            out[2 * segment + p + j] = truncate<u8>(e3 >> 8);
+            out[3 * segment + p + j] = truncate<u8>(e4 >> 8);
+        }
+        b1.count -= used1 as i64;
+        b2.count -= used2 as i64;
+        b3.count -= used3 as i64;
+        b4.count -= used4 as i64;
+        p += 4;
+    }
+    b1.buf = x1;
+    b2.buf = x2;
+    b3.buf = x3;
+    b4.buf = x4;
+    return zstdHuffmanTail(mut b1, data, table, log, out, p, segment) &&
+        zstdHuffmanTail(mut b2, data, table, log, out, segment + p, 2 * segment) &&
+        zstdHuffmanTail(mut b3, data, table, log, out, 2 * segment + p, 3 * segment) &&
+        zstdHuffmanTail(mut b4, data, table, log, out, 3 * segment + p, n);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Copies.
+
+/// Copies `length` bytes to `out[to..]` from `offset` bytes back, where the ranges may overlap, with room for 8 bytes
+/// past the copy (written over by what follows): eight at a time from `offset` back when that is 8 or more; one value
+/// when it is 1; else the first 8 bytes one at a time, then eight at a time from the least multiple of `offset` that
+/// is 8 or more back, since the copy repeats every `offset` bytes.
+@effects()
+fn zstdCopy(out: SliceMut<u8>, to: usize, offset: usize, length: usize) {
+    var k: usize = 0;
+    var back = offset;
+    if (offset < 8) {
+        if (offset == 1) {
+            let b = out[to - 1];
+            out[to..to + length].fill(b);
+            return;
+        }
+        let first = if (length < 8) length else 8;
+        while (k < first) {
+            out[to + k] = out[to + k - offset];
+            k += 1;
+        }
+        back = offset * ((offset + 7) / offset);
+    }
+    while (k < length) {
+        let word = out.readLE<u64>(to + k - back);
+        out.writeLE(to + k, word);
+        k += 8;
+    }
+}
+
+/// Where a block is decoded: into `out`, from `start`. The history a match may reach is `out[segment..start]` and,
+/// in a decoder's ring that has wrapped, the end of the segment before, which ended at `oldEnd`. The block may write
+/// up to `blockEnd` (its maximum: further is Malformed) and `end` (the frame's content size, Malformed, or the
+/// limit, TooLarge: `endCode`); `out` has room for `zstdSlack()` bytes past both. `before` is how many bytes the
+/// frame wrote before the block.
+struct ZstdPlace {
+    start: usize;
+    segment: usize;
+    oldEnd: usize;
+    blockEnd: usize;
+    end: usize;
+    endCode: u32;
+    before: u64;
+}
+
+/// Refuses writing `n` bytes at `pos`: past the block's maximum, then past the end.
+@effects()
+fn zstdRoom(w: borrow ZstdPlace, pos: usize, n: usize) -> u32 {
+    if (n > w.blockEnd - pos) { return 1; }
+    if (n > w.end - pos) { return w.endCode; }
+    return 0;
+}
+
+/// What a literals section held: how many literals, and its bytes.
+struct ZstdLiterals {
+    count: usize;
+    used: usize;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// A frame's decoding state.
+
+/// What lasts across a frame's blocks: the literals of the block being decoded, the last Huffman table, the last FSE
+/// table of each sequence field, the repeated offsets, and the window.
+struct ZstdState {
+    literals: Vector<u8>; // a block's literals, and room past them
+    huffman: Vector<u16>; // 4,096 entries, the last Huffman table
+    huffmanLog: u32;
+    hasHuffman: bool;
+    tables: Vector<u64>; // literal lengths at 0, offsets at 512, match lengths at 768
+    logs: [u32; 3];
+    hasTable: [bool; 3];
+    reps: [u64; 3];
+    window: u64;
+    blockMax: usize;
+
+    /// Allocates the tables and the literals' buffer, about 150 KiB.
+    fn create() -> Result<ZstdState, AllocError> {
+        var literals = Vector<u8>.create();
+        literals.resize(zstdBlockMax() + zstdSlack(), 0)?;
+        var huffman = Vector<u16>.create();
+        huffman.resize(4096, 0)?;
+        var tables = Vector<u64>.create();
+        tables.resize(1280, 0)?;
+        return Ok(ZstdState {
+            literals: literals,
+            huffman: huffman,
+            huffmanLog: 0,
+            hasHuffman: false,
+            tables: tables,
+            logs: [0u32; 3],
+            hasTable: [false; 3],
+            reps: [1u64, 4, 8],
+            window: 0,
+            blockMax: 0,
+        });
+    }
+
+    /// A new frame: no tables to repeat, the first repeated offsets, its window.
+    @effects()
+    fn begin(borrow mut this, window: u64) {
+        this.hasHuffman = false;
+        this.hasTable = [false; 3];
+        this.reps = [1u64, 4, 8];
+        this.window = window;
+        this.blockMax = if (window < zstdBlockMax() as u64) truncate<usize>(window) else zstdBlockMax();
+    }
+
+    /// Decodes the compressed block `block` at `w.start` of `out`; where its output ends.
+    @effects()
+    fn block(borrow mut this, block: Slice<u8>, out: SliceMut<u8>, w: borrow ZstdPlace) -> Result<usize, DecodeError> {
+        if (block.length < 2) { return Err(DecodeError.Malformed); }
+        let lits = this.literalsSection(block)?;
+        return this.sequences(block[lits.used..], lits.count, out, w);
+    }
+
+    /// Decodes the literals section at the start of `block` into `literals`.
+    @effects()
+    fn literalsSection(borrow mut this, block: Slice<u8>) -> Result<ZstdLiterals, DecodeError> {
+        let b0 = block[0] as usize;
+        let kind = b0 & 3;
+        let format = (b0 >> 2) & 3;
+        if (kind < 2) {
+            var n: usize = 0;
+            var h: usize = 0;
+            if (format == 0 || format == 2) {
+                n = b0 >> 3;
+                h = 1;
+            } else if (format == 1) {
+                n = (b0 >> 4) + ((block[1] as usize) << 4);
+                h = 2;
+            } else {
+                if (block.length < 3) { return Err(DecodeError.Malformed); }
+                n = (b0 >> 4) + ((block[1] as usize) << 4) + ((block[2] as usize) << 12);
+                h = 3;
+            }
+            if (n > this.blockMax) { return Err(DecodeError.Malformed); }
+            if (kind == 0) {
+                if (n > block.length - h) { return Err(DecodeError.Malformed); }
+                this.literals[0..n].copyFrom(block[h..h + n]);
+                return Ok(ZstdLiterals { count: n, used: h + n });
+            }
+            if (h >= block.length) { return Err(DecodeError.Malformed); }
+            this.literals[0..n].fill(block[h]);
+            return Ok(ZstdLiterals { count: n, used: h + 1 });
+        }
+        if (block.length < 5) { return Err(DecodeError.Malformed); }
+        let streams: usize = if (format == 0) 1 else 4;
+        var n: usize = 0;
+        var c: usize = 0;
+        var h: usize = 0;
+        if (format < 2) {
+            let v = block.readLE<u32>(0) as usize;
+            n = (v >> 4) & 1023;
+            c = (v >> 14) & 1023;
+            h = 3;
+        } else if (format == 2) {
+            let v = block.readLE<u32>(0) as usize;
+            n = (v >> 4) & 16383;
+            c = (v >> 18) & 16383;
+            h = 4;
+        } else {
+            let v = (block.readLE<u32>(0) as usize) | ((block[4] as usize) << 32);
+            n = (v >> 4) & 262143;
+            c = (v >> 22) & 262143;
+            h = 5;
+        }
+        if (n > this.blockMax) { return Err(DecodeError.Malformed); }
+        if (streams == 4 && n < 6) { return Err(DecodeError.Malformed); }
+        if (c > block.length - h) { return Err(DecodeError.Malformed); }
+        let body = block[h..h + c];
+        var tree: usize = 0;
+        if (kind == 2) {
+            var weights = [0u8; 256];
+            let w = match (zstdWeights(body, mut weights[..])) {
+                Some(w) => w,
+                null => { return Err(DecodeError.Malformed); },
+            };
+            zstdHuffmanTable(weights[0..w.count], w.log, mut this.huffman[..]);
+            this.huffmanLog = w.log;
+            this.hasHuffman = true;
+            tree = w.used;
+        } else if (!this.hasHuffman) {
+            return Err(DecodeError.Malformed);
+        }
+        let log = this.huffmanLog;
+        let table = this.huffman[0..1usize << log];
+        if (streams == 1) {
+            if (!zstdHuffmanStream(body, tree, c, table, log, mut this.literals[..], 0, n)) {
+                return Err(DecodeError.Malformed);
+            }
+            return Ok(ZstdLiterals { count: n, used: h + c });
+        }
+        if (c - tree < 10) { return Err(DecodeError.Malformed); }
+        let s1 = body.readLE<u16>(tree) as usize;
+        let s2 = body.readLE<u16>(tree + 2) as usize;
+        let s3 = body.readLE<u16>(tree + 4) as usize;
+        let total = c - tree - 6;
+        if (s1 + s2 + s3 > total) { return Err(DecodeError.Malformed); }
+        let segment = (n + 3) / 4;
+        if (3 * segment > n) { return Err(DecodeError.Malformed); }
+        let a = tree + 6;
+        let bounds = [a, a + s1, a + s1 + s2, a + s1 + s2 + s3, c];
+        if (!zstdHuffman4(body, bounds, table, log, this.literals.viewMut(), segment, n)) {
+            return Err(DecodeError.Malformed);
+        }
+        return Ok(ZstdLiterals { count: n, used: h + c });
+    }
+
+    /// Sets the table of sequence field `which` by its mode (0 predefined, 1 RLE, 2 described at `data[at..]`, 3 the
+    /// last one); how many bytes of `data` it read.
+    @effects()
+    fn table(borrow mut this, which: usize, mode: usize, data: Slice<u8>, at: usize) -> Result<usize, DecodeError> {
+        let place = zstdTableAt(which);
+        let maximum: usize = if (which == 0) 35 else if (which == 1) 31 else 52;
+        if (mode == 0) {
+            let ok = if (which == 0) zstdFseTable(ZSTD_LL_DEFAULT[..], 6, 0, mut this.tables[place..place + 64])
+                else if (which == 1) zstdFseTable(ZSTD_OF_DEFAULT[..], 5, 1, mut this.tables[place..place + 32])
+                else zstdFseTable(ZSTD_ML_DEFAULT[..], 6, 2, mut this.tables[place..place + 64]);
+            this.logs[which] = if (which == 1) 5 else 6;
+            this.hasTable[which] = ok;
+            return Ok(0);
+        }
+        if (mode == 1) {
+            if (at >= data.length) { return Err(DecodeError.Malformed); }
+            let s = data[at] as usize;
+            if (s > maximum) { return Err(DecodeError.Malformed); }
+            this.tables[place] = zstdSymbol(which, s);
+            this.logs[which] = 0;
+            this.hasTable[which] = true;
+            return Ok(1);
+        }
+        if (mode == 2) {
+            var norm = [0i16; 53];
+            let maxLog: u32 = if (which == 1) 8 else 9;
+            let counts = match (zstdNormalized(data[at..], maximum, maxLog, mut norm[..])) {
+                Some(c) => c,
+                null => { return Err(DecodeError.Malformed); },
+            };
+            let size = 1usize << counts.log;
+            if (!zstdFseTable(norm[0..counts.symbols], counts.log, which, mut this.tables[place..place + size])) {
+                return Err(DecodeError.Malformed);
+            }
+            this.logs[which] = counts.log;
+            this.hasTable[which] = true;
+            return Ok(counts.used);
+        }
+        if (!this.hasTable[which]) { return Err(DecodeError.Malformed); }
+        return Ok(0);
+    }
+
+    /// Decodes the sequences section `data` and runs each sequence as it is decoded, then copies the literals after
+    /// the last; where the block's output ends. Per sequence, in this order: its literals must be there, it must fit
+    /// the block and the end, and its offset must reach neither before the frame nor past the window. The bit stream
+    /// must be used up exactly, which is checked before the last literals.
+    @effects()
+    fn sequences(
+        borrow mut this,
+        data: Slice<u8>,
+        nlits: usize,
+        out: SliceMut<u8>,
+        w: borrow ZstdPlace,
+    ) -> Result<usize, DecodeError> {
+        if (data.length == 0) { return Err(DecodeError.Malformed); }
+        let b0 = data[0] as usize;
+        var n: usize = 0;
+        var at: usize = 0;
+        if (b0 < 128) {
+            n = b0;
+            at = 1;
+        } else if (b0 < 255) {
+            if (data.length < 2) { return Err(DecodeError.Malformed); }
+            n = ((b0 - 128) << 8) + (data[1] as usize);
+            at = 2;
+        } else {
+            if (data.length < 3) { return Err(DecodeError.Malformed); }
+            n = (data.readLE<u16>(1) as usize) + 0x7F00;
+            at = 3;
+        }
+        var pos = w.start;
+        var lp: usize = 0;
+        if (n == 0) {
+            if (data.length != at) { return Err(DecodeError.Malformed); }
+        } else {
+            if (at >= data.length) { return Err(DecodeError.Malformed); }
+            let modes = data[at] as usize;
+            at += 1;
+            if ((modes & 3) != 0) { return Err(DecodeError.Malformed); }
+            at += this.table(0, modes >> 6, data, at)?;
+            at += this.table(1, (modes >> 4) & 3, data, at)?;
+            at += this.table(2, (modes >> 2) & 3, data, at)?;
+            var bits = match (ZstdBits.open(data, at, data.length)) {
+                Some(b) => b,
+                null => { return Err(DecodeError.Malformed); },
+            };
+            let lits = this.literals.view();
+            let tables = this.tables.view();
+            var sll = truncate<usize>(bits.read(this.logs[0]));
+            var sof = 512 + truncate<usize>(bits.read(this.logs[1]));
+            var sml = 768 + truncate<usize>(bits.read(this.logs[2]));
+            var r0 = this.reps[0];
+            var r1 = this.reps[1];
+            var r2 = this.reps[2];
+            let window = this.window;
+            // The loop keeps the bit reader in locals (the C compiler does not inline its methods here). A refill
+            // leaves more than 56 bits unless the stream's start is near; the offset's and the match length's extra
+            // bits take at most 47, the literal length's and the three states' at most 42.
+            var buf = bits.buf;
+            var count = bits.count;
+            var bat = bits.at;
+            let bstart = bits.start;
+            let fastEnd = if (w.end < w.blockEnd) w.end else w.blockEnd;
+            for (k in 0..n) {
+                if (count <= 56) {
+                    if (bat - bstart >= 8) {
+                        buf = buf | (data.readLE<u64>(bat - 8) >> truncate<u32>(count));
+                        let q = truncate<usize>(64 - count) >> 3;
+                        bat -= q;
+                        count += truncate<i64>(q << 3);
+                    } else {
+                        while (count <= 56 && bat > bstart) {
+                            bat -= 1;
+                            buf = buf | ((data[bat] as u64) << truncate<u32>(56 - count));
+                            count += 8;
+                        }
+                    }
+                }
+                let le = tables[sll];
+                let oe = tables[sof];
+                let me = tables[sml];
+                let ob = truncate<u32>((oe >> 8) & 255);
+                let ov = (oe >> 32) + ((buf >> 1) >> (63 - ob));
+                buf = buf << ob;
+                let mb = truncate<u32>((me >> 8) & 255);
+                let ml = truncate<usize>((me >> 32) + ((buf >> 1) >> (63 - mb)));
+                buf = buf << mb;
+                count -= (ob + mb) as i64;
+                if (count <= 56) {
+                    if (bat - bstart >= 8) {
+                        buf = buf | (data.readLE<u64>(bat - 8) >> truncate<u32>(count));
+                        let q = truncate<usize>(64 - count) >> 3;
+                        bat -= q;
+                        count += truncate<i64>(q << 3);
+                    } else {
+                        while (count <= 56 && bat > bstart) {
+                            bat -= 1;
+                            buf = buf | ((data[bat] as u64) << truncate<u32>(56 - count));
+                            count += 8;
+                        }
+                    }
+                }
+                let lb = truncate<u32>((le >> 8) & 255);
+                let ll = truncate<usize>((le >> 32) + ((buf >> 1) >> (63 - lb)));
+                buf = buf << lb;
+                count -= lb as i64;
+                var offset: u64 = 0;
+                if (ov > 3) {
+                    offset = ov - 3;
+                    r2 = r1;
+                    r1 = r0;
+                    r0 = offset;
+                } else {
+                    let index = if (ll == 0) ov else ov - 1;
+                    if (index == 0) {
+                        offset = r0;
+                    } else if (index == 1) {
+                        offset = r1;
+                        r1 = r0;
+                        r0 = offset;
+                    } else if (index == 2) {
+                        offset = r2;
+                        r2 = r1;
+                        r1 = r0;
+                        r0 = offset;
+                    } else {
+                        offset = r0 - 1;
+                        r2 = r1;
+                        r1 = r0;
+                        r0 = offset;
+                    }
+                }
+                if (ll > nlits - lp) { return Err(DecodeError.Malformed); }
+                if (ll + ml > fastEnd - pos) { return Err(zstdError(zstdRoom(w, pos, ll + ml))); }
+                if (ll <= 16) {
+                    let w1 = lits.readLE<u64>(lp);
+                    let w2 = lits.readLE<u64>(lp + 8);
+                    out.writeLE(pos, w1);
+                    out.writeLE(pos + 8, w2);
+                } else {
+                    out[pos..pos + ll].copyFrom(lits[lp..lp + ll]);
+                }
+                pos += ll;
+                lp += ll;
+                if (offset == 0 || offset > window || offset > w.before + (pos - w.start) as u64) {
+                    return Err(DecodeError.Malformed);
+                }
+                let o = truncate<usize>(offset);
+                if (o <= pos - w.segment) {
+                    if (o >= 8) {
+                        var j: usize = 0;
+                        while (j < ml) {
+                            let word = out.readLE<u64>(pos + j - o);
+                            out.writeLE(pos + j, word);
+                            j += 8;
+                        }
+                    } else {
+                        zstdCopy(out, pos, o, ml);
+                    }
+                } else {
+                    // From the end of the ring's previous segment, then from the start of this one.
+                    let back = o - (pos - w.segment);
+                    let c = if (ml < back) ml else back;
+                    out.copyWithin(w.oldEnd - back, pos, c);
+                    if (ml > c) { zstdCopy(out, pos + c, o, ml - c); }
+                }
+                pos += ml;
+                if (k + 1 < n) {
+                    let lnb = truncate<u32>(le & 255);
+                    sll = truncate<usize>(((le >> 16) & 0xFFFF) + ((buf >> 1) >> (63 - lnb)));
+                    buf = buf << lnb;
+                    let mnb = truncate<u32>(me & 255);
+                    sml = 768 + truncate<usize>(((me >> 16) & 0xFFFF) + ((buf >> 1) >> (63 - mnb)));
+                    buf = buf << mnb;
+                    let onb = truncate<u32>(oe & 255);
+                    sof = 512 + truncate<usize>(((oe >> 16) & 0xFFFF) + ((buf >> 1) >> (63 - onb)));
+                    buf = buf << onb;
+                    count -= (lnb + mnb + onb) as i64;
+                }
+            }
+            bits.buf = buf;
+            bits.count = count;
+            bits.at = bat;
+            if (!bits.finished()) { return Err(DecodeError.Malformed); }
+            this.reps = [r0, r1, r2];
+        }
+        let rest = nlits - lp;
+        let room = zstdRoom(w, pos, rest);
+        if (room != 0) { return Err(zstdError(room)); }
+        out[pos..pos + rest].copyFrom(this.literals[lp..nlits]);
+        return Ok(pos + rest);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Frame headers.
+
+/// A frame header's fields.
+struct ZstdHeader {
+    window: u64;
+    contentSize: u64;
+    hasContentSize: bool;
+    checksum: bool;
+    dictionary: u32;
+}
+
+/// The size of the header whose descriptor is `fhd`, its magic number included.
+@effects()
+fn zstdHeaderSize(fhd: u8) -> usize {
+    let single = (fhd >> 5) & 1;
+    let dictionary: usize = match (fhd & 3) {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    let content: usize = match (fhd >> 6) {
+        0 => single as usize,
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    return 5 + (if (single == 1) 0usize else 1) + dictionary + content;
+}
+
+/// Reads a whole frame header, its magic number included (RFC 8878 §3.1.1.1). A window above 2 GiB is TooLarge.
+@effects()
+fn zstdHeader(h: Slice<u8>) -> Result<ZstdHeader, DecodeError> {
+    let fhd = h[4];
+    let single = ((fhd >> 5) & 1) == 1;
+    var p: usize = 5;
+    var window: u64 = 0;
+    if (!single) {
+        let wd = h[p] as u32;
+        p += 1;
+        let log = 10 + (wd >> 3);
+        if (log > 31) { return Err(DecodeError.TooLarge); }
+        window = (1u64 << log) + ((1u64 << log) >> 3) * ((wd & 7) as u64);
+    }
+    var dictionary: u32 = 0;
+    let df = fhd & 3;
+    if (df == 1) {
+        dictionary = h[p] as u32;
+        p += 1;
+    } else if (df == 2) {
+        dictionary = h.readLE<u16>(p) as u32;
+        p += 2;
+    } else if (df == 3) {
+        dictionary = h.readLE<u32>(p);
+        p += 4;
+    }
+    var size: u64 = 0;
+    var has = true;
+    let ff = fhd >> 6;
+    if (ff == 0) {
+        if (single) { size = h[p] as u64; } else { has = false; }
+    } else if (ff == 1) {
+        size = (h.readLE<u16>(p) as u64) + 256;
+    } else if (ff == 2) {
+        size = h.readLE<u32>(p) as u64;
+    } else {
+        size = h.readLE<u64>(p);
+    }
+    if (single) { window = size; }
+    return Ok(ZstdHeader {
+        window: window,
+        contentSize: size,
+        hasContentSize: has,
+        checksum: ((fhd >> 2) & 1) == 1,
+        dictionary: dictionary,
+    });
+}
+
+/// Checks a frame's header against the limits, in this order: a dictionary is Unsupported, a window above
+/// `windowLimit` is TooLarge, and so is a content size above `room`, what the limit leaves.
+@effects()
+fn zstdAdmit(h: borrow ZstdHeader, windowLimit: u64, room: u64) -> u32 {
+    if (h.dictionary != 0) { return 3; }
+    if (h.window > windowLimit) { return 2; }
+    if (h.hasContentSize && h.contentSize > room) { return 2; }
+    return 0;
+}
+
+/// Whether `magic` is a skippable frame's (0x184D2A50 to 0x184D2A5F).
+@effects()
+fn zstdSkippable(magic: u32) -> bool => (magic & 0xFFFFFFF0) == 0x184D2A50;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Whole buffers.
+
+/// Makes `out` at least `need` long, doubling it as it grows, but never past `cap`.
+fn zstdGrow(out: borrow mut Vector<u8>, need: usize, cap: usize) -> Result<void, AllocError> {
+    if (out.length >= need) { return Ok(); }
+    var size = out.length * 2;
+    if (size < need) { size = need; }
+    if (size > cap) { size = cap; }
+    out.resize(size, 0)?;
+    return Ok();
+}
+
+fn zstdAll(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    let start = out.length;
+    match (zstdOnto(input, limit, out, start)) {
+        Ok(end) => {
+            out.truncate(end);
+            return Ok();
+        }
+        Err(e) => {
+            out.truncate(start);
+            return Err(e);
+        }
+    }
+}
+
+/// Decodes every frame of `input` onto `out` from `start`; where the output ends (`out` may be longer).
+fn zstdOnto(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>, start: usize) -> Result<usize, DecodeError> {
+    if (input.length == 0) { return Err(DecodeError.Malformed); }
+    let slack = zstdSlack();
+    let cap = start + limit + slack;
+    var state = ZstdState.create()?;
+    var at: usize = 0;
+    var pos = start;
+    while (at < input.length) {
+        if (input.length - at < 4) { return Err(DecodeError.Malformed); }
+        let magic = input.readLE<u32>(at);
+        if (zstdSkippable(magic)) {
+            if (input.length - at < 8) { return Err(DecodeError.Malformed); }
+            let size = input.readLE<u32>(at + 4) as u64;
+            if (((input.length - at - 8) as u64) < size) { return Err(DecodeError.Malformed); }
+            at += 8 + truncate<usize>(size);
+            continue;
+        }
+        if (magic != zstdMagic() || input.length - at < 5) { return Err(DecodeError.Malformed); }
+        let fhd = input[at + 4];
+        if ((fhd & 8) != 0) { return Err(DecodeError.Malformed); }
+        let hsize = zstdHeaderSize(fhd);
+        if (input.length - at < hsize) { return Err(DecodeError.Malformed); }
+        let h = zstdHeader(input[at..at + hsize])?;
+        at += hsize;
+        let admit = zstdAdmit(h, zstdWindowMax(), (start + limit - pos) as u64);
+        if (admit != 0) { return Err(zstdError(admit)); }
+        let frameStart = pos;
+        var end = start + limit;
+        var endCode: u32 = 2;
+        if (h.hasContentSize) {
+            if (h.contentSize > ((input.length - at) as u64) * zstdRatio()) { return Err(DecodeError.Malformed); }
+            end = pos + truncate<usize>(h.contentSize);
+            endCode = 1;
+            zstdGrow(out, end + slack, cap)?;
+        }
+        state.begin(h.window);
+        let blockMax = state.blockMax;
+        while (true) {
+            if (input.length - at < 3) { return Err(DecodeError.Malformed); }
+            let bh = (input.readLE<u16>(at) as u32) | ((input[at + 2] as u32) << 16);
+            at += 3;
+            let last = (bh & 1) == 1;
+            let kind = (bh >> 1) & 3;
+            let size = (bh >> 3) as usize;
+            if (kind == 3 || size > blockMax) { return Err(DecodeError.Malformed); }
+            let w = ZstdPlace {
+                start: pos,
+                segment: frameStart,
+                oldEnd: 0,
+                blockEnd: pos + blockMax,
+                end: end,
+                endCode: endCode,
+                before: (pos - frameStart) as u64,
+            };
+            if (kind < 2) {
+                let room = zstdRoom(w, pos, size);
+                if (room != 0) { return Err(zstdError(room)); }
+                if (kind == 0) {
+                    if (input.length - at < size) { return Err(DecodeError.Malformed); }
+                    zstdGrow(out, pos + size + slack, cap)?;
+                    out[pos..pos + size].copyFrom(input[at..at + size]);
+                    at += size;
+                } else {
+                    if (input.length - at < 1) { return Err(DecodeError.Malformed); }
+                    zstdGrow(out, pos + size + slack, cap)?;
+                    out[pos..pos + size].fill(input[at]);
+                    at += 1;
+                }
+                pos += size;
+            } else {
+                if (input.length - at < size) { return Err(DecodeError.Malformed); }
+                let most = if (end - pos < blockMax) end else pos + blockMax;
+                zstdGrow(out, most + slack, cap)?;
+                pos = state.block(input[at..at + size], out.viewMut(), w)?;
+                at += size;
+            }
+            if (last) { break; }
+        }
+        if (h.hasContentSize && (pos - frameStart) as u64 != h.contentSize) { return Err(DecodeError.Malformed); }
+        if (h.checksum) {
+            if (input.length - at < 4) { return Err(DecodeError.Malformed); }
+            let want = input.readLE<u32>(at);
+            at += 4;
+            if (truncate<u32>(Xxh64.of(out[frameStart..pos], 0)) != want) {
+                return Err(DecodeError.ChecksumMismatch);
+            }
+        }
+    }
+    return Ok(pos);
+}
+
+/// Zstandard's frame format (RFC 8878) in whole buffers: Parquet's `ZSTD` pages (PyIceberg's default, and Iceberg's
+/// since 1.4) and Avro's `zstandard` blocks. Decoding only: there is no encoder yet (ADR 0196, phase 4).
+///
+/// No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time.
+public struct Zstd {
+    /// Decodes all of `input`, one or more frames in turn, onto the end of `out`, at most `limit` bytes in all.
+    /// Skippable frames are skipped (an input of them alone decodes to nothing); an empty input, and bytes after the
+    /// last frame that do not begin another, are `Malformed`. A frame that needs a dictionary is `Unsupported`; one
+    /// whose window is above 2 GiB is `TooLarge`, and so is one whose stated content size is above what `limit`
+    /// leaves, before anything is allocated (`out` grows to the stated size at once, or as blocks need it if no size
+    /// is stated). Output that disagrees with the stated size, or a content size no frame of its length could
+    /// produce, is `Malformed`; a wrong checksum is `ChecksumMismatch`. On an error, `out` is as it was.
+    public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> =>
+        zstdAll(input, limit, out);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Streams.
+
+enum ZstdMode {
+    Magic,       // gathering a frame's first 4 bytes
+    Header,      // gathering the rest of its header
+    SkipSize,    // gathering a skippable frame's size
+    Skip,        // skipping its bytes
+    BlockHeader, // gathering a block's 3-byte header
+    Raw,         // copying a raw block's bytes
+    Rle,         // waiting for an RLE block's byte
+    Compressed,  // gathering a compressed block
+    Checksum,    // gathering the frame's checksum
+    Between,     // after a frame
+}
+
+/// A Zstandard decoder that streams (RFC 8878): each `step` reads what it can of the input and writes what it can
+/// into the caller's slice, and returns where it stopped. `create` allocates all its memory, at most `windowLimit` +
+/// 406 KiB: a ring of the largest window it accepts and a block, a block's input, and the tables. `step` allocates
+/// nothing (`@effects()`), so async code and a `drop` block may call it; its work is in proportion to the slices it is
+/// given, so async code decodes some 64 KiB at a time, or hands a whole buffer to `Async.blocking`.
+///
+/// A frame whose window is above `windowLimit` is `TooLarge`: a frame may ask for up to 2 GiB here (3.75 TiB by the
+/// format), and libzstd's own default limit is 2^27 bytes (128 MiB), a reasonable choice. A single-segment frame's
+/// window is its content size. The `limit` applies to everything the decoder writes, over all steps and frames: output
+/// past it is `TooLarge`, found before it is written, and so is a frame whose stated content size is above what the
+/// limit leaves. The other refusals are `Zstd.decompress`'s, and after one, each later step returns it again.
+///
+/// `done` is true at the end of a frame (its checksum read, if it has one), when all its bytes are written; `read`
+/// then says where the next data begins. A step after `done` that is given input decodes the next frame. Skippable
+/// frames are skipped: a step goes on past one to the next frame, and is `done` if the input ends after it.
+///
+/// Decoding is not constant time.
+public struct ZstdDecoder {
+    state: ZstdState;
+    ring: Vector<u8>;    // the window and the block being decoded, then room
+    blockIn: Vector<u8>; // a compressed block gathered across steps
+    head: [u8; 18];      // a frame header, a skippable frame's size, a block header or a checksum, gathered
+    headFill: usize;
+    limit: u64;
+    windowLimit: u64;
+    produced: u64; // bytes decoded, over every frame
+    mode: ZstdMode;
+    ended: bool; // a frame ended, and no other has begun
+    header: ZstdHeader;
+    frameTotal: u64;
+    hash: Xxh64;
+    capacity: usize; // the part of the ring this frame uses: its window, a block and twice the slack
+    pos: usize;      // where the next block goes in the ring
+    oldEnd: usize;   // where the segment before the ring last wrapped ended; 0 if it has not wrapped
+    pendingFrom: usize;
+    pendingTo: usize; // ring[pendingFrom..pendingTo] is decoded, not yet written to the caller
+    blockLast: bool;
+    blockSize: usize;
+    blockFill: usize;
+    skipLeft: u64;
+    failure: u32; // 0, or the DecodeError every later step returns (zstdError's codes)
+
+    /// A decoder that writes at most `limit` bytes in all and takes windows of up to `windowLimit` bytes (at most
+    /// 2 GiB). Allocates its ring (`windowLimit` and a block: 128 KiB, or `windowLimit` if that is smaller), a block's
+    /// input (as large), and its tables and a block's literals, about 150 KiB.
+    public fn create(limit: u64, windowLimit: usize) -> Result<ZstdDecoder, AllocError> {
+        var wl = windowLimit as u64;
+        if (wl > zstdWindowMax()) { wl = zstdWindowMax(); }
+        let block = if (wl < zstdBlockMax() as u64) truncate<usize>(wl) else zstdBlockMax();
+        var ring = Vector<u8>.create();
+        ring.resize(truncate<usize>(wl) + block + 2 * zstdSlack(), 0)?;
+        var blockIn = Vector<u8>.create();
+        blockIn.resize(block, 0)?;
+        return Ok(ZstdDecoder {
+            state: ZstdState.create()?,
+            ring: ring,
+            blockIn: blockIn,
+            head: [0u8; 18],
+            headFill: 0,
+            limit: limit,
+            windowLimit: wl,
+            produced: 0,
+            mode: ZstdMode.Magic,
+            ended: false,
+            header: ZstdHeader { window: 0, contentSize: 0, hasContentSize: false, checksum: false, dictionary: 0 },
+            frameTotal: 0,
+            hash: Xxh64.create(0),
+            capacity: 0,
+            pos: 0,
+            oldEnd: 0,
+            pendingFrom: 0,
+            pendingTo: 0,
+            blockLast: false,
+            blockSize: 0,
+            blockFill: 0,
+            skipLeft: 0,
+            failure: 0,
+        });
+    }
+
+    @effects()
+    fn fail(borrow mut this, code: u32) -> DecodeError {
+        this.failure = code;
+        return zstdError(code);
+    }
+
+    /// Gathers input bytes into `head` until it holds `n`; whether it does. `at` moves past what it took.
+    @effects()
+    fn gather(borrow mut this, input: Slice<u8>, at: borrow mut usize, n: usize) -> bool {
+        while (this.headFill < n && at < input.length) {
+            this.head[this.headFill] = input[at];
+            this.headFill += 1;
+            at += 1;
+        }
+        return this.headFill >= n;
+    }
+
+    /// Decodes from `input` into `out` until the input is used up, `out` is full, or a frame ends (`done`). Input it
+    /// reads but cannot use yet (part of a header or of a compressed block) it keeps, so the next step continues with
+    /// the bytes after `read`.
+    @effects()
+    public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError> {
+        if (this.failure != 0) { return Err(zstdError(this.failure)); }
+        var at: usize = 0;
+        var written: usize = 0;
+        if (this.ended) {
+            if (input.length == 0) { return Ok(Progress { read: 0, written: 0, done: true }); }
+            this.ended = false;
+            this.mode = ZstdMode.Magic;
+            this.headFill = 0;
+        }
+        while (true) {
+            if (this.pendingFrom < this.pendingTo) {
+                let n = if (this.pendingTo - this.pendingFrom < out.length - written) this.pendingTo - this.pendingFrom
+                    else out.length - written;
+                out[written..written + n].copyFrom(this.ring[this.pendingFrom..this.pendingFrom + n]);
+                written += n;
+                this.pendingFrom += n;
+                if (this.pendingFrom < this.pendingTo) { break; }
+            }
+            match (this.mode) {
+                ZstdMode.Between => {
+                    this.ended = true;
+                    break;
+                }
+                ZstdMode.Magic => {
+                    if (!this.gather(input, mut at, 4)) { break; }
+                    let magic = this.head[..].readLE<u32>(0);
+                    if (zstdSkippable(magic)) {
+                        this.mode = ZstdMode.SkipSize;
+                    } else if (magic == zstdMagic()) {
+                        this.mode = ZstdMode.Header;
+                    } else {
+                        return Err(this.fail(1));
+                    }
+                }
+                ZstdMode.SkipSize => {
+                    if (!this.gather(input, mut at, 8)) { break; }
+                    this.skipLeft = this.head[..].readLE<u32>(4) as u64;
+                    this.mode = ZstdMode.Skip;
+                }
+                ZstdMode.Skip => {
+                    let left = (input.length - at) as u64;
+                    let n = if (this.skipLeft < left) this.skipLeft else left;
+                    at += truncate<usize>(n);
+                    this.skipLeft -= n;
+                    if (this.skipLeft > 0) { break; }
+                    this.headFill = 0;
+                    if (at < input.length) {
+                        this.mode = ZstdMode.Magic;
+                    } else {
+                        this.mode = ZstdMode.Between;
+                    }
+                }
+                ZstdMode.Header => {
+                    if (!this.gather(input, mut at, 5)) { break; }
+                    let fhd = this.head[4];
+                    if ((fhd & 8) != 0) { return Err(this.fail(1)); }
+                    let size = zstdHeaderSize(fhd);
+                    if (!this.gather(input, mut at, size)) { break; }
+                    let parsed = zstdHeader(this.head[0..size]);
+                    let h = match (parsed) {
+                        Ok(h) => h,
+                        Err(e) => { return Err(this.fail(zstdCode(e))); },
+                    };
+                    let admit = zstdAdmit(h, this.windowLimit, this.limit - this.produced);
+                    if (admit != 0) { return Err(this.fail(admit)); }
+                    this.state.begin(h.window);
+                    this.capacity = truncate<usize>(h.window) + this.state.blockMax + 2 * zstdSlack();
+                    this.header = h;
+                    this.frameTotal = 0;
+                    this.hash = Xxh64.create(0);
+                    this.pos = 0;
+                    this.oldEnd = 0;
+                    this.pendingFrom = 0;
+                    this.pendingTo = 0;
+                    this.headFill = 0;
+                    this.mode = ZstdMode.BlockHeader;
+                }
+                ZstdMode.BlockHeader => {
+                    if (!this.gather(input, mut at, 3)) { break; }
+                    let bh = (this.head[0] as u32) | ((this.head[1] as u32) << 8) | ((this.head[2] as u32) << 16);
+                    this.headFill = 0;
+                    let kind = (bh >> 1) & 3;
+                    let size = (bh >> 3) as usize;
+                    if (kind == 3 || size > this.state.blockMax) { return Err(this.fail(1)); }
+                    this.blockLast = (bh & 1) == 1;
+                    this.blockSize = size;
+                    this.blockFill = 0;
+                    // Wrap the ring when a whole block would not fit: what it held stays, as the window's older part.
+                    if (this.pos + this.state.blockMax + zstdSlack() > this.capacity) {
+                        this.oldEnd = this.pos;
+                        this.pos = 0;
+                    }
+                    if (kind < 2) {
+                        let room = zstdRoom(this.place(), this.pos, size);
+                        if (room != 0) { return Err(this.fail(room)); }
+                    }
+                    this.mode = if (kind == 0) ZstdMode.Raw else if (kind == 1) ZstdMode.Rle else ZstdMode.Compressed;
+                    if (kind == 0 && size == 0) { this.endBlock(); }
+                }
+                ZstdMode.Raw => {
+                    let left = this.blockSize - this.blockFill;
+                    let n = if (left < input.length - at) left else input.length - at;
+                    if (n == 0) { break; }
+                    let p = this.pos;
+                    this.ring[p..p + n].copyFrom(input[at..at + n]);
+                    at += n;
+                    this.blockFill += n;
+                    this.wrote(p, n);
+                    if (this.blockFill == this.blockSize) { this.endBlock(); }
+                }
+                ZstdMode.Rle => {
+                    if (at >= input.length) { break; }
+                    let p = this.pos;
+                    let n = this.blockSize;
+                    this.ring[p..p + n].fill(input[at]);
+                    at += 1;
+                    this.wrote(p, n);
+                    this.endBlock();
+                }
+                ZstdMode.Compressed => {
+                    let size = this.blockSize;
+                    var r: Result<usize, DecodeError> = Ok(0);
+                    if (this.blockFill == 0 && input.length - at >= size) {
+                        r = this.decodeBlock(input[at..at + size]);
+                        at += size;
+                    } else {
+                        let n = if (size - this.blockFill < input.length - at) size - this.blockFill
+                            else input.length - at;
+                        this.blockIn[this.blockFill..this.blockFill + n].copyFrom(input[at..at + n]);
+                        at += n;
+                        this.blockFill += n;
+                        if (this.blockFill < size) { break; }
+                        r = this.decodeGathered();
+                    }
+                    match (r) {
+                        Ok(end) => {
+                            let p = this.pos;
+                            this.wrote(p, end - p);
+                        }
+                        Err(e) => { return Err(this.fail(zstdCode(e))); }
+                    }
+                    this.endBlock();
+                }
+                ZstdMode.Checksum => {
+                    if (!this.gather(input, mut at, 4)) { break; }
+                    let want = this.head[..].readLE<u32>(0);
+                    this.headFill = 0;
+                    if (truncate<u32>(this.hash.finish()) != want) { return Err(this.fail(4)); }
+                    this.mode = ZstdMode.Between;
+                }
+            }
+            if (this.failure != 0) { return Err(zstdError(this.failure)); }
+        }
+        return Ok(Progress { read: at, written: written, done: this.ended });
+    }
+
+    /// Where the next block goes in the ring.
+    @effects()
+    fn place(borrow this) -> ZstdPlace {
+        var end = this.pos + this.state.blockMax;
+        var endCode: u32 = 2;
+        if (this.header.hasContentSize) {
+            let left = this.header.contentSize - this.frameTotal;
+            if (left < (end - this.pos) as u64) { end = this.pos + truncate<usize>(left); }
+            endCode = 1;
+        } else {
+            let left = this.limit - this.produced;
+            if (left < (end - this.pos) as u64) { end = this.pos + truncate<usize>(left); }
+        }
+        return ZstdPlace {
+            start: this.pos,
+            segment: 0,
+            oldEnd: this.oldEnd,
+            blockEnd: this.pos + this.state.blockMax,
+            end: end,
+            endCode: endCode,
+            before: this.frameTotal,
+        };
+    }
+
+    @effects()
+    fn decodeBlock(borrow mut this, block: Slice<u8>) -> Result<usize, DecodeError> {
+        let w = this.place();
+        return this.state.block(block, mut this.ring[..], w);
+    }
+
+    @effects()
+    fn decodeGathered(borrow mut this) -> Result<usize, DecodeError> {
+        let w = this.place();
+        let size = this.blockSize;
+        return this.state.block(this.blockIn[0..size], mut this.ring[..], w);
+    }
+
+    /// The `n` bytes at `ring[p..]` were decoded: they are hashed, counted and pending.
+    @effects()
+    fn wrote(borrow mut this, p: usize, n: usize) {
+        this.hash.update(this.ring[p..p + n]);
+        this.frameTotal += n as u64;
+        this.produced += n as u64;
+        this.pendingFrom = p;
+        this.pendingTo = p + n;
+        this.pos = p + n;
+    }
+
+    /// After a block: the next block's header, or the frame's checksum, or its end.
+    @effects()
+    fn endBlock(borrow mut this) {
+        if (!this.blockLast) {
+            this.mode = ZstdMode.BlockHeader;
+            return;
+        }
+        if (this.header.hasContentSize && this.frameTotal != this.header.contentSize) {
+            this.failure = 1;
+            return;
+        }
+        this.mode = if (this.header.checksum) ZstdMode.Checksum else ZstdMode.Between;
+    }
+}

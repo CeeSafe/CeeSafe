@@ -10,8 +10,9 @@ fn five() -> i64 => 5;
 fn f(param: i64, shared: borrow P, unique: borrow mut P) {
     let fixed: i64 = 1;
     var free: i64 = 2;
-    let a = borrow 5; // error[N0247]
-    let b = borrow five(); // error[N0247]
+    let a = borrow mut 5; // error[N0247]
+    let b = borrow mut five(); // error[N0247]
+    look(borrow five()); // a shared borrow of a temporary, for the statement (ADR 0227 §2.1)
     let c = borrow mut fixed; // error[N0248]
     let d = borrow mut param; // error[N0248]
     let e = borrow mut shared.a; // error[N0248]

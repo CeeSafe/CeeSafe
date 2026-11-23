@@ -1,0 +1,41 @@
+// ADR 0228: diagnostics that say what to write. `*b` of a box says how its contents are reached and moved out
+// (§2.1); a result that holds a slice without being a reference names a region parameter (§2.2); a float literal is
+// no pattern and a float no `match` scrutinee, and both say to compare with `==` (§2.3).
+struct Expr {
+    n: i32;
+    text: String;
+}
+
+enum Value {
+    Real(f64),
+    Int(i64),
+}
+
+enum Short {
+    Missing,
+}
+
+fn span(bytes: Slice<u8>, more: Slice<u8>, n: usize) -> Result<Slice<u8>, Short> { // error[N0245]
+    if (n > bytes.length) {
+        return Err(Short.Missing);
+    }
+    return Ok(bytes[0..n]);
+}
+
+fn main() {
+    let b = Box.create(Expr { n: 1, text: String.from("x")! })!;
+    let e = *b; // error[N0205]
+    let v = Value.Real(1000.0);
+    if (v is Value.Real(1000.0)) { // error[N0108]
+        Console.writeLine("yes");
+    }
+    let s = match (v) {
+        Value.Real(-0.5) => 1, // error[N0108]
+        _ => 2,
+    };
+    let x = 2.5;
+    let t = match (x) { // error[N0207]
+        2.5 => "two and a half",
+        _ => "other",
+    };
+}

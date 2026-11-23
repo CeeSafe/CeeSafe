@@ -1,0 +1,30 @@
+// ADR 0228 §2.2: a method's result that holds a slice of a parameter other than the receiver: the N0245 names a
+// region parameter, since `borrow(bytes) Result<…>` would make the whole result a reference. The region parameter is
+// what works (`take`).
+enum Short {
+    Missing,
+}
+
+struct Cursor {
+    position: usize;
+
+    fn span(borrow mut this, bytes: Slice<u8>, n: usize) -> Result<Slice<u8>, Short> {
+        if (this.position + n > bytes.length) {
+            return Err(Short.Missing);
+        }
+        let s = bytes[this.position..this.position + n];
+        this.position += n;
+        return Ok(s); // error[N0245]
+    }
+
+    fn take<region r>(borrow mut this, bytes: Slice<r, u8>, n: usize) -> Result<Slice<r, u8>, Short> {
+        if (this.position + n > bytes.length) {
+            return Err(Short.Missing);
+        }
+        let s = bytes[this.position..this.position + n];
+        this.position += n;
+        return Ok(s);
+    }
+}
+
+fn main() {}

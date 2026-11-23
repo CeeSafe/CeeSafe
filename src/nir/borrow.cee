@@ -2335,6 +2335,15 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 appendText(mut message, ", which is local to '")?;
                 appendBytes(mut message, c.name(c.hir.functions[source as usize].name))?;
                 appendText(mut message, "'")?;
+                if (loan.hasPlace &&
+                    n.functions[b.function as usize].locals[loan.place.local as usize].name == none() &&
+                    c.types.isSlice(c.hir.functions[source as usize].returnType)) {
+                    // `[1, 2, 3][..]` returned (ADR 0226 §2.4): a table of constants is a `static`.
+                    appendText(
+                        mut message,
+                        "; to return a table of constants, put it in a 'static' and slice that: 'static NAMES: [StringView; 2] = [\"a\", \"b\"];' and 'return NAMES[..];', with the result 'Slice<static, StringView>' (type-system.md §39)",
+                    )?;
+                }
                 appendSendHint(c, c.hir.functions[source as usize].returnType, mut message)?;
                 var notes = Vector<DiagnosticNote>.create();
                 var note = Vector<u8>.create();
@@ -2420,7 +2429,18 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                             "; a 'static' result may hold only static data, such as a string literal",
                         )?;
                     }
-                    appendSendHint(c, c.hir.functions[source as usize].returnType, mut message)?;
+                    let returnType = c.hir.functions[source as usize].returnType;
+                    if (c.types.isScoped(returnType) && !c.types.is(returnType, TypeKind.Reference)) {
+                        // `-> Result<Slice<u8>, E>`: a source list would make the whole result a reference, so the
+                        // way to name the parameter is a region parameter (ADR 0228 §2.2).
+                        appendText(mut message, "; to borrow the result from '")?;
+                        appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                        appendText(
+                            mut message,
+                            "', give the function a region parameter and write it in that parameter's type and the result's, e.g. 'fn f<region r>(bytes: Slice<r, u8>) -> Result<Slice<r, u8>, E>' ('borrow(…) T' would make the whole result a reference; type-system.md §25.6)",
+                        )?;
+                    }
+                    appendSendHint(c, returnType, mut message)?;
                 }
                 c.front.diagnostics.error(returnSourceMismatch(), b.file, span.start, span.end, message)?;
             }

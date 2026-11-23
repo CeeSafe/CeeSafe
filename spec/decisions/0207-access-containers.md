@@ -337,6 +337,7 @@ What §10 and §11 left unchecked, with ClayWind's demo built by 0.94.3.
   TalkBack's own gestures are the owner's to make.
 - **iOS**, an iPhone 14 Plus, the demo signed and installed on it, VoiceOver by the owner: "I've tested iphone
   successfully."
-- **Found, not fixed here**: a second `NativeActivity` started on top of a running one (`am start -n` by component,
-  which the launcher does not do) has no access view, so nothing to read: ADR 0164 §8's "a second activity after the
-  first ends".
+- **Found**: a second `NativeActivity` started on top of a running one (`am start -n` by component, which the launcher
+  does not do) has no access view, so nothing to read: ADR 0164 §8's "a second activity after the first ends". The
+  runtime is one window to a program; ClayWind's packer now makes the activity `singleTask`, so such a start comes to
+  the activity that is there. A program packed otherwise still has the case.

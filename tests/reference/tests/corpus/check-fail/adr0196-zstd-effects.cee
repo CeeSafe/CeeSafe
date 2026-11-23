@@ -1,0 +1,18 @@
+// ADR 0196 §2.3, phase 3: Zstd.decompress and ZstdDecoder.create allocate, so code declared with no effect cannot
+// call them (N0295); a ZstdDecoder's step allocates nothing, so it can, and so can XXH64.
+@effects()
+fn decodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    return Zstd.decompress(input, 100, out); // error[N0295]
+}
+
+@effects()
+fn creates() -> Result<ZstdDecoder, AllocError> => ZstdDecoder.create(100, 1024); // error[N0295]
+
+@effects()
+fn steps(d: borrow mut ZstdDecoder, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError> =>
+    d.step(input, out);
+
+@effects()
+fn hashes(input: Slice<u8>) -> u64 => Xxh64.of(input, 0);
+
+fn main() {}

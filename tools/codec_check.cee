@@ -1,8 +1,10 @@
 // tools/codec_check.py's program (ADR 0196 §4.2): lib/std's codecs on the long lists, compiled only. It reads
 // cases from the file named by its first argument and writes what it made of each to the second; the Python side
-// says what each should be, from its oracles (Python's zlib; libsnappy and tools/oracles/snappy_model.py).
+// says what each should be, from its oracles (Python's zlib; libsnappy and tools/oracles/snappy_model.py; libzstd and
+// tools/oracles/zstd_model.py).
 //
-// A case: op (u8: 1 decode, 2 encode, 3 Adler-32, 4 snappy decode, 5 snappy encode, 6 snappy length), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8), a pad byte,
+// A case: op (u8: 1 decode, 2 encode, 3 Adler-32, 4 snappy decode, 5 snappy encode, 6 snappy length, 7 zstd decode,
+// 8 XXH64), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8; for a zstd decode, the log of its stream's window limit), a pad byte,
 // limit (u64), a and b (u32: a decode's step sizes in and out, an encode's piece size and flush interval), the length
 // of the data (u32) and the data, all little-endian.
 // Its result: a decode's status (u8: 0 ok, 1 Malformed, 2 TooLarge, 3 Unsupported, 4 ChecksumMismatch, 5
@@ -10,7 +12,9 @@
 // streamed output, each a length (u32) and the bytes; an Adler-32's value (u32) fed whole and in three pieces; a
 // snappy decode's status, length and CRC-32 as a deflate decode's, decoded onto a vector that holds a byte already
 // (status 6 if that byte changed or a refusal left output); a snappy encode's output, a length (u32) and the bytes;
-// a snappy length, a u8 (1 if the preamble is one) and the length (u64).
+// a snappy length, a u8 (1 if the preamble is one) and the length (u64); a zstd decode's status, length and CRC-32
+// whole, onto a vector that holds a byte already, as a snappy decode's, then in steps with a ZstdDecoder; an XXH64's
+// value (u64) with the seed `limit`, fed whole and in three pieces.
 
 fn readAll(path: StringView) -> Vector<u8> {
     var f = File.open(path)!;
@@ -77,6 +81,34 @@ fn steps(
         } else if (p.read == 0 && p.written == 0 && end == input.length) {
             return Err(DecodeError.Malformed);
         }
+    }
+    return Ok();
+}
+
+/// Decodes zstd in steps of about `stepIn` and `stepOut` bytes, varying from step to step, with a ZstdDecoder.
+fn zstdSteps(
+    input: Slice<u8>,
+    limit: u64,
+    windowLimit: usize,
+    stepIn: usize,
+    stepOut: usize,
+    out: borrow mut Vector<u8>,
+) -> Result<void, DecodeError> {
+    var d = ZstdDecoder.create(limit, windowLimit)?;
+    var buffer = Vector<u8>.create();
+    buffer.resize(stepOut, 0)?;
+    var at: usize = 0;
+    var k: usize = 0;
+    while (true) {
+        k += 1;
+        let si = 1 + (stepIn * (k % 3)) / 2;
+        let so = 1 + ((stepOut - 1) * ((k * 7) % 5 + 1)) / 5;
+        let end = if (input.length - at < si) input.length else at + si;
+        let p = d.step(input[at..end], mut buffer[0..so])?;
+        out.extend(buffer[0..p.written])?;
+        at += p.read;
+        if (p.done && at == input.length) { return Ok(); }
+        if (!p.done && p.read == 0 && p.written == 0 && end == input.length) { return Err(DecodeError.Malformed); }
     }
     return Ok();
 }
@@ -165,6 +197,25 @@ fn main() {
                     results.pushLE(0u64)!;
                 }
             }
+        } else if (op == 7) {
+            var x = Vector<u8>.create();
+            x.push(7)!;
+            let rx = Zstd.decompress(data, truncate<usize>(limit), mut x);
+            let kept = x[0] == 7 && (statusOf(rx) == 0 || x.length == 1);
+            results.push(if (kept) statusOf(rx) else 6)!;
+            results.pushLE((x.length - 1) as u64)!;
+            results.pushLE(Crc32.of(x[1..]))!;
+            var y = Vector<u8>.create();
+            let ry = zstdSteps(data, limit, 1usize << level, a, b, mut y);
+            report(ry, y, mut results);
+        } else if (op == 8) {
+            var c = Xxh64.create(limit);
+            let third = n / 3;
+            c.update(data[0..third]);
+            c.update(data[third..2 * third]);
+            c.update(data[2 * third..]);
+            results.pushLE(Xxh64.of(data, limit))!;
+            results.pushLE(c.finish())!;
         } else {
             var c = Adler32.create();
             let third = n / 3;

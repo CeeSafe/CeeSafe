@@ -176,8 +176,9 @@ def main():
             # Aes256Gcm (ADR 0135) on the long list of cases, compiled only (the corpus has the short one).
             ("cipher", py + [f"{HERE}/aes_gcm_check.py", "--compiler", cee]),
             # Deflate, zlib and gzip (ADR 0196) on the long lists against Python's zlib, snappy against libsnappy
-            # (where installed) and tools/oracles/snappy_model.py, the leak check, the allocation sweep and a minute
-            # of each fuzzer under ASan and UBSan, compiled only.
+            # (where installed) and tools/oracles/snappy_model.py, zstd against libzstd (where installed) and
+            # tools/oracles/zstd_model.py, the leak check, the allocation sweep and a minute of each fuzzer under
+            # ASan and UBSan, compiled only.
             ("codecs", py + [f"{HERE}/codec_check.py", "--compiler", cee, "--fuzz-seconds", "60"]),
             ("console input", py + [f"{HERE}/console_input_check.py", "--compiler", cee]),
             ("signals", py + [f"{HERE}/signal_check.py", "--compiler", cee]),

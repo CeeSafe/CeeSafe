@@ -7,8 +7,10 @@ struct Holder<region r> {
     }
     fn swapWith(borrow mut this, other: borrow mut Holder<r>) {
         let x = this.text;
-        this.text = other.text; // error[N0272]
-        other.text = x; // error[N0272]
+        // Accepted since ADR 0214 §5 (both lines were N0272): what `other` refers to holds goes into what `this`
+        // refers to, which their shared region `r` lets flow, and a caller sees (x3).
+        this.text = other.text;
+        other.text = x;
     }
 }
 fn keepFree<region r>(h: borrow mut Holder<r>, v: StringView<r>) {

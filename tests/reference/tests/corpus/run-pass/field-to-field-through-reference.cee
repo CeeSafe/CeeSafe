@@ -1,0 +1,37 @@
+// A field copied into another field of the same value through a `borrow mut` parameter (type-system.md §25.7 rule 2,
+// ADR 0074 §2.4): `t.a = t.b` stores what the parameter's referent already holds, as `let old = t.b; t.a = old;`
+// does. The direct form was N0272 before ADR 0214's §5.
+// expect-stdout: two two
+// expect-stdout: one two
+// expect-stdout: two one
+
+struct Two<region r> {
+    a: StringView<r>;
+    b: StringView<r>;
+}
+
+fn copy(t: borrow mut Two) {
+    t.a = t.b;
+}
+
+fn swap(t: borrow mut Two) {
+    let old = t.a;
+    t.a = t.b;
+    t.b = old;
+}
+
+fn show(t: borrow Two) {
+    Console.write(t.a);
+    Console.write(" ");
+    Console.writeLine(t.b);
+}
+
+fn main() {
+    var copied = Two { a: "one", b: "two" };
+    copy(mut copied);
+    show(copied);
+    var swapped = Two { a: "one", b: "two" };
+    show(swapped);
+    swap(mut swapped);
+    show(swapped);
+}

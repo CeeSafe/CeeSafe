@@ -508,6 +508,74 @@ fn recordWrite(
     return Ok();
 }
 
+/// A value stored into a place that is not a whole local (rules 1 and 2): the holder takes the loans of each operand
+/// that may hold some. An operand read through a reference parameter (`t.a = t.b`, the place `(*t).b`) is a copy of
+/// what the parameter's referent holds, so it carries that and not the parameter's own loan, as the same value does
+/// when it is first read into a local (`let old = t.b; t.a = old;`, ADR 0074 §2.4). A local that is read both ways
+/// carries everything.
+fn recordStore(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow mut Borrows,
+    edges: borrow mut Vector<LoanEdge>,
+    holder: u32,
+    operands: borrow Vector<u32>,
+    throughReference: bool,
+    span: Span,
+) -> Result<void, AllocError> {
+    var sources = Vector<u32>.create();
+    var drops = Vector<u32>.create();
+    for (o in operands.view()) {
+        let place = operandPlace(n, o);
+        if (place == none()) {
+            continue;
+        }
+        let p = toPlaceRef(n, place);
+        if (!mayHoldLoans(c, n.operandTypes[o as usize]) || !holdsLoans(c, n, b, p.local)) {
+            continue;
+        }
+        let through = throughParameter(c, n, b, p);
+        var known = false;
+        for (k in 0..sources.length) {
+            if (sources[k] == p.local) {
+                known = true;
+                if (drops[k] != through) {
+                    drops[k] = none();
+                }
+            }
+        }
+        if (!known) {
+            sources.push(p.local)?;
+            drops.push(through)?;
+        }
+    }
+    if (sources.length == 0) {
+        return Ok();
+    }
+    var origins = Vector<u32>.create();
+    for (k in 0..sources.length) {
+        if (drops[k] != none()) {
+            addDeepEdge(edges, sources[k], holder, drops[k])?;
+        } else {
+            addEdge(edges, sources[k], holder)?;
+        }
+        origins.push(sources[k])?;
+    }
+    if (throughReference) {
+        b.throughWrites.push(
+            ThroughWrite {
+                holder: holder,
+                sources: sources,
+                drops: drops,
+                origins: origins,
+                shared: false,
+                span: span,
+            },
+        )?;
+    }
+    return Ok();
+}
+
 /// Is there an edge that carries at least what one from `from` to `to` without `dropOuter`'s outer placeholder does?
 fn hasEdgeDropping(edges: borrow Vector<LoanEdge>, from: u32, to: u32, dropOuter: u32) -> bool {
     for (edge in edges.view()) {
@@ -550,9 +618,8 @@ fn collectWrites(
             if (t.projections.count > 0 && mayHoldLoans(c, placeRefType(c, n, b, t))) {
                 var operands = Vector<u32>.create();
                 rvalueOperands(n, value, mut operands)?;
-                let sources = carriers(c, n, b, operands)?;
                 let through = derefsReference(c, n, b, t);
-                recordWrite(b, edges, t.local, sources, through, false, span)?;
+                recordStore(c, n, b, edges, t.local, operands, through, span)?;
             }
         }
         _ => {}

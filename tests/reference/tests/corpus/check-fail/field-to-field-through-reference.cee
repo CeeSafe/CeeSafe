@@ -1,0 +1,55 @@
+// What a store through a `borrow mut` parameter still refuses (type-system.md §25.7 rule 2): another parameter's
+// view, another parameter's field, and a parameter itself as a reference (N0272). And why a value has one loan set
+// (lifetimes.md §8, ADR 0214): after `swap(mut t)` the field `b` views `first`, so `first` cannot change while `b`
+// is used (N0241).
+struct Two<region r> {
+    a: StringView<r>;
+    b: StringView<r>;
+}
+
+struct Cell<region r> {
+    inner: borrow(r) Two<r>;
+    text: StringView<r>;
+}
+
+fn fromOther(t: borrow mut Two, s: borrow String) {
+    t.a = s.view(); // error[N0272]
+}
+
+fn fromOtherStruct(t: borrow mut Two, u: borrow Two) {
+    t.a = u.b; // error[N0272]
+}
+
+fn ownReference(c: borrow mut Cell, t: borrow Two) {
+    c.inner = t; // error[N0272]
+}
+
+// Two parameters that share a region may exchange what they hold, and a caller sees the flow: a local's view must
+// not reach a `borrow mut` parameter that way.
+fn exchange<region r>(left: borrow mut Two<r>, right: borrow mut Two<r>) {
+    let old = left.a;
+    left.a = right.a;
+    right.a = old;
+}
+
+fn leaks(into: borrow mut Two) {
+    let local = String.create();
+    var mine = Two { a: local.view(), b: local.view() };
+    exchange(mut into, mut mine); // error[N0272] // error[N0272]
+}
+
+fn swap(t: borrow mut Two) {
+    let old = t.a;
+    t.a = t.b;
+    t.b = old;
+}
+
+fn main() {
+    var first = String.create();
+    let second = String.create();
+    var t = Two { a: first.view(), b: second.view() };
+    swap(mut t);
+    let b = t.b;
+    first.clear(); // error[N0241]
+    Console.writeLine(b);
+}

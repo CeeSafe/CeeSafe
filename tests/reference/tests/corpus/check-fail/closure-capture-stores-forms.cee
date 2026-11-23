@@ -25,7 +25,7 @@ fn w1(into: borrow mut Holder) {
     let t = String.from("local local local local local local local local")!;
     let v = t.view();
     let g = () => { // error[N0272]
-        into.text = v; // error[N0272]
+        into.text = v; // the store is the enclosing function's, reported where the closure is made (ADR 0214 §5)
     };
     g();
 }

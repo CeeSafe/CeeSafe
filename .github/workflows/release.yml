@@ -434,8 +434,67 @@ jobs:
           path: dist/*.vsix
           if-no-files-found: error
 
+  zed:
+    # The Zed extension (editors/zed, tooling.md §2.5): its versions must be the release's, its directory must have an
+    # accepted licence, the commit its grammar names must have the release's grammar, the grammar must be what
+    # grammar.js generates and parse every source the compiler accepts, and the extension must build for the target
+    # Zed builds it for. Nothing is published here: zed-registry does that after the release.
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the grammar's commit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Versions, licence and the grammar's commit
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          manifest=$(sed -n 's/^version = "\(.*\)"$/\1/p' editors/zed/extension.toml | head -1)
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' editors/zed/Cargo.toml | head -1)
+          if [ "$manifest" != "$version" ] || [ "$crate" != "$version" ]; then
+            echo "::error::editors/zed is $manifest (extension.toml) and $crate (Cargo.toml), the release is $version; see docs/release.md"
+            exit 1
+          fi
+          grep -q "^MIT License" editors/zed/LICENSE || { echo "::error::editors/zed/LICENSE is not the MIT licence"; exit 1; }
+          rev=$(sed -n 's/^rev = "\(.*\)"$/\1/p' editors/zed/extension.toml)
+          git merge-base --is-ancestor "$rev" HEAD || { echo "::error::the grammar's rev $rev is not an ancestor of the tag"; exit 1; }
+          if ! git diff --quiet "$rev" HEAD -- editors/tree-sitter-ceesafe; then
+            echo "::error::editors/tree-sitter-ceesafe changed since $rev: set rev in editors/zed/extension.toml to a commit that has this grammar; see docs/release.md"
+            exit 1
+          fi
+      - name: Grammar
+        run: |
+          npm install --global tree-sitter-cli@0.27.2
+          (cd editors/tree-sitter-ceesafe && tree-sitter generate)
+          git diff --exit-code -- editors/tree-sitter-ceesafe/src || { echo "::error::editors/tree-sitter-ceesafe/src is not what grammar.js generates: run tree-sitter generate"; exit 1; }
+          python3 tools/tree_sitter_check.py --tree-sitter "$(command -v tree-sitter)" --highlights
+      - name: Extension
+        working-directory: editors/zed
+        run: |
+          rustup target add wasm32-wasip2
+          cargo build --release --target wasm32-wasip2
+
+  zed-registry:
+    # The release in Zed's extension registry: a pull request to zed-industries/extensions that moves the submodule to
+    # this tag and sets its version (huacnlee/zed-extension-action, pinned to v2.0.0's commit). It runs only once the
+    # extension is in the registry and the repository variable ZED_EXTENSIONS_FORK names the fork the pull request is
+    # pushed to; the token, secret ZED_COMMITTER_TOKEN, is a personal access token with the scopes repo and workflow.
+    # After the GitHub release, so its failure never holds a release back.
+    needs: [version, zed, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.ZED_EXTENSIONS_FORK != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: huacnlee/zed-extension-action@8cd592a0d24e1e41157740f1a529aeabddc88a1b # v2.0.0
+        with:
+          extension-name: ceesafe
+          push-to: ${{ vars.ZED_EXTENSIONS_FORK }}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.ZED_COMMITTER_TOKEN }}
+
   publish:
-    needs: [version, build, freebsd, extension, seed-check]
+    needs: [version, build, freebsd, extension, zed, seed-check]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

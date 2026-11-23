@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// SPDX-License-Identifier: MIT
 //! The CeeSafe extension for Zed. Highlighting is the grammar's and the queries' (languages/ceesafe); everything else
 //! comes from `ceesafec lsp` (spec/tooling.md §2), which this starts: `ceesafec` from the `PATH`, or the command that
 //! Zed's settings give for the server `ceesafec`:

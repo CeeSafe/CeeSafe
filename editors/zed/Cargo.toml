@@ -1,9 +1,9 @@
 [package]
 name = "zed_ceesafe"
-version = "0.94.4"
+version = "0.94.5"
 edition = "2024"
 publish = false
-license = "GPL-2.0-only WITH Classpath-exception-2.0"
+license = "MIT"
 description = "The CeeSafe extension for Zed: it starts `ceesafec lsp`."
 
 [lib]

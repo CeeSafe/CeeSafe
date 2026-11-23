@@ -139,9 +139,12 @@ Code's client (diagnostics, hover, definition, an unknown method, shutdown and e
 `editors/zed` holds a Zed extension (`extension.toml`, schema 1):
 - `languages/ceesafe`: the language's configuration (`.cee`, comments, brackets) and its Tree-sitter queries:
   highlighting, brackets, indentation and the outline;
-- `src/ceesafe.rs`, built to WebAssembly (`wasm32-wasip1`) against `zed_extension_api` 0.7: it starts `ceesafec lsp`
+- `src/ceesafe.rs`, built to WebAssembly (`wasm32-wasip2`) against `zed_extension_api` 0.7: it starts `ceesafec lsp`
   (the `ceesafec` on the worktree's `PATH`, or `lsp.ceesafec.binary.path` and `.arguments` from Zed's settings),
   with the worktree's shell environment.
+
+`editors/zed` is under the MIT licence (its `LICENSE`), as Zed's registry requires of an extension's own code; the
+rest of the repository keeps its own.
 
 The grammar is `editors/tree-sitter-ceesafe` (`grammar.js`, the generated `src/parser.c`, and `src/scanner.c` for raw
 string literals, whose end a longest-match token cannot find). It follows `grammar.md` and type-system.md §15.2, and is

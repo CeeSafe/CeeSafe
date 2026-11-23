@@ -1,16 +1,16 @@
 id = "ceesafe"
 name = "CeeSafe"
-version = "0.94.4"
+version = "0.94.5"
 schema_version = 1
 authors = ["The CeeSafe authors"]
 description = "The CeeSafe language: syntax highlighting, and diagnostics, hover, go to definition, outline, formatting and quick fixes from ceesafec lsp."
 repository = "https://github.com/CeeSafe/CeeSafe"
 
-# The grammar is editors/tree-sitter-ceesafe in the CeeSafe repository, at a pushed commit that has it. GRAMMAR_COMMIT
-# is replaced by that commit once it is pushed (editors/zed/README.md).
+# The grammar is editors/tree-sitter-ceesafe in the CeeSafe repository, at a commit of main whose grammar is the
+# release's: the release workflow's zed job checks that it has not changed since (docs/release.md).
 [grammars.ceesafe]
 repository = "https://github.com/CeeSafe/CeeSafe"
-rev = "GRAMMAR_COMMIT"
+rev = "143dab5e3aa4b9ed3b06571e6859a67a9665bc68"
 path = "editors/tree-sitter-ceesafe"
 
 [language_servers.ceesafec]

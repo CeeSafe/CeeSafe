@@ -27,10 +27,21 @@ One C seed for every platform, so every binary is built from the same C and chec
    byte, the smoke test, `ceesafec-freebsd-x64.tar.gz`. No secret reaches that job.
 4. **extension**: the VS Code extension's tests (the language server's run against the linux-x64 `ceesafec` just
    built) and its `.vsix`, `ceesafe-language-<version>.vsix`.
-5. **publish**: `SHA256SUMS` (the archives, the seed and the `.vsix`) and the GitHub release.
-6. **stores**: the same `.vsix` on the VS Code Marketplace and on Open VSX, publisher (namespace) `ceesafe`. It runs
+5. **zed**: the Zed extension (`editors/zed`, tooling.md §2.5): its versions in `extension.toml` and `Cargo.toml`
+   must be the release's, `editors/zed/LICENSE` the MIT licence, the grammar's `rev` an ancestor of the tag whose
+   `editors/tree-sitter-ceesafe` is the tag's, `src/` what `grammar.js` generates (tree-sitter-cli 0.27.2), every
+   source of the compiler, the libraries and the corpus's passing families parse (`tools/tree_sitter_check.py`), and
+   the extension build for `wasm32-wasip2`, the target Zed builds it for. A failure holds the release back.
+6. **publish**: `SHA256SUMS` (the archives, the seed and the `.vsix`) and the GitHub release.
+7. **stores**: the same `.vsix` on the VS Code Marketplace and on Open VSX, publisher (namespace) `ceesafe`. It runs
    after the GitHub release, so a store's failure never holds a release back, and `--skip-duplicate` makes a rerun
    harmless.
+8. **zed-registry**: a pull request to [zed-industries/extensions](https://github.com/zed-industries/extensions) that
+   moves the `ceesafe` submodule to the tag and sets its version (`huacnlee/zed-extension-action`, pinned to v2.0.0's
+   commit), pushed to the fork the repository variable `ZED_EXTENSIONS_FORK` names. It is off while that variable is
+   unset: the extension's first pull request is opened by hand (Zed's publishing guide), after it has been tried in
+   Zed at the commit it names, and the variable is set once the registry has it. After the GitHub release, so its
+   failure never holds a release back; Zed's maintainers merge the pull request.
 
 | Archive | Built on | Contents |
 |---|---|---|
@@ -45,7 +56,10 @@ One C seed for every platform, so every binary is built from the same C and chec
 
 1. Set the version in `src/backend/c_program.cee`: `ceesafeVersion()` and `compilerBanner()` (`ceesafec <version>`)
    must agree, and the tag must name it; the workflow checks both. The version is a constant so that the generated C
-   is reproducible. Set the same version in `editors/vscode/package.json`: the workflow checks it too.
+   is reproducible. Set the same version in `editors/vscode/package.json`, `editors/zed/extension.toml` and
+   `editors/zed/Cargo.toml` (and `cargo update -p zed_ceesafe` for its lock): the workflow checks them too. If
+   `editors/tree-sitter-ceesafe` changed since the commit `editors/zed/extension.toml`'s grammar `rev` names, commit
+   the grammar first and set `rev` to that commit, which must reach `main` with the release.
 2. Run the contract suite on the commit: `python3 tools/contract_tests.py --ceesafec out/ceesafec` (`spec/testing.md`;
    it includes the fixed point). Then build the commit as the workflow's seed job does, from the release stage 0:
    `sh tools/bootstrap_release.sh <ceesafec 0.78.1> HEAD <dir>/ceesafec`. Stage 0 builds the tree directly, so the
@@ -59,6 +73,10 @@ One C seed for every platform, so every binary is built from the same C and chec
 4. Move `main` to the next development version (`<next>-dev`).
 
 ## Secrets
+
+The `zed-registry` job needs the variable `ZED_EXTENSIONS_FORK` (`owner/extensions`, a fork of
+zed-industries/extensions, on a personal account as Zed's guide asks) and the secret `ZED_COMMITTER_TOKEN`, a personal
+access token of that account with the scopes `repo` and `workflow`. Until the variable is set, the job does not run.
 
 The macOS steps need the repository secrets `APPLE_CERTIFICATE_P12` (the Developer ID Application certificate and key,
 base64), `APPLE_CERTIFICATE_PASSWORD`, and for `notarytool` `ASC_P8` (the App Store Connect API key, base64),

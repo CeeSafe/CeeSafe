@@ -27,15 +27,16 @@ Before the grammar's commit is on GitHub, point the grammar at your checkout for
 | | |
 |---|---|
 | `extension.toml` | the manifest: the grammar (repository, commit, path) and the language server `ceesafec` |
-| `src/ceesafe.rs` | starts `ceesafec lsp` (built to `wasm32-wasip1` against `zed_extension_api` 0.7) |
+| `src/ceesafe.rs` | starts `ceesafec lsp` (built to `wasm32-wasip2` against `zed_extension_api` 0.7) |
 | `languages/ceesafe/config.toml` | `.cee`, comments, brackets |
 | `languages/ceesafe/*.scm` | the queries: highlights, brackets, indents, outline |
+| `LICENSE` | MIT, this directory's |
 | `../tree-sitter-ceesafe` | the grammar: `grammar.js`, the generated `src/parser.c`, and `src/scanner.c` |
 
 ## Checking
 
 ```sh
-cargo build --release --target wasm32-wasip1                    # the extension
+cargo build --release --target wasm32-wasip2                    # the extension
 cd ../tree-sitter-ceesafe && tree-sitter generate                # the parser, after a change to grammar.js
 python3 tools/tree_sitter_check.py --tree-sitter "$(which tree-sitter)" --highlights   # from the repository root
 ```
@@ -44,6 +45,13 @@ The last parses every CeeSafe source of the compiler, the libraries and the corp
 
 ## Publishing
 
-Not done yet. Zed's extension registry lists an extension from the
-[zed-industries/extensions](https://github.com/zed-industries/extensions) repository, with its licence; whether
-CeeSafe's (GPL-2.0-only with the Classpath exception) is one it accepts is to be checked.
+Zed's registry lists an extension from the [zed-industries/extensions](https://github.com/zed-industries/extensions)
+repository: a pull request adds it as a submodule (this repository, `path = "editors/zed"`) with its version. The
+first is opened by hand, after the extension has been tried in Zed at the commit it names; after that, the release
+workflow opens one for each release (docs/release.md).
+
+## Licence
+
+This directory, the extension's own code, is under the MIT licence (`LICENSE`), one of those Zed's registry accepts.
+The rest of CeeSafe, the compiler that the extension starts and the grammar it names among it, keeps its licence
+(`COPYING`, `COPYING.RUNTIME`).

@@ -134,6 +134,25 @@ Its tests: `test/grammar.test.mjs` tokenizes CeeSafe lines with `vscode-textmate
 each token gets; `test/server.test.mjs` drives a built `ceesafec lsp` through `vscode-jsonrpc`, the library under VS
 Code's client (diagnostics, hover, definition, an unknown method, shutdown and exit).
 
+### 2.5 The Zed extension
+
+`editors/zed` holds a Zed extension (`extension.toml`, schema 1):
+- `languages/ceesafe`: the language's configuration (`.cee`, comments, brackets) and its Tree-sitter queries:
+  highlighting, brackets, indentation and the outline;
+- `src/ceesafe.rs`, built to WebAssembly (`wasm32-wasip1`) against `zed_extension_api` 0.7: it starts `ceesafec lsp`
+  (the `ceesafec` on the worktree's `PATH`, or `lsp.ceesafec.binary.path` and `.arguments` from Zed's settings),
+  with the worktree's shell environment.
+
+The grammar is `editors/tree-sitter-ceesafe` (`grammar.js`, the generated `src/parser.c`, and `src/scanner.c` for raw
+string literals, whose end a longest-match token cannot find). It follows `grammar.md` and type-system.md §15.2, and is
+more permissive than the compiler where an editor should be. `extension.toml` names it by the repository, a commit and
+the path, so the commit must be a pushed one that has the grammar.
+
+`tools/tree_sitter_check.py` parses every `.cee` file of `src/`, `lib/` and the corpus's run-pass, run-fail and
+check-pass families with the grammar, and compiles the queries against it: a parse error or a query that names a node
+the grammar does not have is a problem. It needs the Tree-sitter CLI (`--tree-sitter`), so it is not in the contract
+suite.
+
 ## 3. Debugging (T4)
 
 A CeeSafe program is debugged as the C it compiles to, with the C mapped back to CeeSafe lines. No debugger needs to

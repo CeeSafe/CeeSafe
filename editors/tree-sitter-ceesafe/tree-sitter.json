@@ -1,0 +1,23 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "ceesafe",
+      "camelcase": "CeeSafe",
+      "scope": "source.ceesafe",
+      "path": ".",
+      "file-types": [
+        "cee"
+      ],
+      "highlights": "../zed/languages/ceesafe/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+    "description": "CeeSafe grammar for Tree-sitter",
+    "links": {
+      "repository": "https://github.com/CeeSafe/CeeSafe"
+    }
+  }
+}

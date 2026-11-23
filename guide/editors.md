@@ -27,10 +27,26 @@ code --install-extension ceesafe-language-*.vsix
 
 The extension starts `ceesafec lsp`. It finds `ceesafec` on your `PATH`, or where the setting `ceesafe.server.path` says.
 
+## Zed
+
+The extension in `editors/zed` gives `.cee` files syntax highlighting from a Tree-sitter grammar
+(`editors/tree-sitter-ceesafe`), the outline, bracket matching and indentation, and starts `ceesafec lsp` for
+everything the server does (below), quick fixes included.
+
+To install it from the repository: in Zed, run **zed: install dev extension** from the command palette and choose the
+`editors/zed` directory. Zed builds the extension (it needs Rust, installed with `rustup`) and the grammar itself.
+
+The extension finds `ceesafec` on your `PATH`. To run another one, give its path in Zed's settings:
+
+```json
+{ "lsp": { "ceesafec": { "binary": { "path": "/opt/ceesafe/bin/ceesafec" } } } }
+```
+
 ## Other editors
 
 `ceesafec lsp` is a standard Language Server Protocol server on standard input and output, so any editor with an LSP
-client can use it: Neovim, Helix, Emacs, Zed, Sublime Text. Configure it to run `ceesafec lsp` for `.cee` files. The
+client can use it: Neovim, Helix, Emacs, Sublime Text. Neovim and Helix can also highlight with the Tree-sitter
+grammar in `editors/tree-sitter-ceesafe`. Configure it to run `ceesafec lsp` for `.cee` files. The
 TextMate grammar in `editors/vscode/syntaxes/ceesafe.tmLanguage.json` works in editors that accept TextMate grammars.
 
 ## What the server does

@@ -207,6 +207,8 @@ with nothing read from disk, or as `paths`, a list of `.cee` files on disk.
 | `ceesafe_spec_section` | The text of one section of a document, such as `type-system` section `31.2`. |
 | `ceesafe_symbol` | The type or signature of the name at a line and column, and where it is declared. |
 | `ceesafe_api` | The signature and documentation of a library or built-in name, such as `Vector.push` or `Process.argument`, or the closest real names when there is none. Use it before deciding that a name does not exist. |
+| `ceesafe_test` | Each `@test` function's outcome, message and output, from a run of the package's tests in the interpreter, sandboxed as `ceesafe_run` is, each test with its own limit on steps. A test that reads files or calls C needs `ceesafec test` in a shell. |
+| `ceesafe_doc` | The Markdown page `ceesafec doc` writes for the package's public items, or the public items that have no doc comment. |
 
 The server also has two prompts, `write-ceesafe` (the guide for agents, then a task) and `port-c-to-ceesafe`, and it
 serves each document embedded in the compiler as a resource whose address starts `ceesafe://docs/`. Those documents

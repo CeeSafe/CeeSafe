@@ -6,7 +6,8 @@
  * ceesafe_push_token blocks, from any thread but the window's, and writes the token as text: "apns-sandbox:HEX" (an
  * iOS development build), "apns:HEX" (iOS), "fcm:TOKEN" (Android); it returns the length, or -2 Unsupported,
  * -5 Denied, -6 Failed (PushError). iOS: the window runtime's ceesafe_ios_push_token (weak here, so a program with no
- * window has none). Android, macOS and the rest: Unsupported for now (ADR 0244 §2.3).
+ * window has none). Android (ADR 0249): the app's Firebase Messaging, through the runtime's Java class Push; an app
+ * without Firebase is Unsupported. macOS and the rest: Unsupported for now (ADR 0244 §2.3).
  *
  * CEESAFE_PUSH_TOKEN=<text> is the token instead, on every system (for tests): its text as it is.
  *
@@ -62,11 +63,75 @@ static int32_t cee_push_system_deliver(uint64_t id, const uint8_t *title, uint64
                : CEE_PUSH_UNSUPPORTED;
 }
 #else
+#if defined(__ANDROID__)
+/* Android (ADR 0249): org.ceesafe.window.Push (runtime/android), a class of the window runtime's embedded dex, asks
+   the app's own Firebase Messaging, found by reflection, for its token; called over JNI from the program's thread,
+   attached to the VM for the call. The window runtime gives the VM and the class (weak here). An app without Firebase
+   has no token: Unsupported. */
+#include <jni.h>
+
+JavaVM *ceesafe_android_vm(void) __attribute__((weak));
+jclass ceesafe_android_push(JNIEnv *env, jobject *activity) __attribute__((weak));
+
+static int64_t cee_push_system(char *out, size_t capacity) {
+    JavaVM *vm = ceesafe_android_vm != NULL ? ceesafe_android_vm() : NULL;
+    if (vm == NULL || ceesafe_android_push == NULL) {
+        return CEE_PUSH_UNSUPPORTED;
+    }
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) {
+            return CEE_PUSH_UNSUPPORTED;
+        }
+        attached = 1;
+    }
+    int64_t result = CEE_PUSH_UNSUPPORTED;
+    if ((*env)->PushLocalFrame(env, 16) == 0) {
+        jobject activity = NULL;
+        jclass push = ceesafe_android_push(env, &activity);
+        jmethodID m = push != NULL ? (*env)->GetStaticMethodID(env, push, "token",
+                                                               "(Landroid/app/Activity;)Ljava/lang/String;")
+                                   : NULL;
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            m = NULL;
+        }
+        if (m != NULL) {
+            jstring token = (jstring)(*env)->CallStaticObjectMethod(env, push, m, activity);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                result = CEE_PUSH_FAILED;
+            } else if (token == NULL) {
+                result = CEE_PUSH_UNSUPPORTED; /* no Firebase Messaging in the app */
+            } else {
+                const char *chars = (*env)->GetStringUTFChars(env, token, NULL);
+                size_t length = chars != NULL ? strlen(chars) : 0;
+                result = chars == NULL || length == 0 || length > capacity ? CEE_PUSH_FAILED : (int64_t)length;
+                if (result > 0) {
+                    memcpy(out, chars, length);
+                }
+                if (chars != NULL) {
+                    (*env)->ReleaseStringUTFChars(env, token, chars);
+                }
+            }
+        } else if (push != NULL) {
+            result = CEE_PUSH_FAILED;
+        }
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (attached) {
+        (void)(*vm)->DetachCurrentThread(vm);
+    }
+    return result;
+}
+#else
 static int64_t cee_push_system(char *out, size_t capacity) {
     (void)out;
     (void)capacity;
     return CEE_PUSH_UNSUPPORTED;
 }
+#endif
 
 static int64_t cee_push_system_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id) {
     (void)milliseconds;

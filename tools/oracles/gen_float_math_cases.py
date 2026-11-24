@@ -252,7 +252,8 @@ EXACT = [
     ("asinh", (-0.0,)), ("asinh", (-INF,)),
     ("acosh", (1.0,)), ("acosh", (0.5,)), ("acosh", (INF,)),
     ("atanh", (-0.0,)), ("atanh", (1.0,)), ("atanh", (-1.0,)), ("atanh", (2.0,)),
-    ("cbrt", (-0.0,)), ("cbrt", (-INF,)), ("cbrt", (-27.0,)), ("cbrt", (8.0,)),
+    # -64, not -27: glibc 2.39's cbrt(-27) is -3.0000000000000004, a last bit the platform may give (ADR 0218 §2.2).
+    ("cbrt", (-0.0,)), ("cbrt", (-INF,)), ("cbrt", (-64.0,)), ("cbrt", (8.0,)),
     ("logB", (8.0,)), ("logB", (0.1,)), ("logB", (0.0,)), ("logB", (-0.0,)), ("logB", (-INF,)), ("logB", (NAN,)),
     ("logB", (5e-324,)), ("logB", (-1e308,)),
     ("pow", (2.0, 10.0)), ("pow", (NAN, 0.0)), ("pow", (1.0, NAN)), ("pow", (-8.0, 1.0 / 3.0)), ("pow", (0.0, -1.0)),

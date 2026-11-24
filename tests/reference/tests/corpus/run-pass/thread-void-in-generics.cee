@@ -9,18 +9,18 @@ fn pass<T>(x: T) -> T => x;
 
 fn lastOf<T>(v: borrow mut Vector<T>) -> T? => v.pop();
 
-fn start() -> Thread<void> {
-    match (Thread.spawn(move () => idle())) {
-        Ok(t) => { return t; }
-        Err(_) => { Process.exit(1); }
-    }
-}
+// A thread, or null when it cannot be started (an allocation the fault sweep fails): the program then stops early,
+// returning, so its allocation report is still written.
+fn start() -> Thread<void>? => match (Thread.spawn(move () => idle())) {
+    Ok(t) => t,
+    Err(_) => null,
+};
 
-fn main() {
+fn run() -> Result<void, AllocError> {
     var threads = Vector<Thread<void>>.create();
-    let _ = threads.push(start());
-    let _ = threads.push(start());
-    let _ = threads.insert(0, start());
+    threads.push(start() ?? { return Ok(); })?;
+    threads.push(start() ?? { return Ok(); })?;
+    threads.insert(0, start() ?? { return Ok(); })?;
     let first = threads.swapRemove(0);
     pass(first).join();
     Console.writeLine("swapRemove");
@@ -36,7 +36,7 @@ fn main() {
     }
     Console.writeLine(threads.length);
     var byKey = HashMap<u32, Thread<void>>.create();
-    let _ = byKey.put(1, start());
+    byKey.put(1, start() ?? { return Ok(); })?;
     let key: u32 = 1;
     match (byKey.remove(key)) {
         Some(t) => {
@@ -46,17 +46,13 @@ fn main() {
         null => {}
     }
     var slots = SlotMap<Thread<void>>.create();
-    match (slots.insert(start())) {
-        Ok(h) => {
-            match (slots.remove(h)) {
-                Some(t) => {
-                    t.join();
-                    Console.writeLine("SlotMap");
-                }
-                null => {}
-            }
+    let h = slots.insert(start() ?? { return Ok(); })?;
+    match (slots.remove(h)) {
+        Some(t) => {
+            t.join();
+            Console.writeLine("SlotMap");
         }
-        Err(_) => {}
+        null => {}
     }
     let maybe: Thread<void>? = start();
     match (maybe) {
@@ -64,14 +60,22 @@ fn main() {
             t.join();
             Console.writeLine("optional");
         }
-        null => {}
+        null => { return Ok(); }
     }
     var counts = Vector<Thread<u64>>.create();
     match (Thread.spawn(move () => 4u64)) {
-        Ok(t) => { let _ = counts.push(t); }
-        Err(_) => {}
+        Ok(t) => { counts.push(t)?; }
+        Err(_) => { return Ok(); }
     }
     Console.writeLine(counts.swapRemove(0).join());
+    return Ok();
+}
+
+fn main() {
+    match (run()) {
+        Ok(_) => {}
+        Err(_) => { Console.writeLine("out of memory"); }
+    }
 }
 // expect-stdout: swapRemove
 // expect-stdout: remove

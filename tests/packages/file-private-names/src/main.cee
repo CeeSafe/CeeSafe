@@ -1,0 +1,13 @@
+// Each file's private items have a scope of their own (type-system.md §2, ADR 0230): src/printf.cee and
+// src/datetime.cee, written apart, each declare private items of the same names, and each means its own.
+// tools/package_tests.py (check 43) runs this, in the interpreter and compiled, and expects
+//   printfAnswer:   2 ("p-") + 30 (Row 3 * 10) + 6 (Mode.Wide(6)) + 103 (3 + 100) + 1000 (its Layout) + 7 (its label)
+//                   = 1148
+//   datetimeAnswer: 3 ("ddd") + 42 (Row 40 + 2) + 6 (Mode.Dusk(3) * 2) + 2 (w) + 1 (lib/core's Layout) + 20 (label
+//                   below) = 74
+fn label() -> i64 => 20;
+
+fn main() {
+    Console.writeLine(printfAnswer());
+    Console.writeLine(datetimeAnswer());
+}

@@ -1,0 +1,52 @@
+// datetime's helpers, written apart from printf.cee's, with the same names (ADR 0230).
+private fn appendInteger(out: borrow mut Vector<u8>, n: i64) {
+    let _ = out.push('d');
+    let _ = out.push('d');
+    let _ = out.push('d');
+}
+
+private fn twice<T: Copy>(x: T) -> T => x;
+
+private struct Row {
+    v: i64;
+    w: i64;
+
+    fn value(borrow this) -> i64 => this.v + this.w;
+}
+
+private enum Mode {
+    Day,
+    Night,
+    Dusk(i64),
+}
+
+impl Mode {
+    fn width(borrow this) -> i64 => match (this) {
+        Mode.Dusk(n) => n * 2,
+        _ => 0,
+    };
+}
+
+private interface Shape {
+    fn size(borrow this) -> i64;
+}
+
+impl Shape for Row {
+    fn size(borrow this) -> i64 => this.w;
+}
+
+private fn measure(s: borrow dyn Shape) -> i64 => s.size();
+
+private const LIMIT: i64 = 40;
+
+private static TABLE: [i64; 3] = [1, 2, 3];
+
+fn datetimeAnswer() -> i64 {
+    var out = Vector<u8>.create();
+    appendInteger(mut out, 5);
+    let r = Row { v: twice<i64>(LIMIT), w: 2 };
+    let m = Mode.Dusk(TABLE[2]);
+    // `Layout` is lib/core's here, and `label` the package's.
+    let layout = Layout { size: 1, align: 8 };
+    return truncate<i64>(out.length) + r.value() + m.width() + measure(borrow r) + truncate<i64>(layout.size) + label();
+}

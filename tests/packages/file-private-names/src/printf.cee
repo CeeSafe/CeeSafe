@@ -1,0 +1,57 @@
+// printf's helpers: private, so datetime.cee may have helpers of the same names (ADR 0230).
+private fn appendInteger(out: borrow mut Vector<u8>, n: i64) {
+    let _ = out.push('p');
+    if (n < 0) {
+        let _ = out.push('-');
+    }
+}
+
+private fn twice<T: Copy>(x: T) -> T => x;
+
+private struct Row {
+    v: i64;
+
+    fn value(borrow this) -> i64 => this.v * 10;
+}
+
+private enum Mode {
+    Plain,
+    Wide(i64),
+}
+
+impl Mode {
+    fn width(borrow this) -> i64 => match (this) {
+        Mode.Plain => 1,
+        Mode.Wide(n) => n,
+    };
+}
+
+private interface Shape {
+    fn size(borrow this) -> i64;
+}
+
+impl Shape for Row {
+    fn size(borrow this) -> i64 => this.v + 100;
+}
+
+private fn measure(s: borrow dyn Shape) -> i64 => s.size();
+
+private const LIMIT: i64 = 3;
+
+private static TABLE: [i64; 2] = [5, 6];
+
+// Hides lib/core's `Layout` in this file only.
+private struct Layout {
+    size: i64;
+}
+
+// Hides the package's `label` (main.cee) in this file only.
+private fn label() -> i64 => 7;
+
+fn printfAnswer() -> i64 {
+    var out = Vector<u8>.create();
+    appendInteger(mut out, -1);
+    let r = Row { v: twice<i64>(LIMIT) };
+    let m = Mode.Wide(TABLE[1]);
+    return truncate<i64>(out.length) + r.value() + m.width() + measure(borrow r) + Layout { size: 1000 }.size + label();
+}

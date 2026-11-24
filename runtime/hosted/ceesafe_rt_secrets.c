@@ -44,6 +44,15 @@ int64_t ceesafe_secrets_read(const uint8_t *app, uint64_t app_length, const uint
 int32_t ceesafe_secrets_write(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
                               const uint8_t *value, uint64_t length);
 int32_t ceesafe_secrets_remove(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length);
+/* The same in a group shared with the app's extensions (ADR 0246): on Apple's systems the keychain access group
+   `group` (an App Group, or a team-prefixed keychain group); elsewhere the group changes nothing. */
+int64_t ceesafe_secrets_group_read(const uint8_t *group, uint64_t group_length, const uint8_t *app, uint64_t app_length,
+                                   const uint8_t *name, uint64_t name_length, uint8_t *out, uint64_t capacity);
+int32_t ceesafe_secrets_group_write(const uint8_t *group, uint64_t group_length, const uint8_t *app,
+                                    uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                                    const uint8_t *value, uint64_t length);
+int32_t ceesafe_secrets_group_remove(const uint8_t *group, uint64_t group_length, const uint8_t *app,
+                                     uint64_t app_length, const uint8_t *name, uint64_t name_length);
 
 /* The names as C strings, checked as lib/std's Secrets.check does; 0 when they are not names the store takes. */
 static int cee_sec_names(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
@@ -306,7 +315,11 @@ static struct {
     cee_os_status (*update)(cee_cf, cee_cf);
     cee_os_status (*remove)(cee_cf);
     cee_cf cls, generic, service, account, value, return_data, match_limit, limit_one, accessible, after_unlock,
-        data_protection;
+        data_protection, access_group, return_attributes;
+    cee_cf (*get)(cee_cf, cee_cf);
+    unsigned char (*c_string)(cee_cf, char *, cee_cf_index, uint32_t);
+    int own_known;     /* 1: own_group found (empty when there is none to name) */
+    char own_group[256]; /* the app's default access group: what a call without a group names (ADR 0246) */
 } cee_sec;
 
 static pthread_mutex_t cee_sec_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -351,6 +364,10 @@ static int cee_sec_load(void) {
             cee_sec.accessible = cee_sec_constant(sec, "kSecAttrAccessible");
             cee_sec.after_unlock = cee_sec_constant(sec, "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly");
             cee_sec.data_protection = cee_sec_constant(sec, "kSecUseDataProtectionKeychain");
+            cee_sec.access_group = cee_sec_constant(sec, "kSecAttrAccessGroup");
+            cee_sec.return_attributes = cee_sec_constant(sec, "kSecReturnAttributes");
+            cee_sec.get = (cee_cf(*)(cee_cf, cee_cf))dlsym(cf, "CFDictionaryGetValue");
+            cee_sec.c_string = (unsigned char (*)(cee_cf, char *, cee_cf_index, uint32_t))dlsym(cf, "CFStringGetCString");
             if (cee_sec.dictionary != NULL && cee_sec.set != NULL && cee_sec.string != NULL && cee_sec.data != NULL &&
                 cee_sec.data_length != NULL && cee_sec.data_bytes != NULL && cee_sec.release != NULL &&
                 cee_sec.key_callbacks != NULL && cee_sec.value_callbacks != NULL && cee_sec.yes != NULL &&
@@ -377,7 +394,12 @@ static int cee_sec_load(void) {
 #define CEE_SEC_MISSING_ENTITLEMENT (-34018)
 
 /* The query naming the item (app, name), in the keychain `login` says (macOS), or NULL; the caller releases it. */
-static cee_cf cee_sec_query(const char *app, const char *name, int login) {
+static const char *cee_sec_own(int login);
+
+static cee_cf cee_sec_query(const char *app, const char *name, int login, const char *group) {
+    if (group == NULL) {
+        group = cee_sec_own(login);
+    }
     cee_cf q = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
     cee_cf service = cee_sec.string(NULL, (const uint8_t *)app, (cee_cf_index)strlen(app), CEE_SEC_UTF8, 0);
     cee_cf account = cee_sec.string(NULL, (const uint8_t *)name, (cee_cf_index)strlen(name), CEE_SEC_UTF8, 0);
@@ -392,6 +414,13 @@ static cee_cf cee_sec_query(const char *app, const char *name, int login) {
     cee_sec.set(q, cee_sec.account, account);
     cee_sec.release(service);
     cee_sec.release(account);
+    if (group != NULL && cee_sec.access_group != NULL) {
+        cee_cf shared = cee_sec.string(NULL, (const uint8_t *)group, (cee_cf_index)strlen(group), CEE_SEC_UTF8, 0);
+        if (shared != NULL) {
+            cee_sec.set(q, cee_sec.access_group, shared);
+            cee_sec.release(shared);
+        }
+    }
 #if !TARGET_OS_IPHONE
     if (!login && cee_sec.data_protection != NULL) {
         cee_sec.set(q, cee_sec.data_protection, cee_sec.yes);
@@ -400,6 +429,89 @@ static cee_cf cee_sec_query(const char *app, const char *name, int login) {
     (void)login;
 #endif
     return q;
+}
+
+/* The app's own access group (iOS, and macOS's data protection keychain), which a call without a group names, so that
+   it reads, writes and removes the app's own item only: without a group, SecItemDelete takes an item of the same
+   service and account in every group the app reaches, a shared group's too (ADR 0246). It is the group the system puts
+   an item in when none is named: a probe item is added, its group read back, and the probe removed. NULL in the login
+   keychain (it has no access groups) or when it cannot be found (calls then name none, as before). */
+static const char *cee_sec_own(int login) {
+    if (login || cee_sec.access_group == NULL || cee_sec.return_attributes == NULL || cee_sec.get == NULL ||
+        cee_sec.c_string == NULL) {
+        return NULL;
+    }
+    pthread_mutex_lock(&cee_sec_lock);
+    int known = cee_sec.own_known;
+    pthread_mutex_unlock(&cee_sec_lock);
+    if (!known) {
+        char found[256] = {0};
+        static const char probe_service[] = "ceesafe.access-group-probe";
+        cee_cf q = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+        cee_cf service = cee_sec.string(NULL, (const uint8_t *)probe_service, (cee_cf_index)(sizeof probe_service - 1),
+                                        CEE_SEC_UTF8, 0);
+        cee_cf data = cee_sec.data(NULL, (const uint8_t *)"0", 1);
+        if (q != NULL && service != NULL && data != NULL) {
+            cee_sec.set(q, cee_sec.cls, cee_sec.generic);
+            cee_sec.set(q, cee_sec.service, service);
+            cee_sec.set(q, cee_sec.account, service);
+#if !TARGET_OS_IPHONE
+            if (cee_sec.data_protection != NULL) {
+                cee_sec.set(q, cee_sec.data_protection, cee_sec.yes);
+            }
+#endif
+            cee_cf add = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+            if (add != NULL) {
+                /* A copy of the query with the value and the wish for its attributes. */
+                cee_sec.set(add, cee_sec.cls, cee_sec.generic);
+                cee_sec.set(add, cee_sec.service, service);
+                cee_sec.set(add, cee_sec.account, service);
+#if !TARGET_OS_IPHONE
+                if (cee_sec.data_protection != NULL) {
+                    cee_sec.set(add, cee_sec.data_protection, cee_sec.yes);
+                }
+#endif
+                cee_sec.set(add, cee_sec.value, data);
+                cee_sec.set(add, cee_sec.accessible, cee_sec.after_unlock);
+                cee_sec.set(add, cee_sec.return_attributes, cee_sec.yes);
+                cee_cf result = NULL;
+                cee_os_status status = cee_sec.add(add, &result);
+                if (status == CEE_SEC_DUPLICATE) {
+                    cee_sec.set(q, cee_sec.return_attributes, cee_sec.yes);
+                    status = cee_sec.copy_matching(q, &result);
+                }
+                cee_cf group = status == 0 && result != NULL ? cee_sec.get(result, cee_sec.access_group) : NULL;
+                if (group != NULL && !cee_sec.c_string(group, found, (cee_cf_index)sizeof found, CEE_SEC_UTF8)) {
+                    found[0] = 0;
+                }
+                if (result != NULL) {
+                    cee_sec.release(result);
+                }
+                cee_sec.release(add);
+                cee_cf gone = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+                if (gone != NULL) {
+                    cee_sec.set(gone, cee_sec.cls, cee_sec.generic);
+                    cee_sec.set(gone, cee_sec.service, service);
+                    cee_sec.set(gone, cee_sec.account, service);
+#if !TARGET_OS_IPHONE
+                    if (cee_sec.data_protection != NULL) {
+                        cee_sec.set(gone, cee_sec.data_protection, cee_sec.yes);
+                    }
+#endif
+                    (void)cee_sec.remove(gone);
+                    cee_sec.release(gone);
+                }
+            }
+        }
+        if (q != NULL) cee_sec.release(q);
+        if (service != NULL) cee_sec.release(service);
+        if (data != NULL) cee_sec.release(data);
+        pthread_mutex_lock(&cee_sec_lock);
+        memcpy(cee_sec.own_group, found, sizeof found);
+        cee_sec.own_known = 1;
+        pthread_mutex_unlock(&cee_sec_lock);
+    }
+    return cee_sec.own_group[0] != 0 ? cee_sec.own_group : NULL;
 }
 
 static int64_t cee_sec_code(cee_os_status status) {
@@ -446,12 +558,13 @@ static int cee_sec_fall_back(cee_os_status status) {
 #endif
 }
 
-static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
+                                   uint64_t capacity) {
     if (!cee_sec_load()) {
         return CEE_SEC_UNSUPPORTED;
     }
     for (;;) {
-        cee_cf q = cee_sec_query(app, name, cee_sec_login());
+        cee_cf q = cee_sec_query(app, name, cee_sec_login(), group);
         if (q == NULL) {
             return CEE_SEC_FAILED;
         }
@@ -482,13 +595,14 @@ static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *o
     }
 }
 
-static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+static int32_t cee_sec_system_write(const char *group, const char *app, const char *name, const uint8_t *value,
+                                    uint64_t length) {
     if (!cee_sec_load()) {
         return CEE_SEC_UNSUPPORTED;
     }
     for (;;) {
         int login = cee_sec_login();
-        cee_cf q = cee_sec_query(app, name, login);
+        cee_cf q = cee_sec_query(app, name, login, group);
         cee_cf data = cee_sec.data(NULL, value, (cee_cf_index)length);
         cee_cf change = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
         if (q == NULL || data == NULL || change == NULL) {
@@ -507,7 +621,7 @@ static int32_t cee_sec_system_write(const char *app, const char *name, const uin
             status = cee_sec.add(q, NULL);
             if (status == CEE_SEC_DUPLICATE) { /* another thread made it between the two calls */
                 cee_sec.release(q);
-                q = cee_sec_query(app, name, login);
+                q = cee_sec_query(app, name, login, group);
                 status = q != NULL ? cee_sec.update(q, change) : -1;
             }
         }
@@ -521,12 +635,12 @@ static int32_t cee_sec_system_write(const char *app, const char *name, const uin
     }
 }
 
-static int32_t cee_sec_system_remove(const char *app, const char *name) {
+static int32_t cee_sec_system_remove(const char *group, const char *app, const char *name) {
     if (!cee_sec_load()) {
         return CEE_SEC_UNSUPPORTED;
     }
     for (;;) {
-        cee_cf q = cee_sec_query(app, name, cee_sec_login());
+        cee_cf q = cee_sec_query(app, name, cee_sec_login(), group);
         if (q == NULL) {
             return CEE_SEC_FAILED;
         }
@@ -623,18 +737,23 @@ static int64_t cee_sec_call(const char *method, const char *signature, const cha
     return result;
 }
 
-static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
+                                   uint64_t capacity) {
+    (void)group;
     return cee_sec_call("read", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app, name, NULL, 0,
                         out, capacity);
 }
 
-static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+static int32_t cee_sec_system_write(const char *group, const char *app, const char *name, const uint8_t *value,
+                                    uint64_t length) {
+    (void)group;
     static const uint8_t nothing = 0;
     return (int32_t)cee_sec_call("write", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
                                  name, value != NULL ? value : &nothing, length, NULL, 0);
 }
 
-static int32_t cee_sec_system_remove(const char *app, const char *name) {
+static int32_t cee_sec_system_remove(const char *group, const char *app, const char *name) {
+    (void)group;
     return (int32_t)cee_sec_call("remove", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
                                  name, NULL, 0, NULL, 0);
 }
@@ -693,7 +812,9 @@ static cee_sec_blob cee_sec_entropy(const char *app, const char *name, char *buf
     return b;
 }
 
-static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
+                                   uint64_t capacity) {
+    (void)group;
     if (!cee_sec_dpapi_load()) {
         return CEE_SEC_UNSUPPORTED;
     }
@@ -730,7 +851,9 @@ static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *o
     return result;
 }
 
-static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+static int32_t cee_sec_system_write(const char *group, const char *app, const char *name, const uint8_t *value,
+                                    uint64_t length) {
+    (void)group;
     if (!cee_sec_dpapi_load()) {
         return CEE_SEC_UNSUPPORTED;
     }
@@ -760,7 +883,8 @@ static int32_t cee_sec_system_write(const char *app, const char *name, const uin
     return result;
 }
 
-static int32_t cee_sec_system_remove(const char *app, const char *name) {
+static int32_t cee_sec_system_remove(const char *group, const char *app, const char *name) {
+    (void)group;
     char dir[1100];
     char path[1200];
     if (!cee_sec_dpapi_dir(app, 0, dir, sizeof dir) || snprintf(path, sizeof path, "%s/%s", dir, name) >= (int)sizeof path) {
@@ -771,7 +895,9 @@ static int32_t cee_sec_system_remove(const char *app, const char *name) {
 
 #else
 /* Linux, FreeBSD and the rest: no store yet (ADR 0242 §6.1). */
-static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
+                                   uint64_t capacity) {
+    (void)group;
     (void)app;
     (void)name;
     (void)out;
@@ -779,7 +905,9 @@ static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *o
     return CEE_SEC_UNSUPPORTED;
 }
 
-static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+static int32_t cee_sec_system_write(const char *group, const char *app, const char *name, const uint8_t *value,
+                                    uint64_t length) {
+    (void)group;
     (void)app;
     (void)name;
     (void)value;
@@ -787,7 +915,8 @@ static int32_t cee_sec_system_write(const char *app, const char *name, const uin
     return CEE_SEC_UNSUPPORTED;
 }
 
-static int32_t cee_sec_system_remove(const char *app, const char *name) {
+static int32_t cee_sec_system_remove(const char *group, const char *app, const char *name) {
+    (void)group;
     (void)app;
     (void)name;
     return CEE_SEC_UNSUPPORTED;
@@ -796,37 +925,76 @@ static int32_t cee_sec_system_remove(const char *app, const char *name) {
 
 /* ---- the entry points -------------------------------------------------------------------------------------------- */
 
-int64_t ceesafe_secrets_read(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
-                             uint8_t *out, uint64_t capacity) {
+/* The group as a C string in `out` (NULL for none, length 0), checked as an app's name is; 0 when it is not one. */
+static int cee_sec_group(const uint8_t *group, uint64_t group_length, char out[CEE_SEC_NAME_LIMIT * 2 + 1],
+                         const char **result) {
+    *result = NULL;
+    if (group == NULL || group_length == 0) {
+        return 1;
+    }
+    if (group_length > CEE_SEC_NAME_LIMIT * 2 || memchr(group, 0, (size_t)group_length) != NULL) {
+        return 0;
+    }
+    memcpy(out, group, (size_t)group_length);
+    out[group_length] = 0;
+    *result = out;
+    return 1;
+}
+
+int64_t ceesafe_secrets_group_read(const uint8_t *group, uint64_t group_length, const uint8_t *app, uint64_t app_length,
+                                   const uint8_t *name, uint64_t name_length, uint8_t *out, uint64_t capacity) {
     char a[CEE_SEC_NAME_LIMIT + 1];
     char n[CEE_SEC_NAME_LIMIT + 1];
-    if (!cee_sec_names(app, app_length, name, name_length, a, n)) {
+    char g[CEE_SEC_NAME_LIMIT * 2 + 1];
+    const char *shared;
+    if (!cee_sec_names(app, app_length, name, name_length, a, n) || !cee_sec_group(group, group_length, g, &shared)) {
         return CEE_SEC_INVALID;
     }
     if (capacity > CEE_SEC_VALUE_LIMIT) {
         capacity = CEE_SEC_VALUE_LIMIT;
     }
     const char *dir = cee_sec_test_dir();
-    return dir != NULL ? cee_sec_dir_read(dir, a, n, out, capacity) : cee_sec_system_read(a, n, out, capacity);
+    return dir != NULL ? cee_sec_dir_read(dir, a, n, out, capacity) : cee_sec_system_read(shared, a, n, out, capacity);
+}
+
+int32_t ceesafe_secrets_group_write(const uint8_t *group, uint64_t group_length, const uint8_t *app,
+                                    uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                                    const uint8_t *value, uint64_t length) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    char g[CEE_SEC_NAME_LIMIT * 2 + 1];
+    const char *shared;
+    if (!cee_sec_names(app, app_length, name, name_length, a, n) || !cee_sec_group(group, group_length, g, &shared) ||
+        length > CEE_SEC_VALUE_LIMIT) {
+        return CEE_SEC_INVALID;
+    }
+    const char *dir = cee_sec_test_dir();
+    return dir != NULL ? cee_sec_dir_write(dir, a, n, value, length) : cee_sec_system_write(shared, a, n, value, length);
+}
+
+int32_t ceesafe_secrets_group_remove(const uint8_t *group, uint64_t group_length, const uint8_t *app,
+                                     uint64_t app_length, const uint8_t *name, uint64_t name_length) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    char g[CEE_SEC_NAME_LIMIT * 2 + 1];
+    const char *shared;
+    if (!cee_sec_names(app, app_length, name, name_length, a, n) || !cee_sec_group(group, group_length, g, &shared)) {
+        return CEE_SEC_INVALID;
+    }
+    const char *dir = cee_sec_test_dir();
+    return dir != NULL ? cee_sec_dir_remove(dir, a, n) : cee_sec_system_remove(shared, a, n);
+}
+
+int64_t ceesafe_secrets_read(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                             uint8_t *out, uint64_t capacity) {
+    return ceesafe_secrets_group_read(NULL, 0, app, app_length, name, name_length, out, capacity);
 }
 
 int32_t ceesafe_secrets_write(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
                               const uint8_t *value, uint64_t length) {
-    char a[CEE_SEC_NAME_LIMIT + 1];
-    char n[CEE_SEC_NAME_LIMIT + 1];
-    if (!cee_sec_names(app, app_length, name, name_length, a, n) || length > CEE_SEC_VALUE_LIMIT) {
-        return CEE_SEC_INVALID;
-    }
-    const char *dir = cee_sec_test_dir();
-    return dir != NULL ? cee_sec_dir_write(dir, a, n, value, length) : cee_sec_system_write(a, n, value, length);
+    return ceesafe_secrets_group_write(NULL, 0, app, app_length, name, name_length, value, length);
 }
 
 int32_t ceesafe_secrets_remove(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length) {
-    char a[CEE_SEC_NAME_LIMIT + 1];
-    char n[CEE_SEC_NAME_LIMIT + 1];
-    if (!cee_sec_names(app, app_length, name, name_length, a, n)) {
-        return CEE_SEC_INVALID;
-    }
-    const char *dir = cee_sec_test_dir();
-    return dir != NULL ? cee_sec_dir_remove(dir, a, n) : cee_sec_system_remove(a, n);
+    return ceesafe_secrets_group_remove(NULL, 0, app, app_length, name, name_length);
 }

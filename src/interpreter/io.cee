@@ -1814,6 +1814,24 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_push_token")) {
         return "Ps:l"; // ADR 0244
     }
+    if (sameText(name, "ceesafe_push_extension_next")) {
+        return "uPsP:l"; // ADR 0246
+    }
+    if (sameText(name, "ceesafe_push_extension_deliver")) {
+        return "sPsPs:i";
+    }
+    if (sameText(name, "ceesafe_push_group_folder")) {
+        return "PsPs:l";
+    }
+    if (sameText(name, "ceesafe_secrets_group_read")) {
+        return "PsPsPsPs:l";
+    }
+    if (sameText(name, "ceesafe_secrets_group_write")) {
+        return "PsPsPsPs:i";
+    }
+    if (sameText(name, "ceesafe_secrets_group_remove")) {
+        return "PsPsPs:i";
+    }
     if (sameText(name, "ceesafe_window_wait_any")) {
         return "u:-";
     }
@@ -2263,6 +2281,15 @@ fn callC(
         // The secret store (ADR 0242): the interpreter has no system store, so every call is SecretError.Unsupported
         // (the runtime's -2), CEESAFE_SECRETS_DIR or not.
         return Ok(hostResult(-2));
+    }
+    if (sameText(n0, "ceesafe_push_extension_next") || sameText(n0, "ceesafe_push_group_folder") ||
+        sameText(n0, "ceesafe_secrets_group_read")) {
+        // ADR 0246: no extension, App Group or system store in the interpreter: Unsupported (-2).
+        return Ok(hostResult(-2));
+    }
+    if (sameText(n0, "ceesafe_push_extension_deliver") || sameText(n0, "ceesafe_secrets_group_write") ||
+        sameText(n0, "ceesafe_secrets_group_remove")) {
+        return Ok(valueOf(0xFFFFFFFE, 4)); // -2 as an i32
     }
     if (sameText(n0, "ceesafe_push_token")) {
         // Push tokens (ADR 0244): the interpreter has no push service, so PushError.Unsupported (-2),

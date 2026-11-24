@@ -1,0 +1,12 @@
+// Console.isTerminal (ADR 0221 §2.3): the corpus runner gives every program pipes (or the interpreter's captured
+// streams), so no stream is a terminal; `// stdin:` makes standard input a pipe too, where the runner would otherwise
+// pass on its own. tools/terminal_check.py runs it under a pseudo-terminal.
+// stdin:
+fn main() {
+    Console.writeLine(Console.isTerminal(ConsoleStream.Input));
+    Console.writeLine(Console.isTerminal(ConsoleStream.Output));
+    Console.writeLine(Console.isTerminal(ConsoleStream.Error));
+}
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: false

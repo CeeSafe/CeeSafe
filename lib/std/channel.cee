@@ -27,6 +27,8 @@ extern "C" {
     fn ceesafe_chan_closed(channel: *mut void) -> bool;
     @effects(sleep)
     fn ceesafe_chan_wait(channel: *mut void, epoch: u64);
+    @effects(sleep)
+    fn ceesafe_chan_wait_until(channel: *mut void, epoch: u64, deadline: u64);
     @effects()
     fn ceesafe_chan_park(channel: *mut void, node: *mut void, epoch: u64) -> bool;
     @effects()
@@ -184,6 +186,36 @@ public struct Channel<T: Send> {
                 return null;
             }
             unsafe { ceesafe_chan_wait(this.raw, epoch); }
+        }
+    }
+
+    /// The next value, waiting at most `ms` milliseconds on the monotonic clock (ADR 0222 §2.2): `Ok(Some(v))`, or
+    /// `Ok(null)` once the channel is closed and empty, as `recv`; `Err(AsyncError.TimedOut)` if neither came in
+    /// time. A buffered value is taken even when `ms` is 0. The thread blocks meanwhile; it does not spin.
+    /// Safety: as `recv`.
+    public fn recvTimeout(borrow this, ms: u64) -> Result<T?, AsyncError> {
+        let start = Timer.now();
+        let deadline = if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
+        loop {
+            var status: u32 = 0;
+            var epoch: u64 = 0;
+            let slot = unsafe { ceesafe_chan_begin_recv(
+                this.raw,
+                borrow mut status as *mut u32,
+                borrow mut epoch as *mut u64,
+            ) };
+            if (status == 0) {
+                let value = unsafe { (slot as *mut T).read() };
+                unsafe { ceesafe_chan_end_recv(this.raw); }
+                return Ok(Some(value));
+            }
+            if (status == 2) {
+                return Ok(null);
+            }
+            if (Timer.now() >= deadline) {
+                return Err(AsyncError.TimedOut);
+            }
+            unsafe { ceesafe_chan_wait_until(this.raw, epoch, deadline); }
         }
     }
 

@@ -286,6 +286,7 @@ uint32_t ceesafe_io_kind(int32_t error) {
     case EDQUOT: return CEE_IO_STORAGE_FULL;
 #endif
     case EMFILE: case ENFILE: return CEE_IO_TOO_MANY_OPEN_FILES; /* ADR 0104 */
+    case EBADF: return CEE_IO_BAD_DESCRIPTOR; /* ADR 0221 §2.2 */
     default: return CEE_IO_OTHER;
     }
 }
@@ -429,6 +430,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 3u ? _O_RDWR | _O_CREAT
                   : mode == 5u ? _O_WRONLY | _O_CREAT | _O_APPEND
                   : mode == 6u ? _O_RDONLY /* ADR 0078: File.openRegular; opening never waits on Windows */
+                  : mode == 7u ? _O_RDWR | _O_CREAT | _O_TRUNC
                                : _O_RDWR | _O_CREAT | _O_EXCL;
         fd = cee_win_open(name, flags);
 #else
@@ -442,6 +444,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   /* ADR 0078: File.openRegular. O_NONBLOCK so that opening a FIFO never waits for a writer, O_NOCTTY
                      so that a terminal never becomes the controlling one; cleared below for a regular file. */
                   : mode == 6u ? O_RDONLY | O_NONBLOCK | O_NOCTTY
+                  : mode == 7u ? O_RDWR | O_CREAT | O_TRUNC /* ADR 0221 §2.1: File.createReadWrite */
                                : O_RDWR | O_CREAT | O_EXCL;
         fd = open(name, flags | O_CLOEXEC, mode == 1u ? 0644 : 0666);
 #endif
@@ -2625,6 +2628,79 @@ int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t 
 /* `f.kind()` (ADR 0078 §3): 1 a regular file, 2 a directory, 3 anything else, or a negated errno. */
 int64_t ceesafe_host_file_kind(void const *file) {
     return cee_fd_kind(*(const int32_t *)file);
+}
+
+/* `f.lock`, `f.tryLock` and `f.unlock` (ADR 0220): an advisory lock on bytes start .. start + length - 1, which
+   lib/std has checked (length > 0, the end within 2^63 - 1). 0 done, 1 a conflict met without waiting, or a negated
+   errno. POSIX: an open-file-description lock where the kernel has one, so the lock is the File's and conflicts with
+   the program's other Files; on EINVAL (a kernel without them) a process-associated fcntl lock, which is what other
+   processes see either way (SQLite's own locks are of this kind). Windows: LockFileEx and UnlockFileEx on the
+   descriptor's handle; a lock there never converts, and an unlock names exactly a range that was locked. */
+int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length) {
+    int fd = *(const int32_t *)file;
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
+    OVERLAPPED at;
+    memset(&at, 0, sizeof at);
+    at.Offset = (DWORD)(start & 0xFFFFFFFFu);
+    at.OffsetHigh = (DWORD)(start >> 32);
+    DWORD low = (DWORD)(length & 0xFFFFFFFFu);
+    DWORD high = (DWORD)(length >> 32);
+    if (kind == 0u) {
+        if (UnlockFileEx(h, 0, low, high, &at)) return 0;
+        DWORD code = GetLastError();
+        return code == ERROR_NOT_LOCKED ? 0 : -(int64_t)cee_win_errno(code); /* as fcntl: nothing held is no error */
+    }
+    DWORD flags = (kind == 2u ? LOCKFILE_EXCLUSIVE_LOCK : 0u) | (wait ? 0u : LOCKFILE_FAIL_IMMEDIATELY);
+    if (LockFileEx(h, flags, 0, low, high, &at)) return 0;
+    DWORD code = GetLastError();
+    if (!wait && (code == ERROR_LOCK_VIOLATION || code == ERROR_IO_PENDING)) return 1;
+    return -(int64_t)cee_win_errno(code);
+#else
+    struct flock lock;
+    memset(&lock, 0, sizeof lock);
+    lock.l_type = kind == 0u ? F_UNLCK : kind == 1u ? F_RDLCK : F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = (off_t)start;
+    lock.l_len = (off_t)length;
+    if (lock.l_start < 0 || (uint64_t)lock.l_start != start || lock.l_len <= 0 || (uint64_t)lock.l_len != length) {
+        return -(int64_t)EINVAL; /* a 32-bit off_t (a 32-bit Linux without large-file offsets) cannot name the range */
+    }
+    int result;
+#if defined(F_OFD_SETLK)
+    /* A 32-bit off_t is refused by the kernel's open-file-description calls, which read a 64-bit struct flock. */
+    if (sizeof(off_t) == 8) {
+        lock.l_pid = 0; /* an open-file-description lock requires it */
+        do {
+            result = fcntl(fd, wait ? F_OFD_SETLKW : F_OFD_SETLK, &lock);
+        } while (result < 0 && errno == EINTR);
+        if (result == 0) return 0;
+        if (errno != EINVAL) {
+            return !wait && (errno == EAGAIN || errno == EACCES) ? 1 : -(int64_t)errno;
+        }
+    }
+#endif
+    do {
+        result = fcntl(fd, wait ? F_SETLKW : F_SETLK, &lock);
+    } while (result < 0 && errno == EINTR);
+    if (result == 0) return 0;
+    return !wait && (errno == EAGAIN || errno == EACCES) ? 1 : -(int64_t)errno;
+#endif
+}
+
+/* `Console.isTerminal(stream)` (ADR 0221 §2.3): 1 if the stream is a terminal. On Windows only a console counts:
+   GetConsoleMode fails for NUL, a pipe, a file and a serial port, which _isatty would call character devices. */
+int64_t ceesafe_host_is_terminal(uint32_t stream) {
+    if (stream > 2u) return 0;
+#ifdef _WIN32
+    DWORD which = stream == 0u ? STD_INPUT_HANDLE : stream == 1u ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE;
+    HANDLE h = GetStdHandle(which);
+    DWORD mode = 0;
+    return h != NULL && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode) ? 1 : 0;
+#else
+    return isatty((int)stream) ? 1 : 0;
+#endif
 }
 
 /* `File.setPermissions(path, mode)` (ADR 0077): chmod. Windows has only the read-only attribute: it is set when the

@@ -184,9 +184,14 @@ fn bfArrayFrom() -> u32 => 143;
 /// `Secret.wipe(mut place)` (ADR 0197 §2.2): the place, or a mutable slice's elements, set to zero bytes through
 /// `ceesafe_wipe`, which the C compiler keeps.
 fn bfSecretWipe() -> u32 => 144;
+/// `File.createReadWrite(path)` (ADR 0221 §2.1): created or emptied, for reading and writing.
+fn bfFileCreateReadWrite() -> u32 => 145;
+/// `t.isFinished()` (ADR 0222 §2.3): whether a thread's body has returned; it never waits.
+fn bfThreadFinished() -> u32 => 146;
 
-/// Whether `b` is one of ADR 0075 §2.1's file builtins.
-fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
+/// Whether `b` is one of ADR 0075 §2.1's file builtins, or a later open of a file for reading and writing.
+fn isDurableFileBuiltin(b: u32) -> bool =>
+    (b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular()) || b == bfFileCreateReadWrite();
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -335,6 +340,8 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     142 => "ThreadService",
     143 => "ArrayFrom",
     144 => "SecretWipe",
+    145 => "FileCreateReadWrite",
+    146 => "ThreadFinished",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

@@ -11,7 +11,9 @@
   regenerates it.
 - Release: stage A ships in 0.24.3, with ADR 0081's diagnostics and the bug of §4. Stages B–F are tooling work, with
   no language change, that can land with any later release; D first. **Stage D is implemented** (branch `impl/0082d`,
-  2026-11-10, not yet released): per-package `check` with interface records and `check --all` (§8).
+  2026-11-10, not yet released): per-package `check` with interface records and `check --all` (§8). **Stage B's
+  preludes (§2.2) are implemented** (2026-11-24, branch `dx/roadmap-phase0`, not released; §9); its content names
+  and per-package instances (§2.2's last item, §2.3) are not.
 - Scope: c-backend.md §2.1 (names), §2.4 (split output), §7 (location tables); tooling.md §4.4 (commands), §5.1 (the
   JSON diagnostics), §8.3 (flags); type-system.md §32.1 (effects across packages); the C backend (`c_split.cee`,
   `c_skeleton.cee`, `c_names.cee`, `c_program.cee`, `c_backend.cee`), closure-call specialisation's variant names, the
@@ -573,3 +575,50 @@ CPU seconds (wall in brackets where the load made them differ much); "before" at
   warm.
 - The cache is never pruned: every edit leaves the records of the old keys. Pruning is left to stage E's object
   cache, which needs the same policy.
+
+## 9. Implementation notes: stage B, the preludes (2026-11-24)
+
+Done under the optimization and DX roadmap's item 2.7 (the owner: "continue"), measured first.
+
+### 9.1 Measured before
+
+The compiler's own sources (164 units), on the Mac (8 cores, Apple clang, load 5–11 from other work), CPU is user
+plus system of the build and every compiler it starts:
+
+| Build | Wall | CPU |
+|---|---|---|
+| one file | 65.1 s | 64.8 s (of which 9.1 s emitting the C) |
+| `--split --jobs 8`, one header | 31.6 s | 136.2 s: **2.1×** one file, past §2.8's 1.5× |
+
+`ceesafe_program.h` is 3.8 MB (4,479 `static inline` helpers); a unit that only includes it costs 0.22 s of CPU to
+compile, about 36 s over 164 units. A prototype (a Python pass over the emitted split C) gave each unit the items it
+names transitively: its units compiled in 74.6 s of CPU against 127.1 s with the header, the program linked, and the
+compiler built from it emitted its own C byte for byte as the usual one does.
+
+### 9.2 What was built
+
+- `c_prelude.cee`: `preludeIndex` cuts `ceesafe_program.h`'s text into items once (a column-0 declaration or
+  definition, to the line where its braces balance, outside literals, ending in `;` or `}`; a preprocessor line, or a
+  block to its `#endif`, always kept) and interns the names each defines; `appendUnitPrelude` gives each unit the
+  kept items and the closure of the items its text names, in the header's order, then each `_Static_assert` whose
+  names are all chosen. `splitFiles` writes each unit as the banner, the renames, its prelude and its code; the header
+  is still written whole, and nothing includes it (tools/package_tests.py reads its location table).
+- **Derived from the emitted text, not from the emitter's records.** §2.2 lists what a prelude holds (types,
+  prototypes, helpers, `dyn` tables, location constants); the emitter does not record per unit what it used, and
+  threading that through it touches every place a name is written. Every C name the backend writes is an identifier in
+  the unit's text, so the text says what the unit uses. A name the text mentions that no item defines (a C library
+  function from `rt.h`) is left alone; an item mentioned by none is left out. The cost: 0.3 s more emitting the
+  compiler's C (9.2 → 9.5 s).
+- **A test's expectation, edited** (tools/package_tests.py, `embed-large`): it counted the `extern` declarations of
+  the two large embedded arrays in every file, expecting two, one each in the header every unit included. Each unit
+  that uses one now has the declaration in its prelude (5 in all for that program). What the test protects, each
+  array **defined** once, is unchanged; it now counts the declarations in `ceesafe_program.h`, and the definitions
+  everywhere, as before.
+- Not done: content names (§2.2's last item) and per-package instances (§2.3), which stage C's cache needs; C's `main`
+  still in `ceesafe_instances.c`.
+
+### 9.3 Measured after
+
+The same machine and sources: `--split --jobs 8` takes **24.6 s wall and 83.3 s CPU, 1.29×** the one-file build (the
+gate is 1.5×), against 31.6 s and 136.2 s before; the compiler built that way emits its own C byte for byte as the
+one-file build's does. The runs are in ROADMAP §10.

@@ -346,11 +346,17 @@ its bytes never take a stack slot, which no wipe would reach once the frame is g
 `ceesafec build --split` writes the program's C in several translation units, so a C compiler can build it in parallel
 and rebuild only what changed. Without it the output is one `main.c`, as above, byte for byte.
 
-- **`ceesafe_program.h`**, included by every unit, holds what one `main.c` has before its first function body (the
-  source-location tables, the types, the prototypes, the C extern wrappers, `dyn` tables, thread and fork-join helpers),
-  and the per-type helpers that `main.c` defines after its functions: drop glue, the `Box`, vector, container and I/O
-  helpers. Each of them is `static`, the per-type helpers `static inline`, so every unit has its own inlinable copy. It
-  starts with an include guard named after the program.
+- **`ceesafe_program.h`** holds what one `main.c` has before its first function body (the source-location tables, the
+  types, the prototypes, the C extern wrappers, `dyn` tables, thread and fork-join helpers), and the per-type helpers
+  that `main.c` defines after its functions: drop glue, the `Box`, vector, container and I/O helpers. Each of them is
+  `static`, the per-type helpers `static inline`. It starts with an include guard named after the program.
+- **Each unit starts with its own prelude** (ADR 0082 §2.2, §9), instead of including `ceesafe_program.h`: the
+  header's renames and preprocessor lines, then the header's items its text names, and the items those name, in the
+  header's order; and each `_Static_assert` whose names are all there (one that names none, always). An item is a
+  declaration or a definition at column 0, to the line where its braces balance and that ends in `;` or `}`; it
+  defines a type's tag and typedef name, an enum's constants, or the name before its first `(`, `[` or `=`. So a
+  unit's C has the declarations it had, fewer of them, and every unit has its own inlinable copy of each per-type
+  helper it uses. `ceesafe_program.h` is still written, whole, and no unit includes it.
 - **One unit per CeeSafe source file**, at `c/<package>/<path in the package>.c`, its extension replaced (ADR 0082
   §2.1): `c/alpha/src/util.c` and `c/beta/src/util.c`, `c/alpha/src/a/mod.c` and `c/alpha/src/b/mod.c`. Package names
   are unique in a build and paths unique in a package, so two units of packages never share a path. Files given

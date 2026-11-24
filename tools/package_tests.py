@@ -2262,7 +2262,8 @@ def main():
                                                             for l in arrays):
             problems.append(f"embed-large: --emit c: expected two byte arrays, the short one among them: "
                             f"{[a[:60] for a in arrays]} ({p.returncode}) {p.stderr[-300:]}")
-        # Split: each array is defined once, in ceesafe_instances.c, and declared in the header every unit includes.
+        # Split: each array is defined once, in ceesafe_instances.c, and declared once in ceesafe_program.h; a unit that
+        # uses one has the declaration in its prelude (ADR 0082 §9), never a definition.
         sdir = os.path.join(work, "embed-large-split")
         p = run([compiler, "build", "--split", "--emit", "c", "-o", sdir], large)
         definitions, declarations = 0, 0
@@ -2271,10 +2272,12 @@ def main():
                 if name.endswith((".c", ".h")):
                     for line in open(os.path.join(top, name), errors="replace"):
                         definitions += line.startswith("const uint8_t ceeLS_") or "CEE_UNUSED const uint8_t ceeLS_" in line
-                        declarations += line.startswith("extern const uint8_t ceeLS_")
+                        if name == "ceesafe_program.h":
+                            declarations += line.startswith("extern const uint8_t ceeLS_")
         if p.returncode != 0 or definitions != 2 or declarations != 2:
-            problems.append(f"embed-large: --split --emit c: expected two arrays defined once and declared once: "
-                            f"{definitions} definitions, {declarations} declarations ({p.returncode}) {p.stderr[-300:]}")
+            problems.append(f"embed-large: --split --emit c: expected two arrays defined once and declared once in the "
+                            f"header: {definitions} definitions, {declarations} declarations ({p.returncode}) "
+                            f"{p.stderr[-300:]}")
         split_exe = os.path.join(work, "embed-large-split-program.exe" if WINDOWS else "embed-large-split-program")
         p = run([compiler, "build", "--split", "-o", split_exe], large)
         if p.returncode != 0 or run([split_exe], large).stdout.strip() != expected:

@@ -262,9 +262,12 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
-        "  --split           (build) write the C as ceesafe_program.h, c/<package>/<path>.c per CeeSafe file and\n",
+        "  --split           (build) write the C as c/<package>/<path>.c per CeeSafe file, each with the declarations it\n",
     )?;
-    appendText(out, "                    ceesafe_instances.c, so it compiles in parallel (c-backend.md §2.4)\n")?;
+    appendText(
+        out,
+        "                    uses, and ceesafe_instances.c, so it compiles in parallel (c-backend.md §2.4)\n",
+    )?;
     appendText(
         out,
         "  --jobs <n>        (build --split) compile at most n C files at once; default: the number of CPUs\n",

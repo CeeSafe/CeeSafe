@@ -1,0 +1,416 @@
+// Per-unit preludes (ADR 0082 §2.2, stage B; c-backend.md §2.4): in a split build each unit starts with what it uses of
+// the program's declarations, transitively, instead of including all of ceesafe_program.h. The header's text is cut
+// into items (a declaration or definition, a preprocessor line or block); each item defines names (a type, a
+// function, a constant) and mentions others. A unit's prelude is every preprocessor item, then the items that define
+// the names its text mentions and, through them, the names those items mention, in the header's order; and each
+// `_Static_assert` whose names are all there. The C a unit compiles is the same declarations as before, fewer of them.
+
+/// One item of the header: its bytes, whether it is always kept (a preprocessor line or block), and whether it is a
+/// `_Static_assert` (kept when every name it mentions is).
+struct PreludeItem {
+    start: usize;
+    end: usize;
+    keep: bool;
+    isAssert: bool;
+}
+
+/// The header cut into items, with what each defines and mentions.
+struct PreludeIndex {
+    items: Vector<PreludeItem>;
+    names: Interner;               // every name an item defines
+    definers: Vector<Vector<u32>>; // by name: the items that define it
+    mentionStarts: Vector<usize>;  // by item: where its mentions start in `mentions` (one more entry at the end)
+    mentions: Vector<u32>;         // the defined names each item's text mentions
+}
+
+fn isPreludeIdentifierStart(b: u8) -> bool => (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_';
+
+fn isPreludeIdentifierPart(b: u8) -> bool => isPreludeIdentifierStart(b) || (b >= '0' && b <= '9');
+
+/// The next identifier of `text` at or after `from` (not inside a number): its range, or an empty range at the end.
+fn nextIdentifier(text: Slice<u8>, from: usize) -> Range {
+    var i = from;
+    while (i < text.length) {
+        let b = text[i];
+        if (isPreludeIdentifierStart(b)) {
+            var j = i + 1;
+            while (j < text.length && isPreludeIdentifierPart(text[j])) {
+                j += 1;
+            }
+            return Range { start: truncate<u32>(i), count: truncate<u32>(j - i) };
+        }
+        if (b >= '0' && b <= '9') {
+            // A number with its suffix (`7u`, `0x1Fu`): no identifier inside it.
+            while (i < text.length && isPreludeIdentifierPart(text[i])) {
+                i += 1;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    return Range { start: truncate<u32>(text.length), count: 0 };
+}
+
+fn rangeText(text: Slice<u8>, r: Range) -> Slice<u8> => text[(r.start as usize)..((r.start + r.count) as usize)];
+
+/// The braces a line opens minus those it closes, outside string and character literals.
+fn braceBalance(line: Slice<u8>) -> i64 {
+    var balance: i64 = 0;
+    var i: usize = 0;
+    while (i < line.length) {
+        let b = line[i];
+        if (b == '"' || b == '\'') {
+            i += 1;
+            while (i < line.length && line[i] != b) {
+                if (line[i] == '\\') {
+                    i += 1;
+                }
+                i += 1;
+            }
+        } else if (b == '{') {
+            balance += 1;
+        } else if (b == '}') {
+            balance -= 1;
+        }
+        i += 1;
+    }
+    return balance;
+}
+
+/// The last byte of a line that is not a space, or 0.
+fn lastNonSpace(line: Slice<u8>) -> u8 {
+    var k = line.length;
+    while (k > 0) {
+        k -= 1;
+        if (!isLineSpace(line[k])) {
+            return line[k];
+        }
+    }
+    return 0;
+}
+
+/// The end of the line starting at `at` (its newline, or the text's end).
+fn lineEnd(text: Slice<u8>, at: usize) -> usize {
+    var i = at;
+    while (i < text.length && text[i] != '\n') {
+        i += 1;
+    }
+    return i;
+}
+
+/// Cuts the header into items (PreludeItems).
+fn preludeItems(text: Slice<u8>) -> Result<Vector<PreludeItem>, AllocError> {
+    var items = Vector<PreludeItem>.create();
+    var at: usize = 0;
+    while (at < text.length) {
+        let end = lineEnd(text, at);
+        let line = text[at..end];
+        let next = if (end < text.length) end + 1 else end;
+        if (lastNonSpace(line) == 0) {
+            at = next;
+            continue;
+        }
+        if (startsWithText(line, "/*") && end >= at + 2 && text[end - 2] == '*' && text[end - 1] == '/') {
+            at = next; // a comment line
+            continue;
+        }
+        if (startsWithText(line, "#if")) {
+            // A preprocessor block, to its matching #endif: kept whole.
+            var depth: u32 = 0;
+            var position = at;
+            var stop = at;
+            while (position < text.length) {
+                let e = lineEnd(text, position);
+                let l = text[position..e];
+                if (startsWithText(l, "#if")) {
+                    depth += 1;
+                } else if (startsWithText(l, "#endif")) {
+                    depth -= 1;
+                }
+                stop = e;
+                position = if (e < text.length) e + 1 else e;
+                if (depth == 0) {
+                    break;
+                }
+            }
+            items.push(PreludeItem { start: at, end: stop, keep: true, isAssert: false })?;
+            at = position;
+            continue;
+        }
+        if (line[0] == '#') {
+            items.push(PreludeItem { start: at, end: end, keep: true, isAssert: false })?;
+            at = next;
+            continue;
+        }
+        // A declaration or a definition: until the braces balance on a line that ends in `;` or `}`.
+        var depth: i64 = 0;
+        var position = at;
+        var stop = at;
+        while (position < text.length) {
+            let e = lineEnd(text, position);
+            let l = text[position..e];
+            depth += braceBalance(l);
+            stop = e;
+            position = if (e < text.length) e + 1 else e;
+            let last = lastNonSpace(l);
+            if (depth == 0 && (last == ';' || last == '}')) {
+                break;
+            }
+        }
+        items.push(PreludeItem {
+            start: at,
+            end: stop,
+            keep: false,
+            isAssert: startsWithText(line, "_Static_assert"),
+        })?;
+        at = position;
+    }
+    return Ok(items);
+}
+
+/// The names an item defines (DefinedBy): a type's tag and typedef name, an enum's constants, a function's or a
+/// constant's name (the identifier before the first `(`, `[` or `=` ahead of any `{`).
+fn preludeDefinitions(item: Slice<u8>, out: borrow mut Vector<Range>) -> Result<void, AllocError> {
+    out.clear();
+    if (startsWithText(item, "_Static_assert")) {
+        return Ok();
+    }
+    let firstEnd = lineEnd(item, 0);
+    let first = item[..firstEnd];
+    let isTypedef = startsWithText(item, "typedef");
+    let tagged = startsWithText(item, "struct ") || startsWithText(item, "union ") || startsWithText(item, "enum ");
+    if (isTypedef || tagged) {
+        // The tag: the identifier after `struct`, `union` or `enum`.
+        var at: usize = 0;
+        var previous = Range { start: 0, count: 0 };
+        loop {
+            let r = nextIdentifier(first, at);
+            if (r.count == 0) {
+                break;
+            }
+            let word = rangeText(first, r);
+            if (previous.count > 0) {
+                let p = rangeText(first, previous);
+                if (sameBytes(p, "struct".bytes()) || sameBytes(p, "union".bytes()) || sameBytes(p, "enum".bytes())) {
+                    out.push(r)?;
+                    break;
+                }
+            }
+            previous = r;
+            at = (r.start + r.count) as usize;
+        }
+        if (isTypedef) {
+            // The typedef's name: the last identifier before the final `;`.
+            var k = item.length;
+            while (k > 0 && item[k - 1] != ';') {
+                k -= 1;
+            }
+            if (k > 0) {
+                var j = k - 1;
+                while (j > 0 && isLineSpace(item[j - 1])) {
+                    j -= 1;
+                }
+                var s = j;
+                while (s > 0 && isPreludeIdentifierPart(item[s - 1])) {
+                    s -= 1;
+                }
+                if (s < j) {
+                    out.push(Range { start: truncate<u32>(s), count: truncate<u32>(j - s) })?;
+                }
+            }
+            // A function pointer's name: `(*name)` on the first line.
+            for (i in 0..first.length) {
+                if (first[i] == '(' && i + 1 < first.length && first[i + 1] == '*') {
+                    let r = nextIdentifier(first, i + 2);
+                    if (r.count > 0) {
+                        out.push(r)?;
+                    }
+                    break;
+                }
+            }
+        }
+        var isEnum = false;
+        var at2: usize = 0;
+        loop {
+            let r = nextIdentifier(first, at2);
+            if (r.count == 0) {
+                break;
+            }
+            if (sameBytes(rangeText(first, r), "enum".bytes())) {
+                isEnum = true;
+            }
+            at2 = (r.start + r.count) as usize;
+        }
+        if (isEnum) {
+            // Its constants: every identifier in it.
+            var at3: usize = 0;
+            loop {
+                let r = nextIdentifier(item, at3);
+                if (r.count == 0) {
+                    break;
+                }
+                out.push(r)?;
+                at3 = (r.start + r.count) as usize;
+            }
+        }
+        return Ok();
+    }
+    // A function, a prototype or a constant: the identifier before the first `(`, `[` or `=` ahead of any `{`.
+    var stop = item.length;
+    for (i in 0..item.length) {
+        if (item[i] == '{') {
+            stop = i;
+            break;
+        }
+    }
+    var at: usize = 0;
+    var last = Range { start: 0, count: 0 };
+    while (at < stop) {
+        let r = nextIdentifier(item[..stop], at);
+        if (r.count == 0) {
+            break;
+        }
+        var k = (r.start + r.count) as usize;
+        while (k < stop && isLineSpace(item[k])) {
+            k += 1;
+        }
+        if (k < stop && (item[k] == '(' || item[k] == '[' || item[k] == '=')) {
+            return out.push(r);
+        }
+        last = r;
+        at = (r.start + r.count) as usize;
+    }
+    if (last.count > 0 && (last.start as usize) < firstEnd) {
+        out.push(last)?;
+    }
+    return Ok();
+}
+
+/// The header's items, the names they define, and the defined names each mentions (BuildPreludeIndex).
+fn preludeIndex(text: Slice<u8>) -> Result<PreludeIndex, AllocError> {
+    var index = PreludeIndex {
+        items: preludeItems(text)?,
+        names: Interner.create(),
+        definers: Vector<Vector<u32>>.create(),
+        mentionStarts: Vector<usize>.create(),
+        mentions: Vector<u32>.create(),
+    };
+    var defined = Vector<Range>.create();
+    for (k in 0..index.items.length) {
+        let item = index.items[k];
+        if (item.keep) {
+            continue;
+        }
+        let body = text[item.start..item.end];
+        preludeDefinitions(body, mut defined)?;
+        for (r in defined.view()) {
+            let symbol = index.names.intern(rangeText(body, r))?;
+            while (index.definers.length <= (symbol.id as usize)) {
+                index.definers.push(Vector<u32>.create())?;
+            }
+            let list = borrow mut index.definers[symbol.id as usize];
+            if (list.length == 0 || list[list.length - 1] != truncate<u32>(k)) {
+                list.push(truncate<u32>(k))?;
+            }
+        }
+    }
+    for (k in 0..index.items.length) {
+        index.mentionStarts.push(index.mentions.length)?;
+        let item = index.items[k];
+        if (item.keep) {
+            continue;
+        }
+        let body = text[item.start..item.end];
+        var at: usize = 0;
+        loop {
+            let r = nextIdentifier(body, at);
+            if (r.count == 0) {
+                break;
+            }
+            match (index.names.find(rangeText(body, r))) {
+                Some(symbol) => { index.mentions.push(symbol.id)?; }
+                null => {}
+            }
+            at = (r.start + r.count) as usize;
+        }
+    }
+    index.mentionStarts.push(index.mentions.length)?;
+    return Ok(index);
+}
+
+/// A unit's prelude (UnitPrelude): the kept items and those the unit's text needs, in the header's order.
+fn appendUnitPrelude(
+    out: borrow mut Vector<u8>,
+    index: borrow PreludeIndex,
+    header: Slice<u8>,
+    unit: Slice<u8>,
+) -> Result<void, AllocError> {
+    var chosen = Vector<bool>.create();
+    for (k in 0..index.items.length) {
+        chosen.push(index.items[k].keep)?;
+    }
+    var seen = Vector<bool>.create();
+    for (k in 0..index.names.count()) {
+        seen.push(false)?;
+    }
+    var work = Vector<u32>.create();
+    var at: usize = 0;
+    loop {
+        let r = nextIdentifier(unit, at);
+        if (r.count == 0) {
+            break;
+        }
+        match (index.names.find(rangeText(unit, r))) {
+            Some(symbol) => {
+                if (!seen[symbol.id as usize]) {
+                    seen[symbol.id as usize] = true;
+                    work.push(symbol.id)?;
+                }
+            }
+            null => {}
+        }
+        at = (r.start + r.count) as usize;
+    }
+    while (work.length > 0) {
+        let name = work.pop()!;
+        if ((name as usize) >= index.definers.length) {
+            continue;
+        }
+        for (k in index.definers[name as usize].view()) {
+            if (chosen[k as usize]) {
+                continue;
+            }
+            chosen[k as usize] = true;
+            for (m in index.mentionStarts[k as usize]..index.mentionStarts[(k + 1) as usize]) {
+                let mentioned = index.mentions[m];
+                if (!seen[mentioned as usize]) {
+                    seen[mentioned as usize] = true;
+                    work.push(mentioned)?;
+                }
+            }
+        }
+    }
+    // A `_Static_assert` goes with the names it checks: kept when every one of them is there (one that names none,
+    // such as the target's word size, always).
+    for (k in 0..index.items.length) {
+        if (!index.items[k].isAssert) {
+            continue;
+        }
+        let from = index.mentionStarts[k];
+        let to = index.mentionStarts[k + 1];
+        var all = true;
+        for (m in from..to) {
+            if (!seen[index.mentions[m] as usize]) {
+                all = false;
+            }
+        }
+        chosen[k] = all;
+    }
+    for (k in 0..index.items.length) {
+        if (chosen[k]) {
+            appendBytes(out, header[index.items[k].start..index.items[k].end])?;
+            out.push('\n')?;
+        }
+    }
+    return Ok();
+}

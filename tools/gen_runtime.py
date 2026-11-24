@@ -29,6 +29,7 @@ FILES = (
     ("ceesafe_rt_bluetooth.c", "hosted/ceesafe_rt_bluetooth.c"),
     ("ceesafe/android.h", "include/ceesafe/android.h"),
     ("ceesafe_rt_math.c", "hosted/ceesafe_rt_math.c"),
+    ("ceesafe_rt_secrets.c", "hosted/ceesafe_rt_secrets.c"),
 )
 
 

@@ -2138,8 +2138,9 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   - An impl that inherits a default gets an **instance** of it with `Self` = the target (once per instance for a
     generic impl). The instance is an ordinary method of the target: it is called on the concrete type, through a
     bound and through a `dyn` table (whose slot holds the instance), and dispatch stays static. An instance that does
-    not check for its target is N0222 at the impl. If the target already has a method of the inherited name (its own,
-    or another impl's), that is N0228 at the impl: a type has one method of each name.
+    not check for its target is N0222 at the impl. If the target already has a method of the inherited name of its
+    own (its body's, an inherent block's), that is N0228 at the impl. Another interface's impl may give it a method of
+    the same name (ADR 0229; §21.4).
   - The interface's `@effects` list bounds a default as it bounds every impl (§37.3). There is no call from an
     override to the default it replaces.
 - **`Self`** (ADR 0086 §2.2). In an interface, `Self` is the implementing type: opaque in its signatures and defaults,
@@ -2204,7 +2205,10 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
     enum (N0267). The built-in types, and everything lib/core and lib/std declare, are the libraries': a program
     implements its own interfaces for them, and lib/std's interfaces for its own types.
   - An `impl` block's methods are ordinary methods of `T`. `x.area()` works on any `Square`, and
-    their names must not clash with `T`'s other methods (N0228).
+    their names must not clash with `T`'s own methods (its body's, an inherent block's, an enum's block's) or its
+    fields and variants (N0228). They may share a name with another interface's impl's methods, with the same
+    signature or another (ADR 0229): §21.4 says which a call names. Two argument lists of one generic interface still
+    clash (N0228, ADR 0165 §7).
 - Interfaces are not types: an interface is a bound (§21.2), and since M13 also the `I` of a `dyn I` type behind a
   pointer, which dispatches at run time (§37; ADR 0015).
 - A method signature may carry an effect list, `@effects() fn visit(borrow mut this);`, which bounds every `impl` of
@@ -2215,7 +2219,7 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 - **Inside generic code**, a value whose type is `T` (or a reference to one) may call the methods
   of `T`'s bounds, with the signatures the interfaces give (after substitution). A call that no
   bound provides is N0234. If two bounds provide the same method name, the call is ambiguous
-  (N0267).
+  (N0267); `I.m(x, …)` names one (§21.4).
 - **`Copy`** is a built-in bound: a `T: Copy` is a Copy type in the generic code (it can be used
   twice and stored in arrays) and never needs drop. Only Copy types satisfy it.
 - **At every instantiation** (a call, type or value that gives `T`), each bound must hold: the
@@ -2238,8 +2242,60 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   `Slice<AtomicU64>`. The methods that copy (`fill`, `copyFrom`, `copyWithin`, `extend`) keep `T: Copy` (N0259);
   `swap`, `sortBy`, `forEach`, `any`, `all` and `partitionPoint` take any `T`.
 
-Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, or an
-ambiguous bound method), N0268 (a type argument that does not satisfy a bound).
+### 21.4 Methods of one name from several interfaces (ADR 0229)
+```ceesafe
+interface PageSource { fn usableSize(borrow this) -> usize; }
+interface PageSink { fn usableSize(borrow this) -> usize; fn write(borrow mut this, page: u32); }
+
+struct Pager { size: usize; }
+
+impl PageSource for Pager { fn usableSize(borrow this) -> usize => this.size - 8; }
+impl PageSink for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 32;
+    fn write(borrow mut this, page: u32) {}
+}
+
+fn sinkSize<T: PageSink>(p: borrow T) -> usize => p.usableSize();  // the sink's, for every T
+
+fn main() {
+    var pager = Pager { size: 4096 };
+    Console.writeLine(sinkSize(pager));                  // 4064
+    Console.writeLine(PageSource.usableSize(pager));     // 4088
+    PageSink.write(mut pager, 1);
+    pager.write(2);                                      // one 'write': no interface named
+}
+```
+A type may implement several interfaces that declare methods of the same name (§21.1). Which one a call names:
+- **Through a bound** `T: I`, the bound's (two bounds that declare it: N0267, §21.2), and so in **every instance** of
+  the generic code: an instance calls the method of the interface its generic version's call went through (§20.3),
+  whatever other interfaces the type argument has a method of that name from. The same holds for an interface's
+  default (`Self` bounded by the interface), a generic impl's methods and a generic struct's or enum's, and for
+  static functions called `T.create(…)`.
+- **Through `dyn I`**: the table's slot holds the type's method for `I` (§37.4).
+- **Qualified**, `I.m(x, a, …)`, or `I<A, …>.m(x, …)` with the interface's arguments: interface `I`'s method `m`
+  (`I`'s own or a supertrait's), with `x` as `this`. `x` is written as an argument to the receiver is: `x` for `this`
+  (moved or copied) and `borrow this` (a value is borrowed, a reference passed), `mut x` for `borrow mut this` (a
+  `borrow mut` reference may be passed as it is); a missing or misplaced `mut` is N0249, with the fix. A value and a
+  box are read through as in a method call. The type of `x` implements `I` (with those arguments): a concrete type,
+  a type parameter bounded by `I`, or a `dyn` of `I` or of a subinterface; otherwise N0268. With no argument it is
+  N0209; a name that `I` does not declare N0200; a static function N0233, since there is no value to name the type
+  by. A generic method takes its own type arguments as a method call does, `I.m<U>(x)`. The form is valid in generic
+  code as elsewhere: it is how `T: PageSource + PageSink` calls each `usableSize`.
+- **On the concrete type**, `x.m(…)`: the method, if the type has one of the name. If several interfaces give it
+  one, those the call cannot see do not count (an interface file-private to another file, ADR 0109, or not public
+  in another package; a method `private` in another file). One left is the call's; two or more are N0267, whose
+  message names each qualified form. When exactly one of them is a method taking as many arguments as the call
+  has, the fix rewrites the call into its form (`pager.label()` → `Labelled.label(pager)`, `mut pager` for a
+  `borrow mut this` method; tooling.md §5.2). The choice is never made by the arguments themselves: there is no
+  overloading.
+- **A static function on the concrete type**, `Pager.make()` where two interfaces give one: N0267, saying to call it
+  through a bound (`fn make<T: Labelled>() -> T => T.make();`).
+- An inherent method and an interface's method of one name on one type stay N0228 (§21.1), so no call chooses
+  between them.
+
+Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, an
+ambiguous bound method, or a call on a type that cannot choose between its interfaces' methods of one name), N0268 (a
+type argument that does not satisfy a bound, or `I.m(x)` where `x` does not implement `I`).
 
 ## 22. Optionals and string views (M6c)
 
@@ -5939,7 +5995,9 @@ fn main() {
 
 ### 37.4 Representation (c-backend.md §2)
 - A `borrow dyn I`, a `borrow mut dyn I` and a `Box<dyn I, A>` with a zero-sized `A` are each two words:
-  `{ data, vt }`. `data` points at the value, and `vt` points at the table for (`T`, `I`).
+  `{ data, vt }`. `data` points at the value, and `vt` points at the table for (`T`, `I`). A slot holds `T`'s
+  method for the slot's interface (`I`, or the supertrait that declares it), whatever other interface gives `T` a
+  method of the same name (§21.4, ADR 0229).
 - The table is a `static const` struct per pair (`T`, `I`) that a coercion names. It holds the drop glue, the value's
   size and alignment (for a user allocator's `deallocate`), then one function per method of `I`, in declaration
   order. Each function is a generated adapter taking `void *` as its receiver, so no function is called through a

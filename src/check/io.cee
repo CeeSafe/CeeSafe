@@ -173,12 +173,15 @@ fn checkResourceMethod(
     if (isFile && (sameText(text, "modified") || sameText(text, "kind")) && !c.freestanding) {
         return checkFileMetadata(c, "FileMetadata", member, arguments, resource, targetSpan, span);
     }
-    if (isFile && (sameText(text, "lock") || sameText(text, "tryLock") || sameText(text, "unlock")) &&
-        !c.freestanding) {
-        return checkFileMetadata(c, "FileLocks", member, arguments, resource, targetSpan, span); // ADR 0220
+    if (isFile && (sameText(text, "lock") || sameText(text, "tryLock") || sameText(text, "unlock") ||
+        sameText(text, "testLock")) && !c.freestanding) {
+        return checkFileMetadata(c, "FileLocks", member, arguments, resource, targetSpan, span); // ADR 0220, 0234
     }
     if (isFile && sameText(text, "mapShared") && !c.freestanding) {
         return checkFileMetadata(c, "SharedMapping", member, arguments, resource, targetSpan, span); // ADR 0232
+    }
+    if (isFile && sameText(text, "mapSharedReadOnly") && !c.freestanding) {
+        return checkFileMetadata(c, "ReadOnlyMapping", member, arguments, resource, targetSpan, span); // ADR 0235
     }
     var function = none();
     var arity: u32 = 0;
@@ -318,8 +321,9 @@ fn checkResourceMethod(
 }
 
 /// `f.modified()` and `f.kind()` (ADR 0078 §3), `f.lock(…)`, `f.tryLock(…)` and `f.unlock(…)` (ADR 0220),
-/// `f.mapShared(…)` (ADR 0232): lib/std's function of that name in `owner` (FileMetadata, FileLocks, SharedMapping),
-/// called with `f` borrowed and the call's arguments.
+/// `f.testLock(…)` (ADR 0234), `f.mapShared(…)` (ADR 0232), `f.mapSharedReadOnly(…)` (ADR 0235): lib/std's function
+/// of that name in `owner` (FileMetadata, FileLocks, SharedMapping, ReadOnlyMapping), called with `f` borrowed and the
+/// call's arguments.
 fn checkFileMetadata(
     c: borrow mut Checker,
     owner: StringView,

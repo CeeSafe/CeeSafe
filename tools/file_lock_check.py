@@ -12,6 +12,11 @@ that has open-file-description locks:
    shared makes a write report it; and while `sqlite3` holds `BEGIN EXCLUSIVE`, the program's `tryLock` of the SHARED
    range is false. Without `sqlite3` this part is skipped and said so.
 
+`f.testLock` (ADR 0234) is checked in each part: (1) between two Files, with a conversion in place that fails and
+keeps the held lock (§2.3); (2) against Python's shared and exclusive `fcntl.lockf` locks, each reported with its
+kind, and, while the program tests a byte 200 000 times, Python's own non-waiting locks of it never fail (a test takes
+nothing); (3) while `sqlite3` holds `BEGIN IMMEDIATE`, the RESERVED byte tests `Exclusive`, and `null` after `COMMIT`.
+
 The SQLite lock bytes are those of its os_unix.c: PENDING 0x40000000, RESERVED 0x40000001, SHARED 0x40000002 to
 0x40000002 + 509.
 
@@ -74,6 +79,73 @@ fn main() {
 # Each answer follows from the rules of ADR 0220 §2.2, in order.
 CONFLICTS_WANT = ["true", "true", "false", "true", "false", "false", "true", "true", "false", "true", "false",
                   "false", "true", "true", "false", "true", "false"]
+
+# testLock between two Files of one program (ADR 0234), and a conversion in place that fails atomically (§2.3).
+TESTS = """
+fn sharedFirst() -> u64 => 0x40000002;
+
+fn name(lock: FileLock?) -> StringView => match (lock) {
+    Some(FileLock.Shared) => "Shared",
+    Some(FileLock.Exclusive) => "Exclusive",
+    null => "null",
+};
+
+fn run(path: StringView) -> Result<void, IoError> {
+    let a = File.openReadWrite(path)?;
+    let b = File.openReadWrite(path)?;
+    a.lock(FileLock.Shared, sharedFirst(), 510)?;
+    b.lock(FileLock.Shared, sharedFirst(), 510)?;
+    Console.writeLine(a.tryLock(FileLock.Exclusive, sharedFirst(), 510)?);
+    Console.writeLine(name(a.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    Console.writeLine(name(b.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    b.unlock(sharedFirst(), 510)?;
+    Console.writeLine(name(b.testLock(FileLock.Exclusive, sharedFirst() + 509, 1)?));
+    Console.writeLine(a.tryLock(FileLock.Exclusive, sharedFirst(), 510)?);
+    Console.writeLine(name(b.testLock(FileLock.Shared, sharedFirst() + 7, 1)?));
+    Console.writeLine(name(a.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    a.lock(FileLock.Shared, sharedFirst(), 510)?;
+    Console.writeLine(name(b.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    Console.writeLine(name(b.testLock(FileLock.Shared, sharedFirst(), 510)?));
+    return Ok();
+}
+
+fn main() {
+    match (run(Process.argument(1)!)) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+}
+"""
+# ADR 0234 §2.1 and §2.3, in order: the conversion fails while b shares and keeps a's shared lock; a's own lock is
+# never reported to a; converted, it is reported Exclusive to b; converted back, Shared to an exclusive test only.
+TESTS_WANT = ["false", "Shared", "Shared", "Shared", "true", "Exclusive", "null", "Shared", "null"]
+
+# Tests a lock and prints what holds it: "null", "Shared" or "Exclusive" (ADR 0234).
+TEST = """
+fn main() {
+    let f = File.open(Process.argument(1)!)!;
+    Console.writeLine(match (f.testLock(FileLock.KIND, START, LENGTH)!) {
+        Some(FileLock.Shared) => "Shared",
+        Some(FileLock.Exclusive) => "Exclusive",
+        null => "null",
+    });
+}
+"""
+
+# Tests an exclusive lock COUNT times as fast as it can and prints how many tests found a holder: while it runs,
+# Python's non-waiting locks of the range must all succeed, since a test takes nothing (ADR 0234 §2.1).
+TEST_LOOP = """
+fn main() {
+    let f = File.openReadWrite(Process.argument(1)!)!;
+    var held: u32 = 0;
+    for (i in 0..COUNT) {
+        if (f.testLock(FileLock.Exclusive, START, LENGTH)!.isSome()) {
+            held += 1;
+        }
+    }
+    Console.writeLine(held);
+}
+"""
 
 # Takes a lock, says so, and holds it until a line arrives on standard input.
 HOLD = """
@@ -160,6 +232,18 @@ def main():
             if p.stdout.split() != CONFLICTS_WANT:
                 problems.append(f"conflicts in the interpreter: {p.stdout.split()} (status {p.returncode}, "
                                 f"{p.stderr.strip()[-300:]}), want {CONFLICTS_WANT}")
+            # testLock between the Files, and a conversion in place (ADR 0234).
+            exe = build(compiler, work, "tests", TESTS, problems)
+            if exe:
+                p = subprocess.run([exe, database], capture_output=True, text=True, timeout=60)
+                if p.stdout.split() != TESTS_WANT:
+                    problems.append(f"testLock natively: {p.stdout.split()} (status {p.returncode}), "
+                                    f"want {TESTS_WANT}")
+            p = subprocess.run([compiler, "run", "--interp", os.path.join(work, "tests.cee"), "--", database],
+                               capture_output=True, text=True, timeout=120)
+            if p.stdout.split() != TESTS_WANT:
+                problems.append(f"testLock in the interpreter: {p.stdout.split()} (status {p.returncode}, "
+                                f"{p.stderr.strip()[-300:]}), want {TESTS_WANT}")
         else:
             skipped.append(f"conflicts between Files of a process ({sys.platform} has no open-file-description locks)")
 
@@ -213,6 +297,54 @@ def main():
                 if p.stdout.strip() != "true":
                     problems.append(f"try_ex after Python's locks went: {p.stdout.strip()!r}")
 
+            # testLock (ADR 0234) against Python's locks: each reported with its kind, and nothing taken.
+            test_ex = build(compiler, work, "test_ex", program(TEST, "Exclusive", RESERVED, 1), problems)
+            test_sh = build(compiler, work, "test_sh", program(TEST, "Shared", RESERVED, 1), problems)
+            loop_source = program(TEST_LOOP, "Exclusive", RESERVED, 1).replace("COUNT", "200000u32")
+            test_loop = build(compiler, work, "test_loop", loop_source, problems)
+            if test_ex and test_sh:
+                import fcntl
+
+                def tested(want_ex, want_sh, what):
+                    for exe, want in ((test_ex, want_ex), (test_sh, want_sh)):
+                        p = subprocess.run([exe, database], capture_output=True, text=True, timeout=60)
+                        if p.stdout.strip() != want:
+                            problems.append(f"{os.path.basename(exe)} {what}: {p.stdout.strip()!r} "
+                                            f"{p.stderr.strip()[-200:]!r}, want {want}")
+
+                tested("null", "null", "with no lock held")
+                fd = os.open(database, os.O_RDWR)
+                fcntl.lockf(fd, fcntl.LOCK_SH, 1, RESERVED, 0)
+                tested("Shared", "null", "against Python's shared lock")
+                fcntl.lockf(fd, fcntl.LOCK_EX, 1, RESERVED, 0)
+                tested("Exclusive", "Exclusive", "against Python's exclusive lock")
+                fcntl.lockf(fd, fcntl.LOCK_UN, 1, RESERVED, 0)
+                tested("null", "null", "after Python's lock went")
+                os.close(fd)
+            if test_loop:
+                # While the program tests the byte 200 000 times, Python takes and releases it without waiting: a test
+                # that took the lock, even for an instant, would make some of Python's attempts fail.
+                import fcntl
+                fd = os.open(database, os.O_RDWR)
+                p = subprocess.Popen([test_loop, database], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                attempts = refused = 0
+                while p.poll() is None:
+                    attempts += 1
+                    try:
+                        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, RESERVED, 0)
+                        fcntl.lockf(fd, fcntl.LOCK_UN, 1, RESERVED, 0)
+                    except OSError:
+                        refused += 1
+                out, err = p.communicate(timeout=120)
+                os.close(fd)
+                if p.returncode != 0 or not out.strip().isdigit():
+                    problems.append(f"test_loop: status {p.returncode}: {out.strip()!r} {err.strip()[-200:]!r}")
+                elif refused:
+                    problems.append(f"testLock took the lock: {refused} of Python's {attempts} attempts were refused "
+                                    f"while the program only tested")
+                elif attempts < 10:
+                    skipped.append(f"testLock takes nothing: only {attempts} of Python's attempts overlapped the test")
+
             # 3. SQLite.
             sqlite3 = shutil.which("sqlite3")
             if sqlite3 is None:
@@ -246,6 +378,13 @@ def main():
                     if p.stdout.split() != ["false", "true"]:
                         problems.append(f"the program's shared lock during and after sqlite3's BEGIN EXCLUSIVE: "
                                         f"{p.stdout.split()}, want ['false', 'true'] ({p.stderr.strip()!r})")
+                    if test_ex:
+                        # SQLite's hot-journal question (unixCheckReservedLock): is RESERVED held?
+                        script = f"BEGIN IMMEDIATE;\n.shell {test_ex} {sql}\nCOMMIT;\n.shell {test_ex} {sql}\n"
+                        p = subprocess.run([sqlite3, sql], input=script, capture_output=True, text=True, timeout=60)
+                        if p.stdout.split() != ["Exclusive", "null"]:
+                            problems.append(f"testLock of RESERVED during and after sqlite3's BEGIN IMMEDIATE: "
+                                            f"{p.stdout.split()}, want ['Exclusive', 'null'] ({p.stderr.strip()!r})")
     print(f"file_lock_check: Files of one program, other processes' locks, SQLite; {len(problems)} problems")
     for s in skipped:
         print("  SKIP " + s)

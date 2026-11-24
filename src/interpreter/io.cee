@@ -6,7 +6,9 @@
 /// A descriptor's host object.
 enum HostHandle {
     Closed,
-    OpenFile(File, String), // the file, and its path (ADR 0051: a read at an offset reopens it)
+    // The file, its path (ADR 0051: a read at an offset reopens it), and whether it is open for reading (File.open,
+    // openRegular) rather than writing (File.create): ADR 0235's read-only mappings need to know.
+    OpenFile(File, String, bool),
     // A file opened for reading and writing (ADR 0075 §2.1): its path and position. Each operation reopens the file,
     // as ADR 0051's read at an offset does, so the stage-0 compiler's File serves.
     PathFile(String, u64),
@@ -355,7 +357,7 @@ fn readAt(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Valu
     match (handleIndex(it, fd)) {
         Some(k) => {
             match (borrow it.runtime.handles[k]) {
-                HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                HostHandle.OpenFile(_, p, _) => { path.append(p.view())!; }
                 HostHandle.PathFile(p, _) => { path.append(p.view())!; }
                 _ => {}
             }
@@ -541,7 +543,7 @@ fn ioBuiltin(
         kept.append(text)!;
         match (opened) {
             Ok(file) => {
-                let fd = addHandle(it, HostHandle.OpenFile(file, kept));
+                let fd = addHandle(it, HostHandle.OpenFile(file, kept, b != bfFileCreate()));
                 return Ok(interpIoResult(c, resultType, fd, 0)?);
             }
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
@@ -606,7 +608,7 @@ fn ioBuiltin(
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow mut it.runtime.handles[k]) {
-                    HostHandle.OpenFile(file, _) => { read = file.read(mut buffer[..]); }
+                    HostHandle.OpenFile(file, _, _) => { read = file.read(mut buffer[..]); }
                     HostHandle.Stream(stream) => { read = stream.read(mut buffer[..]); }
                     HostHandle.PathFile(p, position) => {
                         read = readFileAt(p.view(), mut buffer, position);
@@ -672,7 +674,7 @@ fn ioBuiltin(
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow mut it.runtime.handles[k]) {
-                    HostHandle.OpenFile(file, _) => { written = file.write(bytes.view()); }
+                    HostHandle.OpenFile(file, _, _) => { written = file.write(bytes.view()); }
                     HostHandle.Stream(stream) => { written = stream.write(bytes.view()); }
                     HostHandle.PathFile(p, position) => {
                         var at: u64 = position;
@@ -1113,7 +1115,7 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow it.runtime.handles[k]) {
-                    HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                    HostHandle.OpenFile(_, p, _) => { path.append(p.view())!; }
                     HostHandle.PathFile(p, _) => { path.append(p.view())!; }
                     HostHandle.Stream(_) => { return Ok(hostResult(3)); }
                     _ => {}
@@ -1382,6 +1384,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_file_lock")) {
         return "Puuss:l"; // ADR 0220
+    }
+    if (sameText(name, "ceesafe_host_file_test_lock")) {
+        return "Puss:l"; // ADR 0234
     }
     if (sameText(name, "ceesafe_host_is_terminal")) {
         return "u:l"; // ADR 0221 §2.3
@@ -2298,6 +2303,9 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_host_file_lock")) {
         return Ok(Some(fileLock(it, c, n, arguments)?));
+    }
+    if (sameText(n0, "ceesafe_host_file_test_lock")) {
+        return Ok(Some(testFileLock(it, arguments)?));
     }
     if (mappingShape(n0).isSome()) {
         return mappingService(it, n0, arguments); // ADR 0232
@@ -5021,7 +5029,7 @@ fn durableFileBuiltin(
     match (handleIndex(it, fd)) {
         Some(k) => {
             match (borrow it.runtime.handles[k]) {
-                HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                HostHandle.OpenFile(_, p, _) => { path.append(p.view())!; }
                 HostHandle.PathFile(p, _) => { path.append(p.view())!; }
                 _ => {}
             }
@@ -5207,7 +5215,7 @@ fn fileLock(
     match (handleIndex(it, fd)) {
         Some(k) => {
             isFile = match (borrow it.runtime.handles[k]) {
-                HostHandle.OpenFile(_, _) => true,
+                HostHandle.OpenFile(_, _, _) => true,
                 HostHandle.PathFile(_, _) => true,
                 _ => false,
             };
@@ -5238,12 +5246,60 @@ fn fileLock(
     return Ok(hostResult(0));
 }
 
+/// ceesafe_host_file_test_lock (ADR 0234 §2.5): the kind of the first lock of another descriptor of the program that
+/// conflicts with the request (1 shared, 2 exclusive), or 0; the descriptor's own locks never conflict. Nothing is
+/// taken. Other processes' locks are not seen, as for fileLock.
+fn testFileLock(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
+    requireHostIo(it)?;
+    let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+    let kind = arguments[1].bits(0, 4)?;
+    let start = arguments[2].bits(0, 8)?;
+    let length = arguments[3].bits(0, 8)?;
+    var isFile = false;
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            isFile = match (borrow it.runtime.handles[k]) {
+                HostHandle.OpenFile(_, _, _) => true,
+                HostHandle.PathFile(_, _) => true,
+                _ => false,
+            };
+        }
+        null => {}
+    }
+    if (!isFile) {
+        return Ok(hostFailure(9)); // EBADF, 9 on every host
+    }
+    if (length == 0 || start > 0x7FFFFFFFFFFFFFFF || length > 0x7FFFFFFFFFFFFFFF - start) {
+        return Ok(hostFailure(errnoInvalid())); // lib/std checks first; the runtime's own check
+    }
+    let request = InterpLock { fd: fd, start: start, end: start + length, exclusive: kind == 2 };
+    for (held in it.runtime.locks.view()) {
+        if (held.fd != request.fd && held.start < request.end && request.start < held.end &&
+            (held.exclusive || request.exclusive)) {
+            return Ok(hostResult(if (held.exclusive) 2 else 1));
+        }
+    }
+    return Ok(hostResult(0));
+}
+
 // ---- Shared mappings of a file (ADR 0232 §2.5) ----
 
 /// The shape of a runtime function of lib/std's SharedMapping, or null for another name.
 fn mappingShape(name: Slice<u8>) -> StringView? {
-    if (sameText(name, "ceesafe_host_map_file")) {
+    if (sameText(name, "ceesafe_host_map_file") || sameText(name, "ceesafe_host_map_file_read_only")) {
         return "PssP:l";
+    }
+    if (sameText(name, "ceesafe_host_map_load16")) {
+        return "ssi:h"; // ADR 0235
+    }
+    if (sameText(name, "ceesafe_host_map_store16")) {
+        return "sshi:-";
+    }
+    if (sameText(name, "ceesafe_host_map_cas16")) {
+        return "sshhi:h";
+    }
+    if (sameText(name, "ceesafe_host_map_add16")) {
+        return "sshi:h";
     }
     if (sameText(name, "ceesafe_host_map_unmap")) {
         return "sss:-";
@@ -5292,7 +5348,10 @@ fn mappingService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vect
         return Ok(null); // the model's accesses are already in order
     }
     if (sameText(name, "ceesafe_host_map_file")) {
-        return Ok(Some(mapFile(it, arguments)?));
+        return Ok(Some(mapFile(it, arguments, false)?));
+    }
+    if (sameText(name, "ceesafe_host_map_file_read_only")) {
+        return Ok(Some(mapFile(it, arguments, true)?)); // ADR 0235 §2.5
     }
     let number = arguments[0].bits(0, 8)?;
     if (number == 0 || number > (it.runtime.mappings.length as u64) ||
@@ -5335,19 +5394,23 @@ fn mappingService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vect
         mappedWrite(path.view(), at, bytes.view())?;
         return Ok(null);
     }
-    let width: u64 = if (name[name.length - 2] == '3') 4 else 8;
+    // The width from the name's last two characters: 16, 32 or 64 (ADR 0235 adds the 16-bit ones).
+    let tens = name[name.length - 2];
+    let width: u64 = if (tens == '1') 2 else if (tens == '3') 4 else 8;
     let old = mappedInteger(path.view(), at, width)?;
-    if (sameText(name, "ceesafe_host_map_load32") || sameText(name, "ceesafe_host_map_load64")) {
+    let verb = name[17]; // the first letter after "ceesafe_host_map_": load, store, add or cas
+    if (verb == 'l') {
         return Ok(valueOf(old, width as usize));
     }
     let value = arguments[2].bits(0, width as usize)?;
-    if (sameText(name, "ceesafe_host_map_store32") || sameText(name, "ceesafe_host_map_store64")) {
+    if (verb == 's') {
         mappedStore(path.view(), at, value, width)?;
         return Ok(null);
     }
-    if (sameText(name, "ceesafe_host_map_add32") || sameText(name, "ceesafe_host_map_add64")) {
+    if (verb == 'a') {
         let sum = old.wrappingAdd(value);
-        mappedStore(path.view(), at, if (width == 4) sum & 0xFFFFFFFF else sum, width)?;
+        let mask: u64 = if (width == 8) 0xFFFFFFFFFFFFFFFF else (1u64 << (8 * width)) - 1;
+        mappedStore(path.view(), at, sum & mask, width)?;
         return Ok(valueOf(old, width as usize));
     }
     // compare-exchange: arguments[2] expected, arguments[3] desired
@@ -5359,7 +5422,9 @@ fn mappingService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vect
 
 /// ceesafe_host_map_file's model: the File must be one the program opened for reading and writing; the file is
 /// extended to cover the region, never shortened; out[0] and out[1] are the mapping's number, out[2] its length.
-fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
+/// With `readOnly`, ceesafe_host_map_file_read_only's (ADR 0235 §2.5): any File open for reading, and a region past
+/// the file's end is EINVAL, never an extension.
+fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>, readOnly: bool) -> Result<Value, Stop> {
     requireHostIo(it)?;
     let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
     let offset = arguments[1].bits(0, 8)?;
@@ -5369,10 +5434,15 @@ fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Val
     match (handleIndex(it, fd)) {
         Some(k) => {
             match (borrow it.runtime.handles[k]) {
-                // An appending file is write-only, as a File.open or File.create one is one-way: EBADF, as mmap's
-                // EACCES is reported natively.
+                // An appending file is write-only, as a File.create one is: EBADF, as mmap's EACCES is reported
+                // natively. A File.open one is open for reading only, which a read-only mapping takes.
                 HostHandle.PathFile(p, position) => {
                     if (position != appendPosition()) {
+                        path.append(p.view())!;
+                    }
+                }
+                HostHandle.OpenFile(_, p, readable) => {
+                    if (readOnly && readable) {
                         path.append(p.view())!;
                     }
                 }
@@ -5388,6 +5458,20 @@ fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Val
         return Ok(hostFailure(errnoInvalid())); // lib/std checks first; the runtime's own check
     }
     let end = offset + length;
+    if (readOnly) {
+        let file = match (File.open(path.view())) {
+            Ok(f) => f,
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        };
+        let size = match (file.length()) {
+            Ok(s) => s,
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        };
+        if (size < end) {
+            return Ok(hostFailure(errnoInvalid())); // never extended
+        }
+        return Ok(addMapping(it, path, offset, length, out)?);
+    }
     var file = match (File.openReadWrite(path.view())) {
         Ok(f) => f,
         Err(e) => { return Ok(hostFailure(errnoOf(e))); }
@@ -5403,6 +5487,11 @@ fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Val
             Err(e) => { return Ok(hostFailure(errnoOf(e))); }
         }
     }
+    return addMapping(it, path, offset, length, out);
+}
+
+/// Records a mapping of `path`'s bytes from `offset` and writes `out`: out[0] and out[1] its number, out[2] its length.
+fn addMapping(it: borrow mut Interp, path: String, offset: u64, length: u64, out: u64) -> Result<Value, Stop> {
     it.runtime.mappings.push(InterpMapping { path: path, offset: offset, length: length, live: true })!;
     let number = it.runtime.mappings.length as u64;
     it.memory.storeBits(out, number, 8)?;
@@ -5413,9 +5502,10 @@ fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Val
 }
 
 /// The bytes at `at` of the mapped file at `path`. A file shortened under the mapping faults, as the native SIGBUS
-/// ends the program (ADR 0232 §2.3).
+/// ends the program (ADR 0232 §2.3). The file is opened for reading only, so a read-only mapping (ADR 0235) of a file
+/// the program may not write reads too.
 fn mappedRead(path: StringView, at: u64, into: SliceMut<u8>) -> Result<void, Stop> {
-    var file = match (File.openReadWrite(path)) {
+    var file = match (File.open(path)) {
         Ok(f) => f,
         Err(_) => { return Err(fault("a shared mapping's file cannot be opened again by its path")); }
     };

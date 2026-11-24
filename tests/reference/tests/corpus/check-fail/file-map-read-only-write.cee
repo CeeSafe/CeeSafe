@@ -1,0 +1,15 @@
+// A read-only shared mapping has no method that writes (ADR 0235 §2.2): a write through it is an error of the
+// checker, not a fault at run time.
+fn main() {
+    let f = File.open("db-shm")!;
+    let r = f.mapSharedReadOnly(0, 32768)!;
+    var header = [0u8; 48];
+    r.readAt(0, mut header[..]);
+    let _ = r.load16(0, LoadOrdering.Acquire);
+    r.writeAt(0, header[..]);                                      // error[N0200]
+    r.store32(0, 1, StoreOrdering.Release);                        // error[N0200]
+    r.store16(0, 1, StoreOrdering.Release);                        // error[N0200]
+    let _ = r.compareExchange32(0, 0, 1, Ordering.AcquireRelease); // error[N0200]
+    let _ = r.fetchAdd16(0, 1, Ordering.Relaxed);                  // error[N0200]
+    let _ = r.sync();                                              // error[N0200]
+}

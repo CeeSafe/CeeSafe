@@ -1,0 +1,109 @@
+// Testing a lock without taking it (ADR 0234), the same output on every host and in the interpreter: a range no one
+// holds tests null, for both kinds, and still does after a lock and its unlock; another File's exclusive lock is
+// reported Exclusive, and its shared lock Shared for an exclusive request and null for a shared one, wherever two
+// Files of one program conflict (open-file-description locks, Windows, the interpreter). Where locks are the
+// process's (the BSDs) two Files never conflict, so the program checks only that testLock agrees with tryLock, which
+// it does everywhere; other processes' locks, conversions and SQLite are tools/file_lock_check.py's. Any File may
+// test, one open for reading only too; the errors are lock's.
+
+fn reserved() -> u64 => 0x40000001;
+fn sharedFirst() -> u64 => 0x40000002;
+
+fn name(lock: FileLock?) -> StringView => match (lock) {
+    Some(FileLock.Shared) => "Shared",
+    Some(FileLock.Exclusive) => "Exclusive",
+    null => "null",
+};
+
+/// Whether `b` could take the lock now, by taking it and letting it go: what testLock says without taking it.
+fn takes(b: borrow File, kind: FileLock, start: u64, length: u64) -> Result<bool, IoError> {
+    let taken = b.tryLock(kind, start, length)?;
+    if (taken) {
+        b.unlock(start, length)?;
+    }
+    return Ok(taken);
+}
+
+/// testLock from `b` agrees with tryLock from `b`, and names `want` where Files conflict.
+fn agree(
+    b: borrow File,
+    kind: FileLock,
+    start: u64,
+    length: u64,
+    want: FileLock?,
+    conflict: bool,
+) -> Result<void, IoError> {
+    let seen = b.testLock(kind, start, length)?;
+    let free = takes(b, kind, start, length)?;
+    Console.writeLine(seen.isNull() == free);
+    if (conflict) {
+        Console.writeLine(name(seen));
+    } else {
+        Console.writeLine(name(want)); // no File of the program conflicts with another here: nothing to report
+    }
+    return Ok();
+}
+
+fn run(path: StringView) -> Result<void, IoError> {
+    let a = File.createReadWrite(path)?;
+    let b = File.openReadWrite(path)?;
+    // No one holds anything.
+    Console.writeLine(name(a.testLock(FileLock.Shared, sharedFirst(), 510)?));
+    Console.writeLine(name(a.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    a.lock(FileLock.Exclusive, reserved(), 1)?;
+    a.unlock(reserved(), 1)?;
+    Console.writeLine(name(b.testLock(FileLock.Exclusive, reserved(), 1)?));
+    // Do two Files of this program conflict here? Then testLock must report a's locks to b.
+    a.lock(FileLock.Exclusive, reserved(), 1)?;
+    let conflict = !takes(b, FileLock.Exclusive, reserved(), 1)?;
+    agree(b, FileLock.Exclusive, reserved(), 1, Some(FileLock.Exclusive), conflict)?;
+    agree(b, FileLock.Shared, reserved(), 1, Some(FileLock.Exclusive), conflict)?;
+    a.unlock(reserved(), 1)?;
+    a.lock(FileLock.Shared, sharedFirst(), 510)?;
+    agree(b, FileLock.Exclusive, sharedFirst() + 509, 1, Some(FileLock.Shared), conflict)?;
+    agree(b, FileLock.Shared, sharedFirst(), 510, null, conflict)?;
+    a.unlock(sharedFirst(), 510)?;
+    Console.writeLine(name(b.testLock(FileLock.Exclusive, sharedFirst(), 510)?));
+    // A File open for reading only may test an exclusive lock.
+    let r = File.open(path)?;
+    Console.writeLine(name(r.testLock(FileLock.Exclusive, reserved(), 1)?));
+    // Errors.
+    match (a.testLock(FileLock.Shared, 0, 0)) {
+        Ok(_) => { Console.writeLine("length 0 tested"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (a.testLock(FileLock.Exclusive, 0x7FFFFFFFFFFFFFFF, 2)) {
+        Ok(_) => { Console.writeLine("past 2^63 tested"); }
+        Err(IoError.InvalidInput) => { Console.writeLine("InvalidInput"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    match (run(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: null
+// expect-stdout: null
+// expect-stdout: null
+// expect-stdout: true
+// expect-stdout: Exclusive
+// expect-stdout: true
+// expect-stdout: Exclusive
+// expect-stdout: true
+// expect-stdout: Shared
+// expect-stdout: true
+// expect-stdout: null
+// expect-stdout: null
+// expect-stdout: null
+// expect-stdout: Invalid argument
+// expect-stdout: InvalidInput

@@ -98,6 +98,9 @@
 - [enum PushService](#enum-pushservice)
 - [struct PushToken](#struct-pushtoken)
 - [struct Push](#struct-push)
+- [struct PushRequest](#struct-pushrequest)
+- [struct NotificationExtension](#struct-notificationextension)
+- [struct AppGroup](#struct-appgroup)
 - [enum SecretError](#enum-secreterror)
 - [struct Secrets](#struct-secrets)
 - [struct SharedMemory](#struct-sharedmemory)
@@ -4558,6 +4561,77 @@ Registers with the system's push service and returns this device's token. It blo
 (30 seconds at most) and may be called from any thread but the window's.
 Safety: the runtime writes at most the buffer's length.
 
+## struct PushRequest
+
+```ceesafe
+public struct PushRequest {
+    public title: String;
+    public body: String;
+    public payload: String;
+}
+```
+
+A push a notification service extension was handed (ADR 0246), to show as it is or rewritten (`deliver`).
+
+## struct NotificationExtension
+
+```ceesafe
+public struct NotificationExtension
+```
+
+A notification service extension's side of the system (ADR 0246): on iOS, a program built into the app's
+`PlugIns/<name>.appex` (CeeUI's packer's `--extension`) runs its `main` while the extension lives and is handed each
+push that carries `mutable-content` before the system shows it; it shows what `deliver` gives, or the push as it
+came when the system's time (about 30 seconds) runs out. Elsewhere, and in an app, `Unsupported`.
+`CEESAFE_PUSH_REQUEST=<file>` is one push instead, on every system (its title, body and payload JSON on three
+lines); a delivery is appended to `CEESAFE_NOTIFICATIONS_DUMP` as `deliver TITLE<TAB>BODY`.
+
+```
+loop {
+    match (NotificationExtension.next(60000)?) {
+        Some(push) => { NotificationExtension.deliver(push, "Bob", "the decrypted text")?; }
+        null => {}
+    }
+}
+```
+
+### NotificationExtension.next
+
+```ceesafe
+public fn next(milliseconds: u32) -> Result<PushRequest?, PushError>
+```
+
+The next push, within `milliseconds`, or null when none came.
+Safety: the runtime writes at most the buffer's length, and the id.
+
+### NotificationExtension.deliver
+
+```ceesafe
+public fn deliver(request: borrow PushRequest, title: StringView, body: StringView) -> Result<void, PushError>
+```
+
+Shows the push with `title` (the push's own when empty) and `body`; `Failed` when its time already ran out
+(the system showed it as it came).
+Safety: the runtime reads the views during the call only.
+
+## struct AppGroup
+
+```ceesafe
+public struct AppGroup
+```
+
+An App Group's shared folder (ADR 0246): on Apple's systems the folder an app and its extensions both reach, for
+the group they are signed with (`group.com.example.app`); null where there is none (not signed for it, or not an
+Apple system).
+
+### AppGroup.folder
+
+```ceesafe
+public fn folder(group: StringView) -> String?
+```
+
+Safety: the runtime reads the name during the call only, and writes at most the buffer's length.
+
 ## enum SecretError
 
 ```ceesafe
@@ -4632,6 +4706,40 @@ public fn remove(app: StringView, name: StringView) -> Result<void, SecretError>
 ```
 
 Removes the secret `name` of `app`; `Ok` when there was none.
+Safety: the runtime reads the names during the call only.
+
+### Secrets.readIn
+
+```ceesafe
+public fn readIn(group: StringView, app: StringView, name: StringView) -> Result<Vector<u8>?, SecretError>
+```
+
+`read`, in the keychain group `group` shared with the app's extensions (ADR 0246): on Apple's systems an App
+Group (`group.com.example.app`) or a team-prefixed keychain group the app and its extensions are signed with;
+elsewhere the group changes nothing (an app's secrets are its own there). `group` is 1 to 256 bytes.
+Safety: the runtime reads the names during the call only, and writes at most the buffer's length.
+
+### Secrets.writeIn
+
+```ceesafe
+public fn writeIn(
+    group: StringView,
+    app: StringView,
+    name: StringView,
+    value: Slice<u8>,
+) -> Result<void, SecretError>
+```
+
+`write`, in the shared keychain group `group` (`readIn`).
+Safety: the runtime reads the names and the value during the call only.
+
+### Secrets.removeIn
+
+```ceesafe
+public fn removeIn(group: StringView, app: StringView, name: StringView) -> Result<void, SecretError>
+```
+
+`remove`, in the shared keychain group `group` (`readIn`).
 Safety: the runtime reads the names during the call only.
 
 ## struct SharedMemory

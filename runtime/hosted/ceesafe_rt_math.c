@@ -4,8 +4,8 @@
  * ADR 0248).
  *
  * `x.exp()`, `x.sin()`, `x.pow(y)` … are calls of these functions, each the C function of the same meaning and
- * nothing more, so a compiled program's results are its system's libm's. The interpreter calls these same functions
- * (src/interpreter/math.cee calls the methods, so ceesafec links this file), so a program prints the same in both.
+ * nothing more, so a compiled program's results are its system's libm's. The interpreter calls the same libm
+ * functions (src/interpreter/math.cee), so a program prints the same in both; on Windows, not yet (ADR 0248 §2.3).
  *
  * They are a translation unit of their own on purpose: the generated code cannot be inlined into them, so the C
  * compiler never sees a constant argument and never folds a call at compile time (gcc evaluates `exp(2.0)` with MPFR,

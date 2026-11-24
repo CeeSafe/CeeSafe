@@ -1,78 +1,197 @@
 // The float methods that are the C library's math functions (type-system.md §35.8, ADR 0218), in the interpreter:
-// ceesafec calls the methods themselves, so it calls the runtime functions a compiled program calls
-// (runtime/hosted/ceesafe_rt_math.c, which ceesafec therefore links), and `run --interp` prints what the program's
-// build prints on the same machine (testing.md, "Interpreter agreement"), whichever C compiler built ceesafec: on
-// Windows both are ucrtbase.dll's (ADR 0248). ceesafec links libm: the manifest's [target.linux] and
-// [target.freebsd] name it, macOS's and Windows' C libraries hold it. The arguments are never constants in C, so no C
-// compiler folds a call here either.
+// the same libm functions a compiled program calls through runtime/hosted/ceesafe_rt_math.c, called here from
+// ceesafec, so `run --interp` prints what the program's build prints on the same machine (testing.md, "Interpreter
+// agreement"). ceesafec links libm: the manifest's [target.linux] and [target.freebsd] name it, macOS's and Windows'
+// C libraries hold it. The arguments are never constants in C, so no C compiler folds a call here either.
+// On Windows (ADR 0248 §2.3) a build calls ucrtbase.dll's functions whatever compiles it, but these calls are of the
+// C library ceesafec was linked with: ucrtbase.dll's for a ceesafec built by a UCRT MinGW or `cl /MD`, the SDK's
+// static copy for one built by `cl` as the seed's commands do. They become the runtime's `ceesafe_math_*` when
+// stage 0 (0.94.5, bootstrap/reference.md) is a release that has ceesafe_rt_math.c; 0.94.5 would not link them.
 
-/// The libm method `b` (isLibmBuiltin) of `f64` operands; `n` is `scaleB`'s power of two.
-fn libmF64(b: u32, x: f64, y: f64, z: f64, n: i32) -> f64 {
-    return match (b) {
-        145 => x.exp(),
-        146 => x.exp2(),
-        147 => x.expM1(),
-        148 => x.ln(),
-        149 => x.log2(),
-        150 => x.log10(),
-        151 => x.ln1p(),
-        152 => x.sin(),
-        153 => x.cos(),
-        154 => x.tan(),
-        155 => x.asin(),
-        156 => x.acos(),
-        157 => x.atan(),
-        158 => x.sinh(),
-        159 => x.cosh(),
-        160 => x.tanh(),
-        161 => x.asinh(),
-        162 => x.acosh(),
-        163 => x.atanh(),
-        164 => x.cbrt(),
-        165 => x.logB(),
-        166 => x.pow(y),
-        167 => x.atan2(y),
-        168 => x.hypot(y),
-        169 => x.remainder(y),
-        170 => x.truncatingRemainder(y),
-        171 => x.fma(y, z),
-        _ => x.scaleB(n),
-    };
+extern "C" {
+    @cname("exp")
+    fn libmExp(x: f64) -> f64;
+    @cname("exp2")
+    fn libmExp2(x: f64) -> f64;
+    @cname("expm1")
+    fn libmExpm1(x: f64) -> f64;
+    @cname("log")
+    fn libmLog(x: f64) -> f64;
+    @cname("log2")
+    fn libmLog2(x: f64) -> f64;
+    @cname("log10")
+    fn libmLog10(x: f64) -> f64;
+    @cname("log1p")
+    fn libmLog1p(x: f64) -> f64;
+    @cname("sin")
+    fn libmSin(x: f64) -> f64;
+    @cname("cos")
+    fn libmCos(x: f64) -> f64;
+    @cname("tan")
+    fn libmTan(x: f64) -> f64;
+    @cname("asin")
+    fn libmAsin(x: f64) -> f64;
+    @cname("acos")
+    fn libmAcos(x: f64) -> f64;
+    @cname("atan")
+    fn libmAtan(x: f64) -> f64;
+    @cname("sinh")
+    fn libmSinh(x: f64) -> f64;
+    @cname("cosh")
+    fn libmCosh(x: f64) -> f64;
+    @cname("tanh")
+    fn libmTanh(x: f64) -> f64;
+    @cname("asinh")
+    fn libmAsinh(x: f64) -> f64;
+    @cname("acosh")
+    fn libmAcosh(x: f64) -> f64;
+    @cname("atanh")
+    fn libmAtanh(x: f64) -> f64;
+    @cname("cbrt")
+    fn libmCbrt(x: f64) -> f64;
+    @cname("logb")
+    fn libmLogb(x: f64) -> f64;
+    @cname("pow")
+    fn libmPow(x: f64, y: f64) -> f64;
+    @cname("atan2")
+    fn libmAtan2(x: f64, y: f64) -> f64;
+    @cname("hypot")
+    fn libmHypot(x: f64, y: f64) -> f64;
+    @cname("remainder")
+    fn libmRemainder(x: f64, y: f64) -> f64;
+    @cname("fmod")
+    fn libmFmod(x: f64, y: f64) -> f64;
+    @cname("fma")
+    fn libmFma(x: f64, y: f64, z: f64) -> f64;
+    @cname("scalbn")
+    fn libmScalbn(x: f64, n: i32) -> f64;
+    @cname("expf")
+    fn libmExpF(x: f32) -> f32;
+    @cname("exp2f")
+    fn libmExp2F(x: f32) -> f32;
+    @cname("expm1f")
+    fn libmExpm1F(x: f32) -> f32;
+    @cname("logf")
+    fn libmLogF(x: f32) -> f32;
+    @cname("log2f")
+    fn libmLog2F(x: f32) -> f32;
+    @cname("log10f")
+    fn libmLog10F(x: f32) -> f32;
+    @cname("log1pf")
+    fn libmLog1pF(x: f32) -> f32;
+    @cname("sinf")
+    fn libmSinF(x: f32) -> f32;
+    @cname("cosf")
+    fn libmCosF(x: f32) -> f32;
+    @cname("tanf")
+    fn libmTanF(x: f32) -> f32;
+    @cname("asinf")
+    fn libmAsinF(x: f32) -> f32;
+    @cname("acosf")
+    fn libmAcosF(x: f32) -> f32;
+    @cname("atanf")
+    fn libmAtanF(x: f32) -> f32;
+    @cname("sinhf")
+    fn libmSinhF(x: f32) -> f32;
+    @cname("coshf")
+    fn libmCoshF(x: f32) -> f32;
+    @cname("tanhf")
+    fn libmTanhF(x: f32) -> f32;
+    @cname("asinhf")
+    fn libmAsinhF(x: f32) -> f32;
+    @cname("acoshf")
+    fn libmAcoshF(x: f32) -> f32;
+    @cname("atanhf")
+    fn libmAtanhF(x: f32) -> f32;
+    @cname("cbrtf")
+    fn libmCbrtF(x: f32) -> f32;
+    @cname("logbf")
+    fn libmLogbF(x: f32) -> f32;
+    @cname("powf")
+    fn libmPowF(x: f32, y: f32) -> f32;
+    @cname("atan2f")
+    fn libmAtan2F(x: f32, y: f32) -> f32;
+    @cname("hypotf")
+    fn libmHypotF(x: f32, y: f32) -> f32;
+    @cname("remainderf")
+    fn libmRemainderF(x: f32, y: f32) -> f32;
+    @cname("fmodf")
+    fn libmFmodF(x: f32, y: f32) -> f32;
+    @cname("fmaf")
+    fn libmFmaF(x: f32, y: f32, z: f32) -> f32;
+    @cname("scalbnf")
+    fn libmScalbnF(x: f32, n: i32) -> f32;
 }
 
-/// The same for `f32` operands: an `f32` method is libm's `f` function (`expf` …), so an `f32` result is libm's
-/// `f32` one.
+/// The libm method `b` (isLibmBuiltin) of `f64` operands; `n` is `scaleB`'s power of two.
+/// Safety: each is a C math function of numbers only, defined for every argument (C11 7.12, Annex F): no pointer,
+/// no state but `errno`, which the interpreter does not read.
+fn libmF64(b: u32, x: f64, y: f64, z: f64, n: i32) -> f64 {
+    return unsafe { match (b) {
+        145 => libmExp(x),
+        146 => libmExp2(x),
+        147 => libmExpm1(x),
+        148 => libmLog(x),
+        149 => libmLog2(x),
+        150 => libmLog10(x),
+        151 => libmLog1p(x),
+        152 => libmSin(x),
+        153 => libmCos(x),
+        154 => libmTan(x),
+        155 => libmAsin(x),
+        156 => libmAcos(x),
+        157 => libmAtan(x),
+        158 => libmSinh(x),
+        159 => libmCosh(x),
+        160 => libmTanh(x),
+        161 => libmAsinh(x),
+        162 => libmAcosh(x),
+        163 => libmAtanh(x),
+        164 => libmCbrt(x),
+        165 => libmLogb(x),
+        166 => libmPow(x, y),
+        167 => libmAtan2(x, y),
+        168 => libmHypot(x, y),
+        169 => libmRemainder(x, y),
+        170 => libmFmod(x, y),
+        171 => libmFma(x, y, z),
+        _ => libmScalbn(x, n),
+    } };
+}
+
+/// The same for `f32` operands, with libm's `f` functions (`expf` …), so an `f32` result is libm's `f32` one.
+/// Safety: as libmF64's.
 fn libmF32(b: u32, x: f32, y: f32, z: f32, n: i32) -> f32 {
-    return match (b) {
-        145 => x.exp(),
-        146 => x.exp2(),
-        147 => x.expM1(),
-        148 => x.ln(),
-        149 => x.log2(),
-        150 => x.log10(),
-        151 => x.ln1p(),
-        152 => x.sin(),
-        153 => x.cos(),
-        154 => x.tan(),
-        155 => x.asin(),
-        156 => x.acos(),
-        157 => x.atan(),
-        158 => x.sinh(),
-        159 => x.cosh(),
-        160 => x.tanh(),
-        161 => x.asinh(),
-        162 => x.acosh(),
-        163 => x.atanh(),
-        164 => x.cbrt(),
-        165 => x.logB(),
-        166 => x.pow(y),
-        167 => x.atan2(y),
-        168 => x.hypot(y),
-        169 => x.remainder(y),
-        170 => x.truncatingRemainder(y),
-        171 => x.fma(y, z),
-        _ => x.scaleB(n),
-    };
+    return unsafe { match (b) {
+        145 => libmExpF(x),
+        146 => libmExp2F(x),
+        147 => libmExpm1F(x),
+        148 => libmLogF(x),
+        149 => libmLog2F(x),
+        150 => libmLog10F(x),
+        151 => libmLog1pF(x),
+        152 => libmSinF(x),
+        153 => libmCosF(x),
+        154 => libmTanF(x),
+        155 => libmAsinF(x),
+        156 => libmAcosF(x),
+        157 => libmAtanF(x),
+        158 => libmSinhF(x),
+        159 => libmCoshF(x),
+        160 => libmTanhF(x),
+        161 => libmAsinhF(x),
+        162 => libmAcoshF(x),
+        163 => libmAtanhF(x),
+        164 => libmCbrtF(x),
+        165 => libmLogbF(x),
+        166 => libmPowF(x, y),
+        167 => libmAtan2F(x, y),
+        168 => libmHypotF(x, y),
+        169 => libmRemainderF(x, y),
+        170 => libmFmodF(x, y),
+        171 => libmFmaF(x, y, z),
+        _ => libmScalbnF(x, n),
+    } };
 }
 
 /// `x` with the sign of `s` (`copySign`, and the sign of a zero result below).

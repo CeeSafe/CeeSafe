@@ -146,6 +146,46 @@ def bytes_order():
     return ["order: " + " ".join(str(i) for i in order)]
 
 
+def byte_string_keys_model():
+    """tests/support/run-pass/byte-string-keys.cee: ByteString keys of HashMap and OrderedMap (ADR 0231)."""
+    letters = [0x61, 0x62, 0xFF, 0xC3, 0xA9, 0x7A]
+
+    def make_key(x):
+        out = bytearray()
+        y = x
+        for _ in range((x >> 33) % 6):
+            y = lcg(y)
+            out.append(letters[(y >> 40) % 6])
+        return bytes(out)
+
+    values = {}
+    x = 4242
+    puts = hits = removals = 0
+    for step in range(6000):
+        x = lcg(x)
+        key = make_key(x)
+        op = (x >> 20) % 4
+        if op < 2:
+            puts += 1
+            values[key] = step
+        elif op == 2:
+            if key in values:
+                hits += 1
+        else:
+            removals += 1
+            values.pop(key, None)
+    checksum = 0
+    lossy = 0
+    for key in sorted(values):
+        for b in key:
+            checksum = (checksum * 31 + b) & MASK
+        checksum = (checksum * 1000003 + values[key]) & MASK
+        lossy += len(key.decode("utf-8", "replace").encode("utf-8"))
+    return [f"byte string keys: puts {puts}, hits {hits}, removals {removals}, keys {len(values)}, "
+            f"checksum {checksum}, lossy {lossy}"]
+
+
 if __name__ == "__main__":
-    for line in map_model() + interner_model() + bits_model() + bytes_order() + ordered_edges_model():
+    for line in (map_model() + interner_model() + bits_model() + bytes_order() + ordered_edges_model() +
+                 byte_string_keys_model()):
         print(line)

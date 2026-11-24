@@ -1,0 +1,147 @@
+// lib/core's ByteString (ADR 0231) as the key of lib/std's HashMap and OrderedMap, on keys of up to five bytes from
+// an alphabet of ASCII, a lone 0xFF, and the halves and whole of `é` (C3 A9), so that many keys are not UTF-8 and
+// many are equal. 6,000 seeded puts, lookups and removals go to both maps and to a naive model (a vector of keys and
+// values, searched by `==` and ordered by `compare`); the maps are compared with the model every 500 steps and at
+// the end. The summary is pinned by tools/oracles/support_models.py (Python's dict, sorted bytes and
+// `bytes.decode('utf-8', 'replace')`).
+// expect-stdout: byte string keys: puts 2999, hits 678, removals 1499, keys 1005, checksum 5162793412949124905, lossy 8282
+
+fn lcg(x: u64) -> u64 => x.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+
+/// The naive model: keys and their values, in no order.
+struct Model {
+    keys: Vector<ByteString>;
+    values: Vector<u64>;
+
+    fn find(borrow this, key: borrow ByteString) -> usize? {
+        for (i in 0..this.keys.length) {
+            if (this.keys[i] == key) {
+                return i;
+            }
+        }
+        return null;
+    }
+}
+
+fn alphabet(i: u64) -> u8 {
+    let letters = [0x61u8, 0x62, 0xFF, 0xC3, 0xA9, 0x7A];
+    return letters[(i % 6) as usize];
+}
+
+fn makeKey(x: u64) -> ByteString {
+    var key = ByteString.create();
+    let length = (x >> 33) % 6;
+    var y = x;
+    for (j in 0..length) {
+        y = lcg(y);
+        key.appendByte(alphabet(y >> 40))!;
+    }
+    return key;
+}
+
+fn compareWithModel(hm: borrow HashMap<ByteString, u64>, om: borrow OrderedMap<ByteString, u64>, model: borrow Model) {
+    assert(hm.length() == model.keys.length, "the hash map's length");
+    assert(om.length() == model.keys.length, "the ordered map's length");
+    for (i in 0..model.keys.length) {
+        let k = borrow model.keys[i];
+        match (hm.get(k)) {
+            Some(v) => { assert(v == model.values[i], "a hash map value"); }
+            null => { assert(false, "a hash map key"); }
+        }
+        match (om.get(k)) {
+            Some(v) => { assert(v == model.values[i], "an ordered map value"); }
+            null => { assert(false, "an ordered map key"); }
+        }
+    }
+    var at = om.first();
+    var previous: ByteString? = null;
+    while (at.isSome()) {
+        let cursor = at!;
+        let key = om.keyAt(cursor);
+        match (previous) {
+            Some(p) => { assert(p.view().compare(key.view()) < 0, "the ordered map's order"); }
+            null => {}
+        }
+        previous = key.clone()!;
+        at = om.next(cursor);
+    }
+}
+
+fn main() -> i32 {
+    var hm = HashMap<ByteString, u64>.create();
+    var om = OrderedMap<ByteString, u64>.create();
+    var model = Model { keys: Vector<ByteString>.create(), values: Vector<u64>.create() };
+    var x: u64 = 4242;
+    var puts: u64 = 0;
+    var hits: u64 = 0;
+    var removals: u64 = 0;
+    for (step in 0..6000u64) {
+        x = lcg(x);
+        let key = makeKey(x);
+        let op = (x >> 20) % 4;
+        if (op < 2) {
+            puts += 1;
+            let old = hm.put(key.clone()!, step)!;
+            let oldOrdered = om.put(key.clone()!, step)!;
+            assert(old == oldOrdered, "both maps had the same value");
+            match (model.find(key)) {
+                Some(i) => {
+                    assert(old == Some(model.values[i]), "the replaced value");
+                    model.values[i] = step;
+                }
+                null => {
+                    assert(old.isNull(), "a new key");
+                    model.keys.push(key)!;
+                    model.values.push(step)!;
+                }
+            }
+        } else if (op == 2) {
+            if (hm.get(key).isSome()) {
+                hits += 1;
+            }
+            assert(hm.contains(key) == model.find(key).isSome(), "a lookup");
+        } else {
+            removals += 1;
+            let gone = hm.remove(key);
+            let goneOrdered = om.remove(key);
+            assert(gone == goneOrdered, "both maps removed the same value");
+            match (model.find(key)) {
+                Some(i) => {
+                    let _ = model.keys.swapRemove(i);
+                    let _ = model.values.swapRemove(i);
+                }
+                null => { assert(gone.isNull(), "an absent key"); }
+            }
+        }
+        if (step % 500 == 499) {
+            compareWithModel(hm, om, model);
+        }
+    }
+    compareWithModel(hm, om, model);
+    var checksum: u64 = 0;
+    var lossy: u64 = 0;
+    var at = om.first();
+    while (at.isSome()) {
+        let cursor = at!;
+        let key = om.keyAt(cursor);
+        for (b in key.bytes()) {
+            checksum = checksum.wrappingMul(31).wrappingAdd(b as u64);
+        }
+        checksum = checksum.wrappingMul(1000003).wrappingAdd(om.valueAt(cursor));
+        lossy += key.toUtf8Lossy()!.length as u64;
+        at = om.next(cursor);
+    }
+    Console.write("byte string keys: puts ");
+    Console.write(puts);
+    Console.write(", hits ");
+    Console.write(hits);
+    Console.write(", removals ");
+    Console.write(removals);
+    Console.write(", keys ");
+    Console.write(om.length());
+    Console.write(", checksum ");
+    Console.write(checksum);
+    Console.write(", lossy ");
+    Console.writeLine(lossy);
+    return 0;
+}

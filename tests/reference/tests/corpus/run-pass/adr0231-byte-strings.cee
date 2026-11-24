@@ -1,0 +1,224 @@
+// ADR 0231: lib/core's ByteString and ByteStringView, text of any bytes. Each member once, on text that is not
+// UTF-8 where that matters; bytes are printed in hex, so the expected output is UTF-8. The lossy and chunk cases are
+// byte-string-utf8.cee's, from Python's decoder.
+
+fn hex(bytes: Slice<u8>) -> String {
+    var out = String.create();
+    if (bytes.length == 0) {
+        out.append("-")!;
+    }
+    for (b in bytes) {
+        out.appendHex(b as u64, 2, false)!;
+    }
+    return out;
+}
+
+fn show(label: StringView, bytes: Slice<u8>) {
+    Console.write(label);
+    Console.write(" ");
+    Console.writeLine(hex(bytes).view());
+}
+
+fn views() {
+    // SQLite's TEXT of CAST(x'ff' AS TEXT) and of json('"\ud800"'): bytes a StringView cannot hold.
+    let raw = [0x61u8, 0xFF, 0x62, 0xED, 0xA0, 0x80];
+    let v = ByteStringView.fromBytes(raw[..]);
+    Console.writeLine(v.length());
+    Console.writeLine(v.isEmpty());
+    Console.writeLine(v.byteAt(1));
+    show("slice", v.slice(1, 3).bytes());
+    show("from", v.sliceFrom(3).bytes());
+    show("to", v.sliceTo(2).bytes());
+    Console.writeLine(v.isUtf8());
+    Console.writeLine(v.toUtf8().isNull());
+    let text = ByteStringView.fromText("héllo");
+    Console.writeLine(text.toUtf8() ?? "none");
+    Console.writeLine(v.sliceTo(1).toUtf8() ?? "none");
+    Console.writeLine(v.toUtf8Lossy()!.view());
+    Console.writeLine(v.indexOf([0xEDu8, 0xA0][..]) ?? 99);
+    Console.writeLine(v.lastIndexOf("".bytes()) ?? 99);
+    Console.writeLine(v.indexOfByte(0x62) ?? 99);
+    Console.writeLine(v.indexOfByte(0x63) ?? 99);
+    Console.writeLine(v.contains([0xFFu8][..]));
+    Console.writeLine(v.startsWith([0x61u8, 0xFF][..]));
+    Console.writeLine(v.endsWith([0xA0u8][..]));
+    Console.writeLine(ByteStringView.fromText("SELECT").equalsIgnoreAsciiCase("select".bytes()));
+    let padded = [0x20u8, 0x09, 0xFF, 0x20, 0x0A];
+    show("trim", ByteStringView.fromBytes(padded[..]).trim().bytes());
+    show("trimStart", ByteStringView.fromText("  a ").trimStart().bytes());
+    show("trimEnd", ByteStringView.fromText("  a ").trimEnd().bytes());
+    match (v.splitOnce([0xFFu8][..])) {
+        Some(h) => {
+            show("left", h.left.bytes());
+            show("right", h.right.bytes());
+        }
+        null => { Console.writeLine("no split"); }
+    }
+    Console.writeLine(v.splitOnce("z".bytes()).isNull());
+    let parts = [0x61u8, 0x2C, 0xFF, 0x2C, 0x2C, 0x62];
+    let all = ByteStringView.fromBytes(parts[..]);
+    for (piece in all.split(",".bytes())) {
+        show("piece", piece.bytes());
+    }
+    let same = ByteStringView.fromBytes(raw[..3]);
+    Console.writeLine(same == v.sliceTo(3));
+    Console.writeLine(same != v);
+    Console.writeLine(same.equals(v.sliceTo(3)));
+    Console.writeLine(same.compare(v));
+    Console.writeLine(v.compare(same));
+    let past = [0x61u8, 0xFF];
+    Console.writeLine(ByteStringView.fromText("b").compare(ByteStringView.fromBytes(past[..])));
+    var buffer = [0u8; 8];
+    var w = TextWriter.create(mut buffer[..]);
+    w.text("<");
+    v.sliceTo(2).writeTo(mut w);
+    w.text(">");
+    show("writer", w.written());
+}
+
+fn owned() {
+    var b = ByteString.create();
+    Console.writeLine(b.isEmpty());
+    b.append("n=")!;
+    b.appendNumber(-42)!;
+    b.appendByte(0x20)!;
+    b.appendUnsigned(18446744073709551615)!;
+    Console.writeLine(b.toUtf8() ?? "none");
+    b.clear();
+    b.appendBytes([0xC3u8][..])!;
+    Console.writeLine(b.toUtf8().isNull());
+    b.appendBytes([0xA9u8][..])!;
+    Console.writeLine(b.toUtf8() ?? "none");
+    b.clear();
+    b.appendHex(255, 4, true)!;
+    b.appendByte(0x20)!;
+    b.appendOctal(8)!;
+    b.appendByte(0x20)!;
+    b.appendFixed(2.5, 2)!;
+    b.appendPadded("ab", 5, TextAlign.Center, '*')!;
+    Console.writeLine(b.toUtf8() ?? "none");
+    b.clear();
+    Console.writeLine(b.appendChar(0x263A)!);
+    Console.writeLine(b.appendChar(0xD800)!);
+    Console.writeLine(b.appendUtf8([0xFFu8][..])!);
+    Console.writeLine(b.appendUtf8("!".bytes())!);
+    Console.writeLine(b.toUtf8() ?? "none");
+    Console.writeLine(b.length());
+    b.truncate(3);
+    Console.writeLine(b.toUtf8() ?? "none");
+
+    var name = String.create();
+    name.append("table")!;
+    let fromString = ByteString.fromText(name)!;
+    Console.writeLine(fromString.length());
+    var bytes = Vector<u8>.create();
+    bytes.push(0xFF)!;
+    bytes.push(0x41)!;
+    let moved = ByteString.fromBytes(bytes);
+    show("moved", moved.bytes());
+    let copy = moved.clone()!;
+    Console.writeLine(copy == moved);
+    let other = ByteString.copyOf([0xFFu8, 0x42][..])!;
+    Console.writeLine(copy == other);
+    Console.writeLine(copy.view().compare(other.view()));
+    Console.writeLine(copy.toUtf8Lossy()!.view());
+    let again = copy.view().toByteString()!;
+    Console.writeLine(again == copy);
+    let back = again.intoBytes();
+    Console.writeLine(back.length);
+    let roomy = ByteString.withCapacity(16)!;
+    Console.writeLine(roomy.capacity() >= 16);
+}
+
+fn keys() {
+    var m = HashMap<ByteString, i32>.create();
+    m.put(ByteString.copyOf([0xFFu8][..])!, 1)!;
+    m.put(ByteString.fromText("\u{FFFD}")!, 2)!;
+    m.put(ByteString.copyOf([0xFFu8][..])!, 3)!;
+    Console.writeLine(m.length());
+    let k = ByteString.copyOf([0xFFu8][..])!;
+    match (m.get(k)) {
+        Some(value) => { Console.writeLine(value); }
+        null => { Console.writeLine("missing"); }
+    }
+    var o = OrderedMap<ByteString, i32>.create();
+    o.put(ByteString.copyOf([0xFFu8][..])!, 1)!;
+    o.put(ByteString.fromText("b")!, 2)!;
+    o.put(ByteString.fromText("ab")!, 3)!;
+    o.put(ByteString.fromText("a")!, 4)!;
+    var at = o.first();
+    while (at.isSome()) {
+        let cursor = at!;
+        show("key", o.keyAt(cursor).bytes());
+        at = o.next(cursor);
+    }
+}
+
+fn main() {
+    views();
+    owned();
+    keys();
+}
+// expect-stdout: 6
+// expect-stdout: false
+// expect-stdout: 255
+// expect-stdout: slice ff62
+// expect-stdout: from eda080
+// expect-stdout: to 61ff
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: héllo
+// expect-stdout: a
+// expect-stdout: a�b���
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: 2
+// expect-stdout: 99
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: trim ff
+// expect-stdout: trimStart 6120
+// expect-stdout: trimEnd 202061
+// expect-stdout: left 61
+// expect-stdout: right 62eda080
+// expect-stdout: true
+// expect-stdout: piece 61
+// expect-stdout: piece ff
+// expect-stdout: piece -
+// expect-stdout: piece 62
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: -1
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: writer 3c61ff3e
+// expect-stdout: true
+// expect-stdout: n=-42 18446744073709551615
+// expect-stdout: true
+// expect-stdout: é
+// expect-stdout: 00FF 10 2.50*ab**
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: ☺!
+// expect-stdout: 4
+// expect-stdout: ☺
+// expect-stdout: 5
+// expect-stdout: moved ff41
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: -1
+// expect-stdout: �A
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: key 61
+// expect-stdout: key 6162
+// expect-stdout: key 62
+// expect-stdout: key ff

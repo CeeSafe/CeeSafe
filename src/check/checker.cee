@@ -99,6 +99,8 @@ struct Checker {
     embeddedFiles: Vector<EmbeddedFile>; // the files `embed` read, each once per compilation
     noFloat: bool;                       // --no-float (type-system.md §35.9)
     packageItems: Map<Word, Entity>;     // every package's own items, by packageKey (0 the root)
+    fileItems: Map<Word, Entity>;        // each file's private items, by fileKey (ADR 0230)
+    privateItems: Map<Word, Entity>;     // the first private item of each name, by packageKey: for N0296 (ADR 0230)
     coreItems: Map<Word, Entity>;
     builtins: Map<Word, u32>;
     builtinNames: Vector<u32>; // the symbols of AllocError, IoError, SystemHeap, FailingAllocator
@@ -230,6 +232,7 @@ struct Checker {
     blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
     blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
+    fileDeclared: Map<Word, Word>;    // the names of each file's private items, by fileKey (ADR 0230)
     tryConversions: Map<Word, Word>;  // a `?`: its `@from` variant (ADR 0075 §2.3) or, with bit 32, its `@into` method (ADR 0128)
     packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
     uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks

@@ -86,7 +86,7 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
     }
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(ident.symbol))?;
-    if (c.types.lookup(text.view()) != none() || isDeclared(c, ident.symbol)) {
+    if (c.types.lookup(text.view()) != none() || isDeclaredAs(c, ident.symbol, isPrivateVisibility(entry.visibility))) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, text.view())?;

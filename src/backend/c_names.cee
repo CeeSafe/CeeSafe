@@ -270,6 +270,7 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
                 let bound = c.types.bounds[info.dynInterface as usize];
                 let name = c.types.rangeText(bound.name);
                 out.push('D')?;
+                appendInterfaceMark(c, out, bound.interfaceEntry)?;
                 appendLengthId(out, name)?;
                 appendMangledArguments(c, out, bound.arguments)?;
             }
@@ -521,6 +522,7 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
         return appendMangle(c, out, t);
     }
     let name = c.types.name(t);
+    appendShadowMark(c, out, t)?;
     return appendLengthId(out, name);
 }
 
@@ -541,8 +543,12 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         appendText(out, "ceeCB_")?;
         return appendDecimal(out, f.id as u64);
     }
+    let privateFile = privateFunctionFile(c, function);
     if (isExternFunction(c, function)) {
         appendText(out, "ceeC_")?;
+        if (privateFile != none()) {
+            appendPrivateMark(out, privateFile)?;
+        }
         return appendBytes(out, name);
     }
     if (f.owner != none()) {
@@ -568,9 +574,15 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
     let shadowed = f.file != none() && c.fileIsLibrary[f.file as usize] && isPackageSymbol(c, f.name);
     if (f.typeArguments.count == 0) {
         appendText(out, if (shadowed) "ceeF_lib_" else "ceeF_")?;
+        if (privateFile != none()) {
+            appendPrivateMark(out, privateFile)?;
+        }
         return appendId(out, name);
     }
     appendText(out, if (shadowed) "ceeG_lib_" else "ceeG_")?;
+    if (privateFile != none()) {
+        appendPrivateMark(out, privateFile)?;
+    }
     appendLengthId(out, name)?;
     return appendMangledArguments(c, out, f.typeArguments);
 }
@@ -741,15 +753,25 @@ fn appendVariantPrefix(out: borrow mut Vector<u8>, variant: u32) -> Result<void,
 
 /// `lib_` before the name of a library struct or enum that a package also names (ADR 0075 §5): a package's item may
 /// shadow a library's, and the two must not meet in C.
+/// A private type of a package's file has the file's mark instead (appendPrivateMark, ADR 0230).
 fn appendShadowMark(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
     let info = c.types.info(t);
     var file = none();
+    var item = none();
     if (info.structDef != none()) {
         file = c.types.structs[info.structDef as usize].file;
+        item = c.types.structs[info.structDef as usize].item;
     } else if (info.enumDef != none()) {
         file = c.types.enums[info.enumDef as usize].file;
+        item = c.types.enums[info.enumDef as usize].item;
     }
-    if (file == none() || !c.fileIsLibrary[file as usize]) {
+    if (file == none()) {
+        return Ok();
+    }
+    if (!c.fileIsLibrary[file as usize]) {
+        if (item != none() && isPrivateVisibility(c.front.ast.items[item as usize].visibility)) {
+            return appendPrivateMark(out, file);
+        }
         return Ok();
     }
     let name = if (isInstanceType(c, t)) baseNameOf(c, t) else c.types.name(t);
@@ -762,6 +784,43 @@ fn appendShadowMark(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Re
         null => {}
     }
     return Ok();
+}
+
+/// `00<file>_` before the name of a package's private top-level item (ADR 0230): each file of a package may have a
+/// private item of a name, and their C names must not meet. No other name starts with `0` followed by `0`: a
+/// dependency's begins with its package's length, which is never `0` (appendId, appendLengthId).
+fn appendPrivateMark(out: borrow mut Vector<u8>, file: u32) -> Result<void, AllocError> {
+    appendText(out, "00")?;
+    appendDecimal(out, file as u64)?;
+    return out.push('_');
+}
+
+/// The file of a package's private top-level function (an instance of a generic one, an extern function), whose C
+/// name has its file's mark; none for any other function and for the entry function, which C calls by its name.
+fn privateFunctionFile(c: borrow Checker, function: u32) -> u32 {
+    let f = borrow c.hir.functions[function as usize];
+    if (f.owner != none() || f.syntax == none() || f.file == none() || c.fileIsLibrary[f.file as usize]) {
+        return none();
+    }
+    if (!isPrivateVisibility(c.front.ast.functions[f.syntax as usize].visibility) || isEntryName(c, f.name)) {
+        return none();
+    }
+    return f.file;
+}
+
+/// A private interface's file mark (ADR 0230), for the C names of its `dyn` types.
+fn appendInterfaceMark(c: borrow Checker, out: borrow mut Vector<u8>, entryIndex: u32) -> Result<void, AllocError> {
+    if (entryIndex == none() || entryIndex as usize >= c.interfaces.length) {
+        return Ok();
+    }
+    let entry = borrow c.interfaces[entryIndex as usize];
+    if (entry.item == none() || entry.file == none() || c.fileIsLibrary[entry.file as usize]) {
+        return Ok();
+    }
+    if (!isPrivateVisibility(c.front.ast.items[entry.item as usize].visibility)) {
+        return Ok();
+    }
+    return appendPrivateMark(out, entry.file);
 }
 
 /// Whether a package declares an item named `symbol`.

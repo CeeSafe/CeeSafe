@@ -2695,6 +2695,67 @@ int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, u
 #endif
 }
 
+/* `f.testLock(kind, start, length)` (ADR 0234): whether another holder's lock conflicts with a `kind` lock (1 shared,
+   2 exclusive) on bytes start .. start + length - 1, which lib/std has checked. 0 none, 1 a shared lock conflicts, 2
+   an exclusive one, or a negated errno. POSIX: F_OFD_GETLK where ceesafe_host_file_lock takes open-file-description
+   locks (the File's own locks do not count, the program's other Files' do), falling back to F_GETLK on EINVAL as it
+   does; nothing is taken. Windows has no such query: the lock is tried without waiting and, when taken, released at
+   once (os_win.c's winCheckReservedLock), and for an exclusive request that fails a shared try tells a shared holder
+   from an exclusive one; the File's own locks count there, since Windows never merges them. */
+int64_t ceesafe_host_file_test_lock(void const *file, uint32_t kind, uint64_t start, uint64_t length) {
+    int fd = *(const int32_t *)file;
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
+    OVERLAPPED at;
+    DWORD low = (DWORD)(length & 0xFFFFFFFFu);
+    DWORD high = (DWORD)(length >> 32);
+    for (int pass = 0; pass < 2; pass++) {
+        /* pass 0 tries the lock asked about; pass 1, after an exclusive try failed, a shared one */
+        memset(&at, 0, sizeof at);
+        at.Offset = (DWORD)(start & 0xFFFFFFFFu);
+        at.OffsetHigh = (DWORD)(start >> 32);
+        DWORD flags = LOCKFILE_FAIL_IMMEDIATELY | (pass == 0 && kind == 2u ? LOCKFILE_EXCLUSIVE_LOCK : 0u);
+        if (LockFileEx(h, flags, 0, low, high, &at)) {
+            memset(&at, 0, sizeof at);
+            at.Offset = (DWORD)(start & 0xFFFFFFFFu);
+            at.OffsetHigh = (DWORD)(start >> 32);
+            (void)UnlockFileEx(h, 0, low, high, &at);
+            return pass == 0 ? 0 : 1; /* pass 1 taken: the exclusive request met only shared locks */
+        }
+        DWORD code = GetLastError();
+        if (code != ERROR_LOCK_VIOLATION && code != ERROR_IO_PENDING) return -(int64_t)cee_win_errno(code);
+        if (pass == 1 || kind != 2u) return 2; /* a shared try failed: an exclusive lock is held */
+    }
+    return 2;
+#else
+    struct flock lock;
+    memset(&lock, 0, sizeof lock);
+    lock.l_type = kind == 1u ? F_RDLCK : F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = (off_t)start;
+    lock.l_len = (off_t)length;
+    if (lock.l_start < 0 || (uint64_t)lock.l_start != start || lock.l_len <= 0 || (uint64_t)lock.l_len != length) {
+        return -(int64_t)EINVAL; /* as ceesafe_host_file_lock: a 32-bit off_t cannot name the range */
+    }
+    int result = -1;
+#if defined(F_OFD_SETLK) && defined(F_OFD_GETLK)
+    if (sizeof(off_t) == 8) {
+        struct flock ofd = lock;
+        ofd.l_pid = 0; /* an open-file-description request requires it */
+        result = fcntl(fd, F_OFD_GETLK, &ofd);
+        if (result == 0) {
+            return ofd.l_type == F_UNLCK ? 0 : ofd.l_type == F_RDLCK ? 1 : 2;
+        }
+        if (errno != EINVAL) return -(int64_t)errno;
+    }
+#endif
+    result = fcntl(fd, F_GETLK, &lock);
+    if (result != 0) return -(int64_t)errno;
+    return lock.l_type == F_UNLCK ? 0 : lock.l_type == F_RDLCK ? 1 : 2;
+#endif
+}
+
 /* `Console.isTerminal(stream)` (ADR 0221 §2.3): 1 if the stream is a terminal. On Windows only a console counts:
    GetConsoleMode fails for NUL, a pipe, a file and a serial port, which _isatty would call character devices. */
 int64_t ceesafe_host_is_terminal(uint32_t stream) {
@@ -3368,6 +3429,10 @@ int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length
     (void)file; (void)offset; (void)length; (void)out;
     return -(int64_t)EOPNOTSUPP;
 }
+int64_t ceesafe_host_map_file_read_only(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    (void)file; (void)offset; (void)length; (void)out;
+    return -(int64_t)EOPNOTSUPP;
+}
 void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle) { (void)base; (void)length; (void)handle; }
 int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length) {
     (void)base; (void)length;
@@ -3393,6 +3458,40 @@ int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length
     }
     void *view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, (DWORD)(start >> 32), (DWORD)(start & 0xFFFFFFFFu),
                                (SIZE_T)span);
+    if (view == NULL) {
+        DWORD code = GetLastError();
+        (void)CloseHandle(mapping);
+        return code == ERROR_ACCESS_DENIED ? -(int64_t)EBADF : -(int64_t)cee_win_errno(code);
+    }
+    out[0] = (uint64_t)(uintptr_t)view + (offset - start);
+    out[1] = (uint64_t)(uintptr_t)view;
+    out[2] = span;
+    out[3] = (uint64_t)(uintptr_t)mapping;
+    return 0;
+}
+
+/* ADR 0235 §2.4: bytes the file already holds, mapped for reading only; never extended. */
+int64_t ceesafe_host_map_file_read_only(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    int fd = *(const int32_t *)file;
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    uint64_t granule = info.dwAllocationGranularity != 0u ? (uint64_t)info.dwAllocationGranularity : 65536u;
+    uint64_t start = offset - offset % granule;
+    uint64_t end = offset + length; /* <= 2^63 - 1: checked */
+    uint64_t span = end - start;
+    if (span > (uint64_t)SIZE_MAX) return -(int64_t)ENOMEM;
+    if (GetFileType(h) != FILE_TYPE_DISK) return -(int64_t)EINVAL;
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(h, &size)) return -(int64_t)cee_win_errno(GetLastError());
+    if ((uint64_t)size.QuadPart < end) return -(int64_t)EINVAL; /* a read-only mapping never extends the file */
+    HANDLE mapping = CreateFileMappingW(h, NULL, PAGE_READONLY, (DWORD)(end >> 32), (DWORD)(end & 0xFFFFFFFFu), NULL);
+    if (mapping == NULL) {
+        DWORD code = GetLastError();
+        return code == ERROR_ACCESS_DENIED ? -(int64_t)EBADF : -(int64_t)cee_win_errno(code);
+    }
+    void *view = MapViewOfFile(mapping, FILE_MAP_READ, (DWORD)(start >> 32), (DWORD)(start & 0xFFFFFFFFu), (SIZE_T)span);
     if (view == NULL) {
         DWORD code = GetLastError();
         (void)CloseHandle(mapping);
@@ -3450,6 +3549,32 @@ int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length
     return 0;
 }
 
+/* ADR 0235 §2.4: bytes the file already holds, mapped PROT_READ; a range past its end is EINVAL, never an extension
+   (which would need write access). A file open only for writing is EBADF (mmap's EACCES). */
+int64_t ceesafe_host_map_file_read_only(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    int fd = *(const int32_t *)file;
+    uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
+    if (page == 0u || page > (uint64_t)INT32_MAX) page = 4096u;
+    uint64_t start = offset - offset % page;
+    uint64_t end = offset + length; /* <= 2^63 - 1: checked */
+    uint64_t span = end - start;
+    if (span > (uint64_t)SIZE_MAX || (uint64_t)(off_t)start != start || (off_t)start < 0 ||
+        (uint64_t)(off_t)(end - 1u) != end - 1u) {
+        return -(int64_t)ENOMEM; /* the range does not fit this host's address space or off_t */
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) return -(int64_t)errno;
+    if (!S_ISREG(st.st_mode)) return -(int64_t)EINVAL;
+    if ((uint64_t)st.st_size < end) return -(int64_t)EINVAL;
+    void *view = mmap(NULL, (size_t)span, PROT_READ, MAP_SHARED, fd, (off_t)start);
+    if (view == MAP_FAILED) return -(int64_t)(errno == EACCES ? EBADF : errno);
+    out[0] = (uint64_t)(uintptr_t)view + (offset - start);
+    out[1] = (uint64_t)(uintptr_t)view;
+    out[2] = span;
+    out[3] = 0u;
+    return 0;
+}
+
 void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle) {
     (void)handle;
     (void)munmap((void *)(uintptr_t)base, (size_t)length);
@@ -3474,8 +3599,36 @@ void ceesafe_host_map_write(uint64_t address, uint64_t at, uint8_t const *bytes,
     if (length != 0u) memcpy(CEE_MAPPED(uint8_t, address, at), bytes, (size_t)length);
 }
 
+/* A load from a mapping never writes, so it serves a read-only one too (ADR 0235 §2.2). GCC's and clang's
+   __atomic_load_n on a 16- or 32-bit word is a plain or acquiring load; MSVC's rt.h load is a locked
+   compare-exchange, a write, so with MSVC a load is an aligned volatile load, which the hardware makes atomic, with
+   full barriers for the orderings that need them (stronger than asked, as rt.h's _Interlocked forms are). */
+#if defined(_MSC_VER) && !defined(__clang__)
+static uint32_t cee_map_load32(uint32_t const *p, int32_t order) {
+    if (order == 4) MemoryBarrier();
+    uint32_t value = (uint32_t)__iso_volatile_load32((const volatile __int32 *)p);
+    if (order != 0) MemoryBarrier();
+    return value;
+}
+static uint16_t cee_map_load16(uint16_t const *p, int32_t order) {
+    if (order == 4) MemoryBarrier();
+    uint16_t value = (uint16_t)__iso_volatile_load16((const volatile __int16 *)p);
+    if (order != 0) MemoryBarrier();
+    return value;
+}
+#else
+static uint32_t cee_map_load32(uint32_t *p, int32_t order) { return ceesafe_atomic_load_ord_u32(p, order); }
+static uint16_t cee_map_load16(uint16_t *p, int32_t order) {
+    switch (order) {
+    case 0: return __atomic_load_n(p, __ATOMIC_RELAXED);
+    case 1: return __atomic_load_n(p, __ATOMIC_ACQUIRE);
+    default: return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+    }
+}
+#endif
+
 uint32_t ceesafe_host_map_load32(uint64_t address, uint64_t at, int32_t order) {
-    return ceesafe_atomic_load_ord_u32(CEE_MAPPED(uint32_t, address, at), order);
+    return cee_map_load32(CEE_MAPPED(uint32_t, address, at), order);
 }
 
 void ceesafe_host_map_store32(uint64_t address, uint64_t at, uint32_t value, int32_t order) {
@@ -3489,6 +3642,77 @@ uint32_t ceesafe_host_map_cas32(uint64_t address, uint64_t at, uint32_t expected
 uint32_t ceesafe_host_map_add32(uint64_t address, uint64_t at, uint32_t value, int32_t order) {
     return ceesafe_atomic_add_ord_u32(CEE_MAPPED(uint32_t, address, at), value, order);
 }
+
+/* 16-bit atomics (ADR 0235 §2.1): SQLite's wal-index hash slots. Lock-free on every host CeeSafe builds for; a host
+   whose compiler says otherwise panics rather than share through a lock only this process sees. */
+#if !defined(_MSC_VER) && defined(__GCC_ATOMIC_SHORT_LOCK_FREE) && __GCC_ATOMIC_SHORT_LOCK_FREE < 2
+#define CEE_MAP_CHECK16()                                                                                            \
+    ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "SharedMapping: this host's 16-bit atomics are not lock-free")
+#else
+#define CEE_MAP_CHECK16() ((void)0)
+#endif
+
+uint16_t ceesafe_host_map_load16(uint64_t address, uint64_t at, int32_t order) {
+    CEE_MAP_CHECK16();
+    return cee_map_load16(CEE_MAPPED(uint16_t, address, at), order);
+}
+
+#if defined(_MSC_VER) && !defined(__clang__)
+/* Every _Interlocked intrinsic is a full barrier: a correct, stronger, implementation of each ordering. */
+void ceesafe_host_map_store16(uint64_t address, uint64_t at, uint16_t value, int32_t order) {
+    (void)order;
+    (void)_InterlockedExchange16(CEE_MAPPED(volatile short, address, at), (short)value);
+}
+
+uint16_t ceesafe_host_map_cas16(uint64_t address, uint64_t at, uint16_t expected, uint16_t desired, int32_t order) {
+    (void)order;
+    return (uint16_t)_InterlockedCompareExchange16(CEE_MAPPED(volatile short, address, at), (short)desired,
+                                                   (short)expected);
+}
+
+uint16_t ceesafe_host_map_add16(uint64_t address, uint64_t at, uint16_t value, int32_t order) {
+    (void)order;
+    return (uint16_t)_InterlockedExchangeAdd16(CEE_MAPPED(volatile short, address, at), (short)value);
+}
+#else
+void ceesafe_host_map_store16(uint64_t address, uint64_t at, uint16_t value, int32_t order) {
+    CEE_MAP_CHECK16();
+    uint16_t *p = CEE_MAPPED(uint16_t, address, at);
+    switch (order) {
+    case 0: __atomic_store_n(p, value, __ATOMIC_RELAXED); break;
+    case 2: __atomic_store_n(p, value, __ATOMIC_RELEASE); break;
+    default: __atomic_store_n(p, value, __ATOMIC_SEQ_CST); break;
+    }
+}
+
+/* The previous value: equal to `expected` exactly when the exchange happened. A failed exchange has the ordering C11
+   allows for its success ordering, as rt.h's CEE_CAS_ORD. */
+uint16_t ceesafe_host_map_cas16(uint64_t address, uint64_t at, uint16_t expected, uint16_t desired, int32_t order) {
+    CEE_MAP_CHECK16();
+    uint16_t *p = CEE_MAPPED(uint16_t, address, at);
+    uint16_t e = expected;
+    switch (order) {
+    case 0: (void)__atomic_compare_exchange_n(p, &e, desired, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED); break;
+    case 1: (void)__atomic_compare_exchange_n(p, &e, desired, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE); break;
+    case 2: (void)__atomic_compare_exchange_n(p, &e, desired, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED); break;
+    case 3: (void)__atomic_compare_exchange_n(p, &e, desired, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE); break;
+    default: (void)__atomic_compare_exchange_n(p, &e, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); break;
+    }
+    return e;
+}
+
+uint16_t ceesafe_host_map_add16(uint64_t address, uint64_t at, uint16_t value, int32_t order) {
+    CEE_MAP_CHECK16();
+    uint16_t *p = CEE_MAPPED(uint16_t, address, at);
+    switch (order) {
+    case 0: return __atomic_fetch_add(p, value, __ATOMIC_RELAXED);
+    case 1: return __atomic_fetch_add(p, value, __ATOMIC_ACQUIRE);
+    case 2: return __atomic_fetch_add(p, value, __ATOMIC_RELEASE);
+    case 3: return __atomic_fetch_add(p, value, __ATOMIC_ACQ_REL);
+    default: return __atomic_fetch_add(p, value, __ATOMIC_SEQ_CST);
+    }
+}
+#endif
 
 /* 64-bit atomics on memory another process shares must be instructions, not a lock that only this process sees
    (libatomic's fallback). Every host CeeSafe builds for has them; another one panics rather than share wrongly. */

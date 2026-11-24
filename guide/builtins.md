@@ -433,7 +433,7 @@ fn main() {
 ## Compression: `Deflate`, `Zlib`, `Gzip`, `Snappy` and `Zstd`
 
 lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, and snappy's raw block format,
-both ways, and Zstandard (RFC 8878) decoding, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
+both ways, and Zstandard (RFC 8878) both ways, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
 signature):
 
 | Function or type | Type |
@@ -447,14 +447,17 @@ signature):
 | `Adler32` | zlib's checksum, with `create`, `update`, `finish` and `of`, as `Crc32` (gzip's) |
 | `Snappy.decompress(input, limit, mut out)`, `Snappy.compress(input, level, mut out)` | snappy's raw block (Parquet's `SNAPPY` pages; Avro's `snappy` blocks, which add the big-endian `Crc32` of the bytes), as `Deflate`'s calls; snappy has one level, so `level` is ignored |
 | `Snappy.length(input)` | `usize?`: the length a block's preamble states, read alone, or `null`; `decompress` refuses one above its limit before allocating |
-| `Zstd.decompress(input, limit, mut out)` | Zstandard frames (Parquet's `ZSTD` pages, PyIceberg's default; Avro's `zstandard` blocks), as `Deflate`'s call; skippable frames are skipped, a stated content size above `limit` is refused before allocating; no encoder yet |
+| `Zstd.decompress(input, limit, mut out)` | Zstandard frames (Parquet's `ZSTD` pages, PyIceberg's default; Avro's `zstandard` blocks), as `Deflate`'s call; skippable frames are skipped, a stated content size above `limit` is refused before allocating |
+| `Zstd.compress(input, level, mut out)` | `Result<void, AllocError>`: one frame that states its size, without a checksum; libzstd's levels 1 to 9 in meaning and parameters, 0 its default (3), above 9 taken as 9 |
 | `ZstdDecoder.create(limit, windowLimit)`, `z.step(input, mut out)` | a zstd decoder that streams, as `Inflater`; it allocates a window of `windowLimit` bytes at `create` (libzstd's default limit is 2^27) and refuses a frame whose window is larger |
+| `ZstdEncoder.create(level, checksum)`, `e.update(input, mut out)`, `e.flush(mut out)`, `e.finish(mut out)` | a zstd encoder that streams, as `Deflater`: `flush` writes what it holds as blocks (all so far decodes), `finish` ends the frame, with its XXH64 if `checksum`; its memory is the level's tables and up to twice its window (2 MiB at level 3) |
 | `Xxh64` | XXH64 with a seed, zstd's checksum, with `create(seed)`, `update`, `finish` and `of(bytes, seed)` |
 
 Every decoder takes a limit, so a decompression bomb costs at most `limit` bytes, and no input panics one: every
 refusal is a `DecodeError`. `Inflater.step` and `ZstdDecoder.step` allocate nothing after `create` and has no effect (`@effects()`), so
 async code may call it, but its CPU time is in proportion to the slices it is given: async code decodes some 64 KiB
-at a time, or hands a whole buffer to `Async.blocking`. Compression leaks content through the output's length (CRIME,
+at a time, or hands a whole buffer to `Async.blocking`. The encoders allocate (`@effects(alloc)`) and take time in
+proportion to their input, so async code compresses through `Async.blocking` too. Compression leaks content through the output's length (CRIME,
 BREACH): do not compress a secret together with bytes an attacker chooses.
 
 ```ceesafe
@@ -516,6 +519,20 @@ fn main() {
     let p = decoder.step(frame[..], mut buffer[..])!;
     Console.writeLine(p.written);
     Console.writeLine(Xxh64.of("123456789".bytes(), 0));
+    var z = Vector<u8>.create();
+    Zstd.compress(text, 3, mut z)!;
+    var zback = Vector<u8>.create();
+    Zstd.decompress(z.view(), 1 << 20, mut zback)!;
+    Console.writeLine(zback.view() == text);
+    var encoder = ZstdEncoder.create(1, true)!;
+    var streamed = Vector<u8>.create();
+    encoder.update(text[0..20], mut streamed)!;
+    encoder.flush(mut streamed)!;
+    encoder.update(text[20..], mut streamed)!;
+    encoder.finish(mut streamed)!;
+    var sback = Vector<u8>.create();
+    Zstd.decompress(streamed.view(), 1 << 20, mut sback)!;
+    Console.writeLine(sback.view() == text);
 }
 ```
 
@@ -529,6 +546,8 @@ more than 10 bytes
 to be, or not to be, that is the question: to be, or not to be
 16
 10139926970967174787
+true
+true
 ```
 
 ## Every signature above

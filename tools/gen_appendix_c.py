@@ -934,10 +934,10 @@ REST_ROWS = [
     ("`Layout`, `Allocator`, `Volatile<T>`, `MmioPtr`, `Cpu`", "Programs without an operating system: allocators of your own, device registers, the processor.",
      ["ch22-01", "ch22-02"], link("kernel code", "guide/kernel")),
     ("`Crc32`, `Crc32c`, `Adler32`, `Xxh64`, `Sha1`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, "
-     "`Deflate`, `Zlib`, `Gzip`, `Inflater`, `Deflater`, `Snappy`, `Zstd`, `ZstdDecoder`, `AsyncUdpSocket`, `AsyncDns`, "
-     "`Window`, `Bluetooth`, `BluetoothLink`",
-     "Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib, gzip and snappy "
-     "compression, zstd decoding, UDP and name lookup, native windows, Bluetooth printers.", [],
+     "`Deflate`, `Zlib`, `Gzip`, `Inflater`, `Deflater`, `Snappy`, `Zstd`, `ZstdDecoder`, `ZstdEncoder`, "
+     "`AsyncUdpSocket`, `AsyncDns`, `Window`, `Bluetooth`, `BluetoothLink`",
+     "Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib, gzip, snappy and zstd "
+     "compression, UDP and name lookup, native windows, Bluetooth printers.", [],
      link("lib/std", "reference/api/std")),
 ]
 

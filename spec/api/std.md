@@ -44,6 +44,7 @@
 - [struct Snappy](#struct-snappy)
 - [struct Zstd](#struct-zstd)
 - [struct ZstdDecoder](#struct-zstddecoder)
+- [struct ZstdEncoder](#struct-zstdencoder)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
@@ -2174,9 +2175,9 @@ public struct Zstd
 ```
 
 Zstandard's frame format (RFC 8878) in whole buffers: Parquet's `ZSTD` pages (PyIceberg's default, and Iceberg's
-since 1.4) and Avro's `zstandard` blocks. Decoding only: there is no encoder yet (ADR 0196, phase 4).
+since 1.4) and Avro's `zstandard` blocks. `ZstdDecoder` and `ZstdEncoder` stream.
 
-No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time.
+No input panics the decoder: every refusal is a `DecodeError`. Neither direction is constant time.
 
 ### Zstd.decompress
 
@@ -2191,6 +2192,23 @@ whose window is above 2 GiB is `TooLarge`, and so is one whose stated content si
 leaves, before anything is allocated (`out` grows to the stated size at once, or as blocks need it if no size
 is stated). Output that disagrees with the stated size, or a content size no frame of its length could
 produce, is `Malformed`; a wrong checksum is `ChecksumMismatch`. On an error, `out` is as it was.
+
+### Zstd.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Compresses all of `input` as one frame onto the end of `out`, at `level`: libzstd's levels 1 to 9, in meaning
+and parameters (its `clevels.h`, for the input's size); 0 is its default, 3, and a level above 9 is 9. The
+frame states the content size and has no checksum (`ZstdEncoder` writes one). Its window is the input's size,
+or the level's if that is smaller (512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8, 4 MiB at 9). Memory is the
+level's tables, cut to the input's size, and a block's scratch: about 1.5 MiB for 1 MiB at level 3, 0.3 MiB for
+16 KiB; the input is read where it is. Any zstd decoder reads the frame; it is not libzstd's byte for byte. On
+an error, `out` is as it was.
+
+Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with
+bytes an attacker chooses.
 
 ## struct ZstdDecoder
 
@@ -2236,6 +2254,63 @@ public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<P
 Decodes from `input` into `out` until the input is used up, `out` is full, or a frame ends (`done`). Input it
 reads but cannot use yet (part of a header or of a compressed block) it keeps, so the next step continues with
 the bytes after `read`.
+
+## struct ZstdEncoder
+
+```ceesafe
+public struct ZstdEncoder
+```
+
+A Zstandard encoder that streams (RFC 8878): `update` appends the blocks its input completes and keeps the rest,
+`flush` writes what it holds as blocks, so a decoder given the output so far decodes all of the input so far
+(libzstd's ZSTD_e_flush), and `finish` ends the frame with its last block and, if asked for, its checksum. After
+`finish` the next `update` begins a new frame. A frame states its window and not its content size.
+
+Levels are libzstd's in meaning and parameters, 1 to 9 (its `clevels.h` for inputs of unknown size): 0 is its
+default, 3, and a level above 9 is 9. The window is 512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8 and 4 MiB at 9.
+`create` allocates the level's tables and a block's scratch, about 0.8 MiB at level 1, 1.5 MiB at 3 and 12.8 MiB at
+9; the input is held in a buffer that grows as it comes, to twice the window. Nothing else is allocated but `out`.
+After an `AllocError` the frame being written cannot be finished: start a new encoder. The output is not libzstd's
+byte for byte, and any zstd decoder reads it.
+
+Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with bytes an
+attacker chooses.
+
+### ZstdEncoder.create
+
+```ceesafe
+@effects(alloc)
+public fn create(level: u32, checksum: bool) -> Result<ZstdEncoder, AllocError>
+```
+
+An encoder at `level` that ends each frame with its XXH64 checksum if `checksum`.
+
+### ZstdEncoder.update
+
+```ceesafe
+@effects(alloc)
+public fn update(borrow mut this, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input`, appending to `out` the blocks it completes.
+
+### ZstdEncoder.flush
+
+```ceesafe
+@effects(alloc)
+public fn flush(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes everything given so far as blocks, so a decoder given the output so far decodes all of it.
+
+### ZstdEncoder.finish
+
+```ceesafe
+@effects(alloc)
+public fn finish(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes the rest, ends the frame with its last block and checksum, and makes ready for a new frame.
 
 ## enum PathKind
 

@@ -5,8 +5,8 @@
   owner are §5.
 - Scope: `runtime/hosted/ceesafe_rt_io.c` (`ceesafe_process_run`, `ceesafe_host_spawn`,
   `ceesafe_host_child_start_with`, and the shared `cee_win_command_line`, `ceesafe_host_quote`,
-  `ceesafe_host_quote_program`, `cee_win_batch`), `lib/std/host.cee` (`HostServices.captureIn`),
-  `src/host/toolchain.cee` (`runThroughBatch`), type-system.md §26.5, §26.7, §26.16, c-backend.md (Windows),
+  `ceesafe_host_quote_program`, `cee_win_batch`, `cee_stdin_binary`), `lib/std/host.cee` (`HostServices.captureIn`),
+  `src/host/toolchain.cee` (`runThroughBatch`), type-system.md §26.3, §26.5, §26.7, §26.16, c-backend.md (Windows),
   testing.md, `tools/process_check.py` (new; contract step `processes`, and windows.yml).
 
 ## 1. Context
@@ -48,6 +48,11 @@
    `t.cmd. .`, `t.bat::$DATA`, `C:x.bat`). A name without an extension cannot be one: `CreateProcessW` adds `.exe`.
    A program that means to run a batch file runs `cmd.exe` itself and quotes for cmd.exe itself; ceesafec's
    `runThroughBatch` does so (its script path is now passed unquoted, as one argument the runtime quotes).
+5. **Standard input is bytes on Windows** (found by this ADR's check on its first Windows run: a CeeSafe child
+   given `capture`'s input saw `\n` for `\r\n` and nothing after `0x1A`). The C runtime opens descriptor 0 in text
+   mode; before its first read the runtime switches it to binary when it is a pipe or a file. A console keeps the
+   text mode, so Ctrl+Z still ends typed input. Standard output and error were already binary
+   (`ceesafe_rt_hosted.c`). type-system.md §26.3.
 
 ## 3. Alternatives
 

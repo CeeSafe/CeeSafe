@@ -3307,6 +3307,10 @@ ADR 0221's.
 - `f.write(bytes)` (`Slice<u8>`): `Result<void, IoError>`; it writes all the bytes or fails.
 - `Console.read(mut buffer)`: reads standard input like `f.read`. `Console.writeBytes(bytes)`
   writes raw bytes to standard output, in order with `Console.write`.
+  - Standard input is bytes, as standard output is: on Windows a pipe or a file is read in binary mode, so `\r\n`
+    stays two bytes and `0x1A` does not end the input (ADR 0245 §2.5; before 0.95.8 the C runtime's text mode
+    dropped each `\r` before `\n` and stopped at `0x1A`). A console keeps the text mode, in which Ctrl+Z ends the
+    input; `Console.readLine` takes `\r\n` as a line's end either way.
 - `Console.writeError(text)` and `Console.writeErrorLine(text)` (`text: StringView`) write to
   standard error; standard output is flushed first, so the two keep their relative order.
 - `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.

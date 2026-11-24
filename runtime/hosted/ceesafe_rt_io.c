@@ -524,9 +524,31 @@ static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t
 static void cee_socket_close(int32_t id);
 #endif
 
+#ifdef _WIN32
+/* Standard input is bytes, as standard output is (ceesafe_rt_hosted.c; ADR 0245 §2.5): a pipe or a file is read in
+   binary mode, so "\r\n" stays two bytes and 0x1A does not end it. A console keeps the text mode, in which Ctrl+Z
+   ends the input, and a stream without a handle is left alone (_setmode on it is an invalid parameter). Switched
+   once, before the first read; a thread that comes while another switches waits for it. */
+static uint32_t cee_stdin_mode; /* 0 not switched, 1 being switched, 2 switched */
+static void cee_stdin_binary(void) {
+    if (ceesafe_atomic_load_u32(&cee_stdin_mode) == 2u) return;
+    if (ceesafe_atomic_cas_u32(&cee_stdin_mode, 0u, 1u) == 0u) {
+        intptr_t handle = _get_osfhandle(0);
+        if (handle != -1 && handle != -2 && GetFileType((HANDLE)handle) != FILE_TYPE_CHAR) {
+            (void)_setmode(0, _O_BINARY);
+        }
+        ceesafe_atomic_store_u32(&cee_stdin_mode, 2u);
+    } else {
+        while (ceesafe_atomic_load_u32(&cee_stdin_mode) != 2u) {
+        }
+    }
+}
+#endif
+
 /* One read of a file descriptor (not a socket's id): the count, 0 at the end; interrupted calls are retried. */
 static cee_io_result cee_fd_read_once(int32_t fd, uint8_t *buffer, size_t chunk) {
 #ifdef _WIN32
+    if (fd == 0) cee_stdin_binary();
     int n;
     do {
         n = _read(fd, buffer, (unsigned)chunk);

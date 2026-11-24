@@ -84,7 +84,8 @@ GCC only. What differs:
     There it is `double`. The generated alignment assertions use it.
 - **Process behaviour** (`ceesafe_rt_hosted.c`, under `_WIN32`):
   - standard output and standard error are switched to binary mode at the first write, so
-    `"\n"` stays one byte;
+    `"\n"` stays one byte; standard input, when it is a pipe or a file, is switched to binary mode before its first
+    read (`ceesafe_rt_io.c`, ADR 0245 §2.5), so `"\r\n"` stays two bytes and `0x1A` does not end it;
   - a panic ends with exit status 134 (`_exit(134)` after flushing), the status `abort()` gives
     on Linux and macOS. Windows' own `abort()` would give 3.
 - **I/O** (`ceesafe_rt_io.c`, under `_WIN32`):

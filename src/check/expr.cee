@@ -2039,6 +2039,11 @@ fn checkBuiltinMemberCall(
             appendBytes(mut message, m)?;
             appendText(mut message, "' can print integers, floats, bools and string views, not ")?;
             appendQuotedType(mut message, c, t)?;
+            let typeName = c.typeName(t);
+            if (sameText(typeName, "ByteString") || sameText(typeName, "ByteStringView")) {
+                // Text of any bytes (ADR 0231 §2.6): its bytes are written as they are.
+                appendText(mut message, "; write its bytes with 'Console.writeBytes(text.bytes())'")?;
+            }
             c.error(invalidOperandTypes(), argumentSpan.start, argumentSpan.end, message)?;
             value = c.errorResult(argumentSpan.start, argumentSpan.end)?;
         }

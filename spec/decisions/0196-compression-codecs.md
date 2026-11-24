@@ -449,7 +449,8 @@ Speed stays reported, not a gate (Question 6).
   libzstd's; §4.4's target of 300 just missed), 220 to 331 at 3, 75 to 87 at 6, 27 to 46 at 9 (38 to 68%: libzstd's
   row-based match finder against a chain walked an entry at a time). Question 6: reported, not a gate.
 - **lib/std's size:** `ceesafec check` of a hello world took 0.148 s against 0.127 s before (the M1, the mean of 40),
-  about 17% more for 1,811 lines: phase 1's finding, larger again.
+  about 17% more for 1,811 lines: phase 1's finding, larger again. On the Linux host (Xeon D, the mean of 20):
+  0.354 s against 0.95.0's 0.310 s, 14% more.
 - **Tests:**
   - `run-pass/zstd-encode.cee`: round trips of five shapes at every level and streamed, whole and in steps, the frame
     headers as decided, the empty frame, levels 0 and 22, a flush and two frames; compiled and interpreted (about
@@ -463,4 +464,8 @@ Speed stays reported, not a gate (Question 6).
     at levels 0 to 12, whole and streamed in random pieces with random flushes, sometimes two frames, read by both of
     lib/std's decoders; the encoder's frames join the mutated seeds. Under ASan and UBSan on the M1: 6.5 million
     inputs and 25,228 round trips in 15 minutes, and 4.4 million and 17,351 in 10 minutes on the final code, none
-    failing, nothing leaked.
+    failing, nothing leaked. On Ubuntu 24.04 (Xeon D): 848,960 inputs and 3,293 round trips in 5 minutes built by
+    clang 18, 257,856 and 987 in 2 minutes by gcc 13, none failing;
+  - Ubuntu 24.04, from the 0.95.0 release: the fixed point; the codec corpus (`zstd-encode.cee` with the rest), the
+    adr0196 check-fail files and emit-c under gcc 13.3 and clang 18.1 with the leak check, the zstd corpus
+    interpreted; `codec_check.py` 0 problems, its 4,080 frames read by libzstd 1.5.5 too.

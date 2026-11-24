@@ -62,6 +62,9 @@
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
 - [struct FileMetadata](#struct-filemetadata)
+- [enum FileLock](#enum-filelock)
+- [struct FileLocks](#struct-filelocks)
+- [enum ConsoleStream](#enum-consolestream)
 - [struct UnixTime](#struct-unixtime)
 - [struct Clock](#struct-clock)
 - [struct Random](#struct-random)
@@ -82,6 +85,7 @@
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
 - [struct SharedMemory](#struct-sharedmemory)
+- [struct ThreadServices](#struct-threadservices)
 - [struct Mutex](#struct-mutex)
 - [struct MutexGuard](#struct-mutexguard)
 - [struct Arc](#struct-arc)
@@ -1159,6 +1163,17 @@ public fn recv(borrow this) -> T?
 
 The next value, waiting while the channel is empty; `null` once it is closed and empty.
 Safety: a slot from begin_recv is the channel's, under its lock until end_recv, and holds a value.
+
+### Channel.recvTimeout
+
+```ceesafe
+public fn recvTimeout(borrow this, ms: u64) -> Result<T?, AsyncError>
+```
+
+The next value, waiting at most `ms` milliseconds on the monotonic clock (ADR 0222 §2.2): `Ok(Some(v))`, or
+`Ok(null)` once the channel is closed and empty, as `recv`; `Err(AsyncError.TimedOut)` if neither came in
+time. A buffered value is taken even when `ms` is 0. The thread blocks meanwhile; it does not spin.
+Safety: as `recv`.
 
 ### Channel.sendAsync
 
@@ -2817,6 +2832,17 @@ public fn flush()
 killed. Standard error is never buffered.
 Safety: the runtime only flushes the C library's standard output.
 
+### HostServices.isTerminal
+
+```ceesafe
+public fn isTerminal(stream: ConsoleStream) -> bool
+```
+
+`Console.isTerminal(stream)` (ADR 0221 §2.3): whether the standard stream is a terminal a person types at or
+reads (`isatty`; on Windows a console, by `GetConsoleMode`, so `NUL` is not one). A pipe, a file or a closed
+stream is `false`.
+Safety: the runtime only asks the system.
+
 ### HostServices.readLine
 
 ```ceesafe
@@ -2895,6 +2921,72 @@ public fn kind(file: borrow File) -> Result<PathKind, IoError>
 `f.kind()`: what the open file is. A directory opened for reading is `Directory`; a device, FIFO or socket is
 `Other`.
 Safety: the runtime reads the file's descriptor during the call only.
+
+## enum FileLock
+
+```ceesafe
+public enum FileLock {
+    Shared,
+    Exclusive,
+}
+```
+
+The kind of an advisory lock on bytes of a file (ADR 0220).
+
+## struct FileLocks
+
+```ceesafe
+public struct FileLocks
+```
+
+Advisory locks on byte ranges of an open file (ADR 0220): POSIX `fcntl` record locks, the ones SQLite and other
+programs take, owned by the open `File` where the system has open-file-description locks (Linux, macOS), else by
+the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)` and `f.unlock(start, length)`
+are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File` releases its locks.
+Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked (Windows neither
+converts nor splits a lock; POSIX does both).
+
+### FileLocks.lock
+
+```ceesafe
+public fn lock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<void, IoError>
+```
+
+`f.lock(kind, start, length)`: waits until bytes `start` to `start + length - 1` are locked. A range may lie
+past the end of the file. `InvalidInput` for `length` 0 or a range that ends past 2^63 - 1; `BadDescriptor`
+on POSIX for a shared lock on a file not open for reading, or an exclusive one on a file not open for writing.
+Safety: the runtime reads the file's descriptor during the call only.
+
+### FileLocks.tryLock
+
+```ceesafe
+public fn tryLock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<bool, IoError>
+```
+
+`f.tryLock(kind, start, length)`: as `lock`, but never waits: `Ok(true)` if the lock was taken, `Ok(false)`
+if another holder's lock conflicts.
+Safety: as `lock`.
+
+### FileLocks.unlock
+
+```ceesafe
+public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError>
+```
+
+`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+Safety: as `lock`.
+
+## enum ConsoleStream
+
+```ceesafe
+public enum ConsoleStream {
+    Input,
+    Output,
+    Error,
+}
+```
+
+A standard stream, for `Console.isTerminal` (ADR 0221 §2.3).
 
 ## struct UnixTime
 
@@ -3570,6 +3662,25 @@ public fn address(borrow this) -> *mut u8
 
 The mapping's address, for code with a layout and a protocol of its own. Reading or writing through it is
 `unsafe`: another process may write the same bytes at any moment.
+
+## struct ThreadServices
+
+```ceesafe
+public struct ThreadServices
+```
+
+Thread services that are not a thread's own (ADR 0222): `Thread.sleep(ms)` is the checker's name for
+ThreadServices.sleep(ms), as `Console.flush()` is HostServices.flush().
+
+### ThreadServices.sleep
+
+```ceesafe
+public fn sleep(ms: u64)
+```
+
+`Thread.sleep(ms)`: the calling thread waits at least `ms` milliseconds; 0 returns at once. It blocks the
+thread, so an async function cannot call it (its effect is `sleep`): a task waits with `Timer.sleep(ms)`.
+Safety: the runtime only waits.
 
 ## struct Mutex
 

@@ -258,9 +258,14 @@ fn libmName(b: u32) -> StringView => match (b) {
     171 => "fma",
     _ => "scalbn",
 };
+/// `File.createReadWrite(path)` (ADR 0221 §2.1): created or emptied, for reading and writing.
+fn bfFileCreateReadWrite() -> u32 => 177;
+/// `t.isFinished()` (ADR 0222 §2.3): whether a thread's body has returned; it never waits.
+fn bfThreadFinished() -> u32 => 178;
 
-/// Whether `b` is one of ADR 0075 §2.1's file builtins.
-fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
+/// Whether `b` is one of ADR 0075 §2.1's file builtins, or a later open of a file for reading and writing.
+fn isDurableFileBuiltin(b: u32) -> bool =>
+    (b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular()) || b == bfFileCreateReadWrite();
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -441,6 +446,8 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     174 => "FloatRound",
     175 => "FloatRoundEven",
     176 => "FloatCopySign",
+    177 => "FileCreateReadWrite",
+    178 => "ThreadFinished",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

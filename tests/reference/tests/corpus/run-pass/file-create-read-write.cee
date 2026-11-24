@@ -1,0 +1,61 @@
+// File.createReadWrite (ADR 0221 §2.1): a missing file is created, an existing one emptied, and the handle reads
+// back what it wrote. IoError.BadDescriptor (§2.2): reading a File opened only for writing, or writing one opened only
+// for reading, says so ("Bad file descriptor", glibc's text for EBADF), where it said "Input/output error" before.
+fn run(path: StringView) -> Result<void, IoError> {
+    {
+        let f = File.createReadWrite(path)?;
+        f.writeAt("first contents".bytes(), 0)?;
+        Console.writeLine(f.length()?);
+    }
+    {
+        let f = File.createReadWrite(path)?;
+        Console.writeLine(f.length()?);
+        f.writeAt("abc".bytes(), 0)?;
+        var buffer = [0u8; 8];
+        let n = f.readAt(mut buffer[..], 0)?;
+        Console.writeLine(StringView.fromUtf8(buffer[0..n])!);
+    }
+    {
+        var w = File.create(path)?;
+        w.write("x".bytes())?;
+        var buffer = [0u8; 8];
+        match (w.read(mut buffer[..])) {
+            Ok(n) => { Console.writeLine(n); }
+            Err(IoError.BadDescriptor) => { Console.writeLine("BadDescriptor"); }
+            Err(e) => { Console.writeLine(e.message()); }
+        }
+        match (w.read(mut buffer[..])) {
+            Ok(n) => { Console.writeLine(n); }
+            Err(e) => { Console.writeLine(e.message()); }
+        }
+    }
+    {
+        var r = File.open(path)?;
+        match (r.write("y".bytes())) {
+            Ok() => { Console.writeLine("wrote a read-only file"); }
+            Err(e) => { Console.writeLine(e.message()); }
+        }
+    }
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/journal")!;
+    match (run(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+    Console.writeLine(IoError.BadDescriptor.message());
+}
+// expect-stdout: 14
+// expect-stdout: 0
+// expect-stdout: abc
+// expect-stdout: BadDescriptor
+// expect-stdout: Bad file descriptor
+// expect-stdout: Bad file descriptor
+// expect-stdout: Bad file descriptor

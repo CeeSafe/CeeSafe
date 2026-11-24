@@ -46,6 +46,14 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_host_file_kind(file: *void) -> i64;
     @effects(sleep)
+    fn ceesafe_host_file_lock(file: *void, kind: u32, wait: u32, start: u64, length: u64) -> i64;
+    // tryLock and unlock never wait: the same call without the effect (ADR 0181).
+    @cname("ceesafe_host_file_lock")
+    @effects()
+    fn ceesafe_host_file_lock_now(file: *void, kind: u32, wait: u32, start: u64, length: u64) -> i64;
+    @effects()
+    fn ceesafe_host_is_terminal(stream: u32) -> i64;
+    @effects(sleep)
     fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_dir_open(path: *u8, length: u64, error: *mut i32) -> *mut void;
@@ -788,6 +796,19 @@ public struct HostServices {
         let _ = unsafe { ceesafe_host_console_flush() };
     }
 
+    /// `Console.isTerminal(stream)` (ADR 0221 §2.3): whether the standard stream is a terminal a person types at or
+    /// reads (`isatty`; on Windows a console, by `GetConsoleMode`, so `NUL` is not one). A pipe, a file or a closed
+    /// stream is `false`.
+    /// Safety: the runtime only asks the system.
+    public fn isTerminal(stream: ConsoleStream) -> bool {
+        let which: u32 = match (stream) {
+            ConsoleStream.Input => 0,
+            ConsoleStream.Output => 1,
+            ConsoleStream.Error => 2,
+        };
+        return unsafe { ceesafe_host_is_terminal(which) } == 1;
+    }
+
     /// `Console.readLine(mut line)` (ADR 0106): reads the next line of standard input into `line`, replacing what it
     /// held, without the line's ending (`\n`, or `\r\n`). `Ok(true)` with a line, which may be empty; `Ok(false)` at
     /// the end of the input, with `line` empty. The input's last line needs no ending. Standard output is flushed
@@ -1041,6 +1062,7 @@ public struct HostServices {
             19 => IoError.HostNotFound,
             20 => IoError.StorageFull,
             21 => IoError.TooManyOpenFiles,
+            22 => IoError.BadDescriptor,
             _ => IoError.Other(error),
         };
     }
@@ -1078,6 +1100,85 @@ public struct FileMetadata {
             _ => if (kind < 0) Err(HostServices.hostError(kind)) else Ok(PathKind.Other),
         };
     }
+}
+
+/// The kind of an advisory lock on bytes of a file (ADR 0220).
+public enum FileLock {
+    /// Coexists with other holders' shared locks: readers.
+    Shared,
+    /// Conflicts with every other holder's lock on any of its bytes: a writer.
+    Exclusive,
+}
+
+/// Advisory locks on byte ranges of an open file (ADR 0220): POSIX `fcntl` record locks, the ones SQLite and other
+/// programs take, owned by the open `File` where the system has open-file-description locks (Linux, macOS), else by
+/// the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)` and `f.unlock(start, length)`
+/// are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File` releases its locks.
+/// Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked (Windows neither
+/// converts nor splits a lock; POSIX does both).
+public struct FileLocks {
+    /// `f.lock(kind, start, length)`: waits until bytes `start` to `start + length - 1` are locked. A range may lie
+    /// past the end of the file. `InvalidInput` for `length` 0 or a range that ends past 2^63 - 1; `BadDescriptor`
+    /// on POSIX for a shared lock on a file not open for reading, or an exclusive one on a file not open for writing.
+    /// Safety: the runtime reads the file's descriptor during the call only.
+    public fn lock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<void, IoError> {
+        FileLocks.check(start, length)?;
+        let result = unsafe { ceesafe_host_file_lock(file as *File as *void, FileLocks.code(kind), 1, start, length) };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok();
+    }
+
+    /// `f.tryLock(kind, start, length)`: as `lock`, but never waits: `Ok(true)` if the lock was taken, `Ok(false)`
+    /// if another holder's lock conflicts.
+    /// Safety: as `lock`.
+    public fn tryLock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<bool, IoError> {
+        FileLocks.check(start, length)?;
+        let result = unsafe { ceesafe_host_file_lock_now(
+            file as *File as *void,
+            FileLocks.code(kind),
+            0,
+            start,
+            length,
+        ) };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(result == 0);
+    }
+
+    /// `f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+    /// Safety: as `lock`.
+    public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError> {
+        FileLocks.check(start, length)?;
+        let result = unsafe { ceesafe_host_file_lock_now(file as *File as *void, 0, 0, start, length) };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok();
+    }
+
+    /// A range the systems can name: at least one byte, ending at or below 2^63 - 1 (POSIX's `off_t`).
+    fn check(start: u64, length: u64) -> Result<void, IoError> {
+        let limit: u64 = 0x7FFFFFFFFFFFFFFF;
+        if (length == 0 || start > limit || length > limit - start) {
+            return Err(IoError.InvalidInput);
+        }
+        return Ok();
+    }
+
+    fn code(kind: FileLock) -> u32 => match (kind) {
+        FileLock.Shared => 1,
+        FileLock.Exclusive => 2,
+    };
+}
+
+/// A standard stream, for `Console.isTerminal` (ADR 0221 §2.3).
+public enum ConsoleStream {
+    Input,
+    Output,
+    Error,
 }
 
 /// A point in real time (ADR 0055): seconds since 1970-01-01T00:00:00Z, leap seconds not counted (POSIX time), negative

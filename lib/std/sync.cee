@@ -23,6 +23,19 @@ extern "C" {
     fn ceesafe_mutex_once_lock();
     @effects()
     fn ceesafe_mutex_once_unlock();
+    @effects(sleep)
+    fn ceesafe_thread_sleep(ms: u64);
+}
+
+/// Thread services that are not a thread's own (ADR 0222): `Thread.sleep(ms)` is the checker's name for
+/// ThreadServices.sleep(ms), as `Console.flush()` is HostServices.flush().
+public struct ThreadServices {
+    /// `Thread.sleep(ms)`: the calling thread waits at least `ms` milliseconds; 0 returns at once. It blocks the
+    /// thread, so an async function cannot call it (its effect is `sleep`): a task waits with `Timer.sleep(ms)`.
+    /// Safety: the runtime only waits.
+    public fn sleep(ms: u64) {
+        unsafe { ceesafe_thread_sleep(ms); }
+    }
 }
 
 /// Mutual exclusion: the data is reached only through a guard, which one thread holds at a time.

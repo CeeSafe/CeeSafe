@@ -382,6 +382,7 @@ A range is written `lo..hi` and is not a value: it cannot be stored in a variabl
 | `Console.flush()` | Writes what standard output has buffered now, so that it is out before the program waits or is stopped. | No | [21.1](./ch21-01-one-connection) |
 | `Console.read(mut buffer) -> Result<usize, IoError>` | Reads bytes from standard input into `buffer`, a `SliceMut<u8>`, and returns how many; 0 at the end of the input. | `Err(IoError)` when the read fails | – |
 | `Console.readLine(mut line) -> Result<bool, IoError>` | Reads the next line of standard input into `line`, a `String` it empties first, without the line end; `false` at the end of the input. | `Err(IoError.InvalidInput)` for a line that is not UTF-8 | [2](./ch02-00-guessing-game) |
+| `Console.isTerminal(stream: ConsoleStream) -> bool` | Whether standard input, output or error (`ConsoleStream.Input`, `Output`, `Error`) is a terminal a person types at; `false` for a pipe or a file. | No | – |
 
 ## `Process`
 

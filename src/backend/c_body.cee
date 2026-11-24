@@ -2294,6 +2294,14 @@ fn appendBuiltinRvalue(
     if (b == bfThreadJoin()) {
         return appendHelperCall(e, c, n, sources, f, out, "ceeTJ_", t, arguments);
     }
+    if (b == bfThreadFinished()) {
+        // ADR 0222 §2.3: the argument borrows the Thread<T>, a pointer to its record, whose first member is the
+        // runtime's thread.
+        let thread = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        appendText(out, "ceesafe_thread_finished((*")?;
+        appendBytes(out, thread.view())?;
+        return appendText(out, ")->thread)");
+    }
     if (b == bfThreadBoth()) {
         var name = copyBytes("ceeBOTH_".bytes())?;
         appendMangle(c, mut name, argumentType(n, arguments, 0))?;
@@ -2365,8 +2373,8 @@ fn appendBuiltinRvalue(
         return appendIoCall(c, out, t, call.view());
     }
     if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend() ||
-        b == bfFileOpenRegular()) {
-        // Modes 2, 3, 4 (ADR 0075 §2.1), 5 (ADR 0077) and 6 (ADR 0078 §3) of ceesafe_file_open.
+        b == bfFileOpenRegular() || b == bfFileCreateReadWrite()) {
+        // Modes 2, 3, 4 (ADR 0075 §2.1), 5 (ADR 0077), 6 (ADR 0078 §3) and 7 (ADR 0221 §2.1) of ceesafe_file_open.
         var call = Vector<u8>.create();
         appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
         call.pop();
@@ -2376,6 +2384,7 @@ fn appendBuiltinRvalue(
                 else if (b == bfFileOpenOrCreate()) ", 3u)"
                 else if (b == bfFileOpenAppend()) ", 5u)"
                 else if (b == bfFileOpenRegular()) ", 6u)"
+                else if (b == bfFileCreateReadWrite()) ", 7u)"
                 else ", 4u)",
         )?;
         return appendIoCall(c, out, t, call.view());

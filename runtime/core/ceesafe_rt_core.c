@@ -63,9 +63,9 @@ cee_str ceesafe_io_message(uint32_t kind) {
         "Address already in use", "Out of memory", "Input/output error", "Connection reset by peer",
         "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
         "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not supported",
-        "Host not found", "No space left on device", "Too many open files",
+        "Host not found", "No space left on device", "Too many open files", "Bad file descriptor",
     };
-    const char *text = messages[kind <= CEE_IO_TOO_MANY_OPEN_FILES ? kind : CEE_IO_OTHER];
+    const char *text = messages[kind <= CEE_IO_BAD_DESCRIPTOR ? kind : CEE_IO_OTHER];
     cee_usize length = 0; /* a C string in memory: its length fits the address space */
     while (text[length] != 0) length++;
     return (cee_str){ .ptr = (const uint8_t *)text, .len = length };

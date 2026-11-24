@@ -1258,6 +1258,11 @@ void ceesafe_thread_join(cee_thread *t);
 /* A service thread (type-system.md §38.2, ADR 0182): starts body(arg) named `name` (the first 15 bytes, where the
    platform names threads) and never joins it; the thread frees its own record. 0 if it could not be started. */
 int ceesafe_thread_service(void *(*body)(void *), void *arg, const uint8_t *name, uint64_t length);
+/* ADR 0222 §2.3: whether the thread's body has returned (a sequentially consistent load of the flag its entry sets
+   after the body), so a join after a true answer does not wait. It never waits. */
+bool ceesafe_thread_finished(cee_thread *t);
+/* ADR 0222 §2.1: the calling thread waits at least `ms` milliseconds; 0 returns at once. */
+void ceesafe_thread_sleep(uint64_t ms);
 /* A platform mutex in allocated memory, or NULL. */
 void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);
@@ -1617,6 +1622,9 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 /* ADR 0104: after StorageFull. EMFILE and ENFILE; Windows' ERROR_TOO_MANY_OPEN_FILES, which the runtime maps to
    EMFILE. */
 #define CEE_IO_TOO_MANY_OPEN_FILES 21u
+/* ADR 0221 §2.2: after TooManyOpenFiles. EBADF: a read of a file opened only for writing, a write of one opened only
+   for reading; Windows' ERROR_INVALID_HANDLE, which the runtime maps to EBADF. */
+#define CEE_IO_BAD_DESCRIPTOR 22u
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);
@@ -1691,6 +1699,14 @@ int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *sec
    2 directory, 3 other), from fstat; negated errno on failure. */
 int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t *nanoseconds);
 int64_t ceesafe_host_file_kind(void const *file);
+/* ADR 0220: an advisory lock on bytes start .. start + length - 1 of an open File (its first field is the descriptor):
+   kind 0 unlocks, 1 is shared, 2 exclusive; wait 1 waits for a conflicting lock to go. Open-file-description locks
+   (F_OFD_SETLK) where the kernel has them, else process-associated fcntl locks; LockFileEx on Windows. 0 when done,
+   1 when a lock that does not wait met a conflict, or a negated errno. lib/std checks the range first. */
+int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length);
+/* ADR 0221 §2.3: 1 if standard input (0), output (1) or error (2) is a terminal (isatty; GetConsoleMode on
+   Windows), else 0. */
+int64_t ceesafe_host_is_terminal(uint32_t stream);
 #if defined(_WIN32)
 /* realpath(3) and the descriptor calls ceesafec's `embed` makes (ADR 0087 §2.8), which Windows lacks; C code that
  * declares them, as an `extern "C"` block does, calls these, which take UTF-8 paths (the wide calls underneath):
@@ -1942,6 +1958,9 @@ void ceesafe_chan_close(void *c);
 /* Whether ceesafe_chan_close has been called (ADR 0060), read under the lock. */
 bool ceesafe_chan_closed(void *c);
 void ceesafe_chan_wait(void *c, uint64_t epoch);
+/* ADR 0222 §2.2: as ceesafe_chan_wait, but returns once ceesafe_async_now() reaches `deadline` (milliseconds on the
+   monotonic clock) even if the channel did not change. It may return early: the caller looks again. */
+void ceesafe_chan_wait_until(void *c, uint64_t epoch, uint64_t deadline);
 bool ceesafe_chan_park(void *c, void *node, uint64_t epoch);
 void ceesafe_chan_unpark(void *c, void *node);
 /* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is

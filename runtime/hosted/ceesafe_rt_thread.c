@@ -17,6 +17,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <errno.h>
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
@@ -32,12 +33,21 @@ struct cee_thread {
 #endif
     void *(*body)(void *);
     void *arg;
+    uint32_t finished; /* ADR 0222 §2.3: set (ceesafe_atomic_*) by the entry once the body has returned */
 };
+
+/* The thread's entry: the body, then the flag ceesafe_thread_finished reads. The body's result was written into the
+   thread's record before it returned, and the sequentially consistent store and load order it before the reader. */
+static void *cee_thread_entry(void *p) {
+    cee_thread *t = (cee_thread *)p;
+    (void)t->body(t->arg);
+    ceesafe_atomic_store_u32(&t->finished, 1u);
+    return NULL;
+}
 
 #if defined(_WIN32) && !defined(CEE_COSMOOS)
 static DWORD WINAPI ceesafe_thread_entry(LPVOID p) {
-    cee_thread *t = (cee_thread *)p;
-    (void)t->body(t->arg);
+    (void)cee_thread_entry(p);
     return 0;
 }
 #endif
@@ -49,8 +59,9 @@ cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg) {
     }
     t->body = body;
     t->arg = arg;
+    t->finished = 0u;
 #if defined(CEE_COSMOOS)
-    if (cosmo_thread_start(&t->thread, body, arg, 0) != 0) {
+    if (cosmo_thread_start(&t->thread, cee_thread_entry, t, 0) != 0) {
         ceesafe_free(t, CEE_ALLOC_SYSTEM);
         return NULL;
     }
@@ -61,12 +72,53 @@ cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg) {
         return NULL;
     }
 #else
-    if (pthread_create(&t->thread, NULL, body, arg) != 0) {
+    if (pthread_create(&t->thread, NULL, cee_thread_entry, t) != 0) {
         ceesafe_free(t, CEE_ALLOC_SYSTEM);
         return NULL;
     }
 #endif
     return t;
+}
+
+bool ceesafe_thread_finished(cee_thread *t) {
+    return ceesafe_atomic_load_u32(&t->finished) != 0u;
+}
+
+/* `Thread.sleep(ms)` (ADR 0222 §2.1): at least `ms` milliseconds; a signal's interruption sleeps the time left. */
+void ceesafe_thread_sleep(uint64_t ms) {
+#if defined(CEE_COSMOOS)
+    /* A timed wait on a condition nothing signals (cosmo_cond_timedwait takes nanoseconds from now), a second at a
+       time so the count never overflows. Not built or run here: a wake before a step's end would shorten the sleep,
+       if CosmoOS's condition ever woke without a signal. */
+    if (ms == 0u) {
+        return;
+    }
+    cosmo_mutex_t m = (cosmo_mutex_t)COSMO_MUTEX_INIT;
+    cosmo_cond_t c = (cosmo_cond_t)COSMO_COND_INIT;
+    cosmo_mutex_lock(&m);
+    while (ms > 0u) {
+        uint64_t step = ms > 1000u ? 1000u : ms;
+        (void)cosmo_cond_timedwait(&c, &m, (unsigned long long)step * 1000000ull);
+        ms -= step;
+    }
+    cosmo_mutex_unlock(&m);
+#elif defined(_WIN32)
+    while (ms > 0u) {
+        DWORD step = ms > 0x7FFFFFFFu ? 0x7FFFFFFFu : (DWORD)ms; /* below INFINITE */
+        Sleep(step);
+        ms -= step;
+    }
+#else
+    if (ms == 0u) {
+        return;
+    }
+    struct timespec t = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
+    if ((uint64_t)t.tv_sec != ms / 1000u) {
+        t.tv_sec = (time_t)((~(uint64_t)0) >> 33); /* a time_t of 32 bits: about 34 years, then on */
+    }
+    while (nanosleep(&t, &t) != 0 && errno == EINTR) {
+    }
+#endif
 }
 
 /* ---- Service threads (ADR 0182): started, named and never joined ---------------------------------------------- */

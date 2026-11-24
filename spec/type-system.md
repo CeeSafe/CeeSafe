@@ -3032,13 +3032,16 @@ after it (ADR 0044, so the earlier variants keep their tags) the network kinds `
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
 `AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host",
 and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`, and (ADR 0104)
-`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`.
+`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`, and (ADR 0221 §2.2)
+`BadDescriptor`: `EBADF`, Windows' `ERROR_INVALID_HANDLE`. It is what reading a `File` opened only for writing
+(`File.create`, `File.openAppend`) or writing one opened only for reading (`File.open`) gives, and a lock of the wrong
+kind (§26.3).
 `e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
 platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
 "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
 "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
-supported", "Host not found", which no errno has, "No space left on device" and "Too many open files"; `Other`'s is
-"Input/output error".
+supported", "Host not found", which no errno has, "No space left on device", "Too many open files" and "Bad file
+descriptor"; `Other`'s is "Input/output error".
 
 | Variant | POSIX | Winsock |
 |---|---|---|
@@ -3057,7 +3060,8 @@ deadline of the program's. A `match` that names the first eleven variants and ha
 not cover the network kinds (N0256): a source change of 0.7.0; one that names the first nineteen does not cover
 `HostNotFound` (N0256): a source change of ADR 0060's release; one that names the first twenty does not cover
 `StorageFull`: a source change of ADR 0077's; one that names the first twenty-one does not cover `TooManyOpenFiles`: a
-source change of ADR 0104's.
+source change of ADR 0104's; one that names the first twenty-two does not cover `BadDescriptor`: a source change of
+ADR 0221's.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
@@ -3103,6 +3107,28 @@ source change of ADR 0104's.
   the data private under any umask. The interpreter answers `Unsupported` for this and `File.modified`.
 - `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.
+- `File.createReadWrite(path)` (ADR 0221 §2.1): `Result<File, IoError>`, created if missing and emptied if present,
+  for reading and writing (`O_RDWR | O_CREAT | O_TRUNC`, mode 0666 & ~umask). With `openReadWrite`, `openOrCreate` and
+  `createNew` it names every open with read and write access.
+- **Advisory locks** (ADR 0220; lib/std's `FileLocks`, hosted; `borrow this`): `f.lock(kind: FileLock, start: u64,
+  length: u64)` waits for a lock on bytes `start` to `start + length - 1`, `Result<void, IoError>`;
+  `f.tryLock(kind, start, length)` never waits: `Result<bool, IoError>`, `false` when another holder's lock
+  conflicts; `f.unlock(start, length)` releases the `File`'s locks on the range (bytes it does not hold are no
+  error). `FileLock` is `Shared` or `Exclusive`: shared locks of different holders coexist, an exclusive one
+  conflicts with any other holder's lock on any of its bytes.
+  - A range may lie past the end of the file. `length` 0, or a range that ends past 2^63 - 1, is `InvalidInput`.
+    POSIX needs a file open for reading for a shared lock and for writing for an exclusive one (`BadDescriptor`).
+  - They are the system's record locks, so other programs see them: POSIX `fcntl` locks, which SQLite takes, and
+    `LockFileEx` on Windows. Where the system has open-file-description locks (Linux, macOS), a lock belongs to the
+    `File`: two `File`s of one program conflict as two processes do, and a `File`'s own lock over a range is replaced
+    (converted, or split by an unlock). Elsewhere (FreeBSD and the other BSDs) it belongs to the process: a program's
+    `File`s do not conflict, and closing any of them releases the process's locks on the file. On Windows a lock
+    never converts or splits, and is mandatory for other handles' reads and writes of its bytes. Portable use: lock a
+    range the `File` does not hold, unlock exactly the ranges it locked, and lock bytes the program does not read.
+  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock` and `unlock` none.
+  - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
+    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4). It does not check
+    the `File`'s access mode.
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
   read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
@@ -3114,6 +3140,10 @@ source change of ADR 0104's.
   standard error; standard output is flushed first, so the two keep their relative order.
 - `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.
   It is hosted only (lib/std's `HostServices.flush`). Standard error is not buffered.
+- `Console.isTerminal(stream: ConsoleStream) -> bool` (ADR 0221 §2.3; lib/std's `HostServices.isTerminal`, hosted),
+  `ConsoleStream` being `Input`, `Output` or `Error`: whether the standard stream is a terminal (`isatty`; on Windows a
+  console, by `GetConsoleMode`, so `NUL` is not one). A pipe, a file or a closed stream is `false`; it has no effect.
+  The interpreter answers for its own streams, and `false` for each when its output is captured (`ceesafe_run`).
 - `Console.readLine(mut line)` (ADR 0106; `line: borrow mut String`; lib/std's `HostServices.readLine`, hosted only
   like the rest of `Console`) is `Result<bool, IoError>`: it reads the next line of standard input into `line`,
   replacing what `line` held.
@@ -5963,9 +5993,17 @@ fn main() {
   joined. `main` returning ends the process with the thread wherever it is; the captures it still holds are not
   dropped, as nothing of the process is. A body that returns drops what it did not move and frees its environment,
   on its own thread. This is the one exception to "no detached threads", and named so where it is written.
+- **`t.isFinished()`** (ADR 0222 §2.3) borrows a `Thread<T>`: `true` once the thread's body has returned, so a
+  `join()` after it does not wait. It never waits. A server keeps its client threads in a vector and joins the
+  finished ones (`clients.swapRemove(k).join()`) now and then. In the interpreter it only answers: a thread runs
+  there when the caller waits, so a loop that polls must wait between polls (`Thread.sleep`).
+- **`Thread.sleep(ms: u64)`** (ADR 0222 §2.1; lib/std's `ThreadServices.sleep`, hosted): the calling thread waits at
+  least `ms` milliseconds (`nanosleep`, resumed for the time left after a signal; `Sleep` on Windows); 0 returns at
+  once. A task waits with `await Timer.sleep(ms)` instead. In the interpreter it is a wait on the virtual clock
+  (§40.8): other threads run, and when every thread waits, the clock moves to the earliest deadline.
 - A panic in any thread aborts the process (OD-5).
-- **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, and dropping a `Thread<T>`, have
-  `sleep`.
+- **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, dropping a `Thread<T>`, and
+  `Thread.sleep` have `sleep`; `isFinished` has none.
 
 ### 38.3 Shared state (library types: `lib/std/sync.cee`, and the atomics in `lib/core/atomics.cee`)
 - **`Arc<T: Share>`**: shared ownership.
@@ -6384,7 +6422,11 @@ program's own `close`; POSIX hosts, `IoError.Unsupported` on Windows), `AsyncMut
 held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
 `tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or
-null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null). Its operations return `Result<T, AsyncError>`,
+null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null; and, ADR 0222 §2.2,
+`recvTimeout(ms)` for threads, `Result<T?, AsyncError>`: as `recv`, but `Err(AsyncError.TimedOut)` when no value came
+and the channel did not close within `ms` milliseconds on the monotonic clock, the thread blocked meanwhile on the
+channel's condition variable; a buffered value is taken even when `ms` is 0; effect `sleep`; in the interpreter a
+wait on the virtual clock, as `Thread.sleep`, §38.2). Its operations return `Result<T, AsyncError>`,
 where `AsyncError` has four variants:
 
 | Variant | Meaning | What `?` converts into it, in a function that returns `Result<_, AsyncError>` |

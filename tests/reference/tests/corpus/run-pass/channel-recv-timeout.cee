@@ -1,0 +1,40 @@
+// Channel.recvTimeout (ADR 0222 §2.2): an empty channel times out after at least the time; a value another thread
+// sends before the deadline arrives; a buffered value is taken even with 0 ms; a closed, empty channel is Ok(null),
+// as recv says. Only lower bounds are checked (a wait of 10 s for a value sent at once never times out in practice).
+fn describe(r: Result<u32?, AsyncError>) -> StringView => match (r) {
+    Ok(Some(_)) => "value",
+    Ok(null) => "closed",
+    Err(AsyncError.TimedOut) => "timed out",
+    Err(_) => "other",
+};
+
+fn main() {
+    let c = Channel<u32>.create(4)!;
+    let before = Timer.now();
+    Console.writeLine(describe(c.recvTimeout(25)));
+    Console.writeLine(Timer.now() - before >= 25);
+    Console.writeLine(describe(c.recvTimeout(0)));
+    c.send(7)!;
+    match (c.recvTimeout(0)) {
+        Ok(Some(v)) => { Console.writeLine(v); }
+        _ => { Console.writeLine("lost"); }
+    }
+    let sender = c.clone();
+    let t = Thread.spawn(move () => {
+        Thread.sleep(10);
+        sender.send(42)!;
+        sender.close();
+    })!;
+    match (c.recvTimeout(10000)) {
+        Ok(Some(v)) => { Console.writeLine(v); }
+        _ => { Console.writeLine("lost"); }
+    }
+    t.join();
+    Console.writeLine(describe(c.recvTimeout(10000)));
+}
+// expect-stdout: timed out
+// expect-stdout: true
+// expect-stdout: timed out
+// expect-stdout: 7
+// expect-stdout: 42
+// expect-stdout: closed

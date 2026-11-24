@@ -4741,6 +4741,54 @@ void ceesafe_chan_wait(void *channel, uint64_t epoch) {
     (void)ceesafe_atomic_add_u32(&c->blocked, UINT32_MAX);
 }
 
+/* `recvTimeout` (ADR 0222 §2.2): as ceesafe_chan_wait, until the epoch moves or ceesafe_async_now() reaches `deadline`.
+ * The time left is measured on the monotonic clock before each wait; POSIX's wait counts on the realtime clock, so a
+ * jump of it ends one wait early or late by the jump, and the caller's own check of the deadline decides. */
+void ceesafe_chan_wait_until(void *channel, uint64_t epoch, uint64_t deadline) {
+    cee_chan *c = (cee_chan *)channel;
+    (void)ceesafe_atomic_add_u32(&c->blocked, 1u);
+#if defined(_WIN32)
+    AcquireSRWLockExclusive(&c->m);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_lock(&c->m);
+#else
+    (void)pthread_mutex_lock(&c->m);
+#endif
+    for (;;) {
+        uint64_t now = ceesafe_async_now();
+        if (ceesafe_atomic_load_u64(&c->epoch) != epoch || now >= deadline) {
+            break;
+        }
+        uint64_t ms = deadline - now;
+        if (ms > 1000u) {
+            ms = 1000u; /* a second at most per wait, so a clock's jump costs at most that */
+        }
+#if defined(_WIN32)
+        (void)SleepConditionVariableSRW(&c->cv, &c->m, (DWORD)ms, 0);
+#elif defined(CEE_COSMOOS)
+        (void)cosmo_cond_timedwait(&c->cv, &c->m, (unsigned long long)ms * 1000000ull);
+#else
+        struct timespec until;
+        (void)clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += (time_t)(ms / 1000u);
+        until.tv_nsec += (long)(ms % 1000u) * 1000000L;
+        if (until.tv_nsec >= 1000000000L) {
+            until.tv_sec += 1;
+            until.tv_nsec -= 1000000000L;
+        }
+        (void)pthread_cond_timedwait(&c->cv, &c->m, &until);
+#endif
+    }
+#if defined(_WIN32)
+    ReleaseSRWLockExclusive(&c->m);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_unlock(&c->m);
+#else
+    (void)pthread_mutex_unlock(&c->m);
+#endif
+    (void)ceesafe_atomic_add_u32(&c->blocked, UINT32_MAX);
+}
+
 /* A task's wait: false if the epoch already moved (retry at once); else its node is queued and the task waits to be
  * woken (or cancelled: a channel's wait is cancellable, type-system.md §40.7). */
 bool ceesafe_chan_park(void *channel, void *wait, uint64_t epoch) {

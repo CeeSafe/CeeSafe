@@ -1749,7 +1749,7 @@ fn builtin(
         return Ok(valueOf(if (hostIsX8664()) 0 else 1, 1));
     }
     if (b == bfThreadSpawn() || b == bfThreadSpawnBoxed() || b == bfThreadService() || b == bfThreadBoth() ||
-        b == bfThreadJoin()) {
+        b == bfThreadJoin() || b == bfThreadFinished()) {
         return threadBuiltin(it, c, n, frame, r, b, arguments);
     }
     return ioBuiltin(it, c, n, frame, r, b, arguments);

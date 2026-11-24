@@ -1,0 +1,46 @@
+// Thread.isFinished (ADR 0222 §2.3): a thread that waits on a channel is not finished until it is sent a value; then
+// polling with a sleep between polls sees it finish, and join takes its result. A server's vector of client threads
+// is reaped with isFinished, swapRemove and join until it is empty.
+fn main() {
+    let work = Channel<u32>.create(1)!;
+    let input = work.clone();
+    let t = Thread.spawn(move () => (input.recv() ?? 0) * 2)!;
+    Console.writeLine(t.isFinished());
+    work.send(21)!;
+    while (!t.isFinished()) {
+        Thread.sleep(1);
+    }
+    Console.writeLine(t.isFinished());
+    Console.writeLine(t.join());
+
+    // Thread<u32>: a Vector<Thread<void>>'s swapRemove is N0226 (a generic method over a type that holds `void`).
+    var clients = Vector<Thread<u32>>.create();
+    let served = Arc<AtomicU32>.create(AtomicU32.create(0))!;
+    for (k in 0..5u32) {
+        let count = served.clone();
+        clients.push(Thread.spawn(move () => {
+            Thread.sleep((k * 3) as u64);
+            let _ = count.get().fetchAdd(1);
+            return 1u32;
+        })!)!;
+    }
+    var reaped: u32 = 0;
+    while (clients.length > 0) {
+        var k: usize = 0;
+        while (k < clients.length) {
+            if (clients[k].isFinished()) {
+                reaped += clients.swapRemove(k).join();
+            } else {
+                k += 1;
+            }
+        }
+        Thread.sleep(1);
+    }
+    Console.writeLine(reaped);
+    Console.writeLine(served.get().load());
+}
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 42
+// expect-stdout: 5
+// expect-stdout: 5

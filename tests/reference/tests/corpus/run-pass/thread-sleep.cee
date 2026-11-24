@@ -1,0 +1,20 @@
+// Thread.sleep (ADR 0222 §2.1): the thread waits at least its time on the monotonic clock (the interpreter's virtual
+// clock moves by exactly that), on the main thread and on another; sleep(0) returns at once. Only lower bounds are
+// checked, so a slow machine passes.
+fn main() {
+    let before = Timer.now();
+    Thread.sleep(30);
+    let after = Timer.now();
+    Console.writeLine(after - before >= 30);
+    Thread.sleep(0);
+    let t = Thread.spawn(move () => {
+        let start = Timer.now();
+        Thread.sleep(20);
+        return Timer.now() - start;
+    })!;
+    Console.writeLine(t.join() >= 20);
+    Console.writeLine(Timer.now() - before >= 30);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

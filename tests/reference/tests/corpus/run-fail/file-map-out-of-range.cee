@@ -10,7 +10,7 @@ fn main() {
     var bytes = [0u8; 8];
     m.readAt(8, mut bytes[..]);
     Console.writeLine("inside");
-    m.readAt(9, mut bytes[..]); // expect-panic: SharedMapping.readAt: the bytes are past the mapping's end
+    m.readAt(9, mut bytes[..]); // expect-library-panic: SharedMapping.readAt: the bytes are past the mapping's end
     Console.writeLine("after");
 }
 // expect-stdout: inside

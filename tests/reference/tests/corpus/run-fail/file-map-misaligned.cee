@@ -9,7 +9,7 @@ fn main() {
     let m = f.mapShared(2, 30)!;
     m.store32(2, 1, StoreOrdering.Relaxed);
     Console.writeLine(m.load32(2, LoadOrdering.Relaxed));
-    m.store32(0, 1, StoreOrdering.Relaxed); // expect-panic: SharedMapping: the atomic is not aligned to its size
+    m.store32(0, 1, StoreOrdering.Relaxed); // expect-library-panic: SharedMapping: the atomic is not aligned to its size
     Console.writeLine("after");
 }
 // expect-stdout: 1

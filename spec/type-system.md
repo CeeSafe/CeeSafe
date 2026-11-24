@@ -4437,8 +4437,12 @@ Diagnostics: none new.
 - **`PushError`**: `Unsupported`, `Denied` (not signed for push, or the service refused), `Failed`.
 - **Where.** iOS, a windowed app: APNs, through the runtime's app delegate; the app's signing grants `aps-environment`
   (only a profile of an explicit App ID with Push Notifications does); a development build (one that carries
-  `embedded.mobileprovision` with `aps-environment` `development`) is `sandbox`. Android, macOS, Windows, Linux,
-  FreeBSD, CosmoOS, a program with no window and `ceesafec run --interp`: `Unsupported`.
+  `embedded.mobileprovision` with `aps-environment` `development`) is `sandbox`. Android, a windowed app whose APK
+  carries Firebase Messaging and its configuration (ADR 0249; CeeUI's `ceeui-pack --firebase`): FCM, through the app's
+  own Firebase, found by reflection; without Firebase `Unsupported`, and no token in the time `Failed`. While the
+  program runs, the Java system property `ceesafe.program` is `running`, so the app's own messaging service can leave a
+  push to it. macOS, Windows, Linux, FreeBSD, CosmoOS, a program with no window and `ceesafec run --interp`:
+  `Unsupported`.
 - **Testing.** `CEESAFE_PUSH_TOKEN=<text>` is the token instead, natively on every system: `apns:HEX`,
   `apns-sandbox:HEX` or `fcm:TOKEN`.
 - **A notification service extension** (ADR 0246): a windowed program built into an iOS app's `PlugIns/<name>.appex`

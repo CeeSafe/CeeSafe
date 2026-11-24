@@ -25,13 +25,13 @@ fn isSearchMethod(name: Slice<u8>) -> bool =>
 
 /// A slice's methods; with `bytes`, a byte slice's.
 fn sliceMethodNames(bytes: bool) -> StringView =>
-    if (bytes) "copyFrom fill copyWithin swap sortBy forEach any all partitionPoint splitAt splitAtMut readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
-        else "copyFrom fill copyWithin swap sortBy forEach any all partitionPoint splitAt splitAtMut";
+    if (bytes) "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
+        else "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut";
 
 /// A vector's built-in methods; with `bytes`, a `Vector<u8>`'s.
 fn vectorMethodNames(bytes: bool) -> StringView =>
-    if (bytes) "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
-        else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone";
+    if (bytes) "push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
+        else "push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone";
 
 /// A `String`'s built-in methods.
 fn stringMethodNames() -> StringView =>

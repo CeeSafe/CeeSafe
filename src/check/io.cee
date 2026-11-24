@@ -547,9 +547,10 @@ fn checkIntegerAbs(
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }
 
-/// `x.rotateLeft(n)` … `x.byteSwap()` (ADR 0071 §2.3). Every one but `byteSwap` needs an unsigned receiver, as the bit
-/// operators do (§6). Rotations and the masking shifts take a `u32` amount, taken modulo the width; the counts are
-/// `u32`. None of them panics.
+/// `x.rotateLeft(n)` … `x.byteSwap()` (ADR 0071 §2.3). Every one but `byteSwap` and the masking shifts needs an
+/// unsigned receiver, as the bit operators do (§6); `wrappingShl` and `wrappingShr` take a signed one too, where the
+/// right shift is arithmetic (ADR 0223). Rotations and the masking shifts take a `u32` amount, taken modulo the width;
+/// the counts are `u32`. None of them panics.
 fn checkIntegerBits(
     c: borrow mut Checker,
     member: u32,
@@ -559,7 +560,8 @@ fn checkIntegerBits(
     span: Span,
 ) -> Result<u32, AllocError> {
     let typ = c.typeOf(receiver);
-    if (function != bfIntByteSwap() && c.types.info(typ).signed) {
+    let anySign = function == bfIntByteSwap() || function == bfIntWrappingShl() || function == bfIntWrappingShr();
+    if (!anySign && c.types.info(typ).signed) {
         var message = Vector<u8>.create();
         appendText(mut message, "type ")?;
         appendQuotedType(mut message, c, typ)?;
@@ -567,7 +569,7 @@ fn checkIntegerBits(
         appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
         appendText(
             mut message,
-            ": bit operations are on unsigned types; reinterpret with 'truncate<u32>(x)' (ADR 0071 §2.3)",
+            ": bit operations are on unsigned types; reinterpret with 'truncate<u32>(x)' (ADR 0071 §2.3), or shift with 'x.wrappingShl(n)' and 'x.wrappingShr(n)' (ADR 0223)",
         )?;
         c.error(notAStruct(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

@@ -136,7 +136,7 @@ TABLES.append(table(
          "The bits of an unsigned integer rotated by `n` places, `n` taken modulo the type's width.",
          NO),
         ("`x.wrappingShl(n: u32) -> T`, `x.wrappingShr(n: u32) -> T`",
-         "An unsigned integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more.",
+         "An integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more. On a signed integer, where `<<` and `>>` are refused, the left shift wraps in two's complement and the right shift is arithmetic: the sign is copied in, so `x.wrappingShr(n)` rounds `x / 2^n` down.",
          NO),
         ("`x.leadingZeros() -> u32`, `x.trailingZeros() -> u32`, `x.countOnes() -> u32`",
          "The number of zero bits at the top or at the bottom of an unsigned integer (the width for 0), or the number of one bits.",
@@ -253,6 +253,9 @@ TABLES.append(table(
          "Panics `slice range out of bounds` when `mid` is above the length"),
         ("`d.sortBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)`",
          "Sorts an exclusive slice or a vector by a closure that returns a negative number, zero or a positive number for less, equal and greater. The sort is not stable.",
+         NO),
+        ("`d.sortStableBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)`",
+         "Sorts as `sortBy` does, keeping elements that compare equal in the order they had. It allocates nothing, and is slower than `sortBy`.",
          NO),
         ("`s.forEach(visit: borrow mut fn(borrow T))`", "Calls a closure on each element of a slice, in order.", NO),
         ("`s.any(test: borrow mut fn(borrow T) -> bool) -> bool`",
@@ -506,7 +509,7 @@ TABLES.append(table(
 TABLES.append(table(
     "`Vector<T>`",
     "A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A "
-    "vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.forEach`, `v.any`, "
+    "vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, "
     "`v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a "
     "vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with "
     "[VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), "
@@ -534,6 +537,9 @@ TABLES.append(table(
          "Takes the element at index `at` out of a vector and puts the last element in its place: one move, and the order changes.",
          INDEX + " when `at` is not below the length"),
         ("`v.clear()`", "Destroys every element of a vector. The capacity stays.", NO),
+        ("`v.drain() -> VectorDrain<T>`",
+         "An iterator that moves the elements out of a vector in order, `for (x in v.drain())`, while it borrows the vector. The vector is empty afterwards, with its capacity; elements the loop did not take are destroyed when the iterator is.",
+         NO),
         ("`v.truncate(n: usize)`",
          "Destroys the elements of a vector from index `n` on. A vector that is already that short is unchanged.", NO),
         ("`v.retain(keep: borrow mut fn(borrow T) -> bool)`",

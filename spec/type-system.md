@@ -226,8 +226,17 @@ of the same width and never panics. Neither exists on unsigned types (N0234).
 **Bit methods** (ADR 0071 §2.3). On every unsigned type, `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)` and
 `x.wrappingShr(n)` take a `u32` amount (a flexible literal adapts), taken modulo the bit width, and are of type `T`;
 `x.leadingZeros()`, `x.trailingZeros()` and `x.countOnes()` are a `u32` (the width for a zero `x`). On a signed type
-they are N0234, as the bit operators are restricted to unsigned types. `x.byteSwap()` is on every integer type: the
-bytes in the other order, of type `T` (two's complement for signed types; a one-byte type is unchanged).
+they are N0234, as the bit operators are restricted to unsigned types, except the masking shifts. `x.byteSwap()` is
+on every integer type: the bytes in the other order, of type `T` (two's complement for signed types; a one-byte type
+is unchanged).
+
+**Shifts of signed integers** (ADR 0223). `x.wrappingShl(n)` and `x.wrappingShr(n)` are on every signed type too,
+with the same `u32` amount taken modulo the width `w`, and of type `T`. `wrappingShl` is the unsigned shift of the
+same bits: the result is `x` × 2^(n mod w) modulo 2^w, in two's complement. `wrappingShr` is **arithmetic**: the
+bits shifted in are copies of the sign bit, so the result is ⌊`x` / 2^(n mod w)⌋, rounded towards negative
+infinity (`(-7i32).wrappingShr(1)` is −4, `(-1i32).wrappingShr(31)` is −1). Neither panics; an amount of the width
+or more wraps round (`x.wrappingShr(w)` is `x`), as on unsigned types. A shift that saturates instead of wrapping,
+⌊`x` / 2^n⌋ for every `n`, is `x.wrappingShr(n.min(w - 1))`.
 
 None of them panics except `abs`. Their names are reserved on integer types: an `impl` for an integer type cannot define a method
 with one of these names (N0228). In C they are `static inline` helpers of `rt.h` with no undefined behaviour: a
@@ -236,7 +245,8 @@ wrapping operation computes in the unsigned type of the same width and converts 
 
 Bitwise operators and shifts are restricted to unsigned types in M1. This avoids the
 implementation-defined and undefined parts of C's signed bit operations. Reinterpret
-with `truncate<u32>(x)`. Relaxing this later is backward compatible. A shift amount that is a
+with `truncate<u32>(x)`, or shift a signed value with `x.wrappingShl(n)` and the arithmetic `x.wrappingShr(n)`, whose
+behaviour is defined for every amount (ADR 0223). Relaxing this later is backward compatible. A shift amount that is a
 flexible literal is typed as `u32`. Other mismatches are N0207.
 
 ## 7. Conversions
@@ -2462,7 +2472,15 @@ fn main() -> i32 {
     and panics there ("index out of bounds"). They are lib/core's VectorEditing<T>: the elements move by `swap`, so
     they may be of any type. If `insert` cannot grow the vector, it is unchanged and `x` is destroyed;
   - for a `Vector<u8, A>`, byte order, searching and parsing (§16.6), on its elements;
-  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `retain`): §16.5 and §36.4;
+  - `v.drain()` (ADR 0224): an iterator (§16.4) that moves the elements out first to last, `for (x in v.drain())`.
+    It borrows `v` exclusively (`borrow mut this`) until it is dropped, so the vector cannot be used meanwhile
+    (N0241). Its `next()` is `T?`, `null` once every element was taken. When the iterator is dropped, the vector
+    is empty and keeps its capacity: elements not taken (a loop left with `break` or `return`) are destroyed first
+    to last, as `clear` destroys them. It allocates nothing and is O(n) for n elements: the elements are reversed
+    once, by swaps, and each `next` pops the last. It is lib/core's VectorDrain<r, T> (VectorDrainFailing,
+    VectorDrainSecret for the other allocators; a `SecretHeap` slot is wiped as its element leaves);
+  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `sortStableBy`, `forEach`, `any`, `all`,
+    `partitionPoint`, `retain`): §16.5 and §36.4;
   - `v.view()`: the elements as a `Slice<T>`, and `v.viewMut()` as a `SliceMut<T>`;
   - a `Vector<T>` argument for a `Slice<T>` parameter is borrowed as `v.view()`, and `mut v` for a
     `SliceMut<T>` parameter as `v.viewMut()` (like a box's contents, §18.2);
@@ -5701,6 +5719,7 @@ fn main() {
 | Method | Receiver | Closure type | Result |
 |---|---|---|---|
 | `s.sortBy(cmp)` | `SliceMut<T>`, or a vector (lending its elements mutably) | `borrow mut fn(borrow T, borrow T) -> i32` | `void` |
+| `s.sortStableBy(cmp)` (ADR 0225) | as `sortBy` | as `sortBy` | `void` |
 | `s.forEach(visit)` | `Slice<T>` (a `SliceMut<T>` coerces), or a vector | `borrow mut fn(borrow T)` | `void` |
 | `s.any(test)`, `s.all(test)` | as `forEach` | `borrow mut fn(borrow T) -> bool` | `bool` |
 | `s.partitionPoint(test)` (ADR 0104) | as `forEach` | `borrow mut fn(borrow T) -> bool` | `usize` |
@@ -5719,6 +5738,12 @@ fn main() {
     descending run is reversed, after at most n − 1 calls of `cmp`.
   - If `cmp` is not a consistent order, or changes what it captures, the elements end in some order: they are
     still a permutation of the input, and nothing panics or misbehaves.
+- **`sortStableBy`** (ADR 0225) orders the elements as `sortBy` does, and is **stable**: elements for which `cmp`
+  returns zero keep the order they had. With an inconsistent `cmp` it behaves as `sortBy` does.
+  - It allocates nothing, calls `cmp` O(n log n) times, makes O(n log² n) swaps and uses O(1) stack beyond a fixed
+    frame: insertion sort of blocks of 20 elements, then the blocks merged pairwise, bottom up, by SymMerge (Kim and
+    Kutzner), which merges in place with binary searches and rotations. It is slower than `sortBy` on long inputs,
+    which is why `sortBy` stays the unstable introsort.
 - **`partitionPoint`** (ADR 0104) is a binary search. For a slice **partitioned** by `test` (every element for which
   it returns `true` comes before every element for which it returns `false`) it returns the index of the first
   element for which `test` is false: the length if there is none, 0 for an empty slice. So for a slice sorted by a
@@ -6037,6 +6062,11 @@ fn main() {
 - **`Arc<T: Share>`**: shared ownership.
   - `Arc.create(v)` returns `Result<Arc<T>, AllocError>`. `a.clone()` returns another owner of the same value, and
     `a.get()` returns a `borrow T` (shared only).
+  - `a.getMut()` (ADR 0224) returns `(borrow mut T)?`: the value, lent exclusively for as long as `a` is, when `a`
+    is its only owner (the count is 1), and `null` otherwise. It takes `borrow mut this`, so no other owner can be
+    made from `a` meanwhile, and `Arc` has no weak references, so a count of 1 stays 1 for the loan. The count is
+    read sequentially consistently, after every earlier owner's drop. Values that several owners change are put in
+    a `Mutex`: `Arc<Mutex<T>>`.
   - The count is atomic. The last owner's drop destroys the value and frees it.
 - **`Mutex<T: Send>`**: mutual exclusion.
   - `Mutex.create(v)` returns `Result<Mutex<T>, AllocError>`; the platform lock is allocated.

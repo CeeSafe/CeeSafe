@@ -88,7 +88,7 @@ The integer types are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u
 | `x.abs() -> T` | The magnitude of a signed integer, in the same type. Unsigned types do not have it. | Panics `integer overflow` for the type's least value | [20.4](./ch20-04-arithmetic) |
 | `x.unsignedAbs() -> U` | The magnitude of a signed integer, in the unsigned type `U` of the same width (`u32` for an `i32`). | No | [20.4](./ch20-04-arithmetic) |
 | `x.rotateLeft(n: u32) -> T`, `x.rotateRight(n: u32) -> T` | The bits of an unsigned integer rotated by `n` places, `n` taken modulo the type's width. | No | [20.4](./ch20-04-arithmetic) |
-| `x.wrappingShl(n: u32) -> T`, `x.wrappingShr(n: u32) -> T` | An unsigned integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more. | No | [20.4](./ch20-04-arithmetic) |
+| `x.wrappingShl(n: u32) -> T`, `x.wrappingShr(n: u32) -> T` | An integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more. On a signed integer, where `<<` and `>>` are refused, the left shift wraps in two's complement and the right shift is arithmetic: the sign is copied in, so `x.wrappingShr(n)` rounds `x / 2^n` down. | No | [20.4](./ch20-04-arithmetic) |
 | `x.leadingZeros() -> u32`, `x.trailingZeros() -> u32`, `x.countOnes() -> u32` | The number of zero bits at the top or at the bottom of an unsigned integer (the width for 0), or the number of one bits. | No | [20.4](./ch20-04-arithmetic) |
 | `x.byteSwap() -> T` | An integer with its bytes in the opposite order. | No | [20.4](./ch20-04-arithmetic) |
 
@@ -150,6 +150,7 @@ A slice borrows a run of elements of an array, a vector or another slice: `Slice
 | `s.splitAt(mid: usize) -> SliceHalves<T>` | The two parts of a slice as `left` (the elements before `mid`) and `right` (from `mid` on). | Panics `slice range out of bounds` when `mid` is above the length | [16.1](./ch16-01-starting-threads) |
 | `d.splitAtMut(mid: usize) -> SliceHalvesMut<T>` | The two parts of an exclusive slice as `left` and `right`, which may both be written, since they do not overlap. | Panics `slice range out of bounds` when `mid` is above the length | – |
 | `d.sortBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts an exclusive slice or a vector by a closure that returns a negative number, zero or a positive number for less, equal and greater. The sort is not stable. | No | [8.1](./ch08-01-vectors) |
+| `d.sortStableBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts as `sortBy` does, keeping elements that compare equal in the order they had. It allocates nothing, and is slower than `sortBy`. | No | – |
 | `s.forEach(visit: borrow mut fn(borrow T))` | Calls a closure on each element of a slice, in order. | No | [8.1](./ch08-01-vectors) |
 | `s.any(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for some element of a slice; `false` for an empty slice. | No | [8.1](./ch08-01-vectors) |
 | `s.all(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for every element of a slice; `true` for an empty slice. | No | [8.1](./ch08-01-vectors) |
@@ -278,7 +279,7 @@ A `Box<T>` owns one value on the heap. It is a move type, and destroying it dest
 
 ## `Vector<T>`
 
-A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
+A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|
@@ -293,6 +294,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 | `v.remove(at: usize) -> T` | Takes the element at index `at` out of a vector and moves the later elements down one place. | Panics `index out of bounds` when `at` is not below the length | [8.1](./ch08-01-vectors) |
 | `v.swapRemove(at: usize) -> T` | Takes the element at index `at` out of a vector and puts the last element in its place: one move, and the order changes. | Panics `index out of bounds` when `at` is not below the length | [8.1](./ch08-01-vectors) |
 | `v.clear()` | Destroys every element of a vector. The capacity stays. | No | [8.1](./ch08-01-vectors) |
+| `v.drain() -> VectorDrain<T>` | An iterator that moves the elements out of a vector in order, `for (x in v.drain())`, while it borrows the vector. The vector is empty afterwards, with its capacity; elements the loop did not take are destroyed when the iterator is. | No | – |
 | `v.truncate(n: usize)` | Destroys the elements of a vector from index `n` on. A vector that is already that short is unchanged. | No | [8.1](./ch08-01-vectors) |
 | `v.retain(keep: borrow mut fn(borrow T) -> bool)` | Keeps the elements of a vector for which a closure returns `true`, in order, and destroys the others. | No | [8.1](./ch08-01-vectors) |
 | `v.extend(s: Slice<T>) -> Result<void, AllocError>` | Adds a copy of every element of `s` at the end of a vector. `T` is Copy. | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | [12.2](./ch12-02-reading-a-file) |

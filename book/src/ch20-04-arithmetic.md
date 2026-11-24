@@ -156,6 +156,9 @@ fn main() {
 - `wrappingShl(n)` and `wrappingShr(n)` take the amount modulo the width, so 9 shifts a `u8` by 1 and nothing
   panics. `rotateLeft` and `rotateRight` bring the bits back at the other end.
 - `countOnes`, `leadingZeros` and `trailingZeros` return a `u32`. `byteSwap` reverses the bytes.
+- A signed value is shifted with the same two methods, the one way to shift it: `wrappingShl` shifts its two's
+  complement bits, and `wrappingShr` is *arithmetic*, copying the sign bit in, so it divides by a power of two
+  rounding down: `signed.wrappingShr(1)` is -4 and `(-7i32).wrappingShr(1)` is -4 too.
 
 ## Arithmetic on literals is done by the compiler
 

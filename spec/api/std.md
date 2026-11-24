@@ -3827,6 +3827,18 @@ public fn get(borrow this) -> borrow T
 The shared value, for as long as this owner is borrowed.
 Safety: the value lives while any owner does; T is Share, so shared references to it may cross threads.
 
+### Arc.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> (borrow mut T)?
+```
+
+The value, to change in place, when this is its only owner (ADR 0224); null while another owner exists, which
+may be reading it on another thread. Values that several owners change go in a `Mutex`: `Arc<Mutex<T>>`.
+Safety: a count of one is this owner alone. No other owner can appear while it is borrowed exclusively, since
+only an owner makes another (`clone`, through a borrow of it), and Arc has no weak references. The load is
+sequentially consistent, so it is ordered after every earlier owner's drop, as the last owner's drop is.
+
 ## enum SpawnError
 
 ```ceesafe

@@ -503,6 +503,9 @@ fn checkVectorMethod(
     if (!isString && (sameText(text, "insert") || sameText(text, "remove") || sameText(text, "swapRemove"))) {
         return checkVectorEditing(c, member, arguments, vector, targetSpan, span);
     }
+    if (!isString && sameText(text, "drain")) {
+        return checkVectorDrain(c, arguments, vector, targetSpan, span);
+    }
     if (sameText(text, "clone")) {
         return checkVectorClone(c, member, arguments, vector, targetSpan, span);
     }
@@ -551,6 +554,9 @@ fn checkVectorMethod(
     ) || sameText(
         text,
         "sortBy",
+    ) || sameText(
+        text,
+        "sortStableBy",
     ) || sameText(text, "forEach") || sameText(text, "partitionPoint") || sameText(text, "any") ||
         sameText(
             text,
@@ -563,8 +569,8 @@ fn checkVectorMethod(
         // Through the elements (§36.4): mutably for the methods that move or lend them mutably.
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), pointee, s.start, s.end)?;
-        let mutable = sameText(text, "swap") || sameText(text, "sortBy") || sameText(text, "splitAtMut") ||
-            sameText(text, "copyWithin");
+        let mutable = sameText(text, "swap") || sameText(text, "sortBy") || sameText(text, "sortStableBy") ||
+            sameText(text, "splitAtMut") || sameText(text, "copyWithin");
         let slice = borrowReceiver(c, elements, mutable, targetSpan)?;
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
@@ -641,17 +647,18 @@ fn vectorMethodArity(isString: bool, text: Slice<u8>) -> i32 {
         return -1;
     }
     if (sameText(text, "push") || sameText(text, "retain") || sameText(text, "truncate") || sameText(text, "sortBy") ||
-        sameText(
-            text,
-            "forEach",
-        ) || sameText(
+        sameText(text, "sortStableBy") || sameText(
+        text,
+        "forEach",
+    ) || sameText(
         text,
         "partitionPoint",
     ) || sameText(text, "any") || sameText(text, "all") || sameText(text, "splitAt") ||
         sameText(text, "splitAtMut")) {
         return 1;
     }
-    if (sameText(text, "pop") || sameText(text, "clear") || sameText(text, "view") || sameText(text, "viewMut")) {
+    if (sameText(text, "pop") || sameText(text, "clear") || sameText(text, "view") || sameText(text, "viewMut") ||
+        sameText(text, "drain")) {
         return 0;
     }
     if (sameText(text, "swap")) {
@@ -730,7 +737,7 @@ fn checkSliceMethod(
     if (sameText(
         text,
         "sortBy",
-    ) || sameText(
+    ) || sameText(text, "sortStableBy") || sameText(
         text,
         "forEach",
     ) || sameText(text, "partitionPoint") || sameText(text, "any") || sameText(text, "all") ||
@@ -1013,6 +1020,42 @@ fn checkVectorEditing(
         values.push(value)?;
     }
     return libraryCall(c, function, values.view(), span);
+}
+
+/// `v.drain()` (ADR 0224): lib/core's VectorDrain<r, T>.drain(mut v), an iterator that moves the elements out in order
+/// while it borrows the vector exclusively; `VectorDrainFailing` and `VectorDrainSecret` for the other allocators.
+fn checkVectorDrain(
+    c: borrow mut Checker,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'drain' takes no arguments: 'for (x in v.drain())'")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let vectorType = c.typeOf(vector);
+    let element = c.types.info(c.types.info(vectorType).pointee).element;
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
+    if (c.isBottom(receiver)) {
+        return c.errorResult(span.start, span.end);
+    }
+    var holder = Vector<u8>.create();
+    appendText(mut holder, "VectorDrain")?;
+    appendText(mut holder, allocatorSuffix(c, c.types.info(vectorType).allocator))?; // `Failing` or `Secret` (§23.1)
+    let symbol = c.intern("drain")?;
+    let elements = [element];
+    let function = libraryFunction(c, StringView.fromUtf8(holder.view())!, elements[..], symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0224")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [receiver];
+    return libraryCall(c, function, values[..], span);
 }
 
 /// `v.clone()` and `s.clone()` (ADR 0108): a new vector or string of the same type, allocator included, holding a copy

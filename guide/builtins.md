@@ -253,6 +253,8 @@ hi
 | `v.length`, `v.capacity`, `v[i]` | `usize`; an element place |
 | `v.clear()`, `v.truncate(n)`, `v.swap(i, j)` | |
 | `v.insert(at, x)`, `v.remove(at)`, `v.swapRemove(at)` | `Result<void, AllocError>`; `T`; `T` (the last element fills the gap); the index is checked at the call |
+| `v.drain()` | an iterator that moves the elements out first to last, `for (x in v.drain())`; `v` is borrowed until it ends, then empty with its capacity |
+| `s.sortBy(cmp)`, `s.sortStableBy(cmp)` | on a `SliceMut<T>` or a vector: `cmp(a, b)` is negative, zero or positive; `sortStableBy` keeps equal elements in their order |
 | `[]` | the empty `Slice<T>` or `SliceMut<T>`, where one is expected |
 | `a.writeLE(0, x)` on an array | an array's methods are its slice's: `a[..].writeLE(0, x)` |
 | `v.view()`, `v.viewMut()` | `Slice<T>`, `SliceMut<T>` |
@@ -350,7 +352,8 @@ Medium
 | `x.mulHigh(y)` | every integer type: the upper half of the full product (`wrappingMul` is the lower); never overflows |
 | `x.min(y)`, `x.max(y)` | every integer type |
 | `x.abs()`, `x.unsignedAbs()` | signed types: `abs` panics at the minimum, `unsignedAbs` is the unsigned type of the width |
-| `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)`, `x.wrappingShr(n)` | unsigned types; `n: u32`, taken modulo the width |
+| `x.rotateLeft(n)`, `x.rotateRight(n)` | unsigned types; `n: u32`, taken modulo the width |
+| `x.wrappingShl(n)`, `x.wrappingShr(n)` | every integer type; `n: u32`, taken modulo the width; on a signed type `wrappingShr` is arithmetic (`(-7i32).wrappingShr(1)` is `-4`) |
 | `x.leadingZeros()`, `x.trailingZeros()`, `x.countOnes()` | unsigned types; a `u32` (the width for 0) |
 | `x.byteSwap()` | every integer type: the bytes in the other order |
 | `x as T` | only conversions that never lose information; `a as u64 < b` compares |
@@ -571,6 +574,10 @@ fn collections() -> Result<void, AllocError> {
     v.swap(0, 1);
     v.truncate(1);
     let m: SliceMut<u32> = v.viewMut();
+    v.sortStableBy((a, b) => if (a < b) -1 else if (a > b) 1 else 0);
+    for (moved in v.drain()) {
+        let kept: u32 = moved;
+    }
     v.clear();
     var t: String = String.withCapacity(8)?;
     t.clear();
@@ -630,6 +637,8 @@ fn numbers() {
     let bits: u64 = f.bits();
     let w: u32 = 0x80000001;
     let rotated: u32 = w.rotateLeft(1).rotateRight(2).wrappingShl(33).wrappingShr(1);
+    let halved: i64 = x.wrappingShr(1);
+    let doubled: i64 = x.wrappingShl(1);
     let counts: u32 = w.leadingZeros() + w.trailingZeros() + w.countOnes();
     let swapped: i16 = (-2i16).byteSwap();
 }

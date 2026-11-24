@@ -2110,13 +2110,22 @@ fn addHeadersBeside(options: borrow mut Options, path: Slice<u8>) -> i32 {
 }
 
 /// The library functions with an error inside their syntax (Checker.uncheckedLibrary), before the libraries'
-/// diagnostics are dropped.
+/// diagnostics are dropped; and the methods and drop of a library struct with a field whose type did not resolve,
+/// whose error is reported at the field: in the freestanding profile, lib/core's VectorDrain, which borrows a
+/// `Vector` (ADR 0224).
 fn markUncheckedLibrary(c: borrow mut Checker) {
     for (f in 0..c.hir.functions.length) {
         c.uncheckedLibrary.push(false)!;
         let function = borrow c.hir.functions[f];
         let file = function.file;
-        if (file == none() || !c.fileIsLibrary[file as usize] || function.syntax == none() || function.isClosure) {
+        if (file == none() || !c.fileIsLibrary[file as usize] || function.isClosure) {
+            continue;
+        }
+        if (function.owner != none() && hasUnresolvedField(c, function.owner)) {
+            c.uncheckedLibrary[f] = true;
+            continue;
+        }
+        if (function.syntax == none()) {
             continue;
         }
         let syntax = borrow c.front.ast.functions[function.syntax as usize];
@@ -2127,4 +2136,19 @@ fn markUncheckedLibrary(c: borrow mut Checker) {
             }
         }
     }
+}
+
+/// Does the struct type `owner` have a field whose type, or the type it refers to, is the error type?
+fn hasUnresolvedField(c: borrow Checker, owner: u32) -> bool {
+    let definition = c.types.info(owner).structDef;
+    if (definition == none()) {
+        return false;
+    }
+    for (field in c.types.structs[definition as usize].fields.view()) {
+        let typ = c.types.fields[field as usize].typ;
+        if (typ == c.types.error || (typ != none() && c.types.info(typ).pointee == c.types.error)) {
+            return true;
+        }
+    }
+    return false;
 }

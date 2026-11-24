@@ -1,0 +1,55 @@
+// `a.getMut()` (lib/std, ADR 0224): the value of an `Arc`, to change in place, while this owner is the only one; null
+// while another owner exists, here another thread's, until that thread has dropped it. State that several owners
+// change goes in an `Arc<Mutex<T>>` instead.
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: false
+// expect-stdout: 4
+// expect-stdout: 7
+
+fn sum(values: borrow Vector<u32>) -> u32 {
+    var total: u32 = 0;
+    for (v in values.view()) {
+        total += v;
+    }
+    return total;
+}
+
+fn main() {
+    var shared = Arc<Vector<u32>>.create(Vector<u32>.create())!;
+    match (shared.getMut()) {
+        Some(values) => {
+            values.push(1)!;
+            values.push(2)!;
+        }
+        null => { Console.writeLine("not unique"); }
+    }
+    Console.writeLine(sum(shared.get()));
+    let reader = shared.clone();
+    Console.writeLine(shared.getMut().isNull());
+    let worker = Thread.spawn(move () => sum(reader.get()))!;
+    Console.writeLine(worker.join());
+    // The thread's owner is gone with the thread.
+    match (shared.getMut()) {
+        Some(values) => { values.push(3)!; }
+        null => { Console.writeLine("still shared"); }
+    }
+    Console.writeLine(sum(shared.get()));
+    Console.writeLine(shared.getMut().isNull());
+
+    let counter = Arc<Mutex<u32>>.create(Mutex<u32>.create(0)!)!;
+    let other = counter.clone();
+    let adder = Thread.spawn(move () => {
+        var guard = other.get().lock();
+        let d = guard.data();
+        d += 4;
+    })!;
+    let _ = adder.join();
+    var guard = counter.get().lock();
+    Console.writeLine(guard.data());
+    let d = guard.data();
+    d += 3;
+    Console.writeLine(guard.data());
+}

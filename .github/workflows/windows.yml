@@ -127,3 +127,40 @@ jobs:
         if: always()
         shell: bash
         run: python tools/slice_check.py --compiler seed/ceesafec.exe --cc cl
+
+  math:
+    # ADR 0248: a program's float math is ucrtbase.dll's whether cl or the runner's gcc (MinGW-w64) builds it, and the
+    # interpreter's too; on two Windows versions, whose ucrtbase.dll and SDK differ.
+    name: float math, the system's UCRT with cl and gcc (${{ matrix.os }})
+    needs: seed
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed
+          path: seed
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: ceesafec, from its C
+        shell: cmd
+        run: |
+          cd seed
+          cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
+          ceesafec.exe --version
+      - name: The C runtimes
+        shell: pwsh
+        run: |
+          (Get-Item C:\Windows\System32\ucrtbase.dll).VersionInfo.FileVersion
+          Get-Command gcc -ErrorAction SilentlyContinue | ForEach-Object { $_.Source; & gcc --version | Select-Object -First 1; & gcc -print-file-name=libucrt.a }
+      - name: The float methods against ucrtbase.dll (ADR 0248)
+        shell: bash
+        run: |
+          if command -v gcc >/dev/null; then gcc="--cc gcc"; else echo "::notice::no gcc on this image"; gcc=; fi
+          python tools/libm_check.py --compiler seed/ceesafec.exe --cc cl $gcc

@@ -1,0 +1,66 @@
+// A program over the zlib binding ceesafec cbind writes (src/zlib.cee, made by tools/cbind_zlib_check.py): compress a
+// buffer, uncompress it, compare, and print the two checksums, which the check compares with Python's zlib.
+
+/// The CRC-32 of `data`, as zlib computes it.
+/// Safety: C reads `data.length` bytes from `data.ptr`, a live slice; the length fits a `u32` (checked).
+fn crc32Of(data: Slice<u8>) -> u64 => unsafe { crc32(0, data.ptr, checkedTruncate<u32>(data.length)!) as u64 };
+
+/// The Adler-32 of `data`.
+/// Safety: C reads `data.length` bytes from `data.ptr`, a live slice; the length fits a `u32` (checked).
+fn adler32Of(data: Slice<u8>) -> u64 => unsafe { adler32(1, data.ptr, checkedTruncate<u32>(data.length)!) as u64 };
+
+/// `data` compressed, in a buffer of compressBound's size.
+/// Safety: C writes at most `length` bytes into `out`, whose size it is told, and reads `data.length` from `data`.
+fn compressed(data: Slice<u8>) -> Vector<u8> {
+    var out = Vector<u8>.create();
+    out.resize(unsafe { compressBound(data.length) }, 0)!;
+    var length = out.length;
+    let space = out.viewMut();
+    let status = unsafe { compress(space.ptr, borrow mut length as *mut usize, data.ptr, data.length) };
+    if (status != Z_OK) {
+        Process.exit(1);
+    }
+    out.truncate(length);
+    return out;
+}
+
+/// `packed` uncompressed into `size` bytes.
+/// Safety: C writes at most `length` bytes into `out`, whose size it is told, and reads `packed.length` from `packed`.
+fn uncompressed(packed: Slice<u8>, size: usize) -> Vector<u8> {
+    var out = Vector<u8>.create();
+    out.resize(size, 0)!;
+    var length = out.length;
+    let space = out.viewMut();
+    let status = unsafe { uncompress(space.ptr, borrow mut length as *mut usize, packed.ptr, packed.length) };
+    if (status != Z_OK) {
+        Process.exit(2);
+    }
+    out.truncate(length);
+    return out;
+}
+
+/// Whether `a` and `b` hold the same bytes.
+fn same(a: Slice<u8>, b: Slice<u8>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (k in 0..a.length) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn main() {
+    var data = Vector<u8>.create();
+    for (k in 0..100000u32) {
+        data.push(truncate<u8>(k * 7 % 251))!;
+    }
+    let packed = compressed(data.view());
+    let back = uncompressed(packed.view(), data.length);
+    Console.writeLine(same(back.view(), data.view()));
+    Console.writeLine(packed.length < data.length);
+    Console.writeLine(crc32Of(data.view()));
+    Console.writeLine(adler32Of(data.view()));
+}

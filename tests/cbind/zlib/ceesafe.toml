@@ -1,0 +1,7 @@
+# A program over a binding of the system's zlib that `ceesafec cbind` writes afresh for each run, as
+# tools/cbind_zlib_check.py does (src/zlib.cee is not kept: it is the system header's).
+[package]
+name = "zlibdemo"
+version = "0.1.0"
+kind = "executable"
+links = ["z"]

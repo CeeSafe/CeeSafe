@@ -25,9 +25,11 @@
   properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the book (tools/book_check.py,
   Decision 0011), the debugger scripts, the MCP server's name lookup (tools/mcp_api_check.py) and its
-  package source (tools/mcp_package_check.py), its tests and documentation tools (tools/mcp_test_check.py), and each kind of fix of tooling.md §5.2 (tools/fix_kinds_check.py).
+  package source (tools/mcp_package_check.py), its tests and documentation tools (tools/mcp_test_check.py), and each
+  kind of fix of tooling.md §5.2 (tools/fix_kinds_check.py).
 - `extern "C"` blocks generated from C headers, by `ceesafec cbind` and by its oracle tools/cbind.py
-  (tools/cbind_check.py; ADR 0095, ADR 0127).
+  (tools/cbind_check.py; ADR 0095, ADR 0127), and a binding of the system's zlib written afresh, built and run against
+  Python's zlib (tools/cbind_zlib_check.py; skipped without clang or zlib.h).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
 - The Android window's embedded dex made from its Java source as it is now (tools/gen_android_dex.py --check;
   ADR 0157).
@@ -225,6 +227,7 @@ def main():
             ("mcp test", py + [f"{HERE}/mcp_test_check.py", "--compiler", cee]),
             ("fix kinds", py + [f"{HERE}/fix_kinds_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),
+            ("cbind zlib", py + [f"{HERE}/cbind_zlib_check.py", "--ceesafec", cee]),
             ("const statics", py + [f"{HERE}/const_statics_check.py", "--ceesafec", cee]),
             ("android dex", py + [f"{HERE}/gen_android_dex.py", "--check"]),
             # The release's seed job builds HEAD from the stage 0 (0.94.5): the compiler's own sources may use only
@@ -265,8 +268,8 @@ def main():
                                                          "run tsan share", "run tsan scratch") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
-            if name == "freestanding" and p.returncode == 2:
-                print(f"{name:14} skip {summary}")  # no clang on this host: not a pass
+            if name in ("freestanding", "cbind zlib") and p.returncode == 2:
+                print(f"{name:14} skip {summary}")  # no clang (or no zlib.h) on this host: not a pass
                 sys.stdout.flush()
                 continue
             failures = {line.split()[1] for line in lines if line.startswith("FAIL ")}

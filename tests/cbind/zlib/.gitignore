@@ -1,0 +1,3 @@
+# Written by ceesafec cbind from the system header (tools/cbind_zlib_check.py), and the build.
+src/zlib.cee
+out/

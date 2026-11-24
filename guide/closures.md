@@ -300,7 +300,7 @@ NaN
 The transcendental ones (from `exp` to `logB` in the table) are the C library's functions, so a result's last bit
 is the platform's, and the interpreter gives the same as the build. The platform is the system the program runs on,
 not the C compiler: on Windows they are the system's ucrtbase.dll's whether `cl`, clang or MinGW's gcc built the
-program, so those builds agree bit for bit. They follow C: `(-1.0).ln()` is NaN, `0.0.ln()`
+program, so those builds agree bit for bit (the interpreter there may still differ in the last bit). They follow C: `(-1.0).ln()` is NaN, `0.0.ln()`
 is `-Infinity`, `1000.0.exp()` is `Infinity`, and none panics. `--profile freestanding` has only the others: the
 kernel has no C library.
 

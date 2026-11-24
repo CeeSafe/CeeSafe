@@ -5674,9 +5674,11 @@ and a zero result keeps `x`'s sign.
   `pow(2.0, y)` into `exp2(y)`), and the result is the libm's at run time. A program links the file only if it calls
   one of them, and the link then adds `-lm`, except on Windows (tooling.md §8.3). With `--emit lib` the host links
   libm (c-backend.md §1).
-- **In the interpreter** each calls the same runtime function, from ceesafec (`src/interpreter/math.cee`), so a
-  program prints the same under `run --interp` as its build does on the same machine, whichever compiler built
-  ceesafec.
+- **In the interpreter** each calls the same libm function, from ceesafec (`src/interpreter/math.cee`), so a program
+  prints the same under `run --interp` as its build does on the same machine. On Windows the interpreter's is the C
+  library ceesafec was linked with, not yet ucrtbase.dll whatever built ceesafec (ADR 0248 §2.3): a ceesafec built by
+  `cl` (the seed's and the releases') carries its SDK's static UCRT, which may differ from ucrtbase.dll in the last
+  bit.
 - **Hosted only.** With `--profile freestanding` a call of one is N0293: CosmoOS has no libm. `trunc`, `round`,
   `roundEven` and `copySign`, like the methods above them, are in every profile.
 

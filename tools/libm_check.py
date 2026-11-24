@@ -8,7 +8,8 @@ choice) and run under `ceesafec run --interp`, and every result is compared bit 
 
 1. with the system's libm, called through Python's ctypes: ucrtbase.dll on Windows, libSystem on macOS, libm
    elsewhere. A difference is a problem;
-2. between the builds and the interpreter (the same comparison, transitively);
+2. between the builds and the interpreter (the same comparison, transitively). On Windows the interpreter's
+   differences are information, not problems: it calls the C library ceesafec was linked with (ADR 0248 §2.3);
 3. for f64 results whose operands and result are finite, with Python's math module, which calls the same libm
    (CPython on Windows links ucrtbase.dll): a second witness, a difference is a problem;
 4. on Windows with `cl` among the compilers, as information only, with a C program that calls the functions
@@ -302,11 +303,14 @@ def main():
             problems += 1
             continue
         wrong = [k for k in range(len(expected)) if not same(int(got[k]), expected[k], all_cases[k][0])]
-        print(f"{what}: {len(wrong)} of {len(expected)} differ from {label}")
+        known = what == "interpreted" and os.name == "nt"
+        print(f"{'information: ' if known and wrong else ''}{what}: {len(wrong)} of {len(expected)} differ from "
+              f"{label}" + (" (the C library ceesafec was linked with: ADR 0248 §2.3)" if known and wrong else ""))
         for k in wrong[:25]:
             t = all_cases[k][0]
             print(f"    {describe(all_cases[k])} = {value(int(got[k]), t)}, {label} {value(expected[k], t)}")
-        problems += len(wrong)
+        if not known:
+            problems += len(wrong)
     witnessed = 0
     disagree = 0
     for k, case in enumerate(all_cases):

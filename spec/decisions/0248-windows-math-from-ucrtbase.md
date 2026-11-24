@@ -4,8 +4,8 @@
   `CEESAFE_FINDINGS.md` finding 50, at the owner's decision: "the same as the platform". To ship in 0.95.8 with
   `fix/windows-processes`. §6's question is the owner's.
 - Scope: type-system.md §35.8 and c-backend.md §1 (ADR 0218's float methods); `runtime/hosted/ceesafe_rt_math.c`
-  (the Windows resolver), `src/interpreter/math.cee` (the interpreter calls the runtime's functions), the embedded
-  runtime (`src/library/runtime.cee`, generated); `tools/libm_check.py` (new) and `.github/workflows/windows.yml`.
+  (the Windows resolver), the embedded runtime (`src/library/runtime.cee`, generated), `src/interpreter/math.cee`
+  (a comment: §2.3); `tools/libm_check.py` (new) and `.github/workflows/windows.yml`.
   Amends ADR 0218 §2.2.
 
 ## 1. Context
@@ -60,10 +60,15 @@ it was built), not on the machine it runs on.
      10 and 11 and Server 2016 and later.
    - Mixing C runtimes is safe here: the functions are pure (numbers in, a number out), they touch no CRT state but
      `errno`, which CeeSafe does not read (ADR 0218 §2.2), and they need no initialisation by the program's CRT.
-3. **The interpreter** calls the same runtime functions (`ceesafe_math_*`), not libm by name, so `run --interp` on
-   Windows gives what a build gives on the same machine whichever compiler built ceesafec (the seed is built by
-   `cl`, statically). `src/interpreter/math.cee` calls the methods themselves (`x.exp()` …), so ceesafec links
-   `ceesafe_rt_math.c` as any program that calls them does, and its `extern "C"` block and `unsafe` go.
+3. **The interpreter, not yet.** `src/interpreter/math.cee` calls libm by name (`extern "C"`, ADR 0218 §2.2), so
+   under `run --interp` on Windows the results are those of the C library ceesafec was linked with: ucrtbase.dll's
+   when a UCRT MinGW or `cl /MD` built ceesafec, the SDK's static copy when `cl` built it as the seed's commands and
+   release.yml do (§5 measures how often that differs). It should call the runtime's `ceesafe_math_*` instead, which
+   every ceesafec already links (its embedded runtime names them), and the interpreter would then agree with builds
+   bit for bit on Windows too. But the tree must build with stage 0, 0.94.5 (bootstrap/reference.md), whose runtime
+   has no `ceesafe_rt_math.c` and whose checker has no float methods, so neither spelling links or checks there.
+   The change is one line per function once stage 0 is a release with ADR 0218 (an explicit change of stage 0, the
+   owner's: §6).
 4. **Elsewhere nothing changes**: Linux, macOS, FreeBSD, Android and iOS call the system libm, as their `sqlite3`
    does. The generated C does not change on any platform: the change is inside the runtime file.
 5. **What is not promised.** Results may differ between operating systems, and between versions of Windows
@@ -93,7 +98,8 @@ it was built), not on the machine it runs on.
   from that file (§5).
 - The first math call of a Windows program loads ucrtbase.dll if the program has not already (a UCRT program has);
   each call is then one indirect call more and one `InitOnce` check.
-- ceesafec links `ceesafe_rt_math.c` itself; its manifest's `links = ["m"]` stays for Linux and FreeBSD.
+- Until §2.3 is done, `run --interp` on Windows can differ from a build in the last bit, where the static UCRT of
+  the SDK that built ceesafec differs from the system's ucrtbase.dll.
 
 ## 5. Tests and evidence
 
@@ -101,14 +107,18 @@ it was built), not on the machine it runs on.
   arguments (the SQLite tests' sweeps and special values, `pow(2, -1075)` among them) and seeded random operands, in
   `f64` and `f32`, with each C compiler given and under `run --interp`, and compares every result bit for bit with
   each other and with the system's libm called through Python's `ctypes` (ucrtbase.dll on Windows), and the `f64`
-  ones with Python's `math` where it calls libm. With `cl` among the compilers it also reports, as information, how
+  ones with Python's `math` where it calls libm. On Windows the interpreter's differences are reported as
+  information (§2.3). With `cl` among the compilers it also reports, as information, how
   a C program built `cl /MT` (the SDK's static UCRT) differs. windows.yml runs it with `cl` and the runner's gcc.
 - Results: ROADMAP §10.
 
-## 6. Question for the owner
+## 6. Questions for the owner
 
 1. **sqlite3.exe.** sqlite.org's `sqlite3.exe` is static (§1.3), so "the same as the platform" and "the same as
    sqlite3.exe" are different promises on a Windows whose ucrtbase.dll is older (or newer) than that file's SDK.
    This ADR keeps the first, as decided. The SQLite port's tests can compare with a `sqlite3` built `/MD` (or by
    MinGW), or accept the last bit on Windows; or CeeSafe could promise the second, which only bundling a libm would
    give.
+2. **Stage 0 for the interpreter** (§2.3): move stage 0 to a release with ADR 0218 (0.95.x) so the interpreter can
+   call the runtime's functions, or leave the interpreter on the C library ceesafec links until stage 0 moves for
+   another reason?

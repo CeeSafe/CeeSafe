@@ -2,8 +2,8 @@
 
 - Status: **Proposed** 2026-11-24 and implemented on branch `fix/findings-math` at the owner's instruction (the
   SQLite port's `CEESAFE_FINDINGS.md`, findings 1 and 20); not released. §6's questions are the owner's. ADR 0248
-  amends §2.2: on Windows the functions are ucrtbase.dll's whatever the C compiler, and the interpreter calls the
-  runtime's functions, not libm by name.
+  amends §2.2: on Windows the functions are ucrtbase.dll's whatever the C compiler (the interpreter's not yet: its
+  §2.3).
 - Scope: type-system.md §35.6 and §35.8; c-backend.md §1; tooling.md §8.3; diagnostics.md N0293;
   `src/check/io.cee` (the method table), `src/hir/builtins.cee`, `src/backend/c_body.cee`, `src/backend/c_backend.cee`,
   `src/host/toolchain.cee` (`-lm`), `src/interpreter/math.cee` and `runtime.cee`; `runtime/include/ceesafe/rt.h`,

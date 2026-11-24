@@ -143,8 +143,9 @@ Code's client (diagnostics, hover, definition, an unknown method, shutdown and e
   (the `ceesafec` on the worktree's `PATH`, or `lsp.ceesafec.binary.path` and `.arguments` from Zed's settings),
   with the worktree's shell environment.
 
-`editors/zed` is under the MIT licence (its `LICENSE`), as Zed's registry requires of an extension's own code; the
-rest of the repository keeps its own.
+`editors/zed` is under the MIT licence (its `LICENSE`), as Zed's registry requires of an extension's own code, and so is
+the grammar, `editors/tree-sitter-ceesafe` (its `LICENSE`; Decision 0012), which other editors bundle too; the rest of
+the repository keeps its own (`COPYING.RUNTIME`).
 
 The grammar is `editors/tree-sitter-ceesafe` (`grammar.js`, the generated `src/parser.c`, and `src/scanner.c` for raw
 string literals, whose end a longest-match token cannot find). It follows `grammar.md` and type-system.md §15.2, and is

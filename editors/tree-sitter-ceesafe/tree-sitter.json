@@ -14,7 +14,7 @@
   ],
   "metadata": {
     "version": "0.1.0",
-    "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+    "license": "MIT",
     "description": "CeeSafe grammar for Tree-sitter",
     "links": {
       "repository": "https://github.com/CeeSafe/CeeSafe"

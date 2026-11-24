@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// SPDX-License-Identifier: MIT
 // The raw string literal of CeeSafe (spec/grammar.md §1.6): `"""` that ends its line, the lines that follow, and a
 // closing line that holds only spaces or tabs and then `"""`. Tree-sitter's lexer takes the longest match, so it
 // cannot stop at the first closing line; this scanner does.

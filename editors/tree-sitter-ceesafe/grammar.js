@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// SPDX-License-Identifier: MIT
 // A Tree-sitter grammar for CeeSafe, for editors that highlight with Tree-sitter (editors/zed). It follows
 // spec/grammar.md and type-system.md §15.2 (patterns), and is permissive where an editor should be: what the compiler
 // refuses with a message (a missing `(` after `if`, a tuple) may still parse here. The compiler's parser is the

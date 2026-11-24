@@ -1,8 +1,9 @@
 # Decision 0012 — The licences of the editor tooling
 
-- Status: **Proposed**, 2026-11-24, under the optimization and DX roadmap's Phase 4, item 2 (the owner: "Continue to
-  the remaining in the roadmap"). Nothing is relicensed by this document: §4's questions are the owner's, and only the
-  copyright holders can answer the second.
+- Status: **Accepted** by the owner, 2026-11-24 ("Go ahead. I'm with your recommendations."), every question of §4 as
+  proposed: the Tree-sitter grammar is MIT (its `LICENSE`, SPDX lines and `tree-sitter.json`), `COPYING.RUNTIME` names
+  the three MIT parts, and the VS Code client, the language server and the debugger scripts stay GPL-2.0-only.
+  Proposed the same day under the optimization and DX roadmap's Phase 4, item 2.
 - Relates to: `COPYING`, `COPYING.RUNTIME`, tooling.md §2.4 and §2.5, `editors/linguist/README.md`.
 
 ## 1. What the repository says today

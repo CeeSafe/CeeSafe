@@ -17,8 +17,11 @@ The exception applies to:
     contains code from ceesafec itself rather than from the program being compiled.
 
 In those files, "this library" in the exception means the files listed above. Their SPDX identifier is
-GPL-2.0-only WITH Classpath-exception-2.0. Everything else in this repository (the compiler, its tools and tests, the
-editor support, the specification and the documentation) is GPL-2.0-only without the exception.
+GPL-2.0-only WITH Classpath-exception-2.0. Three parts of the editor support are under the MIT licence instead, each
+with its own LICENSE file, so that other editors and tools can bundle them: the TextMate grammar
+(editors/vscode/syntaxes), the Tree-sitter grammar (editors/tree-sitter-ceesafe) and the Zed extension (editors/zed).
+Everything else in this repository (the compiler, its tools and tests, the rest of the editor support, the
+specification and the documentation) is GPL-2.0-only without the exception.
 
 -----------------------------------------------------------------------------------------------------------
 

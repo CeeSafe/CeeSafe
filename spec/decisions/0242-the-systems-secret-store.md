@@ -1,6 +1,6 @@
 # ADR 0242 — The system's secret store
 
-- Status: **Proposed — implemented** 2026-11-24 on the branch `feat/secret-store`, asked for by Marivil's CeeUI port
+- Status: **Proposed — implemented** 2026-11-24 on the branch `feat/secret-store`, released in 0.95.6 (the owner: "Release"), asked for by Marivil's CeeUI port
   (phase 3, phones: "secure storage for the account and the keys", PORT-PLAN.md), on the owner's "continue" after
   that step was named as the port's next. Its questions for the owner are §6.
 - Scope: `lib/std/secrets.cee` (`Secrets`, `SecretError`), `runtime/hosted/ceesafe_rt_secrets.c` (new),

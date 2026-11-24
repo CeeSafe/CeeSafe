@@ -1,0 +1,19 @@
+// ADR 0236: `s.intoBytes()` and `String.fromUtf8(v)` move their string or vector: neither can be used after, taken
+// through a loan, or moved while it is borrowed.
+fn lent(s: borrow String) -> Vector<u8> {
+    return s.intoBytes(); // error[N0251]
+}
+
+fn lentMut(s: borrow mut String) -> Vector<u8> {
+    return s.intoBytes(); // error[N0251]
+}
+
+fn main() {
+    let s = String.from("abc")!;
+    let bytes = s.intoBytes();
+    Console.writeLine(s.length); // error[N0250]
+    let v = Vector<u8>.create();
+    let r = borrow v;
+    let t = String.fromUtf8(v); // error[N0240]
+    Console.writeLine(r.length);
+}

@@ -174,11 +174,23 @@ public struct ByteString {
     /// A new byte string with a copy of `text`'s bytes (a literal, a `StringView`, or a `String`, lent).
     public fn fromText(text: StringView) -> Result<ByteString, AllocError> => ByteString.copyOf(text.bytes());
 
+    /// The bytes of `text`, which it takes: no copy (`s.intoBytes()`, ADR 0236).
+    public fn fromString(text: String) -> ByteString => ByteString { data: StringBytes.intoBytes(text) };
+
     /// A new byte string with a copy of the bytes.
     public fn clone(borrow this) -> Result<ByteString, AllocError> => ByteString.copyOf(this.data.view());
 
     /// The bytes, which the byte string gives up: no copy.
     public fn intoBytes(this) -> Vector<u8> => this.data;
+
+    /// The text as a `String`, which the byte string gives up, when the bytes are UTF-8: no copy
+    /// (`String.fromUtf8`, ADR 0236). When they are not, the byte string back, unchanged.
+    public fn intoString(this) -> Result<String, ByteString> {
+        return match (StringBytes.fromUtf8(this.data)) {
+            Ok(text) => Ok(text),
+            Err(bytes) => Err(ByteString { data: bytes }),
+        };
+    }
 
     /// A view of the text, a loan of the byte string.
     public fn view(borrow this) -> ByteStringView => ByteStringView { data: this.data.view() };

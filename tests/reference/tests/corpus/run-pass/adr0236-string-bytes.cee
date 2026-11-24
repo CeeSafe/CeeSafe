@@ -1,0 +1,162 @@
+// ADR 0236: a string's bytes without a copy. `s.intoBytes()` gives a string's buffer to a vector, `String.fromUtf8(v)`
+// gives a vector's buffer to a string when the bytes are UTF-8 (else the vector back), and `ByteString.fromString(s)`
+// and `b.intoString()` do the same for a byte string. No copy is observable: the buffer's address and the capacity are
+// those of the value given up. Expectations written by hand.
+
+fn address(bytes: Slice<u8>) -> usize => bytes.ptr as usize;
+
+fn roundTrip() {
+    var s = String.withCapacity(32)!;
+    s.append("x = ")!;
+    s.appendNumber(-12)!;
+    let before = address(s.bytes());
+    let capacity = s.capacity;
+    let bytes = s.intoBytes();
+    Console.writeLine(bytes.length);
+    Console.writeLine(bytes.capacity == capacity);
+    Console.writeLine(address(bytes.view()) == before);
+    match (String.fromUtf8(bytes)) {
+        Ok(text) => {
+            Console.writeLine(text.view());
+            Console.writeLine(text.capacity == capacity);
+            Console.writeLine(address(text.bytes()) == before);
+        }
+        Err(_) => {
+            Console.writeLine("not UTF-8");
+        }
+    }
+}
+
+fn notUtf8() {
+    var v = Vector<u8>.withCapacity(16)!;
+    v.extend("ab".bytes())!;
+    v.push(0xFF)!;
+    let before = address(v.view());
+    match (String.fromUtf8(v)) {
+        Ok(_) => {
+            Console.writeLine("UTF-8?");
+        }
+        Err(back) => {
+            // The vector given back, unchanged.
+            Console.writeLine(back.length);
+            Console.writeLine(back.capacity);
+            Console.writeLine(back[2]);
+            Console.writeLine(address(back.view()) == before);
+        }
+    }
+}
+
+fn empty() {
+    let bytes = String.create().intoBytes();
+    Console.writeLine(bytes.length);
+    Console.writeLine(bytes.capacity);
+    let text = String.fromUtf8(Vector<u8>.create())!;
+    Console.writeLine(text.length);
+    // A string emptied by `clear` keeps its buffer, and gives it.
+    var s = String.from("hello")!;
+    s.clear();
+    let capacity = s.capacity;
+    let kept = s.intoBytes();
+    Console.writeLine(kept.length);
+    Console.writeLine(kept.capacity == capacity);
+}
+
+fn byteStrings() {
+    var s = String.create();
+    s.appendFixed(2.5, 3)!;
+    let before = address(s.bytes());
+    let b = ByteString.fromString(s);
+    Console.writeLine(address(b.bytes()) == before);
+    Console.writeBytes(b.bytes());
+    Console.writeLine("");
+    match (b.intoString()) {
+        Ok(text) => {
+            Console.writeLine(address(text.bytes()) == before);
+            Console.writeLine(text.view());
+        }
+        Err(_) => {
+            Console.writeLine("not UTF-8");
+        }
+    }
+    var odd = ByteString.fromText("a")!;
+    odd.appendByte(0xC0)!;
+    match (odd.intoString()) {
+        Ok(_) => {
+            Console.writeLine("UTF-8?");
+        }
+        Err(back) => {
+            Console.writeLine(back.length());
+            Console.writeLine(back.bytes()[1]);
+        }
+    }
+    // A multi-byte text is UTF-8, and comes back as it went.
+    let snow = ByteString.fromString(String.from("☃ é")!);
+    Console.writeLine(snow.length());
+    Console.writeLine(snow.intoString()!.view());
+}
+
+fn otherAllocators() {
+    var f = String<FailingAllocator>.from("fail")!;
+    f.append("ing")!;
+    let fb: Vector<u8, FailingAllocator> = f.intoBytes();
+    Console.writeLine(fb.length);
+    let back: String<FailingAllocator> = String.fromUtf8(fb)!;
+    Console.writeLine(back.view());
+    var secret = String<SecretHeap>.from("secret")!;
+    let before = address(secret.bytes());
+    let sb: Vector<u8, SecretHeap> = secret.intoBytes();
+    Console.writeLine(address(sb.view()) == before);
+    match (String<SecretHeap>.fromUtf8(sb)) {
+        Ok(text) => {
+            Console.writeLine(text.view());
+        }
+        Err(_) => {}
+    }
+}
+
+fn direct() {
+    // lib/core's own functions, which the two calls are, are safe to name.
+    let bytes = StringBytes.intoBytes(String.from("direct")!);
+    Console.writeLine(bytes.length);
+    let text = StringBytes.fromUtf8(bytes)!;
+    Console.writeLine(text.view());
+}
+
+fn main() {
+    roundTrip();
+    notUtf8();
+    empty();
+    byteStrings();
+    otherAllocators();
+    direct();
+}
+
+// expect-stdout: 7
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: x = -12
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 3
+// expect-stdout: 16
+// expect-stdout: 255
+// expect-stdout: true
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 2.500
+// expect-stdout: true
+// expect-stdout: 2.500
+// expect-stdout: 2
+// expect-stdout: 192
+// expect-stdout: 6
+// expect-stdout: ☃ é
+// expect-stdout: 7
+// expect-stdout: failing
+// expect-stdout: true
+// expect-stdout: secret
+// expect-stdout: 6
+// expect-stdout: direct

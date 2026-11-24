@@ -35,7 +35,7 @@ fn vectorMethodNames(bytes: bool) -> StringView =>
 
 /// A `String`'s built-in methods.
 fn stringMethodNames() -> StringView =>
-    "append appendNumber clear view bytes clone indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat";
+    "append appendNumber clear view bytes clone intoBytes indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat";
 
 /// A `StringView`'s methods.
 fn viewMethodNames() -> StringView =>

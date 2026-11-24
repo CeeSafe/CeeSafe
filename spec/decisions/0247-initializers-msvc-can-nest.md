@@ -58,9 +58,11 @@ gives gcc's `-Wmissing-braces`.
    that does (a variant with a payload, `Some`, a constructor `ceeMk_`), or is `{0}` of a fixed type whose first
    member is a scalar (an async frame, a scope, a field-less allocator).
 
-The generated C is the same on every host; only its text changes. gcc and clang at -O2 give the same machine code for
-the old and new forms (`{ .tag = 0 }` and `{0}`: a `bzero` call for a 520-byte optional, the same stores for a
-24-byte one; `memset` the same; clang 21, measured).
+The generated C is the same on every host; only its text changes. At -O2 the new forms cost what the old did
+(measured 2026-11-25, Apple clang 21 arm64 and MinGW-w64 gcc 16.2 x64): `{ .tag = 0 }`, `{0}` and the zero helper's
+`memset` of a 520-byte optional are one `bzero`/`memset` call with both; a 24-byte unit variant is the same four
+stores with clang, and three stores with gcc for both (with the new form gcc leaves the padding unwritten, which C
+never promised to zero).
 
 ## 3. Alternatives
 

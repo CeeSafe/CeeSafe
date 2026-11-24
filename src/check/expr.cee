@@ -1629,6 +1629,11 @@ fn voidMisplaced(c: borrow Checker, t: u32, top: bool, depth: u32) -> bool {
     if (c.types.is(t, TypeKind.RawPointer)) {
         return false;
     }
+    // A thread's result is what its body returns, so `Thread<void>` is a thread with no result (type-system.md §38.2): its argument is
+    // a return type, not an element.
+    if (c.types.is(t, TypeKind.Thread)) {
+        return voidMisplaced(c, info.element, true, depth + 1);
+    }
     // An element or a referent of the type `void` (ADR 0213 §7): `Vector<T>`, `[T; N]`, `Slice<T>`, `borrow T`,
     // `Box<T>`.
     if (info.element != none() && voidMisplaced(c, info.element, false, depth + 1)) {

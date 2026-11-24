@@ -1940,8 +1940,9 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
     with a field of the type `void`, have no meaning: N0226 where the instance is used.
   - There is no value of `void`, so in an instance a type parameter that is `void` cannot be part of another type:
     an optional's value (`T?`), an element (`Vector<T>`, `[T; N]`, `Slice<T>`), a referent (`borrow T`) or any other
-    type argument but a `Result`'s success type and a generic enum's. In the instance's signature that is N0226 at
-    the call; in its body, N0222 there, as any error of an instance's body.
+    type argument but a `Result`'s success type, a generic enum's and a thread's result (`Thread<void>`, §38.2,
+    whose argument is what the body returns). In the instance's signature that is N0226 at the call; in its body,
+    N0222 there, as any error of an instance's body.
   - A call of an instance whose signature, with `void` for a type parameter, has `void` where §2 allows none (a
     parameter, `T?`, a `Result`'s error) is N0226 at the call (ADR 0138 §7): `r.ok()` on a `Result<void, E>` is one,
     and `isOk()` tests it. The instance is never compiled.

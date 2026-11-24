@@ -4084,8 +4084,9 @@ Diagnostics: none new.
     its pixels over the density's scale (`dpi / 160`), and `safeArea()` its insets (ADR 0156). Frames are copied into the `ANativeWindow`'s buffer
     (`RGBX_8888`). Touches are as on iOS (ADR 0155); the window's focus gives `Focus`; the
     activity's end (Back, or the system's) gives `Closed`, after which `present` shows nothing. The activity's input
-    queue and window are used under one lock that its callbacks take too. There is no clipboard yet
-    (`setClipboardText` is `Unsupported`, `clipboardText` false), title, cursor, menu or file dialog. Text input is
+    queue and window are used under one lock that its callbacks take too. The clipboard is `ClipboardManager`'s
+    plain text (ADR 0154 §4, amended 2026-11-25; Android 10 and later give it only to the app in front). There is no
+    title, cursor, menu or file dialog. Text input is
     the soft keyboard's (ADR 0157).
 
   The runtime file is part of a build only when the program calls a window function.

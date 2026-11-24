@@ -371,6 +371,7 @@ fn compileIn(
         options.split,
         if (!options.split) 1 else if (options.jobsGiven) options.testJobs else processorCount(),
         options.windowed && !options.testing,
+        options.lto,
     )!;
     if (tool.length == 0) {
         appendBytes(mut tool, compiler)!;

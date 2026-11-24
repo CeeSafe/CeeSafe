@@ -118,6 +118,7 @@ files named with the `.cee` files are compiled and linked with the program. Taug
 | `--no-debug-assertions` | none | Leaves `debugAssert` calls out of this build, even with `-g`. | off |
 | `--split` | none | Writes the C as one file for each CeeSafe file, so that the C compiler runs on several at once ([14.1](./ch14-01-build-settings)). | off: one C file |
 | `--jobs` | `<n>`, a number above 0 | With `--split`, compiles at most `n` C files at once. Without `--split` it is a usage error. | the number of processors |
+| `--lto` | none | With `--split`, compiles and links with link-time optimisation, so calls between the C files can be inlined: ThinLTO with clang, `-flto=auto` with gcc, `/GL` and `/LTCG` with `cl`. Without `--split` it is a usage error. | off |
 | `--program` | `<name>` | With `--split`, sets the name that the program's C names carry. | the package's name, or the first file's |
 | `--flat-c` | none | Writes the C in its flat form, one label for each block, without rebuilding `if` and loops. | off |
 | `--profile` | `hosted` or `freestanding` | Chooses the profile. `freestanding` builds without a C library or an operating system ([22.1](./ch22-01-the-freestanding-profile)). | `hosted`, or the manifest's `profile` |

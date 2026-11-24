@@ -36,8 +36,11 @@ fn appendSignature(
     }
     appendCTypeName(c, mut e.buf, source.returnType)?;
     e.t(" ")?;
-    appendVariantPrefix(mut e.buf, function.variant)?;
-    appendCFunctionName(c, mut e.buf, function.source)?;
+    if (function.variant == 0) {
+        appendCFunctionName(c, mut e.buf, function.source)?;
+    } else {
+        appendBoundVariantName(c, mut e.buf, function.source, function.bindings)?;
+    }
     e.t("(")?;
     var count: u32 = 0;
     for (k in 0..function.parameterCount) {
@@ -2014,8 +2017,7 @@ fn appendRvalue(
                 }
                 return appendFromBoundary(c, out, function.returnType, call.view());
             }
-            appendVariantPrefix(out, n.rvalueVariants[r as usize])?;
-            appendCFunctionName(c, out, callee)?;
+            appendNirFunctionName(c, n, out, callee, n.rvalueVariants[r as usize])?;
             out.push('(')?;
             appendOperandList(e, c, n, sources, f, out, arguments, 0)?;
             if (function.usesCallerAddress) {

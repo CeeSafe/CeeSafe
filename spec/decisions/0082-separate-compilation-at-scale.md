@@ -12,8 +12,8 @@
 - Release: stage A ships in 0.24.3, with ADR 0081's diagnostics and the bug of §4. Stages B–F are tooling work, with
   no language change, that can land with any later release; D first. **Stage D is implemented** (branch `impl/0082d`,
   2026-11-10, not yet released): per-package `check` with interface records and `check --all` (§8). **Stage B's
-  preludes (§2.2) are implemented** (2026-11-24, branch `dx/roadmap-phase0`, not released; §9); its content names
-  and per-package instances (§2.2's last item, §2.3) are not.
+  preludes (§2.2) are implemented** (2026-11-24, branch `dx/roadmap-phase0`, not released; §9), and **its content
+  names and stage F's `--lto`** (§10); per-package instances (§2.3) are not.
 - Scope: c-backend.md §2.1 (names), §2.4 (split output), §7 (location tables); tooling.md §4.4 (commands), §5.1 (the
   JSON diagnostics), §8.3 (flags); type-system.md §32.1 (effects across packages); the C backend (`c_split.cee`,
   `c_skeleton.cee`, `c_names.cee`, `c_program.cee`, `c_backend.cee`), closure-call specialisation's variant names, the
@@ -622,3 +622,67 @@ compiler built from it emitted its own C byte for byte as the usual one does.
 The same machine and sources: `--split --jobs 8` takes **24.6 s wall and 83.3 s CPU, 1.29×** the one-file build (the
 gate is 1.5×), against 31.6 s and 136.2 s before; the compiler built that way emits its own C byte for byte as the
 one-file build's does. The runs are in ROADMAP §10.
+
+## 10. Implementation notes: content names and `--lto` (2026-11-24)
+
+Done under the same roadmap item (the owner: "Go ahead to those still open items"). Measured on rq (Ubuntu 24.04,
+x86-64, 8 cores, gcc 13.3 and clang 18.1, load under 2), the compiler's own sources.
+
+### 10.1 Content names (§2.2's last item)
+
+- **Closures** are `ceeCB_<place>`, their environments `ceeCE_<place>` (and `CE<len><place>` inside a mangled
+  name): `<place>` is the C name of the function the closure is written in, the outermost one's for a nested closure,
+  then `_<k>` for its k-th closure. The checker already numbered closures that way (`placeClosure`, for the
+  environment's diagnostic name); the environment struct now records its closure's function. A closure in a static's
+  initialiser is `S<k>`, still counted in the program's order: rare, and left for stage C.
+- **Variants** are `ceeXS_<len><callee>` then `B<index>_<len><body>` for each bound parameter, from the NIR
+  function's bindings; **async instances** `ceeAS_<len><original>` and the same for their bindings, which the instance's
+  HIR function now keeps. Both were numbered by the order the program's calls made them.
+- **`ceeL_` and `cee_file_`** are numbered within each split unit (`renumberUnitLocals`, after its prelude): they are
+  static, copied per unit, so a unit's own numbers, in the program's order, make its text independent of other units.
+  One-file builds keep their numbers, so no snapshot of them changed.
+- **`ceeLS_` is not renamed**: a split build defines each long literal once, in `ceesafe_instances.c`, and every unit
+  declares it `extern`; numbering it per unit would copy an embedded file into each unit that uses it. Naming it by its
+  bytes needs a hash and a collision check; stage C can decide.
+- **A unit's renames are only those it mentions.** Every unit had a `#define` for every function the program defines,
+  so its text depended on all the others: 40.5 MB of the compiler's 108.6 MB of units, of which 0.6 MB were names the
+  unit used. Units are now 68.7 MB. The CPU of a split build did not change measurably (gcc 362.7 → 365.0 s, clang
+  235.9 → 238.6 s): the preprocessor reads `#define`s cheaply. It is kept for the cache, whose keys are a unit's text.
+- **Expectations edited** (reviewed): `emit-c/arrays-of-atomics.c`'s closure, `ceeCB_1549`/`ceeCE_1549`, is now
+  `ceeCB_ceeF_build_1`/`ceeCE_ceeF_build_1`. Its number had changed whenever the libraries gained a function. The
+  book's chapter 13.4 shows the new names; `tools/debugger_check.py` demangles an async closure's resume function in
+  the new form.
+
+### 10.2 `--lto` (stage F, §2.4)
+
+`build --split --lto` adds `-flto=thin` (clang) or `-flto=auto` (gcc), chosen from `<cc> --version`, to each compile
+and the link; `/GL` and `/LTCG` with `cl` (tooling.md §8.3). Without `--split`, or with another `--emit`, it is a usage
+error. One test found a fault the ADR did not foresee: an `@export` that uses `callerAddress()` takes the address in
+its C wrapper (ADR 0030 §3.3, "it does not depend on inlining"), but LTO inlined the wrapper into its C caller in
+`ffi/includes-exports`, which then printed `callers 0 0 1`. That wrapper is now `CEE_NOINLINE`.
+
+| rq, the compiler | gcc: build wall / CPU | emitting its own C | clang: build wall / CPU | emitting its own C |
+|---|---|---|---|---|
+| one file | 209.7 s / 207.4 s | 26.71 s | 187.4 s / 186.0 s | 21.54 s |
+| `--split` | 73.5 s / 365.0 s (1.76×) | 29.10 s (+8.9%) | 57.2 s / 238.6 s (1.28×) | 22.51 s (+4.5%) |
+| `--split --lto` | 82.9 s / 397.5 s | 25.47 s (−4.6%) | 91.3 s / 330.5 s | 19.86 s (−7.8%) |
+
+Emitting is the median of 5 runs of `build --emit c` of the compiler's sources by each build. So split + LTO is faster
+than one file with both compilers, within §2.8's 5%. ThinLTO's link takes 34 s of the clang build's wall time; gcc's
+partitions run in parallel.
+
+`benchmarks/run.py` (clang, 5 runs, CeeSafe's wall time against the same programs built as one file): `--split`
+0.987 and `--split --lto` **1.000** in geometric mean over the 17 workloads, so the gate holds on the mean. Not on each
+workload: `parsing` is 1.145 with LTO and 1.141 without, `numeric` 1.055 and `large-objects` 1.053; the rest are within
+5%, `heap-alloc` 0.889 and `recursion` 0.924 the fastest. A benchmark is one source file, so its split build is that
+unit, `ceesafe_instances.c` and the runtime: LTO has little to join. `parsing`'s gap is the same without LTO, so it
+comes from splitting; its cause was not measured.
+
+**Stage B's gate with gcc is not met**: 1.76× the one-file CPU, against 1.28× with clang (§9.3 measured clang only).
+Where gcc's extra time goes was not measured; it is open.
+
+### 10.3 Not done
+
+Per-package instances (§2.3): each package's copy of the generic and async instances and variants it uses, named
+with it, its `dyn` tables and frames, and C's `main` out of `ceesafe_instances.c`. It serves stage C's cache alone,
+and nothing measures it before that cache exists; it is left to be done with stage C.

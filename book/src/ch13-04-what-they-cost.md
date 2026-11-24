@@ -52,7 +52,7 @@ between versions; the shape does not. Three pieces of it are the closure.
 variable:
 
 ```c
-struct ceeCE_997 {
+struct ceeCE_ceeF_main_1 {
     ceeCK_Q1i32bool f_0code;
     const int32_t * f_limit;
 };
@@ -62,8 +62,8 @@ struct ceeCE_997 {
 the pointer there:
 
 ```c
-static bool ceeCB_997(const void *cee_env, CEE_UNUSED int32_t v_v_1) {
-    CEE_UNUSED ceeCE_997 * v_env_0 = (ceeCE_997 *)(uintptr_t)cee_env;
+static bool ceeCB_ceeF_main_1(const void *cee_env, CEE_UNUSED int32_t v_v_1) {
+    CEE_UNUSED ceeCE_ceeF_main_1 * v_env_0 = (ceeCE_ceeF_main_1 *)(uintptr_t)cee_env;
     CEE_TEMP bool t_2 = false;
     CEE_TEMP bool t_3 = false;
     t_2 = (v_v_1 > (*(*v_env_0).f_limit));
@@ -76,11 +76,11 @@ static bool ceeCB_997(const void *cee_env, CEE_UNUSED int32_t v_v_1) {
 That address is the closure's value:
 
 ```c
-    t_3 = ceeCB_997;
+    t_3 = ceeCB_ceeF_main_1;
     t_4 = &v_limit_1;
-    t_5 = ((ceeCE_997){ .f_0code = t_3, .f_limit = t_4 });
+    t_5 = ((ceeCE_ceeF_main_1){ .f_0code = t_3, .f_limit = t_4 });
     t_6 = &t_5.f_0code;
-    t_7 = ceeXS1_ceeF_countIf(t_2, t_6);
+    t_7 = ceeXS_12ceeF_countIfB1_17ceeCB_ceeF_main_1(t_2, t_6);
 ```
 
 So a closure that borrows costs two words on the stack here, 16 bytes, and no allocation. One more pointer
@@ -106,11 +106,12 @@ pointer:
 
 A C compiler cannot look into a call like that, so it cannot merge the body into the loop. But `main` does
 know which closure it passes. So `ceesafec` makes a second copy of `countIf` for that call, a **variant**, in
-which the parameter is bound to that closure's body. `main` calls the variant (`ceeXS1_ceeF_countIf` above),
-and the call in it is direct:
+which the parameter is bound to that closure's body. `main` calls the variant
+(`ceeXS_12ceeF_countIfB1_17ceeCB_ceeF_main_1` above: `countIf` with parameter 1 bound to the first closure written in
+`main`), and the call in it is direct:
 
 ```c
-        t_7 = ceeCB_997(v_keep_1, v_v_3);
+        t_7 = ceeCB_ceeF_main_1(v_keep_1, v_v_3);
 ```
 
 The C compiler can now put the comparison inside the loop. `ceesafec build --explain-closure-calls` reports

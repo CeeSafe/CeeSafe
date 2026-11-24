@@ -352,7 +352,8 @@ closure's body, so the calls through it inside are direct too.
 
 ### 5.2 What a program can observe
 Nothing: output, exit status, panics and allocations are unchanged. Only the C function a call goes to changes, and the
-generated C has one more function per variant (`ceeXS<n>_<name>`, c-backend §2.1).
+generated C has one more function per variant (`ceeXS_<len><name>B<k>_<len><body>…`, named from what it binds,
+c-backend §2.1).
 
 ### 5.3 Switch and diagnostics
 - On by default. `ceesafec build --no-closure-specialisation` and `ceesafec run --no-closure-specialisation` keep every

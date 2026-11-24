@@ -186,6 +186,7 @@ struct StructDefinition {
     isOnceEnvironment: bool; // a move environment whose body runs at most once: it may move its captures out (ADR 0074 §2.3)
     inGenericCode: bool;     // a closure's environment in generic code: never emitted, as a type that names a parameter
     closureId: u32;
+    closureFunction: u32; // a closure's environment: the closure's HIR function, for its C name (ADR 0082 §2.2)
     allocateMethod: u32;
     deallocateMethod: u32;
     isImported: bool;
@@ -2314,6 +2315,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     isOnceEnvironment: false,
     inGenericCode: false,
     closureId: 0,
+    closureFunction: none(),
     allocateMethod: none(),
     deallocateMethod: none(),
     isImported: false,

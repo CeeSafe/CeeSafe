@@ -414,3 +414,89 @@ fn appendUnitPrelude(
     }
     return Ok();
 }
+
+/// The number after `prefix` when `word` is `prefix` and decimal digits only, else none.
+fn unitNumberAfter(word: Slice<u8>, prefix: StringView) -> u64? {
+    let p = prefix.bytes();
+    if (word.length <= p.length || !startsWithText(word, prefix)) {
+        return null;
+    }
+    var value: u64 = 0;
+    for (b in word[p.length..]) {
+        if (b < '0' || b > '9' || value > 0xFFFFFFFF) {
+            return null;
+        }
+        value = value * 10 + (b - '0') as u64;
+    }
+    return value;
+}
+
+/// The numbers `prefix` takes in `text`, each once, ascending.
+fn unitNumbers(text: Slice<u8>, prefix: StringView) -> Result<Vector<u64>, AllocError> {
+    var numbers = Vector<u64>.create();
+    var at: usize = 0;
+    loop {
+        let r = nextIdentifier(text, at);
+        if (r.count == 0) {
+            break;
+        }
+        match (unitNumberAfter(rangeText(text, r), prefix)) {
+            Some(value) => { numbers.push(value)?; }
+            null => {}
+        }
+        at = (r.start + r.count) as usize;
+    }
+    numbers.sortBy((a, b) => if (a < b) -1 else if (a > b) 1 else 0);
+    var unique = Vector<u64>.create();
+    for (value in numbers.view()) {
+        if (unique.length == 0 || unique[unique.length - 1] != value) {
+            unique.push(value)?;
+        }
+    }
+    return Ok(unique);
+}
+
+/// Where `value` is in the ascending `numbers` (which holds it).
+fn placeOf(numbers: borrow Vector<u64>, value: u64) -> usize =>
+    numbers.view().partitionPoint((n) => n < value);
+
+/// A unit's text with its location constants and file names numbered within it (ADR 0082 §2.2): `ceeL_<n>` and
+/// `cee_file_<n>` are static in each unit, which copies them in its prelude, so the unit numbers the ones it uses
+/// 0, 1, … in the program's order. Its text then does not change when another unit gains or loses a location.
+fn renumberUnitLocals(text: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    let locations = unitNumbers(text, "ceeL_")?;
+    let files = unitNumbers(text, "cee_file_")?;
+    var out = Vector<u8>.create();
+    var copied: usize = 0;
+    var at: usize = 0;
+    loop {
+        let r = nextIdentifier(text, at);
+        if (r.count == 0) {
+            break;
+        }
+        let word = rangeText(text, r);
+        let start = r.start as usize;
+        match (unitNumberAfter(word, "ceeL_")) {
+            Some(value) => {
+                appendBytes(mut out, text[copied..start])?;
+                appendText(mut out, "ceeL_")?;
+                appendDecimal(mut out, placeOf(locations, value) as u64)?;
+                copied = start + word.length;
+            }
+            null => {
+                match (unitNumberAfter(word, "cee_file_")) {
+                    Some(value) => {
+                        appendBytes(mut out, text[copied..start])?;
+                        appendText(mut out, "cee_file_")?;
+                        appendDecimal(mut out, placeOf(files, value) as u64)?;
+                        copied = start + word.length;
+                    }
+                    null => {}
+                }
+            }
+        }
+        at = start + word.length;
+    }
+    appendBytes(mut out, text[copied..])?;
+    return Ok(out);
+}

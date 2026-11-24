@@ -971,6 +971,14 @@ bytewise order of their paths. The objects are linked in that order, and the C c
 whatever finishes first, so neither the C nor the output depends on `N`; an output identical to an earlier file's
 (a bad `--cflag`'s error, printed by every compile) is printed once, then `ceesafec: the C compiler printed the same
 for <n> of the C files`. `--jobs` without `--split` is a usage error (status 2), since the C is then one command.
+
+`--lto` (`build --split`, ADR 0082 §2.4) compiles and links with link-time optimisation, so the C compiler can inline a
+call from one C file into another as it did in one `main.c`: `-flto=thin` (ThinLTO) for clang and `-flto=auto` for gcc,
+from what `<cc> --version` says, given to each compile and to the link; `/GL` to each compile and `/LTCG` after `/link`
+with `cl`. A compiler whose `--version` names neither clang nor gcc fails the build with `ceesafec: --lto knows clang's
+and gcc's flags, and '<cc> --version' names neither`. Without `--split`, or with an `--emit` other than `exe`, it is a
+usage error (status 2): one C file is optimised whole already. It is off by default: the link then does the work the
+compiles skipped.
 With `cl`, each file is compiled with `/c`, `/Fo:` its own object and, for `-g`, `/FS`, and the objects are linked by
 `cl /Fe:`. On macOS a `-g` build's debug
 information is gathered into `<output>.dSYM` by `dsymutil` after the link, as the compiler driver does when it compiles
@@ -1352,6 +1360,7 @@ for it.
 | `--flat-c` | build, test | build, test | |
 | `--interp` | run, test | run, test | |
 | `--jobs` | build, test | build, with `--split` (without it a usage error); test: the tests run at once, and with `--split` the C files compiled at once | check answers `unknown option`: it is one process |
+| `--lto` | build | build, with `--split` and `--emit exe` (otherwise a usage error) | test answers `unknown option` |
 | `--kernel`, `--profile`, `--no-float` | parse, check, build, run, fix, test | check, build, fix, test | parse: nothing. run: nothing, the interpreter runs hosted code with floats |
 | `--ld` | build, test | build, with `--emit obj` | test: nothing. With `--emit lib` it is a usage error in both |
 | `--lib-main` | build, test | build, with `--emit lib` | test: nothing. Without `--emit lib` it is a usage error in both |

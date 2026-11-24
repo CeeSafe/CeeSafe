@@ -261,9 +261,10 @@ struct HirFunction {
     usesCallerAddress: bool;          // its body calls callerAddress() (ADR 0030): a hidden last parameter in C
     exportName: Range;                // Hir.text
     /// `@cfg("NAME")` (ADR 0043): the C macro whose builds have the exported symbol; count 0 when every build has it.
-    cfgName: Range;         // Hir.text
-    asyncInstanceOf: u32;   // an async instance's original (ADR 0037 §3.3), or none
-    inheritedDefault: bool; // an interface default's instance for an impl that inherits it (ADR 0086 §2.1)
+    cfgName: Range;             // Hir.text
+    asyncInstanceOf: u32;       // an async instance's original (ADR 0037 §3.3), or none
+    asyncBindings: Vector<u64>; // an async instance's bindings, (index << 32) | async closure, for its C name
+    inheritedDefault: bool;     // an interface default's instance for an impl that inherits it (ADR 0086 §2.1)
     /// A function of the instance a bounded `impl` block's functions are checked in that is not one of them (ADR
     /// 0130): the struct's or enum's own generic version reports it.
     repeatsGeneric: bool;
@@ -519,6 +520,7 @@ struct HirProgram {
             exportName: Range { start: 0, count: 0 },
             cfgName: Range { start: 0, count: 0 },
             asyncInstanceOf: 0xFFFFFFFF,
+            asyncBindings: Vector<u64>.create(),
             inheritedDefault: false,
             repeatsGeneric: false,
             keepsInterfaceFlows: false,

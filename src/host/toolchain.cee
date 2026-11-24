@@ -332,6 +332,7 @@ fn compileExecutable(
     split: bool,
     jobs: u32,
     windowed: bool,
+    lto: bool,
 ) -> Result<ToolOutcome, AllocError> {
     var objects = Vector<Vector<u8>>.create();
     match (compileSeparate(compiler, directory, debug, userFlags, freestanding, native, mut objects)?) {
@@ -367,6 +368,7 @@ fn compileExecutable(
                 objects,
                 jobs,
                 windowed,
+                lto,
             );
         }
         var arguments = msvcArguments(directory, files, output, debug, withIncludes)?;
@@ -401,6 +403,7 @@ fn compileExecutable(
             objects,
             jobs,
             windowed,
+            lto,
         );
     }
     var arguments = Vector<Vector<u8>>.create();
@@ -520,7 +523,34 @@ fn compileUnitsAndLink(
     separate: borrow Vector<Vector<u8>>,
     jobs: u32,
     windowed: bool,
+    lto: bool,
 ) -> Result<ToolOutcome, AllocError> {
+    // With --lto (ADR 0082 §2.4), each compile and the link get the compiler's flag for it: the objects then hold the
+    // compiler's intermediate form, and the link optimises the program across them.
+    var flags = Vector<Vector<u8>>.create();
+    for (flag in userFlags.view()) {
+        pushBytes(mut flags, flag.view())?;
+    }
+    if (lto) {
+        if (compiler.msvc) {
+            pushText(mut flags, "/GL")?;
+        } else {
+            let flag = ltoFlag(compiler, directory)?;
+            if (flag.length == 0) {
+                var message = copyBytes("ceesafec: --lto knows clang's and gcc's flags, and '".bytes())?;
+                appendBytes(mut message, compiler.path.view())?;
+                appendText(mut message, " --version' names neither (tooling.md §8.3)\n")?;
+                return Ok(ToolOutcome {
+                    started: true,
+                    status: 1,
+                    stdout: Vector<u8>.create(),
+                    stderr: message,
+                    error: IoError.Other(0),
+                });
+            }
+            flags.push(flag)?;
+        }
+    }
     // The C files, by path.
     var units = Vector<usize>.create();
     for (k in 0..files.length) {
@@ -560,7 +590,7 @@ fn compileUnitsAndLink(
                 pushText(mut arguments, "/O2")?;
                 pushText(mut arguments, "/Oi-")?; // msvcArguments says why
             }
-            for (flag in userFlags.view()) {
+            for (flag in flags.view()) {
                 pushBytes(mut arguments, flag.view())?;
             }
             pushText(mut arguments, "/c")?;
@@ -569,7 +599,7 @@ fn compileUnitsAndLink(
             appendBytes(mut out, object.view())?;
             arguments.push(out)?;
         } else {
-            pushCompileFlags(mut arguments, directory, debug, userFlags, freestanding)?;
+            pushCompileFlags(mut arguments, directory, debug, flags, freestanding)?;
             pushText(mut arguments, "-c")?;
             pushBytes(mut arguments, source.view())?;
             pushText(mut arguments, "-o")?;
@@ -653,7 +683,7 @@ fn compileUnitsAndLink(
         if (debug) {
             pushText(mut link, "/Zi")?;
         }
-        for (flag in userFlags.view()) {
+        for (flag in flags.view()) {
             pushBytes(mut link, flag.view())?;
         }
         for (o in objects.view()) {
@@ -666,6 +696,9 @@ fn compileUnitsAndLink(
         appendBytes(mut executable, output)?;
         link.push(executable)?;
         pushText(mut link, "/link")?;
+        if (lto) {
+            pushText(mut link, "/LTCG")?;
+        }
         pushText(mut link, "/STACK:8388608")?;
         pushMsvcLinkFlags(mut link, native)?;
         pushWindowedLink(mut link, compiler, windowed && !freestanding)?;
@@ -674,7 +707,7 @@ fn compileUnitsAndLink(
     if (debug) {
         pushText(mut link, "-g")?;
     }
-    for (flag in userFlags.view()) {
+    for (flag in flags.view()) {
         pushBytes(mut link, flag.view())?;
     }
     for (o in objects.view()) {
@@ -697,6 +730,26 @@ fn compileUnitsAndLink(
     pushText(mut link, "-o")?;
     pushBytes(mut link, output)?;
     return linkUnits(compiler, directory, link, stdout, stderr, if (debug) output else "".bytes());
+}
+
+/// The flag that compiles and links with link-time optimisation (ADR 0082 §2.4), from what `compiler --version` says
+/// it is: `-flto=thin` for clang (ThinLTO, whose back end runs in parallel), `-flto=auto` for gcc (its partitions in
+/// parallel, as many as the CPUs); empty for a compiler that says neither.
+fn ltoFlag(compiler: borrow CCompiler, directory: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var arguments = Vector<Vector<u8>>.create();
+    pushText(mut arguments, "--version")?;
+    let outcome = runCompiler(compiler, directory, arguments)?;
+    if (!outcome.started || outcome.status != 0) {
+        return Ok(Vector<u8>.create());
+    }
+    let said = outcome.stdout.view();
+    if (containsText(said, "clang")) {
+        return copyBytes("-flto=thin".bytes());
+    }
+    if (containsText(said, "Free Software Foundation") || containsText(said, "gcc") || containsText(said, "GCC")) {
+        return copyBytes("-flto=auto".bytes());
+    }
+    return Ok(Vector<u8>.create());
 }
 
 /// The link of a split build's objects: its outcome, after the compiles' output.

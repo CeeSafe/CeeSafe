@@ -274,6 +274,14 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
+        "  --lto             (build --split) link-time optimisation, so calls between C files inline: clang's ThinLTO\n",
+    )?;
+    appendText(
+        out,
+        "                    (-flto=thin), gcc's -flto=auto, cl's /GL and /LTCG (ADR 0082 §2.4)\n",
+    )?;
+    appendText(
+        out,
         "  --program <name>  (build --split) the name external C names carry; default: the package's, or the\n",
     )?;
     appendText(out, "                    first file's\n")?;
@@ -348,6 +356,7 @@ struct Options {
     debug: bool;                // -g (build)
     debugAssertions: u8;        // --debug-assertions 1, --no-debug-assertions 2, else 0 (build, run; ADR 0087 §2.5)
     split: bool;                // --split (build)
+    lto: bool;                  // --lto (build --split; ADR 0082 §2.4)
     libMain: bool;              // --lib-main (build --emit lib)
     windowed: bool;             // --windowed (build), or the manifest's windowed (ADR 0151)
     polls: bool;                // --polls (build, test), or the root manifest's polls (ADR 0190): CEE_POLLS in the C
@@ -484,6 +493,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.debugAssertions = 2;
         } else if (options.building && arg == "--split") {
             options.split = true;
+        } else if (options.building && !options.testing && arg == "--lto") {
+            options.lto = true;
         } else if (options.building && arg == "--lib-main") {
             options.libMain = true;
         } else if (options.building && arg == "--windowed") {
@@ -710,6 +721,13 @@ fn readOptions(options: borrow mut Options) -> i32 {
     if (options.building && !options.testing && options.jobsGiven && !options.split) {
         // Without --split the C is one compile, so a --jobs that did nothing would mislead (ADR 0082 §2.5).
         return fail("build's --jobs needs --split: without it, the C is compiled in one command");
+    }
+    if (options.lto && !options.split) {
+        // One C file is optimised whole already: --lto would do nothing (ADR 0082 §2.4).
+        return fail("build's --lto needs --split: without it, the program is one C file, optimised whole");
+    }
+    if (options.lto && !sameText(options.emit.view(), "exe")) {
+        return fail("build's --lto makes an executable: it takes no --emit c, obj or lib");
     }
     if (options.archiver.length > 0 && !sameText(options.emit.view(), "lib")) {
         return fail("--ar needs --emit lib: only a library is archived (ADR 0088 §2.1)");
@@ -1023,6 +1041,7 @@ fn parseCommand() -> i32 {
         debug: false,
         debugAssertions: 0,
         split: false,
+        lto: false,
         libMain: false,
         windowed: false,
         polls: false,
@@ -1409,6 +1428,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     debug: false,
     debugAssertions: 0,
     split: false,
+    lto: false,
     libMain: false,
     windowed: false,
     polls: false,

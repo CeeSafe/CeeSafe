@@ -140,7 +140,7 @@ relies on) raises the version. Version 1 is the first.
 | `isize`/`usize` | the fixed-width type of the target's pointer width (`int64_t`/`uint64_t`, or `int32_t`/`uint32_t` on a 32-bit target; ADR 0192), plus `_Static_assert(sizeof(void *) * 8 == P)` for the target's width `P`. A slice's, a vector's and a `cee_str`'s length, and a vector's capacity, are `cee_usize`, which `rt.h` makes `uint32_t` or `uint64_t` by the C compiler's pointer width. A narrowing `as` on a 32-bit target is `cee_narrow_u`/`cee_narrow_i`, which panic with `CEE_PANIC_NARROWING`. `ptrdiff_t`/`size_t` are used at FFI boundaries (M8) |
 | `bool` | `bool` (`_Bool`) |
 | `char` | `uint32_t` |
-| `borrow fn(T…) -> R` (M11 G8b) | `const ceeCK_<mangle> *`, a pointer to the first member, the code pointer `R (*)(const void *, T…)`, of an environment `ceeCE_<id>` that holds a pointer per capture; the body is `ceeCB_<id>`, which converts `env` back through `uintptr_t`; a call is `(*f)(f, args…)` (type-system.md §36.2) |
+| `borrow fn(T…) -> R` (M11 G8b) | `const ceeCK_<mangle> *`, a pointer to the first member, the code pointer `R (*)(const void *, T…)`, of an environment `ceeCE_<place>` that holds a pointer per capture; the body is `ceeCB_<place>` (`<place>`, §2.1), which converts `env` back through `uintptr_t`; a call is `(*f)(f, args…)` (type-system.md §36.2) |
 | `borrow dyn I`, `borrow mut dyn I`, `Box<dyn I, A>` (M13 G2) | `ceeDR_<D…>` = `struct { void *data; const ceeDT_<D…> *vt; }` (16 bytes; the dyn type mangles as `D<length><interface><arguments>`, `dyn Shape` → `D5Shape0`), typedef'd before every struct, so any struct may hold one. Not a niche optional: `Box<dyn I>?` has a tag. The table type `ceeDT_…` is defined after the structs: `drop` (NULL if `T` needs none), `size`, `align`, then `m0…` in the interface's method order, each taking `void *` for the receiver. Per (`T`, `I`) pair that a coercion names: `static const ceeDT_… ceeVT_<T>_<D…>`, with adapters `ceeVT_…_<slot>` that convert the address back through `uintptr_t` and call `T`'s method, and `ceeVT_…_drop` over `T`'s drop glue. A coercion is `((ceeDR_…){ .data = (void *)(uintptr_t)p, .vt = &ceeVT_… })`; a call through `x` is `x.vt->m<slot>(x.data, args…)`; borrowing `*x` is `x` itself. An async method's entry is `void (*m<slot>)(void *frame, void *self, args…)` with the size `s<slot>` beside it (§3a, ADR 0036). `Box<dyn I, A>`'s drop glue calls `vt->drop` and frees `data` with `A` (a user allocator's `deallocate` gets the table's size and alignment) (type-system.md §37.4). **`dyn fn`** (M13 G3, §36.5) mangles as `DF` (`DG` for `dyn mut fn`), its effect list and its signature; its table's one entry `m0` is a move literal's body, whose `self` is the boxed environment `ceeCE_<id>` (the code pointer, then the captured values; drop glue `ceeD_CE<id>_`) |
 | `fn(T…) -> R` (M11 G8a) | a typedef `ceeN_<mangle>` of a pointer to the functions' C signature; a value is a function's address, a call an indirect call (type-system.md §36.1) |
 | `f32`/`f64` | `float`/`double` (`rt.h` checks the IEEE formats; literals by their bits through `cee_f32_from_bits`/`cee_f64_from_bits`; float→integer conversions through range-checked helpers; type-system.md §35). The CosmoOS kernel forbids floats (`profiles.md`; `--no-float` in G7c) |
@@ -221,8 +221,8 @@ prefix:
 | Owner | Names |
 |---|---|
 | **Runtime** (`ceesafe/rt.h`, `ceesafe_rt_*.c`) | `ceesafe_*`; `cee_` followed by a lowercase letter (`cee_add_i32`, `cee_check_index`, `cee_str`, `cee_loc`); `CEE_*` |
-| **Generated** | `cee` followed by a capital letter: `ceeF_name` (top-level functions), `ceeM_` (members), `ceeG_` (generic instances), `ceeXS<n>_<name>` (variant `n` of the function named `<name>` made by closure-call specialisation, optimisations.md §5), `ceeT_`/`ceeE_` (types), and the helper families (`ceeD_`, `ceeB_`, `ceeVP_`, …; for async fns `ceeAF_` frames,
-`ceeAI_` initialisers and `ceeAR_` resume functions, §3a); locals `v_<name>_<n>` and `t_<n>`; fields `f_<name>`; variants `v_<name>`; labels `bb<n>`; files `cee_file_<n>`; source locations `ceeL_<n>` (§6); string literals over 4095 bytes `ceeLS_<n>` |
+| **Generated** | `cee` followed by a capital letter: `ceeF_name` (top-level functions), `ceeM_` (members), `ceeG_` (generic instances), `ceeXS_<len><name>B<k>_<len><body>…` (the variant of the function named `<name>` that closure-call specialisation made with parameter `k` bound to the closure or function named `<body>`, for each bound parameter, optimisations.md §5), `ceeCB_<place>` closure bodies and `ceeCE_<place>` their environments, where `<place>` is the C name of the function the closure is written in (the outermost one's, for a closure inside a closure) and `_<k>` for the k-th closure written there, or `S<k>` for one in a static's initialiser, `ceeT_`/`ceeE_` (types), and the helper families (`ceeD_`, `ceeB_`, `ceeVP_`, …; for async fns `ceeAF_` frames,
+`ceeAI_` initialisers and `ceeAR_` resume functions, §3a); locals `v_<name>_<n>` and `t_<n>`; fields `f_<name>`; variants `v_<name>`; labels `bb<n>`; files `cee_file_<n>`; source locations `ceeL_<n>` (§6), both numbered within each unit of a split build (§2.4); string literals over 4095 bytes `ceeLS_<n>` |
 
 **Packages** (M10 T5, ADR 0013 D4): an item of a dependency, rather than of the package being built, has its
 package's name in its C name: `ceeF_8geometry_area`, `ceeT_8geometry_Point`, `ceeM_08geometry5Point_norm`. The package
@@ -238,6 +238,14 @@ dependency's `geometry.Point`, and the lengths keep a package `geo_x`'s `P` apar
 `ceesafe_exports.h`, with `typedef struct Point ceeT_3geo_Point;`, and a `@repr` enum `geo.Shade` is `Shade` in the
 header and in exports' prototypes, while its internal struct stays `ceeE_3geo_Shade`. Those names have one declaration
 in a program (N0201).
+
+**Content names** (ADR 0082 §2.2): a generated name says what it names, never where a program-wide counter had got
+to, so the C of one function does not change when another package gains a closure or a variant. Closures are named by
+their place, variants and async instances by what they bind, and generic instances and per-type helpers by their
+type arguments, as before. Up to 0.94.5 closures were `ceeCB_<n>` and `ceeCE_<n>` (`<n>` the closure's number in the
+program), variants `ceeXS<n>_<name>` (the callee's n-th variant, in the order the program's calls made them) and async
+instances `ceeAS<n>_<name>` (the instance's HIR number). Long literals, `ceeLS_<n>`, are still numbered in the
+program: a split build defines each once, in `ceesafe_instances.c` (§2 `StringView`).
 
 Before M7d, top-level functions were `cee_<name>`. A function named `add_i32` then collided with
 the runtime's `cee_add_i32`, and the C failed to compile. The random program generator found this,
@@ -356,7 +364,10 @@ and rebuild only what changed. Without it the output is one `main.c`, as above, 
   declaration or a definition at column 0, to the line where its braces balance and that ends in `;` or `}`; it
   defines a type's tag and typedef name, an enum's constants, or the name before its first `(`, `[` or `=`. So a
   unit's C has the declarations it had, fewer of them, and every unit has its own inlinable copy of each per-type
-  helper it uses. `ceesafe_program.h` is still written, whole, and no unit includes it.
+  helper it uses. `ceesafe_program.h` is still written, whole, and no unit includes it. The location constants and
+  file names a unit's prelude copies are static, so the unit numbers the ones it uses `ceeL_0`, `ceeL_1`, … and
+  `cee_file_0`, … in the program's order (§2.1, content names): its text does not change when another unit gains or
+  loses a location. The header keeps the program's numbers.
 - **One unit per CeeSafe source file**, at `c/<package>/<path in the package>.c`, its extension replaced (ADR 0082
   §2.1): `c/alpha/src/util.c` and `c/beta/src/util.c`, `c/alpha/src/a/mod.c` and `c/alpha/src/b/mod.c`. Package names
   are unique in a build and paths unique in a package, so two units of packages never share a path. Files given
@@ -622,8 +633,9 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   `ceesafe_async_publish(frame)`, which queues the child for any worker. A child records its scope's first error only
   if `ceesafe_async_claim_failure(scope)` says it is the first, which takes the run's lock for a shared scope.
   `Async.runWorkers(n, task)` is `ceesafe_async_workers(n)` before the run's code.
-- **Async instances** (ADR 0037, type-system.md §32.5) are async fns like any other, named `ceeAS<n>_<f>` after the
-  function they copy (`<n>` the instance's HIR number). The caller awaits the instance; inside it, a call through a
+- **Async instances** (ADR 0037, type-system.md §32.5) are async fns like any other, named
+  `ceeAS_<len><f>B<k>_<len><closure>…` from the function they copy and, for each bound parameter `k`, the async
+  closure or fn bound to it (ADR 0082 §2.2). The caller awaits the instance; inside it, a call through a
   bound closure is an awaited call of the async closure's body, its frame a member of the instance's union.
 - **Calls through `dyn`** (ADR 0036). An async method `m` in slot `k` of a dyn type `D…` has its own frame,
   `struct ceeAF_dyn_<D…>_m<k>`: `cee_state` (always 0, for the debugger), `cee_resume`, the resume adapter of the

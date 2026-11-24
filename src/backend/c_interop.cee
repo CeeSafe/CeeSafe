@@ -787,6 +787,11 @@ fn emitExports(
     emittedExports(e, c, n, mut exports)?;
     for (function in exports.view()) {
         emitCfgOpen(e, c, function)?;
+        if (c.hir.functions[function as usize].usesCallerAddress) {
+            // Never inlined into its C caller, which link-time optimisation could otherwise do across C files
+            // (`build --lto`, ADR 0082 §2.4): the address it returns to must stay the caller's (ADR 0030).
+            e.t("CEE_NOINLINE ")?;
+        }
         appendExportSignature(c, mut e.buf, function, false)?;
         e.t(" {")?;
         e.emit()?;
@@ -800,7 +805,7 @@ fn emitExports(
             appendDecimal(mut argument, k as u64)?;
             emitCheckEnumFromC(e, c, sources, parameterType(c, function, k), argument.view(), function)?;
         }
-        // The address this wrapper returns to is its C caller's (ADR 0030), taken here, where inlining cannot move it.
+        // The address this wrapper returns to is its C caller's (ADR 0030), taken here, in a wrapper never inlined.
         var call = Vector<u8>.create();
         appendWrapperCall(c, mut call, function, "cee_return_address()")?;
         emitWrapperBody(e, c, function, call.view())?;

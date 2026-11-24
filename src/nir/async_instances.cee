@@ -118,6 +118,9 @@ fn asyncInstanceOf(
         g.siteEnd = siteSpan.end;
         g.asyncInstanceOf = original;
     }
+    for (b in bindings.view()) {
+        c.hir.functions[function as usize].asyncBindings.push(b)?;
+    }
     var remaining = Vector<u32>.create();
     for (index in c.hir.functions[function as usize].effectsOfParameters.view()) {
         var bound = false;

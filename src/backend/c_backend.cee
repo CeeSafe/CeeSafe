@@ -223,6 +223,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_notify_")) {
             out.push(runtimeFile(14, "")?)?; // local notifications (type-system.md §26.22, ADR 0243)
         }
+        if (containsBytes(mainText.view(), "ceesafe_push_")) {
+            out.push(runtimeFile(15, "")?)?; // push tokens (type-system.md §26.23, ADR 0244)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

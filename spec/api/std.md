@@ -89,6 +89,10 @@
 - [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
+- [enum PushError](#enum-pusherror)
+- [enum PushService](#enum-pushservice)
+- [struct PushToken](#struct-pushtoken)
+- [struct Push](#struct-push)
 - [enum SecretError](#enum-secreterror)
 - [struct Secrets](#struct-secrets)
 - [struct SharedMemory](#struct-sharedmemory)
@@ -4035,6 +4039,69 @@ public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
 ```
 
 The value at `at`, to change it. Changing a value does not change the map's version.
+
+## enum PushError
+
+```ceesafe
+public enum PushError {
+    Unsupported,
+    Denied,
+    Failed,
+}
+```
+
+Why no push token came.
+
+## enum PushService
+
+```ceesafe
+public enum PushService {
+    Apns,
+    Fcm,
+}
+```
+
+The push service a token is for.
+
+## struct PushToken
+
+```ceesafe
+public struct PushToken {
+    public service: PushService;
+    public token: String;
+    public sandbox: bool;
+}
+```
+
+This device's token, and where a server sends to it.
+
+## struct Push
+
+```ceesafe
+public struct Push
+```
+
+The system's push service (ADR 0244).
+
+```
+let device = Push.register()?;          // once a run: the token may change
+// send device.token (and device.sandbox) to the app's server
+```
+
+iOS: the app registers with APNs (its signing must grant `aps-environment`: CeeUI's packer's `--push`) and the
+token comes from Apple; the user's permission to show notifications is `Notifications.requestPermission`'s.
+`CEESAFE_PUSH_TOKEN=<text>` is the token instead, natively on every system, for tests (`apns:HEX`,
+`apns-sandbox:HEX` or `fcm:TOKEN`). Under `ceesafec run --interp` it is `Unsupported`.
+
+### Push.register
+
+```ceesafe
+public fn register() -> Result<PushToken, PushError>
+```
+
+Registers with the system's push service and returns this device's token. It blocks until the service answers
+(30 seconds at most) and may be called from any thread but the window's.
+Safety: the runtime writes at most the buffer's length.
 
 ## enum SecretError
 

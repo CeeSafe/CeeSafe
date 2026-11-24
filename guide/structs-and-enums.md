@@ -45,6 +45,10 @@ fn main() {
 - A struct is **Copy**, copied on assignment, when every field is Copy and it has no `drop` block. Otherwise it
   moves: see [Ownership](ownership.md).
 - Fields are laid out in declaration order with C's rules, so a struct is the same in C.
+- There are no type aliases (ADR 0215). Where another language would name a long type, such as a handle
+  `Arc<AsyncMutex<Store>>`, declare a struct with one field: `struct StoreHandle { shared: Arc<AsyncMutex<Store>>; }`.
+  It has a place for its methods, and the type checker tells it apart from other handles.
+  `struct Meters { value: f64; }` is a distinct unit in one line.
 
 ### Visibility
 

@@ -1,7 +1,8 @@
 # ADR 0216 — Tuples and anonymous result structs: why not
 
-- Status: **Proposed** 2026-11-23, at the owner's instruction ("continue with 3.9": the optimization and DX
-  roadmap's Phase 3, item 9). It proposes no change to the language. §5's questions are the owner's to decide.
+- Status: **Accepted** by the owner, 2026-11-24 ("I accept ADRs 0215–0217"), §5's questions as recommended: no tuples
+  and no anonymous result structs, and no `Pair<A, B>` in lib/core. No change to the language. Proposed 2026-11-23 at
+  the owner's instruction ("continue with 3.9": the optimization and DX roadmap's Phase 3, item 9).
 - Scope: type-system.md §12 and §15; ADR 0018 §2 ("the reference has no tuples"), ADR 0032, ADR 0085 §4, ADR 0117,
   ADR 0123 §1 ("CeeSafe has no tuples and is not getting them"); diagnostics.md N0100.
 

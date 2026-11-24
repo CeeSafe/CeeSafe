@@ -1,8 +1,10 @@
 # ADR 0217 — Building text: a chainable appender, and why not interpolation
 
-- Status: **Proposed** 2026-11-23, at the owner's instruction ("continue with 3.9": the optimization and DX
-  roadmap's Phase 3, item 9). Nothing is implemented: §2 proposes a library addition whose names are the owner's.
-  §6's questions are the owner's to decide.
+- Status: **Accepted** by the owner, 2026-11-24 ("I accept ADRs 0215–0217"), §6's questions as recommended: the
+  appender with the proposed names (`add()`, `text`, `char`, `number`, `signed`, `hex`, `padded`, `fixed`, `done()`),
+  in lib/std for `String` and in lib/core for `Vector<u8>`; a warning for an appender left without `done()`; no
+  interpolation and no format strings. Not implemented yet. Proposed 2026-11-23 at the owner's instruction ("continue
+  with 3.9": the optimization and DX roadmap's Phase 3, item 9).
 - Scope: lib/std's `String` and lib/core's `Vector<u8>` text helpers (ADR 0087 §2.9, ADR 0138 §6); diagnostics.md
   N0400; the guide's collections page, where strings are.
 

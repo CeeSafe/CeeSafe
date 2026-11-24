@@ -1,8 +1,8 @@
 # ADR 0215 — Type aliases: why not, and what would change that
 
-- Status: **Proposed** 2026-11-23, at the owner's instruction ("continue with 3.9": the optimization and DX
-  roadmap's Phase 3, item 9, "ADRs for the ergonomic gaps"). It proposes no change. §5's questions are the owner's
-  to decide.
+- Status: **Accepted** by the owner, 2026-11-24 ("I accept ADRs 0215–0217"), §5's questions as recommended: no type
+  aliases, and a sentence in the guide's types page for the handle case. Proposed 2026-11-23 at the owner's
+  instruction ("continue with 3.9": the optimization and DX roadmap's Phase 3, item 9, "ADRs for the ergonomic gaps").
 - Scope: diagnostics.md N0101 and the agents template's "Common mistakes", the two places that say there are none
   (the specification has no rule for a form it does not have).
 

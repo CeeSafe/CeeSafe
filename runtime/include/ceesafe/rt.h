@@ -1720,6 +1720,25 @@ int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, u
 /* ADR 0221 §2.3: 1 if standard input (0), output (1) or error (2) is a terminal (isatty; GetConsoleMode on
    Windows), else 0. */
 int64_t ceesafe_host_is_terminal(uint32_t stream);
+/* ADR 0232: a shared mapping of bytes offset .. offset + length - 1 of an open File (its first field is the
+   descriptor), for reading and writing; the file is first extended to cover them, never shortened. out[0] the
+   address of byte `offset`, out[1] and out[2] what was mapped (from a page or granule boundary), out[3] the Windows
+   mapping handle. 0 or a negated errno (EBADF for a file not open for reading and writing). lib/std checks the range
+   first. The accessors take the address and the mapping's byte `at` apart; lib/std checks bounds and alignment. */
+int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length, uint64_t *out);
+void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle);
+int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length);
+void ceesafe_host_map_read(uint64_t address, uint64_t at, uint8_t *into, uint64_t length);
+void ceesafe_host_map_write(uint64_t address, uint64_t at, uint8_t const *bytes, uint64_t length);
+uint32_t ceesafe_host_map_load32(uint64_t address, uint64_t at, int32_t order);
+void ceesafe_host_map_store32(uint64_t address, uint64_t at, uint32_t value, int32_t order);
+uint32_t ceesafe_host_map_cas32(uint64_t address, uint64_t at, uint32_t expected, uint32_t desired, int32_t order);
+uint32_t ceesafe_host_map_add32(uint64_t address, uint64_t at, uint32_t value, int32_t order);
+uint64_t ceesafe_host_map_load64(uint64_t address, uint64_t at, int32_t order);
+void ceesafe_host_map_store64(uint64_t address, uint64_t at, uint64_t value, int32_t order);
+uint64_t ceesafe_host_map_cas64(uint64_t address, uint64_t at, uint64_t expected, uint64_t desired, int32_t order);
+uint64_t ceesafe_host_map_add64(uint64_t address, uint64_t at, uint64_t value, int32_t order);
+void ceesafe_host_map_fence(void);
 #if defined(_WIN32)
 /* realpath(3) and the descriptor calls ceesafec's `embed` makes (ADR 0087 §2.8), which Windows lacks; C code that
  * declares them, as an `extern "C"` block does, calls these, which take UTF-8 paths (the wide calls underneath):

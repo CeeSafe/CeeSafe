@@ -1,0 +1,270 @@
+// Shared mappings of a region of a file (ADR 0232; type-system.md §26.20).
+
+extern "C" {
+    @effects(sleep)
+    fn ceesafe_host_map_file(file: *void, offset: u64, length: u64, out: *mut u64) -> i64;
+    @effects()
+    fn ceesafe_host_map_unmap(base: u64, length: u64, handle: u64);
+    @effects(sleep)
+    fn ceesafe_host_map_sync(base: u64, length: u64) -> i64;
+    @effects()
+    fn ceesafe_host_map_read(address: u64, at: u64, into: *mut u8, length: u64);
+    @effects()
+    fn ceesafe_host_map_write(address: u64, at: u64, bytes: *u8, length: u64);
+    @effects()
+    fn ceesafe_host_map_load32(address: u64, at: u64, order: i32) -> u32;
+    @effects()
+    fn ceesafe_host_map_store32(address: u64, at: u64, value: u32, order: i32);
+    @effects()
+    fn ceesafe_host_map_cas32(address: u64, at: u64, expected: u32, desired: u32, order: i32) -> u32;
+    @effects()
+    fn ceesafe_host_map_add32(address: u64, at: u64, value: u32, order: i32) -> u32;
+    @effects()
+    fn ceesafe_host_map_load64(address: u64, at: u64, order: i32) -> u64;
+    @effects()
+    fn ceesafe_host_map_store64(address: u64, at: u64, value: u64, order: i32);
+    @effects()
+    fn ceesafe_host_map_cas64(address: u64, at: u64, expected: u64, desired: u64, order: i32) -> u64;
+    @effects()
+    fn ceesafe_host_map_add64(address: u64, at: u64, value: u64, order: i32) -> u64;
+    @effects()
+    fn ceesafe_host_map_fence();
+}
+
+/// A region of a file mapped shared (ADR 0232): what one mapping writes, every other mapping of those bytes sees,
+/// in this process and in others, and so does a read of the file. SQLite's wal-index (`<database>-shm`) is one.
+///
+/// ```
+/// let shm = File.openOrCreate("db-shm")?;
+/// let region = shm.mapShared(0, 32768)?;          // SharedMapping.mapShared(shm, 0, 32768)
+/// var header = [0u8; 48];
+/// region.readAt(0, mut header[..]);              // a copy out
+/// SharedMapping.fence();
+/// let _ = region.compareExchange32(100, 0, 1, Ordering.AcquireRelease);
+/// ```
+///
+/// Another process may write the memory at any moment, so it is never a slice: bytes are copied out and in, and
+/// integers are read and written as atomics, between processes too. An access out of the mapping's bounds, or an
+/// atomic not aligned to its size in the file, panics. The value is Send and Share; dropping it unmaps the region
+/// (the `File` may be dropped before). A program that needs more of the file maps another region, as SQLite maps
+/// 32 KiB at a time. Natively, a file shortened by someone else while it is mapped ends the program by `SIGBUS` at
+/// the next access to a page past the new end (§2.3 of the ADR). Hosted, on Linux, macOS, the BSDs, Android and
+/// Windows; under `ceesafec run --interp` it is modelled by reads and writes of the file, whose atomics are not
+/// atomic against another process.
+@noncopy
+public struct SharedMapping {
+    /// The address of the region's first byte, as a number (the interpreter's: the mapping's number).
+    private address: u64;
+    private size: usize;
+    private start: u64;
+    /// What unmapping needs: the start and length of what the system mapped, and Windows' mapping handle.
+    private base: u64;
+    private extent: u64;
+    private handle: u64;
+
+    /// `f.mapShared(offset, length)`: maps bytes `offset` to `offset + length - 1` of `file`, shared, for reading and
+    /// writing; a shorter file is first extended with zero bytes (never shortened). `InvalidInput` for `length` 0 or a
+    /// range that ends past 2^63 - 1; `BadDescriptor` for a file not open for reading and writing.
+    /// Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
+    public fn mapShared(file: borrow File, offset: u64, length: usize) -> Result<SharedMapping, IoError> {
+        let limit: u64 = 0x7FFFFFFFFFFFFFFF;
+        let bytes = length as u64;
+        if (bytes == 0 || offset > limit || bytes > limit - offset) {
+            return Err(IoError.InvalidInput);
+        }
+        var out = [0u64; 4];
+        let status = unsafe { ceesafe_host_map_file(
+            file as *File as *void,
+            offset,
+            bytes,
+            borrow mut out[0] as *mut u64,
+        ) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        return Ok(SharedMapping {
+            address: out[0],
+            size: length,
+            start: offset,
+            base: out[1],
+            extent: out[2],
+            handle: out[3],
+        });
+    }
+
+    /// Its length in bytes.
+    public fn length(borrow this) -> usize => this.size;
+
+    /// Where it starts in the file.
+    public fn offset(borrow this) -> u64 => this.start;
+
+    /// Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+    /// bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+    /// it. Panics if the bytes are not all inside the region.
+    /// Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+    public fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
+        this.inside(at, into.length, "SharedMapping.readAt: the bytes are past the mapping's end");
+        unsafe { ceesafe_host_map_read(this.address, at as u64, into.ptr, into.length as u64); }
+    }
+
+    /// Copies `bytes` to byte `at` of the region. Panics if they do not all fit inside it.
+    /// Safety: as readAt; the runtime reads `bytes` only.
+    public fn writeAt(borrow this, at: usize, bytes: Slice<u8>) {
+        this.inside(at, bytes.length, "SharedMapping.writeAt: the bytes are past the mapping's end");
+        unsafe { ceesafe_host_map_write(this.address, at as u64, bytes.ptr, bytes.length as u64); }
+    }
+
+    /// The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+    /// inside the region or `offset() + at` is not a multiple of 4.
+    /// Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+    public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
+        this.word(at, 4);
+        return unsafe { ceesafe_host_map_load32(this.address, at as u64, SharedMapping.loadCode(order)) };
+    }
+
+    /// Stores `value` at byte `at` atomically with `order` (AtomicU32.storeWith). Panics as load32.
+    /// Safety: as load32.
+    public fn store32(borrow this, at: usize, value: u32, order: StoreOrdering) {
+        this.word(at, 4);
+        unsafe { ceesafe_host_map_store32(this.address, at as u64, value, SharedMapping.storeCode(order)); }
+    }
+
+    /// Ok(the old value) if the u32 at byte `at` was `expected` and is now `desired`; else Err(the value it has),
+    /// atomically between processes, with `order` (AtomicU32.compareExchangeWith). Panics as load32.
+    /// Safety: as load32.
+    public fn compareExchange32(
+        borrow this,
+        at: usize,
+        expected: u32,
+        desired: u32,
+        order: Ordering,
+    ) -> Result<u32, u32> {
+        this.word(at, 4);
+        let old = unsafe { ceesafe_host_map_cas32(
+            this.address,
+            at as u64,
+            expected,
+            desired,
+            SharedMapping.code(order),
+        ) };
+        if (old == expected) {
+            return Ok(old);
+        }
+        return Err(old);
+    }
+
+    /// Adds `value` to the u32 at byte `at`, wrapping, atomically with `order`; the value before. Panics as load32.
+    /// Safety: as load32.
+    public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32 {
+        this.word(at, 4);
+        return unsafe { ceesafe_host_map_add32(this.address, at as u64, value, SharedMapping.code(order)) };
+    }
+
+    /// The u64 at byte `at`, as load32 (AtomicU64.loadWith). Panics if its eight bytes are not inside the region or
+    /// `offset() + at` is not a multiple of 8.
+    /// Safety: as load32.
+    public fn load64(borrow this, at: usize, order: LoadOrdering) -> u64 {
+        this.word(at, 8);
+        return unsafe { ceesafe_host_map_load64(this.address, at as u64, SharedMapping.loadCode(order)) };
+    }
+
+    /// Stores the u64 `value` at byte `at`, as store32. Panics as load64.
+    /// Safety: as load32.
+    public fn store64(borrow this, at: usize, value: u64, order: StoreOrdering) {
+        this.word(at, 8);
+        unsafe { ceesafe_host_map_store64(this.address, at as u64, value, SharedMapping.storeCode(order)); }
+    }
+
+    /// compareExchange32 for the u64 at byte `at`. Panics as load64.
+    /// Safety: as load32.
+    public fn compareExchange64(
+        borrow this,
+        at: usize,
+        expected: u64,
+        desired: u64,
+        order: Ordering,
+    ) -> Result<u64, u64> {
+        this.word(at, 8);
+        let old = unsafe { ceesafe_host_map_cas64(
+            this.address,
+            at as u64,
+            expected,
+            desired,
+            SharedMapping.code(order),
+        ) };
+        if (old == expected) {
+            return Ok(old);
+        }
+        return Err(old);
+    }
+
+    /// fetchAdd32 for the u64 at byte `at`. Panics as load64.
+    /// Safety: as load32.
+    public fn fetchAdd64(borrow this, at: usize, value: u64, order: Ordering) -> u64 {
+        this.word(at, 8);
+        return unsafe { ceesafe_host_map_add64(this.address, at as u64, value, SharedMapping.code(order)) };
+    }
+
+    /// A sequentially consistent fence (SQLite's unixShmBarrier): every copy and atomic before it is ordered before
+    /// every one after it.
+    /// Safety: the runtime only orders memory.
+    public fn fence() {
+        unsafe { ceesafe_host_map_fence(); }
+    }
+
+    /// Writes the region's changed pages to the file and waits for them (`msync`); on Windows `FlushViewOfFile`, after
+    /// which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
+    /// Safety: the runtime is given what it mapped.
+    public fn sync(borrow this) -> Result<void, IoError> {
+        let status = unsafe { ceesafe_host_map_sync(this.base, this.extent) };
+        if (status < 0) {
+            return Err(HostServices.hostError(status));
+        }
+        return Ok();
+    }
+
+    /// Panics unless bytes `at` to `at + count - 1` lie inside the region.
+    fn inside(borrow this, at: usize, count: usize, message: StringView) {
+        if (at > this.size || count > this.size - at) {
+            panic(message);
+        }
+    }
+
+    /// Panics unless the `width` bytes at `at` lie inside the region and are aligned to `width` in the file.
+    fn word(borrow this, at: usize, width: usize) {
+        if (at > this.size || width > this.size - at) {
+            panic("SharedMapping: the atomic's bytes are past the mapping's end");
+        }
+        if ((this.start + at as u64) % (width as u64) != 0) {
+            panic("SharedMapping: the atomic is not aligned to its size");
+        }
+    }
+
+    // lib/core's ordering codes (ceesafe/rt.h, ADR 0021): 0 relaxed, 1 acquire, 2 release, 3 acquire-release,
+    // 4 sequentially consistent.
+    fn loadCode(order: LoadOrdering) -> i32 => match (order) {
+        LoadOrdering.Relaxed => 0,
+        LoadOrdering.Acquire => 1,
+        LoadOrdering.SequentiallyConsistent => 4,
+    };
+
+    fn storeCode(order: StoreOrdering) -> i32 => match (order) {
+        StoreOrdering.Relaxed => 0,
+        StoreOrdering.Release => 2,
+        StoreOrdering.SequentiallyConsistent => 4,
+    };
+
+    fn code(order: Ordering) -> i32 => match (order) {
+        Ordering.Relaxed => 0,
+        Ordering.Acquire => 1,
+        Ordering.Release => 2,
+        Ordering.AcquireRelease => 3,
+        Ordering.SequentiallyConsistent => 4,
+    };
+
+    /// Unmaps the region.
+    /// Safety: the start, length and handle are what the runtime gave, given back once.
+    drop {
+        unsafe { ceesafe_host_map_unmap(this.base, this.extent, this.handle); }
+    }
+}

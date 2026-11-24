@@ -3352,6 +3352,182 @@ int64_t ceesafe_host_shared_remove(const uint8_t *name, uint64_t name_length) {
 }
 #endif
 
+/* ---- Shared mappings of a region of a file (ADR 0232; type-system.md §26.20; lib/std's SharedMapping) ----
+ * ceesafe_host_map_file maps bytes offset .. offset + length - 1 of the open File `file` points at (its first field
+ * is the descriptor) shared, for reading and writing. lib/std has checked length > 0 and offset + length <= 2^63 - 1.
+ * A shorter file is first extended to cover the range, and never shortened (ADR 0232 §2.3): POSIX writes one zero
+ * byte at the range's last byte, as SQLite does, which only lengthens a file another process grew meanwhile;
+ * Windows' CreateFileMapping extends it. The mapping starts at the page (Windows: the allocation granule) at or
+ * below `offset`. out[0] is the address of byte `offset`, out[1] and out[2] the start and length of what was
+ * mapped, out[3] the Windows mapping handle (0 on POSIX). 0, or a negated errno; a file not open for reading and
+ * writing is EBADF (mmap's and CreateFileMapping's EACCES).
+ * The accessors take the address and the byte `at` apart, as lib/std passes them (the interpreter models them by
+ * name); lib/std has checked that the bytes lie inside the mapping and that an atomic's are aligned to its size. */
+#if defined(COSMO_AF_INET) || defined(CEE_COSMOOS)
+int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    (void)file; (void)offset; (void)length; (void)out;
+    return -(int64_t)EOPNOTSUPP;
+}
+void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle) { (void)base; (void)length; (void)handle; }
+int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length) {
+    (void)base; (void)length;
+    return -(int64_t)EOPNOTSUPP;
+}
+#elif defined(_WIN32)
+int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    int fd = *(const int32_t *)file;
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    uint64_t granule = info.dwAllocationGranularity != 0u ? (uint64_t)info.dwAllocationGranularity : 65536u;
+    uint64_t start = offset - offset % granule;
+    uint64_t end = offset + length; /* <= 2^63 - 1: checked */
+    uint64_t span = end - start;
+    if (span > (uint64_t)SIZE_MAX) return -(int64_t)ENOMEM;
+    /* The mapping object's size is the range's end: a shorter file grows to it; a longer one is not shortened. */
+    HANDLE mapping = CreateFileMappingW(h, NULL, PAGE_READWRITE, (DWORD)(end >> 32), (DWORD)(end & 0xFFFFFFFFu), NULL);
+    if (mapping == NULL) {
+        DWORD code = GetLastError();
+        return code == ERROR_ACCESS_DENIED ? -(int64_t)EBADF : -(int64_t)cee_win_errno(code);
+    }
+    void *view = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, (DWORD)(start >> 32), (DWORD)(start & 0xFFFFFFFFu),
+                               (SIZE_T)span);
+    if (view == NULL) {
+        DWORD code = GetLastError();
+        (void)CloseHandle(mapping);
+        return code == ERROR_ACCESS_DENIED ? -(int64_t)EBADF : -(int64_t)cee_win_errno(code);
+    }
+    out[0] = (uint64_t)(uintptr_t)view + (offset - start);
+    out[1] = (uint64_t)(uintptr_t)view;
+    out[2] = span;
+    out[3] = (uint64_t)(uintptr_t)mapping;
+    return 0;
+}
+
+void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle) {
+    (void)length;
+    (void)UnmapViewOfFile((void *)(uintptr_t)base);
+    (void)CloseHandle((HANDLE)(uintptr_t)handle);
+}
+
+int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length) {
+    return FlushViewOfFile((void *)(uintptr_t)base, (SIZE_T)length) ? 0 : -(int64_t)cee_win_errno(GetLastError());
+}
+#else
+#include <sys/mman.h>
+
+int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length, uint64_t *out) {
+    int fd = *(const int32_t *)file;
+    uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
+    if (page == 0u || page > (uint64_t)INT32_MAX) page = 4096u;
+    uint64_t start = offset - offset % page;
+    uint64_t end = offset + length; /* <= 2^63 - 1: checked */
+    uint64_t span = end - start;
+    if (span > (uint64_t)SIZE_MAX || (uint64_t)(off_t)start != start || (off_t)start < 0 ||
+        (uint64_t)(off_t)(end - 1u) != end - 1u) {
+        return -(int64_t)ENOMEM; /* the range does not fit this host's address space or off_t */
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) return -(int64_t)errno;
+    if (!S_ISREG(st.st_mode)) return -(int64_t)EINVAL;
+    if ((uint64_t)st.st_size < end) {
+        /* Grow the file to cover the range; one byte at the end only ever lengthens it (ADR 0232 §2.3). */
+        static const uint8_t zero = 0u;
+        ssize_t wrote;
+        do {
+            wrote = pwrite(fd, &zero, 1u, (off_t)(end - 1u));
+        } while (wrote < 0 && errno == EINTR);
+        if (wrote < 0) return -(int64_t)errno;
+        if (wrote != 1) return -(int64_t)EIO;
+    }
+    void *view = mmap(NULL, (size_t)span, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)start);
+    if (view == MAP_FAILED) return -(int64_t)(errno == EACCES ? EBADF : errno);
+    out[0] = (uint64_t)(uintptr_t)view + (offset - start);
+    out[1] = (uint64_t)(uintptr_t)view;
+    out[2] = span;
+    out[3] = 0u;
+    return 0;
+}
+
+void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle) {
+    (void)handle;
+    (void)munmap((void *)(uintptr_t)base, (size_t)length);
+}
+
+int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length) {
+    int result;
+    do {
+        result = msync((void *)(uintptr_t)base, (size_t)length, MS_SYNC);
+    } while (result != 0 && errno == EINTR);
+    return result == 0 ? 0 : -(int64_t)errno;
+}
+#endif
+
+#define CEE_MAPPED(T, address, at) ((T *)(uintptr_t)((address) + (at)))
+
+void ceesafe_host_map_read(uint64_t address, uint64_t at, uint8_t *into, uint64_t length) {
+    if (length != 0u) memcpy(into, CEE_MAPPED(const uint8_t, address, at), (size_t)length);
+}
+
+void ceesafe_host_map_write(uint64_t address, uint64_t at, uint8_t const *bytes, uint64_t length) {
+    if (length != 0u) memcpy(CEE_MAPPED(uint8_t, address, at), bytes, (size_t)length);
+}
+
+uint32_t ceesafe_host_map_load32(uint64_t address, uint64_t at, int32_t order) {
+    return ceesafe_atomic_load_ord_u32(CEE_MAPPED(uint32_t, address, at), order);
+}
+
+void ceesafe_host_map_store32(uint64_t address, uint64_t at, uint32_t value, int32_t order) {
+    ceesafe_atomic_store_ord_u32(CEE_MAPPED(uint32_t, address, at), value, order);
+}
+
+uint32_t ceesafe_host_map_cas32(uint64_t address, uint64_t at, uint32_t expected, uint32_t desired, int32_t order) {
+    return ceesafe_atomic_cas_ord_u32(CEE_MAPPED(uint32_t, address, at), expected, desired, order);
+}
+
+uint32_t ceesafe_host_map_add32(uint64_t address, uint64_t at, uint32_t value, int32_t order) {
+    return ceesafe_atomic_add_ord_u32(CEE_MAPPED(uint32_t, address, at), value, order);
+}
+
+/* 64-bit atomics on memory another process shares must be instructions, not a lock that only this process sees
+   (libatomic's fallback). Every host CeeSafe builds for has them; another one panics rather than share wrongly. */
+#if !defined(_MSC_VER) && defined(__GCC_ATOMIC_LLONG_LOCK_FREE) && __GCC_ATOMIC_LLONG_LOCK_FREE < 2
+#define CEE_MAP_CHECK64()                                                                                            \
+    ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "SharedMapping: this host's 64-bit atomics are not lock-free")
+#else
+#define CEE_MAP_CHECK64() ((void)0)
+#endif
+
+uint64_t ceesafe_host_map_load64(uint64_t address, uint64_t at, int32_t order) {
+    CEE_MAP_CHECK64();
+    return ceesafe_atomic_load_ord_u64(CEE_MAPPED(uint64_t, address, at), order);
+}
+
+void ceesafe_host_map_store64(uint64_t address, uint64_t at, uint64_t value, int32_t order) {
+    CEE_MAP_CHECK64();
+    ceesafe_atomic_store_ord_u64(CEE_MAPPED(uint64_t, address, at), value, order);
+}
+
+uint64_t ceesafe_host_map_cas64(uint64_t address, uint64_t at, uint64_t expected, uint64_t desired, int32_t order) {
+    CEE_MAP_CHECK64();
+    return ceesafe_atomic_cas_ord_u64(CEE_MAPPED(uint64_t, address, at), expected, desired, order);
+}
+
+uint64_t ceesafe_host_map_add64(uint64_t address, uint64_t at, uint64_t value, int32_t order) {
+    CEE_MAP_CHECK64();
+    return ceesafe_atomic_add_ord_u64(CEE_MAPPED(uint64_t, address, at), value, order);
+}
+
+/* SharedMapping.fence(): a sequentially consistent fence, SQLite's unixShmBarrier. */
+void ceesafe_host_map_fence(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    MemoryBarrier();
+#else
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#endif
+}
+
 /* ---- Child processes that run beside their parent (ADR 0169; type-system.md §26.16; lib/std's ChildProcess) ----
  * ceesafe_host_child_start starts argv[0] (found on PATH) and returns at once: the child's process id, or a negated
  * errno, with `*handle` what the other calls take (POSIX: the id again; Windows: the process's handle). `streams`

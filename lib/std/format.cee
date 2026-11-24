@@ -75,3 +75,206 @@ impl AppendText for String {
         }
     }
 }
+
+/// `s.add()` on a `String` (ADR 0217 §7.1): the checker calls `TextAppend.add(mut s)`. The struct is never made.
+public struct TextAppend<region r> {
+    public fn add(out: borrow mut(r) String) -> TextAppender<r> => TextAppender { out: out, failed: false };
+}
+
+/// Text appended to a `String` a step at a time, each step returning the appender so the next can follow:
+/// `line.add().text("status ").number(code).done()?`. A step whose allocation fails appends nothing more and marks the
+/// appender, so one `done()` at the end reports it; what earlier steps appended stays (ADR 0217).
+public struct TextAppender<region r> {
+    out: borrow mut(r) String;
+    failed: bool;
+}
+
+impl<region r> TextAppender<r> {
+    /// Notes a step's outcome: a failed allocation marks the appender.
+    fn note(borrow mut this, outcome: Result<void, AllocError>) {
+        match (outcome) {
+            Ok() => {}
+            Err(_) => { this.failed = true; }
+        }
+    }
+
+    /// `s`, as `append(s)`.
+    public fn text(borrow mut this, s: StringView) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.append(s);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+    /// not a failure.
+    public fn char(borrow mut this, c: u32) -> borrow mut TextAppender {
+        if (!this.failed) {
+            match (this.out.appendChar(c)) {
+                Ok(_) => {}
+                Err(_) => { this.failed = true; }
+            }
+        }
+        return this;
+    }
+
+    /// `n` in decimal, as `appendNumber(n)`.
+    public fn number(borrow mut this, n: u64) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.appendNumber(n);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `n` in decimal with its sign, as `appendNumber(n)`.
+    public fn signed(borrow mut this, n: i64) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.appendNumber(n);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+    public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.appendHex(value, minWidth, upper);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+    public fn padded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.appendPadded(text, width, align, fill);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+    public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut TextAppender {
+        if (!this.failed) {
+            let outcome = this.out.appendFixed(value, digits);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
+    public fn done(borrow mut this) -> Result<void, AllocError> =>
+        if (this.failed) Err(AllocError.OutOfMemory) else Ok();
+}
+
+/// `v.add()` on a `Vector<u8>` (ADR 0217 §7.1): the checker calls `ByteAppend.add(mut v)`. The struct is never made.
+public struct ByteAppend<region r> {
+    public fn add(out: borrow mut(r) Vector<u8>) -> ByteAppender<r> => ByteAppender { out: out, failed: false };
+}
+
+/// Text appended to a `Vector<u8>` a step at a time, as TextAppender appends to a `String` (ADR 0217): each step
+/// returns the appender, a failed allocation marks it, and `done()` reports it.
+public struct ByteAppender<region r> {
+    out: borrow mut(r) Vector<u8>;
+    failed: bool;
+}
+
+impl<region r> ByteAppender<r> {
+    /// Notes a step's outcome: a failed allocation marks the appender.
+    fn note(borrow mut this, outcome: Result<void, AllocError>) {
+        match (outcome) {
+            Ok() => {}
+            Err(_) => { this.failed = true; }
+        }
+    }
+
+    /// The bytes of `s`.
+    public fn text(borrow mut this, s: StringView) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            let outcome = this.out.extend(s.bytes());
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+    /// not a failure.
+    public fn char(borrow mut this, c: u32) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            match (this.out.appendChar(c)) {
+                Ok(_) => {}
+                Err(_) => { this.failed = true; }
+            }
+        }
+        return this;
+    }
+
+    /// `n` in decimal.
+    public fn number(borrow mut this, n: u64) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            var buffer = [0u8; 24];
+            var writer = TextWriter.create(mut buffer[..]);
+            writer.decimal(n);
+            let outcome = this.out.extend(writer.written());
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `n` in decimal with its sign.
+    public fn signed(borrow mut this, n: i64) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            var buffer = [0u8; 24];
+            var writer = TextWriter.create(mut buffer[..]);
+            writer.signed(n);
+            let outcome = this.out.extend(writer.written());
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+    public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            let outcome = Formatted.hex(this.out, value, minWidth, upper);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+    public fn padded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            let outcome = Formatted.padded(this.out, text, width, align, fill);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// `value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+    public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut ByteAppender {
+        if (!this.failed) {
+            let outcome = Formatted.fixed(this.out, value, digits);
+            this.note(outcome);
+        }
+        return this;
+    }
+
+    /// Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
+    public fn done(borrow mut this) -> Result<void, AllocError> =>
+        if (this.failed) Err(AllocError.OutOfMemory) else Ok();
+}

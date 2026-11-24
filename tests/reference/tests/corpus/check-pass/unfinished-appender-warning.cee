@@ -1,0 +1,36 @@
+// N0408 (ADR 0217 §7.2): a statement made of a chain that starts with `x.add()` and does not reach `done()` drops the
+// appender at its end, so a failed allocation in it is lost. A warning: the program still checks, builds and runs.
+// An appender kept in a variable is not reported, nor is a program's own struct of the same name.
+struct TextAppender {
+    n: i32;
+}
+
+impl TextAppender {
+    fn bump(borrow mut this) -> borrow mut TextAppender {
+        this.n += 1;
+        return this;
+    }
+}
+
+// Once for the statement, whatever the number of instances.
+fn twice<T: Copy>(x: T) {
+    var s = String.create();
+    s.add().text("generic"); // warning[N0408]
+}
+
+fn main() {
+    var line = String.create();
+    line.add().text("lost ").number(1); // warning[N0408]
+    line.add().text("kept ").number(2).done()!;
+    line.add().text("unread ").done(); // warning[N0402]
+    var a = line.add();
+    a.text("step ");
+    a.number(3);
+    a.done()!;
+    var mine = TextAppender { n: 0 };
+    mine.bump().bump();
+    var bytes = Vector<u8>.create();
+    bytes.add().text("x"); // warning[N0408]
+    twice(1);
+    twice(true);
+}

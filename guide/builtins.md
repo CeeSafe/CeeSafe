@@ -158,6 +158,7 @@ No such file or directory
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `String.from(view)`, `t.clone()` | `Result<String, AllocError>`: a new string with a copy of the text |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
+| `t.add()`, then `.text(view)`, `.char(c)`, `.number(n)`, `.signed(n)`, `.hex(n, minWidth, upper)`, `.padded(view, width, align, fill)`, `.fixed(f, digits)`, `.done()` | an appender whose steps chain; `done()` is `Result<void, AllocError>`, an `Err` if any step could not allocate (ADR 0217; also on a `Vector<u8>`) |
 | `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
 | `t.appendChar(c)`, `t.appendUtf8(bytes)` | `Result<bool, AllocError>`: a character (`c: u32`) in UTF-8, or bytes that are UTF-8 (checked once, not copied first); `false`, appending nothing, otherwise (also on a `Vector<u8>`) |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |

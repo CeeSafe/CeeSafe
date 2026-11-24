@@ -2510,6 +2510,14 @@ fn main() -> i32 {
     `Result<bool, AllocError>`: the character in UTF-8, or the bytes when they are UTF-8 (checked once, with no copy
     first); `false`, appending nothing, for a value that is not a Unicode scalar value or bytes that are not UTF-8.
     They are lib/core's `AppendText` interface, for `Vector<u8>` in lib/core and `String` in lib/std;
+  - `s.add()` (ADR 0217), on a `String` and on a `Vector<u8>` of the system heap: an appender that holds `s` borrowed
+    mutably, lib/std's `TextAppender<r>` or `ByteAppender<r>` (the call `TextAppend.add(mut s)` or
+    `ByteAppend.add(mut s)`). Its steps `text(view)`, `char(c)`, `number(n: u64)`, `signed(n: i64)`,
+    `hex(n, minWidth, upper)`, `padded(text, width, align, fill)` and `fixed(f, digits)` append as the methods above,
+    each returning the appender (`borrow mut`) so the next follows; after a step whose allocation failed the later ones
+    append nothing, and `done()` is `Err(AllocError.OutOfMemory)`, else `Ok()`:
+    `line.add().text("status ").number(code).done()?`. A statement that starts such a chain and does not reach
+    `done()` is warning N0408;
   - `s.clear()`, `s.length` (bytes), `s.capacity`;
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;

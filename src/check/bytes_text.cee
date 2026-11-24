@@ -30,12 +30,12 @@ fn sliceMethodNames(bytes: bool) -> StringView =>
 
 /// A vector's built-in methods; with `bytes`, a `Vector<u8>`'s.
 fn vectorMethodNames(bytes: bool) -> StringView =>
-    if (bytes) "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
+    if (bytes) "add push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
         else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone";
 
 /// A `String`'s built-in methods.
 fn stringMethodNames() -> StringView =>
-    "append appendNumber clear view bytes clone indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat";
+    "add append appendNumber clear view bytes clone indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat";
 
 /// A `StringView`'s methods.
 fn viewMethodNames() -> StringView =>
@@ -222,6 +222,54 @@ fn checkVectorPushBytes(
         return c.errorResult(span.start, span.end);
     }
     let values = [receiver, value];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `s.add()` on a `String` or on a `Vector<u8>` of the system heap (ADR 0217 §7.1): `TextAppend.add(mut s)` or
+/// `ByteAppend.add(mut v)`, an appender that holds the receiver borrowed mutably.
+fn checkAppenderStart(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    let vectorType = c.typeOf(vector);
+    let isString = c.types.isString(vectorType);
+    if (!isString && (c.types.info(c.types.info(vectorType).pointee).element != c.types.u8 ||
+        allocatorSuffix(c, c.types.info(vectorType).allocator).length > 0)) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, vectorType)?;
+        appendText(mut message, " has no method 'add': it appends text, to a 'String' or a 'Vector<u8>' (ADR 0217)")?;
+        c.error(undefinedName(), ident.start, ident.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (!noMemberTypeArguments(c, member, span)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'add' takes no arguments: the steps that follow it append (ADR 0217)")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
+    if (c.isBottom(receiver)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let symbol = c.intern("add")?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, if (isString) "TextAppend" else "ByteAppend", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0217")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [receiver];
     return libraryCall(c, function, values[..], span);
 }
 

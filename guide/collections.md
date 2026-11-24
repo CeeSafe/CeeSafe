@@ -198,11 +198,8 @@ owns growable text.
 
 ```ceesafe
 fn greet(name: StringView) -> Result<String, AllocError> {
-    var s = String.withCapacity(name.length + 7)?;
-    s.append("Hello, ")?;
-    s.append(name)?;
-    s.append("! You are visitor ")?;
-    s.appendNumber(42)?;
+    var s = String.withCapacity(name.length + 25)?;
+    s.add().text("Hello, ").text(name).text("! You are visitor ").number(42).done()?;
     return Ok(s);
 }
 
@@ -223,6 +220,10 @@ CeeSafe
 true
 ```
 
+- `s.add()` starts a chain of appends: `text`, `char`, `number`, `signed`, `hex`, `padded` and `fixed`, then `done()`,
+  whose one `?` reports an allocation that failed anywhere in the chain. A chain that never reaches `done()` is
+  warning N0408. The same appends exist one at a time, `s.append(…)?` and `s.appendNumber(…)?`, each with its own
+  `?`, and a `Vector<u8>` has `add()` too. There is no string interpolation: `"x = {x}"` is printed as written.
 - `length` is in bytes; `s[i]` is a byte (`u8`); `s.bytes()` is a `Slice<u8>`.
 - Slicing (`s[lo..hi]`) checks that both ends fall on character boundaries.
 - A `String` can only receive valid UTF-8 (`append` takes a view, which always is), so its contents are always valid

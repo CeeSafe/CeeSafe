@@ -497,6 +497,9 @@ fn checkVectorMethod(
     if (sameText(text, "pushBE") || sameText(text, "pushLE")) {
         return checkVectorPushBytes(c, member, arguments, vector, targetSpan, span);
     }
+    if (sameText(text, "add")) {
+        return checkAppenderStart(c, member, arguments, vector, targetSpan, span);
+    }
     if (!isString && (sameText(text, "extend") || sameText(text, "resize") || sameText(text, "reserve"))) {
         return checkVectorBulk(c, member, arguments, vector, targetSpan, span);
     }

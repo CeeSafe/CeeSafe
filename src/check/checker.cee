@@ -254,6 +254,7 @@ struct Checker {
     qualifyRoot: bool;                         // name the root's items as a dependent does (qualifiedName)
     lintAll: bool;                             // N0400 and N0401 for every package's own files (check --all)
     unusedResults: Vector<u32>;                // N0402: (file, start, end) of each call statement whose value is a Result
+    unfinishedAppenders: Vector<u32>;          // N0408: (file, start, end) of each `x.add()…` chain without `done()`
     copiedChanges: Vector<u32>;                // N0403: (file, start, end, local, name, read later) of each Copy capture a move literal changes
     recordOut: Vector<RecordedEffects>;        // the recorded packages' functions, each with its package
     opaquePackages: Vector<bool>;              // by package: a recorded body made what a record cannot hold, or embeds

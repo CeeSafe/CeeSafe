@@ -17,10 +17,10 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     11 =>
         "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 =>
-        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7)",
+        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7); the forms other languages write, each with what CeeSafe writes instead (below)",
     101 =>
-        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3)",
-    102 => "Expected an expression",
+        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3); `type Name = …`, which says CeeSafe has no type aliases",
+    102 => "Expected an expression; at a `|`, that a closure is written `(a) => a + 1`",
     103 => "Comparison operators chained",
     104 => "Invalid assignment target",
     105 =>
@@ -66,7 +66,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     223 => "*(unassigned)*",
     224 => "Value of type `void` used as a value, or a `let` of a `never` expression",
     225 => "Expression statement that is not a call, an `await`, or `?` or `!` (ADR 0138 §5)",
-    226 => "`void` used other than as a return type, or `never` other than as a function's return type",
+    226 =>
+        "`void` used other than as a return type, or `never` other than as a function's return type; since ADR 0213 an instance at `void` of a generic struct with a field of that type, or of a generic enum whose variant would have a `void` payload beside others (a variant's one `void` payload makes a unit variant, §20.4)",
     227 =>
         "Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6)",
     228 =>
@@ -110,7 +111,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy (since ADR 0198, one that needs drop, an unbounded type parameter included, until arrays have drop glue), or an array larger than 2^31 − 1 bytes; since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected",
+        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), or an array larger than 2^31 − 1 bytes (an element type that needs drop was N0259 until ADR 0198's phase 2); since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
@@ -252,7 +253,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     365 =>
         "`Secret.wipe` of a place, or of a slice's elements, whose type is not zeroable: not an integer, float, `bool`, raw pointer, array of a zeroable type, or struct without a `drop` whose fields are all zeroable, so zero bytes need not be one of its values. The message names the first field that is not (`type-system.md` §42.1, ADR 0197 §2.2)",
     400 =>
-        "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
+        "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6); build such text with `s.add().text(\"x = \").number(x).done()?` (ADR 0217)",
     401 =>
         "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
     402 =>
@@ -267,5 +268,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A function that is not async whose values of 4 KiB or more add up to 256 KiB or more of its stack frame, by the compiler's estimate: a value is counted once however many locals it is moved through, and so is the value the function returns. A main thread's stack is 1 MiB on iOS and Windows. `ceesafec build --explain-frames` lists each such value, from 64 KiB (`c-backend.md` §4.1, ADR 0163 §2.1)",
     407 =>
         "`for (x in e)` over an iterator (`type-system.md` §16.4) where `e` is written as a place (a name, or fields of a name or of `this`), its type is Copy, so the loop walks a copy and the place does not advance, and the place is read later in the function, after the loop's end, other than as the `e` of another `for` and before any assignment to the whole place (ADR 0167). The loop is reported; `for (x in borrow mut e)` walks the place itself",
+    408 =>
+        "A statement made of a chain of method calls that starts with `x.add()` (a `String`'s or a `Vector<u8>`'s appender) and does not end in `done()`: the appender is dropped at the statement's end, so a failed allocation in the chain is lost (ADR 0217 §7.2). End the chain with `.done()?`; an appender kept in a variable is not reported",
     _ => "",
 };

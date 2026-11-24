@@ -367,6 +367,20 @@ TABLES.append(table(
         ("`t.appendUtf8(bytes: Slice<u8>) -> Result<bool, AllocError>`",
          "Adds `bytes` at the end of a string when they are UTF-8, checked once. `false`, adding nothing, when they are not.",
          OOM),
+        ("`t.add() -> TextAppender`",
+         "An appender that holds the string borrowed mutably, whose steps add at its end and chain: "
+         "`t.add().text(\"n = \").number(n).done()?`. A statement that starts such a chain and does not reach `done()` "
+         "is warning N0408.",
+         NO),
+        ("`.text(text: StringView)`, `.char(c: u32)`, `.number(n: u64)`, `.signed(n: i64)`, "
+         "`.hex(value: u64, minWidth: u32, upper: bool)`, `.padded(text: StringView, width: usize, align: TextAlign, fill: u32)`, "
+         "`.fixed(value: f64, digits: u32)`",
+         "The steps of an appender: each adds as `append`, `appendChar`, `appendNumber`, `appendHex`, `appendPadded` or "
+         "`appendFixed` does, and returns the appender. After a step whose allocation failed, the later steps add nothing.",
+         "the failure is kept for `done()`"),
+        ("`.done() -> Result<void, AllocError>`",
+         "Ends an appender's chain: whether every step could add.",
+         OOM + " in any step; what the steps before it added stays"),
         ("`t.view() -> StringView`", "The text of a string as a view that borrows the string.", NO),
         ("`t.clear()`", "Empties a string. The capacity stays.", NO),
         ("`t.sameAs(other: borrow String) -> bool`, `t.hash(h: borrow mut Hasher)`, "
@@ -540,6 +554,9 @@ TABLES.append(table(
         ("`v.appendChar(c: u32)`, `v.appendUtf8(bytes: Slice<u8>)`",
          "The `appendChar` and `appendUtf8` of a `String`, on a `Vector<u8>`: each returns a `Result<bool, AllocError>`, `false` for what is not a character or not UTF-8.",
          OOM),
+        ("`v.add() -> ByteAppender`",
+         "The appender of a `String`, on a `Vector<u8>` of the system heap: the same steps, adding the text's bytes, and `done()`.",
+         NO),
         ("`Vector.intoRaw(v: Vector<T>) -> VectorParts<T>`",
          "Gives up a vector and returns its `pointer`, `length` and `capacity`. Nothing is freed.", NO, []),
         ("`Vector.fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>`",

@@ -1,0 +1,44 @@
+(program
+  (fn twice ((x#0: T)) -> void
+    (block
+      (var s#1: String = (Process.exit))
+      (expr (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut s#1)):TextAppender) "generic"):borrow mut TextAppender)
+    )
+  )
+  (fn main () -> void
+    (block
+      (var line#0: String = (Process.exit))
+      (expr (call TextAppender.number (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut line#0)):TextAppender) "lost "):borrow mut TextAppender 1:u64):borrow mut TextAppender)
+      (expr (unwrap (call TextAppender.done (call TextAppender.number (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut line#0)):TextAppender) "kept "):borrow mut TextAppender 2:u64):borrow mut TextAppender):Result<void, AllocError>):void)
+      (expr (call TextAppender.done (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut line#0)):TextAppender) "unread "):borrow mut TextAppender):Result<void, AllocError>)
+      (var a#1: TextAppender = (call TextAppend.add (borrow-mut line#0)):TextAppender)
+      (expr (call TextAppender.text (borrow-mut a#1) "step "):borrow mut TextAppender)
+      (expr (call TextAppender.number (borrow-mut a#1) 3:u64):borrow mut TextAppender)
+      (expr (unwrap (call TextAppender.done (borrow-mut a#1)):Result<void, AllocError>):void)
+      (var mine#2: TextAppender = (new TextAppender (n 0:i32)))
+      (expr (call TextAppender.bump (call TextAppender.bump (borrow-mut mine#2)):borrow mut TextAppender):borrow mut TextAppender)
+      (var bytes#3: Vector<u8> = (Process.exit))
+      (expr (call ByteAppender.text (borrow-mut-temp (call ByteAppend.add (borrow-mut bytes#3)):ByteAppender) "x"):borrow mut ByteAppender)
+      (expr (call twice 1:i32):void)
+      (expr (call twice true):void)
+    )
+  )
+  (fn TextAppender.bump ((this#0: borrow mut TextAppender)) -> borrow mut TextAppender
+    (block
+      (+= (*this#0).n 1:i32)
+      (return (reborrow-mut this#0))
+    )
+  )
+  (fn twice ((x#0: i32)) -> void
+    (block
+      (var s#1: String = (Process.exit))
+      (expr (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut s#1)):TextAppender) "generic"):borrow mut TextAppender)
+    )
+  )
+  (fn twice ((x#0: bool)) -> void
+    (block
+      (var s#1: String = (Process.exit))
+      (expr (call TextAppender.text (borrow-mut-temp (call TextAppend.add (borrow-mut s#1)):TextAppender) "generic"):borrow mut TextAppender)
+    )
+  )
+)

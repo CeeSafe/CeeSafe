@@ -44,6 +44,10 @@
 - [struct Snappy](#struct-snappy)
 - [struct Zstd](#struct-zstd)
 - [struct ZstdDecoder](#struct-zstddecoder)
+- [struct TextAppend](#struct-textappend)
+- [struct TextAppender](#struct-textappender)
+- [struct ByteAppend](#struct-byteappend)
+- [struct ByteAppender](#struct-byteappender)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [enum ChildStream](#enum-childstream)
@@ -2221,6 +2225,53 @@ public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<P
 Decodes from `input` into `out` until the input is used up, `out` is full, or a frame ends (`done`). Input it
 reads but cannot use yet (part of a header or of a compressed block) it keeps, so the next step continues with
 the bytes after `read`.
+
+## struct TextAppend
+
+```ceesafe
+public struct TextAppend<region r>
+```
+
+`s.add()` on a `String` (ADR 0217 §7.1): the checker calls `TextAppend.add(mut s)`. The struct is never made.
+
+### TextAppend.add
+
+```ceesafe
+public fn add(out: borrow mut(r) String) -> TextAppender<r>
+```
+
+## struct TextAppender
+
+```ceesafe
+public struct TextAppender<region r>
+```
+
+Text appended to a `String` a step at a time, each step returning the appender so the next can follow:
+`line.add().text("status ").number(code).done()?`. A step whose allocation fails appends nothing more and marks the
+appender, so one `done()` at the end reports it; what earlier steps appended stays (ADR 0217).
+
+## struct ByteAppend
+
+```ceesafe
+public struct ByteAppend<region r>
+```
+
+`v.add()` on a `Vector<u8>` (ADR 0217 §7.1): the checker calls `ByteAppend.add(mut v)`. The struct is never made.
+
+### ByteAppend.add
+
+```ceesafe
+public fn add(out: borrow mut(r) Vector<u8>) -> ByteAppender<r>
+```
+
+## struct ByteAppender
+
+```ceesafe
+public struct ByteAppender<region r>
+```
+
+Text appended to a `Vector<u8>` a step at a time, as TextAppender appends to a `String` (ADR 0217): each step
+returns the appender, a failed allocation marks it, and `done()` reports it.
 
 ## enum PathKind
 

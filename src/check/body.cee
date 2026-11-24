@@ -209,6 +209,14 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
         c.unusedResults.push(span.start)?;
         c.unusedResults.push(span.end)?;
     }
+    if (!c.isBottom(value) && isAppenderType(c, c.typeOf(value)) && chainStartsWithAdd(c, e) &&
+        c.front.diagnostics.items.length == reported) {
+        // An appender made by this statement and dropped at its end without done() (ADR 0217 §7.2): noted here and
+        // reported once after every body, as N0402 is.
+        c.unfinishedAppenders.push(c.file)?;
+        c.unfinishedAppenders.push(span.start)?;
+        c.unfinishedAppenders.push(span.end)?;
+    }
     return Ok(value);
 }
 

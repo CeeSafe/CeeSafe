@@ -87,3 +87,85 @@ fn warnCopiedChanges(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     return Ok();
 }
+
+// N0408 (ADR 0217 §7.2): a statement made of a chain of method calls that starts with `x.add()`, a `String`'s or a
+// `Vector<u8>`'s appender, whose value is still the appender: it is dropped at the statement's end without `done()`,
+// so a failed allocation in the chain is lost. An appender kept in a variable is not reported.
+
+fn n0408() -> u32 => 408;
+
+/// Whether `t` is lib/std's TextAppender or lib/core's ByteAppender, or a reference to one.
+fn isAppenderType(c: borrow Checker, t: u32) -> bool {
+    var target = t;
+    if (c.types.is(t, TypeKind.Reference)) {
+        target = c.types.info(t).pointee;
+    }
+    let definition = c.types.info(target).structDef;
+    if (definition == none()) {
+        return false;
+    }
+    let file = c.types.structs[definition as usize].file;
+    if (file == none() || (file as usize) >= c.fileIsLibrary.length || !c.fileIsLibrary[file as usize]) {
+        return false;
+    }
+    let name = c.types.name(target);
+    var end = name.length;
+    for (k in 0..name.length) {
+        if (end == name.length && name[k] == '<') {
+            end = k;
+        }
+    }
+    return sameText(name[..end], "TextAppender") || sameText(name[..end], "ByteAppender");
+}
+
+/// Whether `e` is a chain of method calls whose first call is `x.add()` with no arguments.
+fn chainStartsWithAdd(c: borrow Checker, e: u32) -> bool {
+    var at = e;
+    var firstName = none();
+    var firstCount: u32 = 0;
+    loop {
+        match (c.front.ast.exprs[at as usize]) {
+            ExprNode.Call(callee, arguments) => {
+                match (c.front.ast.exprs[callee as usize]) {
+                    ExprNode.Member(receiver, ident) => {
+                        firstName = c.front.ast.idents[ident as usize].symbol;
+                        firstCount = arguments.count;
+                        at = receiver;
+                    }
+                    _ => { return false; }
+                }
+            }
+            _ => { break; }
+        }
+    }
+    return firstName != none() && firstCount == 0 && sameText(c.name(firstName), "add");
+}
+
+fn warnUnfinishedAppenders(c: borrow mut Checker) -> Result<void, AllocError> {
+    var at: usize = 0;
+    while (at + 2 < c.unfinishedAppenders.length) {
+        let file = c.unfinishedAppenders[at];
+        let start = c.unfinishedAppenders[at + 1];
+        let end = c.unfinishedAppenders[at + 2];
+        // Once for a statement: a generic function's body is checked for each of its instances.
+        var seen = false;
+        var earlier: usize = 0;
+        while (earlier < at) {
+            if (c.unfinishedAppenders[earlier] == file && c.unfinishedAppenders[earlier + 1] == start) {
+                seen = true;
+            }
+            earlier += 3;
+        }
+        at += 3;
+        if (seen || !isLintedFile(c, file)) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "this appender is dropped at the end of the statement without 'done()', so a failed allocation in it is lost: end the chain with '.done()?' (ADR 0217)",
+        )?;
+        c.front.diagnostics.warning(n0408(), file, start, end, message)?;
+    }
+    return Ok();
+}

@@ -1,0 +1,39 @@
+// ADR 0217: `s.add()` on a `String` and on a `Vector<u8>`, each step appending as the method it names and `done()`
+// reporting a failed allocation once. The expected lines are Python's formatting of the same values (`f"{255:04X}"`,
+// `f"{3.14159:.2f}"`, `"ok".rjust(5, ".")`, `"ab".ljust(4, "*")`), and the extremes of `u64` and `i64`.
+fn line(status: u64) -> Result<String, AllocError> {
+    var out = String.create();
+    out.add().text("HTTP/1.1 ").number(status).text(", ").signed(-12).char(0x263A).text(" ").hex(255, 4, true).text(" ")
+        .fixed(3.14159, 2).text(" [").padded("ok", 5, TextAlign.Right, '.' as u32).text("]").done()?;
+    return Ok(out);
+}
+
+fn main() {
+    Console.writeLine(line(200)!.view());
+    var bytes = Vector<u8>.create();
+    bytes.add().text("n=").number(42).text(" s=").signed(-7).text(" h=").hex(3054, 0, false).text(" f=").fixed(0.5, 3)
+        .text(" [").padded("ab", 4, TextAlign.Left, '*' as u32).text("]").char(0xE9).done()!;
+    Console.writeLine(StringView.fromUtf8(bytes.view())!);
+    // An appender kept in a variable, fed a step at a time.
+    var kept = String.create();
+    var a = kept.add();
+    a.text("one ");
+    a.number(2);
+    a.done()!;
+    Console.writeLine(kept.view());
+    // A value that is not a Unicode scalar value appends nothing, and is not a failure.
+    var surrogate = String.create();
+    match (surrogate.add().text("a").char(0xD800).text("b").done()) {
+        Ok() => { Console.writeLine(surrogate.view()); }
+        Err(_) => { Console.writeLine("out of memory"); }
+    }
+    var extremes = String.create();
+    extremes.add().number(0xFFFFFFFFFFFFFFFF).text(" ").signed(-9223372036854775807 - 1).done()!;
+    Console.writeLine(extremes.view());
+}
+
+// expect-stdout: HTTP/1.1 200, -12☺ 00FF 3.14 [...ok]
+// expect-stdout: n=42 s=-7 h=bee f=0.500 [ab**]é
+// expect-stdout: one 2
+// expect-stdout: ab
+// expect-stdout: 18446744073709551615 -9223372036854775808

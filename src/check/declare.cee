@@ -295,6 +295,7 @@ fn checkProgramWith(
         qualifyRoot: records.qualifyRoot,
         lintAll: records.lintAll,
         unusedResults: Vector<u32>.create(),
+        unfinishedAppenders: Vector<u32>.create(),
         copiedChanges: Vector<u32>.create(),
         recordOut: Vector<RecordedEffects>.create(),
         opaquePackages: Vector<bool>.create(),
@@ -477,11 +478,12 @@ fn checkProgramWith(
         f += 1;
     }
     checkMain(mut c)?;
-    warnStringBraces(mut c)?;    // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
-    warnShadowedMembers(mut c)?; // ADR 0074 §2.10
-    warnLoopCopies(mut c)?;      // ADR 0167
-    warnUnusedResults(mut c)?;   // ADR 0105
-    warnCopiedChanges(mut c)?;   // ADR 0113
+    warnStringBraces(mut c)?;        // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
+    warnShadowedMembers(mut c)?;     // ADR 0074 §2.10
+    warnLoopCopies(mut c)?;          // ADR 0167
+    warnUnusedResults(mut c)?;       // ADR 0105
+    warnUnfinishedAppenders(mut c)?; // ADR 0217 §7.2
+    warnCopiedChanges(mut c)?;       // ADR 0113
     foldStatics(mut c)?;
     finishFunctionFacts(mut c)?;
     finishAtomicStructs(mut c);

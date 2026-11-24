@@ -78,6 +78,7 @@
 - [struct TextSearch](#struct-textsearch)
 - [struct ByteSearch](#struct-bytesearch)
 - [struct StringCopying](#struct-stringcopying)
+- [struct StringBytes](#struct-stringbytes)
 
 ## struct PhysAddr
 
@@ -2115,6 +2116,14 @@ public fn fromText(text: StringView) -> Result<ByteString, AllocError>
 
 A new byte string with a copy of `text`'s bytes (a literal, a `StringView`, or a `String`, lent).
 
+### ByteString.fromString
+
+```ceesafe
+public fn fromString(text: String) -> ByteString
+```
+
+The bytes of `text`, which it takes: no copy (`s.intoBytes()`, ADR 0236).
+
 ### ByteString.clone
 
 ```ceesafe
@@ -2130,6 +2139,15 @@ public fn intoBytes(this) -> Vector<u8>
 ```
 
 The bytes, which the byte string gives up: no copy.
+
+### ByteString.intoString
+
+```ceesafe
+public fn intoString(this) -> Result<String, ByteString>
+```
+
+The text as a `String`, which the byte string gives up, when the bytes are UTF-8: no copy
+(`String.fromUtf8`, ADR 0236). When they are not, the byte string back, unchanged.
 
 ### ByteString.view
 
@@ -4142,3 +4160,65 @@ public fn fromSecret(text: StringView) -> Result<String<SecretHeap>, AllocError>
 ```
 
 `from` for a string of `SecretHeap`.
+
+## struct StringBytes
+
+```ceesafe
+public struct StringBytes
+```
+
+`s.intoBytes()` and `String.fromUtf8(v)` (ADR 0236, type-system.md §23.2): a string and a byte vector of one
+allocator become each other with no copy, the buffer, its length and its capacity moving as they are. They are
+written over the libraries' `releaseBuffer` and `adoptBuffer` (as `VectorRaw` is), with the block kept in the
+allocation report's `live`. The `…Failing` functions are for `FailingAllocator`, the `…Secret` ones for `SecretHeap`.
+
+### StringBytes.intoBytes
+
+```ceesafe
+public fn intoBytes(s: String) -> Vector<u8>
+```
+
+`s.intoBytes()`: the bytes of `s`, which it gives up. Nothing is copied, allocated or freed.
+
+### StringBytes.fromUtf8
+
+```ceesafe
+public fn fromUtf8(v: Vector<u8>) -> Result<String, Vector<u8>>
+```
+
+`String.fromUtf8(v)`: the bytes of `v` as a string, without a copy, when they are UTF-8; `Err(v)`, unchanged,
+when they are not.
+
+### StringBytes.intoBytesFailing
+
+```ceesafe
+public fn intoBytesFailing(s: String<FailingAllocator>) -> Vector<u8, FailingAllocator>
+```
+
+`intoBytes` for a string of `FailingAllocator`.
+
+### StringBytes.fromUtf8Failing
+
+```ceesafe
+public fn fromUtf8Failing(
+    v: Vector<u8, FailingAllocator>,
+) -> Result<String<FailingAllocator>, Vector<u8, FailingAllocator>>
+```
+
+`fromUtf8` for a vector of `FailingAllocator`.
+
+### StringBytes.intoBytesSecret
+
+```ceesafe
+public fn intoBytesSecret(s: String<SecretHeap>) -> Vector<u8, SecretHeap>
+```
+
+`intoBytes` for a string of `SecretHeap`: the vector wipes the bytes when it frees them, as the string would.
+
+### StringBytes.fromUtf8Secret
+
+```ceesafe
+public fn fromUtf8Secret(v: Vector<u8, SecretHeap>) -> Result<String<SecretHeap>, Vector<u8, SecretHeap>>
+```
+
+`fromUtf8` for a vector of `SecretHeap`.

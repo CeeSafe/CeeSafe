@@ -8,6 +8,7 @@ The commands of `ceesafec` beside `build`, `check` and `run`. The formatter has 
 ceesafec doc file.cee...                 # Markdown for the files' public items, on standard output
 ceesafec doc lib/core -o spec/api/core.md --title "lib/core"
 ceesafec doc --missing file.cee...       # list the public items without a doc comment; exit 1 if there are any
+ceesafec doc ByteString.fromString       # the embedded reference's entries for a name (§1.5)
 ```
 
 The files are one package, as for `check` (a directory means every `.cee` file under it, in ordinal path order).
@@ -52,6 +53,17 @@ there is any. It is a lint for a package's public surface; nothing requires it t
 
 `spec/api/core.md` is generated from `lib/core` with `ceesafec doc lib/core -o spec/api/core.md --title "lib/core"`, run
 on the embedded `lib/core` (its sources under CeeSafe's names). `tools/spec_check.py` fails if it is out of date.
+
+### 1.5 A name (ADR 0236 §2.5)
+
+`ceesafec doc NAME`, with one argument and no option, where `NAME` is an identifier or two joined by one `.`
+(`ByteString`, `ByteString.fromString`, `appendHex`), does not end in `.cee` or `.c`, and is not an existing file or
+directory, prints what `ceesafe_api` (§6.3) finds for it in the embedded `spec/api/core.md`, `spec/api/std.md` and
+`guide/builtins.md`: a type's whole section, a member's entries, or the built-in table rows naming it. Each entry is
+preceded by a line `<!-- document: heading -->`, and entries are separated by a blank line; the exit status is 0.
+With no entry, it writes `no entry for 'NAME'` and ceesafe_api's suggestions (`; did you mean 'a', 'b'`) on standard
+error, and exits 1. Any other argument is a path, as above; a package's own items are documented as a page, not looked
+up by name.
 
 ## 2. Language server (T3)
 

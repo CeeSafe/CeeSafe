@@ -52,6 +52,8 @@ extern "C" {
     @effects()
     fn ceesafe_host_file_lock_now(file: *void, kind: u32, wait: u32, start: u64, length: u64) -> i64;
     @effects()
+    fn ceesafe_host_file_test_lock(file: *void, kind: u32, start: u64, length: u64) -> i64;
+    @effects()
     fn ceesafe_host_is_terminal(stream: u32) -> i64;
     @effects(sleep)
     fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
@@ -1112,10 +1114,11 @@ public enum FileLock {
 
 /// Advisory locks on byte ranges of an open file (ADR 0220): POSIX `fcntl` record locks, the ones SQLite and other
 /// programs take, owned by the open `File` where the system has open-file-description locks (Linux, macOS), else by
-/// the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)` and `f.unlock(start, length)`
-/// are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File` releases its locks.
-/// Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked (Windows neither
-/// converts nor splits a lock; POSIX does both).
+/// the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)`, `f.testLock(…)` and
+/// `f.unlock(start, length)` are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File`
+/// releases its locks. Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked
+/// (Windows neither converts nor splits a lock; POSIX does both, and a conversion that meets a conflict leaves the
+/// held lock as it was, ADR 0234 §2.3).
 public struct FileLocks {
     /// `f.lock(kind, start, length)`: waits until bytes `start` to `start + length - 1` are locked. A range may lie
     /// past the end of the file. `InvalidInput` for `length` 0 or a range that ends past 2^63 - 1; `BadDescriptor`
@@ -1146,6 +1149,31 @@ public struct FileLocks {
             return Err(HostServices.hostError(result));
         }
         return Ok(result == 0);
+    }
+
+    /// `f.testLock(kind, start, length)` (ADR 0234): null if a `kind` lock on the range could be taken now, else the
+    /// kind of another holder's lock that conflicts (for a `Shared` request always `Exclusive`; when several holders
+    /// conflict, which one is named is unspecified). On POSIX it takes nothing (`F_OFD_GETLK`, else `F_GETLK`), and
+    /// the `File`'s own locks are not counted. On Windows the lock is tried without waiting and released at once, as
+    /// SQLite's os_win.c does: another holder may meet it in that instant, and the `File`'s own locks on the range
+    /// count as a conflict. Any open `File` may test. The answer is a snapshot: confirm with the lock taken next.
+    /// Safety: as `lock`.
+    public fn testLock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<FileLock?, IoError> {
+        FileLocks.check(start, length)?;
+        let result = unsafe { ceesafe_host_file_test_lock(
+            file as *File as *void,
+            FileLocks.code(kind),
+            start,
+            length,
+        ) };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return match (result) {
+            0 => Ok(null),
+            1 => Ok(Some(FileLock.Shared)),
+            _ => Ok(Some(FileLock.Exclusive)),
+        };
     }
 
     /// `f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.

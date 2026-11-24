@@ -99,6 +99,9 @@ fn checkVectorCreate(
     if (!isString && isVectorRawName(text)) {
         return checkVectorRaw(c, member, typeArguments, arguments, expected, span);
     }
+    if (isString && sameText(text, "fromUtf8")) {
+        return checkStringFromUtf8(c, typeArguments, arguments, span);
+    }
     // `empty` is `create` under the name a static's initialiser reads well with (ADR 0211 §2.2).
     if (!withCapacity && !fromText && !sameText(text, "create") && !sameText(text, "empty")) {
         var message = Vector<u8>.create();
@@ -112,7 +115,7 @@ fn checkVectorCreate(
         appendText(mut message, kind)?;
         appendText(mut message, ".withCapacity(n)'")?;
         if (isString) {
-            appendText(mut message, ", or 'String.from(text)'")?;
+            appendText(mut message, ", or 'String.from(text)' or 'String.fromUtf8(bytes)'")?;
         }
         if (!isString) {
             appendText(
@@ -225,6 +228,108 @@ fn stringCopy(c: borrow mut Checker, string: u32, text: u32, span: Span) -> Resu
         return c.errorResult(span.start, span.end);
     }
     let values = [text];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// lib/core's `StringBytes.<name><suffix>` for a string or vector of `allocator` (ADR 0236): `Failing`, `Secret`.
+fn stringBytesFunction(c: borrow mut Checker, name: StringView, allocator: u32, span: Span) -> Result<u32, AllocError> {
+    var full = Vector<u8>.create();
+    appendText(mut full, name)?;
+    appendText(mut full, allocatorSuffix(c, allocator))?;
+    let symbol = c.intern(StringView.fromUtf8(full.view())!)?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "StringBytes", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library function", "ADR 0236")?;
+    }
+    return Ok(function);
+}
+
+/// `s.intoBytes()` (ADR 0236, §23.2): the string, moved, into lib/core's `StringBytes.intoBytes`, whose vector takes
+/// its buffer.
+fn checkStringIntoBytes(c: borrow mut Checker, arguments: Range, string: u32, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'intoBytes' takes no arguments: 's.intoBytes()'")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let function = stringBytesFunction(c, "intoBytes", c.types.info(c.typeOf(string)).allocator, span)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [string];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `String.fromUtf8(v)` (ADR 0236, §23.2): `v` is a `Vector<u8, A>`, moved into lib/core's `StringBytes.fromUtf8`,
+/// which gives a `Result<String<A>, Vector<u8, A>>`. A written `String<A>` must be the vector's allocator's.
+fn checkStringFromUtf8(
+    c: borrow mut Checker,
+    typeArguments: Range,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (arguments.count != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'String.fromUtf8' takes the vector of bytes it becomes: 'String.fromUtf8(bytes)'")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var written = none();
+    if (typeArguments.count > 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'String' takes at most one type argument: 'String<A>'")?;
+        c.error(unknownType(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (typeArguments.count == 1) {
+        written = resolveVectorType(c, true, typeArguments)?;
+        if (c.types.isBottom(written)) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    let syntax = c.front.ast.at(arguments, 0);
+    let vector = synth(c, syntax, none())?;
+    if (c.isBottom(vector)) {
+        return Ok(vector);
+    }
+    let vectorType = c.typeOf(vector);
+    let argumentSpan = c.front.ast.exprSpans[syntax as usize];
+    let isBytes = c.types.is(vectorType, TypeKind.Vector) && !c.types.isString(vectorType) &&
+        c.types.info(c.types.info(vectorType).pointee).element == c.types.u8;
+    if (!isBytes) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'String.fromUtf8' takes a 'Vector<u8>', not a ")?;
+        appendQuotedType(mut message, c, vectorType)?;
+        if (c.types.isString(vectorType)) {
+            appendText(mut message, "; a string is already text")?;
+        } else if (c.types.isSlice(vectorType) || c.types.isStringView(vectorType)) {
+            appendText(mut message, "; a view of bytes is checked by 'StringView.fromUtf8(bytes)'")?;
+        }
+        c.error(typeMismatch(), argumentSpan.start, argumentSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let allocator = c.types.info(vectorType).allocator;
+    if (written != none() && c.types.info(written).allocator != allocator) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'String.fromUtf8' is written for a ")?;
+        appendQuotedType(mut message, c, written)?;
+        appendText(mut message, ", but its argument is a ")?;
+        appendQuotedType(mut message, c, vectorType)?;
+        appendText(mut message, "; a string keeps its bytes' allocator")?;
+        c.error(typeMismatch(), argumentSpan.start, argumentSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let function = stringBytesFunction(c, "fromUtf8", allocator, span)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [vector];
     return libraryCall(c, function, values[..], span);
 }
 
@@ -515,10 +620,14 @@ fn checkVectorMethod(
     if (!isString && sameText(text, "setLength")) {
         return checkVectorBuffer(c, member, arguments, vector, targetSpan, span);
     }
-    if (!isString && (sameText(text, "releaseBuffer") || sameText(text, "adoptBuffer")) && c.function != none() &&
+    if ((sameText(text, "releaseBuffer") || sameText(text, "adoptBuffer")) && c.function != none() &&
         c.hir.functions[c.function as usize].library) {
-        // The libraries' own, for lib/core's VectorRaw and VectorForeign (ADR 0090): a program has no such methods.
+        // The libraries' own, for lib/core's VectorRaw and VectorForeign (ADR 0090) and, on a string, StringBytes
+        // (ADR 0236), which checks UTF-8 before a string adopts bytes: a program has no such methods.
         return checkVectorBuffer(c, member, arguments, vector, targetSpan, span);
+    }
+    if (isString && sameText(text, "intoBytes")) {
+        return checkStringIntoBytes(c, arguments, vector, span);
     }
     let arity = vectorMethodArity(isString, text);
     if (arity < 0) {

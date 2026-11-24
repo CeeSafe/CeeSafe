@@ -143,7 +143,9 @@ no argument 1000
 | `File.createReadWrite(path)` | `Result<File, IoError>` for reading and writing, created if missing, emptied if present (ADR 0221) |
 | `IoError.BadDescriptor` | "Bad file descriptor" (`EBADF`): reading a file opened only for writing (`File.create`), or writing one opened only for reading |
 | `f.lock(FileLock.Exclusive, start, length)`, `f.tryLock(…)`, `f.unlock(start, length)` | advisory locks on bytes of the file, which other programs (SQLite among them) see; `tryLock` is `Result<bool, IoError>`, `false` when another holds a conflicting lock (ADR 0220) |
-| `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232) |
+| `f.testLock(kind, start, length)` | `Result<FileLock?, IoError>`: null if the lock could be taken now, else the kind of another holder's conflicting lock; takes nothing on POSIX (`F_GETLK`), tries and releases at once on Windows (ADR 0234) |
+| `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `16` and `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232, ADR 0235) |
+| `f.mapSharedReadOnly(offset, length)` | `Result<ReadOnlyMapping, IoError>`: the same, for reading only, from a `File` open for reading (`File.open` too); `readAt`, `load16`, `load32`, and no method that writes; the file must already hold the range (ADR 0235) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -169,7 +171,8 @@ No such file or directory
 
 A lock is advisory: it keeps out only programs that ask for one too. Lock bytes past the data (SQLite locks bytes
 from 0x40000000), take a range the `File` does not already hold, and unlock exactly the ranges taken: that is the
-same on every system. Dropping the `File` releases its locks.
+same on every system. Dropping the `File` releases its locks. `testLock` asks whether a lock could be taken
+without taking it (SQLite's "is a writer here?"), and names the kind of lock in the way.
 
 ```ceesafe
 fn main() {
@@ -182,6 +185,7 @@ fn main() {
         let mine = f.tryLock(FileLock.Exclusive, 0x40000000, 1)!;
         Console.writeLine(mine);
         f.unlock(0x40000000, 1)!;
+        Console.writeLine(f.testLock(FileLock.Exclusive, 0x40000001, 1)!.isNull());
     }
     File.remove(path.view())!;
     Directory.remove(dir.view())!;
@@ -190,12 +194,14 @@ fn main() {
 
 ```text
 true
+true
 ```
 
 A shared mapping is memory that other processes may write at any moment, so it is never a slice: bytes are copied
 out and in, and integers are atomics, which are atomic between processes too. An access outside the region, or an
 atomic not aligned to its size in the file, panics. To reach more of the file, map another region; regions of the
-same bytes are one memory.
+same bytes are one memory. A file the program may only read is mapped with `mapSharedReadOnly`, whose
+`ReadOnlyMapping` has copies out and loads but nothing that writes.
 
 ```ceesafe
 fn main() {
@@ -238,6 +244,7 @@ header
 | `==`, `!=` | compare the bytes |
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `String.from(view)`, `t.clone()` | `Result<String, AllocError>`: a new string with a copy of the text |
+| `t.intoBytes()`, `String.fromUtf8(v)` | `Vector<u8>`; `Result<String, Vector<u8>>`: the buffer moves, no copy; `Err(v)`, unchanged, for bytes that are not UTF-8 |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
 | `t.add()`, then `.text(view)`, `.char(c)`, `.number(n)`, `.signed(n)`, `.hex(n, minWidth, upper)`, `.padded(view, width, align, fill)`, `.fixed(f, digits)`, `.done()` | an appender whose steps chain; `done()` is `Result<void, AllocError>`, an `Err` if any step could not allocate (ADR 0217; also on a `Vector<u8>`) |
 | `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
@@ -291,6 +298,7 @@ keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-syst
 |---|---|
 | `ByteStringView.fromText(text)`, `ByteStringView.fromBytes(bytes)` | a view of the bytes, no copy |
 | `ByteString.create()`, `ByteString.fromBytes(v)`, `b.intoBytes()` | a byte string; the `Vector<u8>` taken or given back, no copy |
+| `ByteString.fromString(t)`, `b.intoString()` | a byte string, the `String`'s bytes taken; `Result<String, ByteString>`, the byte string back when it is not UTF-8; no copy |
 | `ByteString.fromText(text)`, `ByteString.copyOf(bytes)`, `b.clone()`, `v.toByteString()` | `Result<ByteString, AllocError>`, a copy |
 | `b.view()`, `b.bytes()`, `length()`, `isEmpty()`, `byteAt(i)`, `slice(lo, hi)`, `sliceFrom(lo)`, `sliceTo(hi)` | a `ByteStringView`; `Slice<u8>`; … |
 | `toUtf8()`, `isUtf8()` | `StringView?`, a view when the bytes are UTF-8; `bool` |
@@ -300,7 +308,9 @@ keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-syst
 | `v.indexOf(bytes)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, … | as a `StringView`'s, with `Slice<u8>` needles |
 | `b.append(text)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n)`, `appendUnsigned(n)`, `appendHex`, `appendChar`, … | `Result<…, AllocError>`, as a `String`'s |
 
-`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`.
+`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`. Text built in a
+`String` becomes a byte string with `ByteString.fromString(t)`, which takes its buffer, and a byte string that is
+UTF-8 becomes a `String` with `b.intoString()` (ADR 0236).
 
 ```ceesafe
 fn main() {
@@ -318,6 +328,13 @@ fn main() {
     }
     let name = ByteStringView.fromText("id=7");
     Console.writeLine(b.view().startsWith(name.bytes()));
+    var t = String.create();
+    t.appendFixed(0.5, 2)!;
+    let c = ByteString.fromString(t); // no copy
+    match (c.intoString()) {
+        Ok(text) => { Console.writeLine(text.view()); }
+        Err(_) => { Console.writeLine("not UTF-8"); }
+    }
 }
 ```
 
@@ -327,6 +344,7 @@ true
 id=7�
 id=7 then 1
 true
+0.50
 ```
 
 ## `Vector`, arrays and slices

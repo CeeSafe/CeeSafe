@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.4
+## Releases 0.25.0 to 0.95.5
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.5 | 2026-11-24 | `f.testLock(kind, start, length)`, whether another holder has a conflicting lock, without taking it, and a held lock converted in place on POSIX (ADR 0234); `f.mapSharedReadOnly(offset, length)` and `ReadOnlyMapping`, and 16-bit atomics on a `SharedMapping` (`load16`, `store16`, `compareExchange16`, `fetchAdd16`) (ADR 0235); `s.intoBytes()`, `String.fromUtf8(v)`, `ByteString.fromString(s)` and `b.intoString()`, from text to bytes and back without a copy, and `ceesafec doc NAME` for a type or member of the embedded libraries (ADR 0236) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.4 | 2026-11-24 | `Thread.cpuCount()`, the CPUs the process may run on; `appendNumber` and `appendUnsigned` on a `Vector<u8>`; a string literal as the needle of a byte slice's search, `path.startsWith("/api")` (ADR 0237) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.3 | 2026-11-24 | The system's Back: `WindowKey.Back` and `window.setBackWanted(on)`, so a program with pages of its own takes Android's Back while it has one to go back to, and leaves it to the system otherwise (ADR 0233) | [Appendix E](./appendix-e-ceesafec) |
 | 0.95.2 | 2026-11-24 | Methods of one name from several interfaces on one type, and the qualified call `I.m(x, …)` that names one (N0267 when a call on the concrete type is ambiguous) (ADR 0229); a file's `private` items in a scope of their own, so two files may each have a private item of one name (ADR 0230); `ByteString` and `ByteStringView` in lib/core, text of any bytes with `toUtf8`, `toUtf8Lossy` and `chunks` (ADR 0231); `SharedMapping` in lib/std, `f.mapShared(offset, length)` with `readAt`/`writeAt` and 32- and 64-bit atomics on a region of a file shared between processes (ADR 0232); a `Thread<void>` in a generic signature (`Vector<Thread<void>>.swapRemove`) is no longer N0226 | [Appendix C](./appendix-c-built-in-types) |

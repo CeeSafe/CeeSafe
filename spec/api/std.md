@@ -76,6 +76,7 @@
 - [struct IsolationReport](#struct-isolationreport)
 - [struct Isolation](#struct-isolation)
 - [struct SharedMapping](#struct-sharedmapping)
+- [struct ReadOnlyMapping](#struct-readonlymapping)
 - [enum SocketAddress](#enum-socketaddress)
 - [interface SocketEndpoint](#interface-socketendpoint)
 - [struct SocketAddresses](#struct-socketaddresses)
@@ -3068,10 +3069,11 @@ public struct FileLocks
 
 Advisory locks on byte ranges of an open file (ADR 0220): POSIX `fcntl` record locks, the ones SQLite and other
 programs take, owned by the open `File` where the system has open-file-description locks (Linux, macOS), else by
-the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)` and `f.unlock(start, length)`
-are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File` releases its locks.
-Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked (Windows neither
-converts nor splits a lock; POSIX does both).
+the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)`, `f.testLock(…)` and
+`f.unlock(start, length)` are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File`
+releases its locks. Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked
+(Windows neither converts nor splits a lock; POSIX does both, and a conversion that meets a conflict leaves the
+held lock as it was, ADR 0234 §2.3).
 
 ### FileLocks.lock
 
@@ -3092,6 +3094,20 @@ public fn tryLock(file: borrow File, kind: FileLock, start: u64, length: u64) ->
 
 `f.tryLock(kind, start, length)`: as `lock`, but never waits: `Ok(true)` if the lock was taken, `Ok(false)`
 if another holder's lock conflicts.
+Safety: as `lock`.
+
+### FileLocks.testLock
+
+```ceesafe
+public fn testLock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<FileLock?, IoError>
+```
+
+`f.testLock(kind, start, length)` (ADR 0234): null if a `kind` lock on the range could be taken now, else the
+kind of another holder's lock that conflicts (for a `Shared` request always `Exclusive`; when several holders
+conflict, which one is named is unspecified). On POSIX it takes nothing (`F_OFD_GETLK`, else `F_GETLK`), and
+the `File`'s own locks are not counted. On Windows the lock is tried without waiting and released at once, as
+SQLite's os_win.c does: another holder may meet it in that instant, and the `File`'s own locks on the range
+count as a conflict. Any open `File` may test. The answer is a snapshot: confirm with the lock taken next.
 Safety: as `lock`.
 
 ### FileLocks.unlock
@@ -3277,7 +3293,7 @@ let _ = region.compareExchange32(100, 0, 1, Ordering.AcquireRelease);
 ```
 
 Another process may write the memory at any moment, so it is never a slice: bytes are copied out and in, and
-integers are read and written as atomics, between processes too. An access out of the mapping's bounds, or an
+integers (u16, u32, u64) are read and written as atomics, between processes too. An access out of the mapping's bounds, or an
 atomic not aligned to its size in the file, panics. The value is Send and Share; dropping it unmaps the region
 (the `File` may be dropped before). A program that needs more of the file maps another region, as SQLite maps
 32 KiB at a time. Natively, a file shortened by someone else while it is mapped ends the program by `SIGBUS` at
@@ -3376,6 +3392,49 @@ public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32
 Adds `value` to the u32 at byte `at`, wrapping, atomically with `order`; the value before. Panics as load32.
 Safety: as load32.
 
+### SharedMapping.load16
+
+```ceesafe
+public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+```
+
+The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
+inside the region or `offset() + at` is odd.
+Safety: as load32.
+
+### SharedMapping.store16
+
+```ceesafe
+public fn store16(borrow this, at: usize, value: u16, order: StoreOrdering)
+```
+
+Stores the u16 `value` at byte `at`, as store32; the neighbouring bytes are untouched. Panics as load16.
+Safety: as load32.
+
+### SharedMapping.compareExchange16
+
+```ceesafe
+public fn compareExchange16(
+    borrow this,
+    at: usize,
+    expected: u16,
+    desired: u16,
+    order: Ordering,
+) -> Result<u16, u16>
+```
+
+compareExchange32 for the u16 at byte `at`. Panics as load16.
+Safety: as load32.
+
+### SharedMapping.fetchAdd16
+
+```ceesafe
+public fn fetchAdd16(borrow this, at: usize, value: u16, order: Ordering) -> u16
+```
+
+fetchAdd32 for the u16 at byte `at`, wrapping. Panics as load16.
+Safety: as load32.
+
 ### SharedMapping.load64
 
 ```ceesafe
@@ -3438,6 +3497,92 @@ public fn sync(borrow this) -> Result<void, IoError>
 Writes the region's changed pages to the file and waits for them (`msync`); on Windows `FlushViewOfFile`, after
 which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
 Safety: the runtime is given what it mapped.
+
+## struct ReadOnlyMapping
+
+```ceesafe
+@noncopy
+public struct ReadOnlyMapping {
+    drop { … }
+}
+```
+
+A region of a file mapped shared for reading only (ADR 0235): SQLite's `readonly_shm`, a `-shm` the program may
+not write. It sees what every read-write mapping of those bytes writes, in this process and in others, but has no
+method that writes, and its pages are mapped without write access.
+
+```
+let shm = File.open("db-shm")?;                      // open for reading only
+let region = shm.mapSharedReadOnly(0, 32768)?;       // ReadOnlyMapping.mapSharedReadOnly(shm, 0, 32768)
+var header = [0u8; 48];
+region.readAt(0, mut header[..]);
+SharedMapping.fence();
+let slot = region.load16(16384, LoadOrdering.Acquire);
+```
+
+The file is never extended: map only bytes it holds. Copies and loads follow `SharedMapping`'s rules (bounds and
+alignment panic, loads are atomic between processes, `SharedMapping.fence()` orders them); there is no `load64`,
+which a 32-bit x86 host may implement with a write. The value is Send and Share; dropping it unmaps the region.
+A file shortened by someone else while it is mapped ends the program by `SIGBUS` at the next access to a page past
+the new end, as for `SharedMapping`. Under `ceesafec run --interp` it is modelled by reads of the file.
+
+### ReadOnlyMapping.mapSharedReadOnly
+
+```ceesafe
+public fn mapSharedReadOnly(file: borrow File, offset: u64, length: usize) -> Result<ReadOnlyMapping, IoError>
+```
+
+`f.mapSharedReadOnly(offset, length)`: maps bytes `offset` to `offset + length - 1` of `file`, shared, for
+reading only. The file must hold them (`InvalidInput` otherwise: it is never extended), and must be open for
+reading (`BadDescriptor` for one open only for writing). `InvalidInput` for `length` 0 or a range that ends
+past 2^63 - 1.
+Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
+
+### ReadOnlyMapping.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### ReadOnlyMapping.offset
+
+```ceesafe
+public fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### ReadOnlyMapping.readAt
+
+```ceesafe
+public fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`, as SharedMapping.readAt. Panics if the
+bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### ReadOnlyMapping.load16
+
+```ceesafe
+public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+```
+
+The u16 at byte `at`, loaded atomically with `order`. Panics if its two bytes are not inside the region or
+`offset() + at` is odd.
+Safety: the word is inside the mapping and aligned; the runtime's load never writes.
+
+### ReadOnlyMapping.load32
+
+```ceesafe
+public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order`. Panics if its four bytes are not inside the region or
+`offset() + at` is not a multiple of 4.
+Safety: as load16.
 
 ## enum SocketAddress
 

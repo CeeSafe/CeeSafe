@@ -2480,7 +2480,10 @@ lib/core's `ByteString` (owned, a move type over a `Vector<u8>`) and `ByteString
 file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked for. Their fields are private (N0296).
 - **Making one.** `ByteStringView.fromText(text)` (`text: StringView`, so a literal or a lent `String`) and
   `ByteStringView.fromBytes(bytes)` view the bytes in place; `ByteString.fromBytes(v)` takes a `Vector<u8>` and
-  `b.intoBytes()` gives it back, neither copying; `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
+  `b.intoBytes()` gives it back, neither copying; `ByteString.fromString(s)` takes a `String`'s bytes and
+  `b.intoString()` (`Result<String, ByteString>`) gives a `String` when the bytes are UTF-8 and the byte string back
+  when they are not, neither copying (`s.intoBytes()` and `String.fromUtf8`, §23.2; ADR 0236);
+  `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
   `copyOf(bytes)`, `b.clone()` and `v.toByteString()` make a new one (the last four copy). `b.view()` and `b.bytes()`
   are loans of `b`. A string literal is not a `ByteStringView` (N0205): `fromText` makes one.
 - **UTF-8.** `toUtf8()` is the text as a `StringView`, with no copy, when the bytes are UTF-8 (Table 3-7, as
@@ -2617,7 +2620,8 @@ fn main() -> i32 {
 - `String<A>` owns UTF-8 text in a growable buffer (`String` means `String<SystemHeap>`). It is a
   move type that needs drop, like `Vector<u8, A>`, but a distinct type.
 - **UTF-8 invariant:** text only enters a string through `append` of a `StringView` (`String.from` and `clone` are
-  an `append`), which is always valid UTF-8 (§22.2), so a string's bytes are always valid UTF-8. Its bytes cannot be
+  an `append`), which is always valid UTF-8 (§22.2), or through `String.fromUtf8`, which checks the bytes first, so a
+  string's bytes are always valid UTF-8. Its bytes cannot be
   written: `s[i] = b` is rejected (N0211), and `borrow mut s[i]` and mutable slices of a string
   (N0248).
 - **Creation:** `String.create()` (no allocation) and `String.withCapacity(n)`:
@@ -2628,9 +2632,16 @@ fn main() -> i32 {
     that length, and none for an empty text. `A` comes from the written type (`String<A>.from(text)`) or from an
     expected `Result<String<A>, _>`, as for `withCapacity`, and is `SystemHeap` otherwise. Any other number of arguments is N0209.
     It is lib/core's StringCopying.
+  - `String.fromUtf8(v)` (`v: Vector<u8, A>`; ADR 0236): `Result<String<A>, Vector<u8, A>>`. It moves `v` and, when its
+    bytes are UTF-8 (Table 3-7, as `StringView.fromUtf8` checks), the string takes its buffer, length and capacity: no
+    copy, no allocation. Otherwise the result is `Err(v)`, the vector unchanged. A written `String<A>.fromUtf8(v)`
+    must be of the vector's allocator (N0205), and an argument that is not a `Vector<u8, A>` is N0205.
 - **Members:**
   - `s.clone()` (ADR 0108): `Result<String<A>, AllocError>`, `String<A>.from(s.view())` with the allocator of `s`.
     It takes `borrow this` and leaves `s` as it was;
+  - `s.intoBytes()` (ADR 0236): `Vector<u8, A>`. It moves `s` (`this`), and the vector takes its buffer, length and
+    capacity: no copy, no allocation, nothing freed. Both calls are lib/core's StringBytes, over the libraries'
+    `releaseBuffer` and `adoptBuffer` (§23.3), which a program cannot call on a string (N0200);
   - `s.append(text)` (`text: StringView`): `Result<void, AllocError>`, two-phase like `push`.
     Growth is as for vectors. On failure the string is unchanged;
   - `s.appendNumber(n)` (M11, G4c; `n` of any integer type, or a reference to one): appends `n` in decimal, with a
@@ -3281,12 +3292,22 @@ ADR 0221's.
     `File`s do not conflict, and closing any of them releases the process's locks on the file. On Windows a lock
     never converts or splits, and is mandatory for other handles' reads and writes of its bytes. Portable use: lock a
     range the `File` does not hold, unlock exactly the ranges it locked, and lock bytes the program does not read.
-  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock` and `unlock` none.
+  - On POSIX hosts a conversion is atomic: a `tryLock` that meets a conflict is `false` and leaves the `File`'s held
+    lock as it was, and a `lock` waits with it kept (os_unix.c's SHARED to EXCLUSIVE). A program that also runs on
+    Windows unlocks and locks again, as os_win.c does (ADR 0234 §2.3).
+  - `f.testLock(kind, start, length)` (ADR 0234): `Result<FileLock?, IoError>`, null when a `kind` lock on the range
+    could be taken now, else the kind of another holder's lock that conflicts (which one, when several do, is
+    unspecified). On POSIX hosts it takes nothing (`F_OFD_GETLK`, else `F_GETLK`), and the `File`'s own locks are
+    not counted; on Windows it tries the lock without waiting and releases it at once (os_win.c's way), so another
+    holder may see it for that instant, and the `File`'s own locks on the range count as a conflict. Any open `File`
+    may test. The answer is a snapshot.
+  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock`, `testLock` and `unlock` none.
   - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
-    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4). It does not check
-    the `File`'s access mode.
+    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4), and its `testLock`
+    reports only the program's other `File`s' locks. It does not check the `File`'s access mode.
 - **Shared mappings** (ADR 0232; lib/std's `SharedMapping`, hosted; `borrow this`): `f.mapShared(offset: u64,
-  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20).
+  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20);
+  `f.mapSharedReadOnly(offset, length)` maps it for reading only, `Result<ReadOnlyMapping, IoError>` (ADR 0235).
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
   read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
@@ -4308,7 +4329,8 @@ Diagnostics: none new.
   process writes may mix old and new bytes); `m.load32(at, LoadOrdering)`, `m.store32(at, value, StoreOrdering)`,
   `m.compareExchange32(at, expected, desired, Ordering) -> Result<u32, u32>`, `m.fetchAdd32(at, value, Ordering)`,
   and `load64`, `store64`, `compareExchange64`, `fetchAdd64`, are `AtomicU32`'s and `AtomicU64`'s `…With`
-  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order.
+  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order; so are
+  `load16`, `store16`, `compareExchange16` and `fetchAdd16` on a `u16` (ADR 0235 §2.1: SQLite's hash slots).
   `SharedMapping.fence()` is a sequentially consistent fence. `m.sync()` writes the region's changed pages to the
   file and waits (`msync`; `FlushViewOfFile` on Windows). `m.length()` and `m.offset()` describe the region.
 - **A copy whose bytes are not all inside the region panics**, and so does an atomic whose bytes are not, or whose
@@ -4316,8 +4338,16 @@ Diagnostics: none new.
 - **A file shortened under a mapping** by another party (another process, or the program's own `f.setLength`):
   natively an access to a page wholly past the new end ends the program by `SIGBUS`, the system's default; the
   access does not complete, so nothing wrong is read or written (ADR 0232 §2.3). Windows refuses to shorten a mapped
-  file.
-- `mapShared` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
+  file. It is not made an `IoError` (ADR 0235 §2.3: only a process-wide signal handler that jumps out of a copy could).
+- **`f.mapSharedReadOnly(offset: u64, length: usize)`** (ADR 0235 §2.2; lib/std's
+  `ReadOnlyMapping.mapSharedReadOnly(f, offset, length)`): `Result<ReadOnlyMapping, IoError>`, the same bytes mapped
+  shared for reading only (`PROT_READ`; Windows `PAGE_READONLY`), from any `File` open for reading (`File.open`
+  too); one open only for writing is `BadDescriptor`. The file is never extended: a range that ends past its length is
+  `InvalidInput`, as are `length` 0 and a range past 2^63 - 1. `ReadOnlyMapping` has `r.length()`, `r.offset()`,
+  `r.readAt(at, into)`, `r.load16(at, LoadOrdering)` and `r.load32(at, LoadOrdering)`, with `SharedMapping`'s bounds,
+  alignment, atomicity and `fence`; no method writes, so a write is an error of the checker. It has no `load64` (a
+  32-bit x86 host's 64-bit atomic load may write). It is a move type that needs drop, Send and Share.
+- `mapShared`, `mapSharedReadOnly` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
 - **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
   Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a
   positional read or write of the file, so the program's mappings and threads see one memory and other processes see

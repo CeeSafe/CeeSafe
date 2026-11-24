@@ -21,6 +21,7 @@ directory or above. Outside one, give the files.
 | `ceesafec parse` | parse only, reporting syntax errors |
 | `ceesafec fmt [--check \| --stdout]` | format in the canonical style ([Formatting](formatting-and-docs.md)) |
 | `ceesafec doc [-o file] [--title t] [--missing]` | a Markdown page of the public items ([Documentation](formatting-and-docs.md#documentation)) |
+| `ceesafec doc Type.member` | the library reference's entries for a type or member name, as MCP `ceesafe_api` finds them |
 | `ceesafec cbind --header <h> [-I <dir>] -o <file>` | write the `extern "C"` block for a C header, with clang ([Unsafe code and C](unsafe-and-c.md#generating-the-block-from-the-header)) |
 | `ceesafec lsp` | the language server, for [editors](editors.md) |
 | `ceesafec fix [--dry-run]` | apply the fixes the compiler is sure of, and check again until none applies |

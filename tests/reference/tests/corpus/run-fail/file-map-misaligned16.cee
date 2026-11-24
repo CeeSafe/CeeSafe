@@ -1,0 +1,15 @@
+// A 16-bit atomic in a shared mapping must be aligned to 2 in the file (ADR 0235 §2.1): the mapping starts at byte 1
+// of the file, so its byte 1 is the file's byte 2, aligned, and its byte 2 is not.
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/m")!;
+    let f = File.createReadWrite(path.view())!;
+    let m = f.mapShared(1, 30)!;
+    m.store16(1, 7, StoreOrdering.Relaxed);
+    Console.writeLine(m.load16(1, LoadOrdering.Relaxed));
+    m.store16(2, 1, StoreOrdering.Relaxed); // expect-library-panic: SharedMapping: the atomic is not aligned to its size
+    Console.writeLine("after");
+}
+// expect-stdout: 7

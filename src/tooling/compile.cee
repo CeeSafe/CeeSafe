@@ -29,6 +29,16 @@ fn compileInMemory(
     freestanding: bool,
     noFloat: bool,
     kernel: bool,
+) -> Result<Compiled, AllocError> => compileInMemoryFrom(files, packages, freestanding, noFloat, kernel, "main");
+
+/// compileInMemory with the entry function named `entry`: `ceesafeTestMain` for a test harness (ADR 0220 §2.1).
+fn compileInMemoryFrom(
+    files: borrow Vector<InputFile>,
+    packages: Vector<PackageInfo>,
+    freestanding: bool,
+    noFloat: bool,
+    kernel: bool,
+    entry: StringView,
 ) -> Result<Compiled, AllocError> {
     var sources = Vector<SourceText>.create();
     var fileIsLibrary = Vector<bool>.create();
@@ -98,7 +108,7 @@ fn compileInMemory(
         freestanding,
         packages,
         filePackage,
-        copyBytes("main".bytes())?,
+        copyBytes(entry.bytes())?,
     )?;
     checker.front.diagnostics.removeFiles(checker.fileIsLibrary.view());
     var nir = NirProgram.create();
@@ -144,7 +154,16 @@ struct PackageProgram {
 
 /// The program of the package whose manifest is in `directory`, through its lock, never fetching (tooling.md §4.4).
 /// Null after reporting to `report`.
-fn packageProgram(directory: Slice<u8>, report: borrow mut PackageReport) -> Result<PackageProgram?, AllocError> {
+fn packageProgram(directory: Slice<u8>, report: borrow mut PackageReport) -> Result<PackageProgram?, AllocError> =>
+    packageProgramWith(directory, report, false);
+
+/// packageProgram, with the root package's test directories among its files when `tests` (ADR 0049 §3.1), as `test`
+/// and `check` read them.
+fn packageProgramWith(
+    directory: Slice<u8>,
+    report: borrow mut PackageReport,
+    tests: bool,
+) -> Result<PackageProgram?, AllocError> {
     let noUpdate = Vector<Vector<u8>>.create();
     let workspace = match (resolveWorkspace(directory, report, false, true, false, noUpdate)?) {
         Some(w) => w,
@@ -158,6 +177,9 @@ fn packageProgram(directory: Slice<u8>, report: borrow mut PackageReport) -> Res
         packages.push(workspace.packageInfo(p)?)?;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)?;
+        if (p == 0 && tests) {
+            manifestTestFiles(manifest, mut paths)?;
+        }
         for (f in paths.view()) {
             let bytes = match (readFile(StringView.fromUtf8(f.view())!)) {
                 Ok(b) => b,

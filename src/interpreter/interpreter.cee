@@ -2300,6 +2300,7 @@ struct CapturedRun {
     stdout: Vector<u8>;
     stderr: Vector<u8>;
     truncated: bool;
+    steps: u64; // statements run, counted when there is a step limit (ceesafe_test's `steps`, ADR 0220 §2.1)
 }
 
 fn interpretCaptured(
@@ -2331,6 +2332,7 @@ fn interpretCaptured(
             stdout: validUtf8(it.capturedOutput.view())?,
             stderr: validUtf8(it.capturedError.view())?,
             truncated: it.truncated,
+            steps: it.steps,
         },
     );
 }

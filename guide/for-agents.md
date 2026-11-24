@@ -60,6 +60,8 @@ Its tools:
 | `ceesafe_spec_search`, `ceesafe_spec_section` | search and read the specification, which is embedded in `ceesafec` |
 | `ceesafe_symbol` | the type and declaration of what is at a position |
 | `ceesafe_api` | a library or built-in name looked up (`TextWriter.decimal`, `Process.argument`): its signature and documentation, or the closest names |
+| `ceesafe_test` | runs the package's `@test` functions in the sandboxed interpreter, each with its own budget, and returns each outcome as `ceesafec test --format json` does, with the steps each ran; a test that reads files or calls C needs `ceesafec test` in a shell |
+| `ceesafe_doc` | the Markdown page of the package's public items, or the ones without a doc comment |
 
 The tools that compile take the program as `files` (texts), as `paths` (files on disk, compiled alone as one package),
 or as `package`: a directory, for the package of the nearest `ceesafe.toml` with the dependencies of its lock. In a
@@ -79,7 +81,8 @@ The prompt `write-ceesafe` gives an agent this page and the loop below. The spec
 4. Fix the rest yourself. Each diagnostic has a code; `ceesafe_explain` (or `ceesafec explain N0249`) says what it means, and
    the message often names the specification section to read. For a function or method you are not sure of, look it
    up with `ceesafe_api` before writing it, rather than guessing a name from another language.
-5. Repeat until there are no errors. Then run it with `ceesafe_run`, or build it with `ceesafec build`.
+5. Repeat until there are no errors. Then run it with `ceesafe_run`, or build it with `ceesafec build`; in a package
+   with tests, run them with `ceesafe_test` and `{"package": "."}`, or `ceesafec test`.
 
 Without MCP, the same loop works from a shell: `ceesafec check --diagnostics-format=json main.cee` prints one JSON
 document with every diagnostic, its position and its fixes, and `ceesafec fix main.cee` applies them.

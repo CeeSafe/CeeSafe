@@ -1,6 +1,6 @@
 // `ceesafec mcp` (the reference's Tooling/McpServer.cs; tooling.md §6): the Model Context Protocol over JSON-RPC 2.0,
-// one message per line, serving the checker, fixes, formatter, sandboxed interpreter, C generator, specification and
-// language index as tools, the embedded documents as resources, and two prompts. It reads nothing but its input, the
+// one message per line, serving the checker, fixes, formatter, sandboxed interpreter (programs and tests), C generator,
+// documentation generator, specification and language index as tools, the embedded documents as resources, and two prompts. It reads nothing but its input, the
 // paths a tool names and, for a `package` source (ADR 0208), that package's manifests, lock and sources. Messages are written as ToJsonString writes them with UnsafeRelaxedJsonEscaping.
 
 fn mcpInvalidRequest() -> i64 => -32600;
@@ -367,7 +367,7 @@ fn dispatchMcp(
         json.endObject()!;
         json.name("instructions")!;
         json.string(
-            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit, in a package with {\"package\": \".\"} so that its dependencies are seen; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules; ceesafe_api to look up a library or built-in name before concluding it does not exist. ceesafe_run runs a program in a sandboxed interpreter. The prompt write-ceesafe has the agent guide.",
+            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit, in a package with {\"package\": \".\"} so that its dependencies are seen; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules; ceesafe_api to look up a library or built-in name before concluding it does not exist. ceesafe_run runs a program in a sandboxed interpreter, and ceesafe_test the package's tests there, after an edit that changes behaviour; ceesafec test in a shell for tests that read files or call C. The prompt write-ceesafe has the agent guide.",
         )!;
         json.endObject()!;
         return mcpResult(json);
@@ -615,7 +615,7 @@ fn diagnosticsSchema(json: borrow mut JsonWriter) {
     json.endObject()!;
 }
 
-fn mcpToolCount() -> usize => 10;
+fn mcpToolCount() -> usize => 12;
 
 fn toolName(k: usize) -> StringView => match (k) {
     0 => "ceesafe_check",
@@ -627,7 +627,9 @@ fn toolName(k: usize) -> StringView => match (k) {
     6 => "ceesafe_spec_search",
     7 => "ceesafe_spec_section",
     8 => "ceesafe_symbol",
-    _ => "ceesafe_api",
+    9 => "ceesafe_api",
+    10 => "ceesafe_test",
+    _ => "ceesafe_doc",
 };
 
 fn toolTitle(k: usize) -> StringView => match (k) {
@@ -640,7 +642,9 @@ fn toolTitle(k: usize) -> StringView => match (k) {
     6 => "Search the CeeSafe specification",
     7 => "Read a specification section",
     8 => "What is at a position",
-    _ => "Look up a library or built-in name",
+    9 => "Look up a library or built-in name",
+    10 => "Run a package's tests",
+    _ => "Document a package's public items",
 };
 
 fn toolDescription(k: usize) -> StringView => match (k) {
@@ -657,8 +661,12 @@ fn toolDescription(k: usize) -> StringView => match (k) {
     6 => "Find sections of CeeSafe's specification and guide whose heading or text contain every word of a query.",
     7 => "Read one section of a CeeSafe document, with its subsections: for example type-system §31.2, or a heading.",
     8 => "The type or signature of the name or expression at a 1-based line and column, and where it is declared.",
-    _ =>
+    9 =>
         "Look up a type, function or method of lib/core, lib/std or the built-in types by name (TextWriter, TextWriter.decimal, decimal, Process.argument, Vector.push): its signature and documentation, or the closest names when there is none. Use it before concluding a function does not exist.",
+    10 =>
+        "Run the package's @test functions in the sandboxed interpreter, each with its own step budget: no files, sockets, processes or C. Returns each test's outcome, message and output, as ceesafec test --format json does. Tests that read files or call C, and the sweeps, need ceesafec test in a shell.",
+    _ =>
+        "The Markdown page ceesafec doc writes for the package's public items, or with missing the public items without a doc comment.",
 };
 
 fn writeInputSchema(json: borrow mut JsonWriter, k: usize) {
@@ -720,6 +728,20 @@ fn writeInputSchema(json: borrow mut JsonWriter, k: usize) {
             "a type (TextWriter), a member (TextWriter.decimal) or a bare member name (decimal)",
         );
         schemaEnd(json, "name");
+    } else if (k == 10) {
+        sourceProperties(json);
+        json.name("filter")!;
+        typeSchema(json, "string", "run only the tests whose name contains it");
+        json.name("maxSteps")!;
+        typeSchema(json, "integer", "statements each test may run (default 10000000)");
+        json.name("maxOutputBytes")!;
+        typeSchema(json, "integer", "bytes of each test's output to keep (default 65536)");
+        schemaEnd(json, "");
+    } else if (k == 11) {
+        sourceProperties(json);
+        json.name("missing")!;
+        typeSchema(json, "boolean", "list the public items without a doc comment instead (default false)");
+        schemaEnd(json, "");
     } else {
         sourceProperties(json);
         json.name("path")!;
@@ -804,6 +826,35 @@ fn writeOutputSchema(json: borrow mut JsonWriter, k: usize) {
         json.name("text")!;
         typeSchema(json, "string", "");
         schemaEnd(json, "document heading text");
+    } else if (k == 10) {
+        json.name("version")!;
+        typeSchema(json, "integer", "1");
+        json.name("outcome")!;
+        enumSchema(json, "not-compiled when the package did not compile", "not-compiled");
+        json.name("tests")!;
+        arrayStart(json);
+        objectSchema(json);
+        arrayEnd(
+            json,
+            "name, outcome (passed, failed, panicked, leaked, skipped, exited, fault), steps, message, stdout, stderr, truncated",
+        );
+        json.name("passed")!;
+        typeSchema(json, "integer", "tests passed");
+        json.name("failed")!;
+        typeSchema(json, "integer", "tests neither passed nor skipped");
+        json.name("skipped")!;
+        typeSchema(json, "integer", "tests that call C");
+        json.name("diagnostics")!;
+        diagnosticsSchema(json);
+        schemaEnd(json, "");
+    } else if (k == 11) {
+        json.name("markdown")!;
+        typeSchema(json, "string", "the page");
+        json.name("missing")!;
+        arrayStart(json);
+        objectSchema(json);
+        arrayEnd(json, "path, line, kind, name of each public item without a doc comment");
+        schemaEnd(json, "");
     } else if (k == 9) {
         json.name("results")!;
         arrayStart(json);
@@ -928,7 +979,9 @@ fn runMcpTool(
         6 => searchTool(doc, arguments),
         7 => sectionTool(doc, arguments),
         8 => symbolTool(server, doc, arguments),
-        _ => apiTool(doc, arguments),
+        9 => apiTool(doc, arguments),
+        10 => testTool(server, doc, arguments),
+        _ => docTool(server, doc, arguments),
     };
 }
 
@@ -943,9 +996,18 @@ struct McpSources {
 }
 
 /// The program's files: `package`, or `files`, then `paths` read from the working directory.
-fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<McpSources, McpFailure> {
+fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<McpSources, McpFailure> =>
+    sourcesOfWith(server, doc, arguments, false);
+
+/// sourcesOf, with a package's test directories among the root package's files when `tests` (`ceesafe_test`).
+fn sourcesOfWith(
+    server: borrow McpServer,
+    doc: borrow JsonDoc,
+    arguments: u32,
+    tests: bool,
+) -> Result<McpSources, McpFailure> {
     match (optionalString(doc, arguments, "package")?) {
-        Some(directory) => { return packageSourcesOf(server, doc, arguments, directory.view()); }
+        Some(directory) => { return packageSourcesOf(server, doc, arguments, directory.view(), tests); }
         null => {}
     }
     let settings = settingsOf(doc, arguments)?;
@@ -1005,6 +1067,7 @@ fn packageSourcesOf(
     doc: borrow JsonDoc,
     arguments: u32,
     directory: Slice<u8>,
+    tests: bool,
 ) -> Result<McpSources, McpFailure> {
     if (doc.kind(doc.member(arguments, "paths")) != jsonNull()) {
         return Err(invalidParams(copyBytes("give 'package' or 'paths', not both".bytes())!));
@@ -1023,7 +1086,7 @@ fn packageSourcesOf(
         null => { return Err(toolFailure(textOf("no ceesafe.toml in '", directory, "' or above it"))); }
     };
     var report = PackageReport.create();
-    var program = match (packageProgram(home.view(), mut report)!) {
+    var program = match (packageProgramWith(home.view(), mut report, tests)!) {
         Some(p) => p,
         null => {
             var message = textOf("the package in '", directory, "' does not resolve");
@@ -1400,6 +1463,253 @@ fn runProgramTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32)
     json.stringBytes(run.stderr.view())!;
     json.name("truncated")!;
     json.boolean(run.truncated)!;
+    json.endObject()!;
+    return toolResult(json, false);
+}
+
+/// The answer of a tool whose program did not compile: `not-compiled` and the diagnostics.
+fn notCompiledResult(compiled: borrow Compiled) -> Result<ToolResult, McpFailure> {
+    var json = JsonWriter.create();
+    json.startObject()!;
+    json.name("outcome")!;
+    json.string("not-compiled")!;
+    json.name("diagnostics")!;
+    let document = compiledDiagnosticsJson(compiled)!;
+    json.raw(document.view())!;
+    json.endObject()!;
+    return toolResult(json, false);
+}
+
+/// The path the harness has in a tool's compilation (never a file: ADR 0220 §2.1).
+fn mcpHarnessPath() -> StringView => "ceesafe-test/harness.cee";
+
+/// `ceesafe_test` (ADR 0220 §2.1): the root package's tests, in the order of their names, each run by a fresh sandboxed
+/// interpreter in this process with its own budget, from a harness made in memory; nothing is built, written or
+/// started. The result is `ceesafec test --format json`'s document, with the interpreter's `fault`.
+fn testTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
+    let steps = mcpInteger(doc, arguments, "maxSteps", mcpDefaultSteps())?;
+    let outputBytes = mcpInteger(doc, arguments, "maxOutputBytes", mcpDefaultOutputBytes())?;
+    let filter = match (optionalString(doc, arguments, "filter")?) {
+        Some(f) => f,
+        null => Vector<u8>.create(),
+    };
+    var sources = sourcesOfWith(server, doc, arguments, true)?;
+    let settings = sources.settings;
+    // The package with its tests, to find them.
+    let first = compileSources(sources);
+    if (compiledHasErrors(first) || !first.analyzed) {
+        return notCompiledResult(first);
+    }
+    let tests = match (borrow first.checker) {
+        Some(checker) => testEntries(checker)!,
+        null => { return Err(internalFailure(copyBytes("no checker".bytes())!)); }
+    };
+    // The tests to run, by name in bytewise order, as `test` runs them (tooling.md §10.2).
+    var chosen = Vector<usize>.create();
+    for (k in 0..tests.length) {
+        if (filter.length > 0 && !containsSlice(tests[k].name.view(), filter.view())) {
+            continue;
+        }
+        chosen.push(k)!;
+        var at = chosen.length - 1;
+        while (at > 0 && compareBytes(tests[chosen[at - 1]].name.view(), tests[k].name.view()) > 0) {
+            chosen.swap(at - 1, at);
+            at -= 1;
+        }
+    }
+    if (filter.length > 0 && chosen.length == 0) {
+        return Err(toolFailure(textOf("no test's name contains '", filter.view(), "'")));
+    }
+    // Then with the harness, whose entry runs the test its arguments name (ADR 0049 §3.4).
+    sources.files.push(
+        InputFile {
+            path: copyBytes(mcpHarnessPath().bytes())!,
+            text: harnessSource(borrow tests)!,
+            package: 0,
+            diskPath: Vector<u8>.create(),
+        },
+    )!;
+    var compiled = compileInMemoryFrom(
+        sources.files,
+        copyPackages(sources.packages),
+        settings.freestanding,
+        settings.noFloat,
+        settings.kernel,
+        harnessEntry(),
+    )!;
+    var cFiles = Vector<CFile>.create();
+    if (!generateCompiled(mut compiled, true, settings.freestanding, mut cFiles)) {
+        return notCompiledResult(compiled);
+    }
+    var json = JsonWriter.create();
+    json.startObject()!;
+    json.name("version")!;
+    json.number(1)!;
+    json.name("tests")!;
+    json.startArray()!;
+    var passed: i64 = 0;
+    var skipped: i64 = 0;
+    for (k in chosen.view()) {
+        let name = tests[k].name.view();
+        var programArguments = Vector<Vector<u8>>.create();
+        programArguments.push(copyBytes(mcpHarnessPath().bytes())!)!;
+        pushText(mut programArguments, "--ceesafe-test")!;
+        pushBytes(mut programArguments, name)!;
+        pushText(mut programArguments, "0")!;     // no allocation fails
+        pushText(mut programArguments, "0")!;     // no suspension cancels
+        pushText(mut programArguments, "60000")!; // test's default timeout, on the interpreter's virtual clock
+        let options = InterpreterOptions {
+            arguments: programArguments,
+            failAllocationAt: 0,
+            allocationReport: true, // for `leaked`, as `test --interp` counts allocations
+            placement: true,
+            bce: true,
+            oce: true,
+            stepLimit: steps,
+            memoryLimit: mcpMemoryLimit(),
+            sandboxed: true,
+            workingDirectory: copyBytes("/tmp/".bytes())!, // never used: the sandbox refuses files
+            capture: true,
+            outputLimit: outputBytes,
+            input: Vector<u8>.create(),
+            debugAssertions: true,
+        };
+        let run = match (borrow compiled.checker) {
+            Some(checker) => interpretCaptured(checker, compiled.nir, compiled.sources, options)!,
+            null => { return Err(internalFailure(copyBytes("no checker".bytes())!)); }
+        };
+        var result = TestOutcome {
+            outcome: 3,
+            message: Vector<u8>.create(),
+            stdout: run.stdout,
+            stderr: run.stderr,
+            attempts: 0,
+            points: 0,
+            millis: 0,
+        };
+        // The interpreter's own stop (exit status 70): a sandbox refusal, the budget spent, uninitialised memory.
+        let fault = run.status == 70 && !containsText(result.stderr.view(), "the interpreter runs no C code");
+        if (fault) {
+            result.message = stderrTail(result.stderr.view(), 4, 2000);
+        } else {
+            classifyTestRun(mut result, run.status, true);
+        }
+        if (!fault && result.outcome == 0) {
+            passed += 1;
+        } else if (!fault && result.outcome == 7) {
+            skipped += 1;
+        }
+        json.startObject()!;
+        json.name("name")!;
+        json.stringBytes(name)!;
+        json.name("outcome")!;
+        json.string(if (fault) "fault" else outcomeName(result.outcome))!;
+        json.name("steps")!;
+        json.number(truncate<i64>(run.steps))!;
+        json.name("message")!;
+        json.stringBytes(result.message.view())!;
+        json.name("stdout")!;
+        json.stringBytes(result.stdout.view())!;
+        json.name("stderr")!;
+        json.stringBytes(result.stderr.view())!;
+        json.name("truncated")!;
+        json.boolean(run.truncated)!;
+        json.endObject()!;
+    }
+    json.endArray()!;
+    json.name("passed")!;
+    json.number(passed)!;
+    json.name("failed")!;
+    json.number(truncate<i64>(chosen.length) - passed - skipped)!;
+    json.name("skipped")!;
+    json.number(skipped)!;
+    json.endObject()!;
+    return toolResult(json, false);
+}
+
+/// `ceesafe_doc` (ADR 0220 §2.2): the page `ceesafec doc` writes for the root package's public items, titled as it
+/// titles it (the package's name, or the first file's), or with `missing` its list of those without a doc comment.
+fn docTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
+    let missing = match (optionalBool(doc, arguments, "missing")?) {
+        Some(b) => b,
+        null => false,
+    };
+    let sources = sourcesOf(server, doc, arguments)?;
+    var texts = Vector<SourceText>.create();
+    for (k in 0..sources.rootFiles) {
+        texts.push(SourceText.create(sources.files[k].path.view(), sources.files[k].text.view())!)!;
+    }
+    let title = if (sources.fromPackage) copyBytes(sources.packages[0].name.view())!
+        else docTitleOf(sources.files[0].path.view())!;
+    let made = documentSources(texts, title.view(), missing)!;
+    if (made.internalError.length > 0) {
+        return Err(internalFailure(made.internalError));
+    }
+    if (made.failed) {
+        return Err(toolFailure(made.diagnostics));
+    }
+    var json = JsonWriter.create();
+    json.startObject()!;
+    if (!missing) {
+        json.name("markdown")!;
+        json.stringBytes(made.text.view())!;
+        json.endObject()!;
+        return toolResult(json, false);
+    }
+    // Each `path:line: kind name` line (tooling.md §1.3) as an object.
+    json.name("missing")!;
+    json.startArray()!;
+    let text = made.text.view();
+    var start: usize = 0;
+    for (i in 0..text.length) {
+        if (text[i] != '\n') {
+            continue;
+        }
+        let line = text[start..i];
+        start = i + 1;
+        var split = line.length;
+        for (j in 1..line.length) {
+            if (line[j - 1] == ':' && line[j] == ' ') {
+                split = j - 1;
+            }
+        }
+        if (split == line.length) {
+            continue;
+        }
+        let place = line[..split];
+        let rest = line[(split + 2)..];
+        var colon = place.length;
+        for (j in 0..place.length) {
+            if (place[j] == ':') {
+                colon = j;
+            }
+        }
+        var space = rest.length;
+        for (j in 0..rest.length) {
+            if (space == rest.length && rest[j] == ' ') {
+                space = j;
+            }
+        }
+        var number: i64 = 0;
+        if (colon < place.length) {
+            for (b in place[(colon + 1)..]) {
+                if (b >= '0' && b <= '9') {
+                    number = number * 10 + (b - '0') as i64;
+                }
+            }
+        }
+        json.startObject()!;
+        json.name("path")!;
+        json.stringBytes(place[..colon])!;
+        json.name("line")!;
+        json.number(number)!;
+        json.name("kind")!;
+        json.stringBytes(rest[..space])!;
+        json.name("name")!;
+        json.stringBytes(if (space < rest.length) rest[(space + 1)..] else "".bytes())!;
+        json.endObject()!;
+    }
+    json.endArray()!;
     json.endObject()!;
     return toolResult(json, false);
 }

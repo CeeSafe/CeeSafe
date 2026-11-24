@@ -690,10 +690,7 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
     if (files.length == 0) {
         return fail("no CeeSafe input files");
     }
-    // Every file is parsed and formatted; any syntax error stops the page (DocGenerator.Collect).
     var sources = Vector<SourceText>.create();
-    var diagnostics = Diagnostics.create();
-    var docFiles = Vector<DocFile>.create();
     for (file in files.view()) {
         let path = StringView.fromUtf8(file.view())!;
         let bytes = match (readFile(path)) {
@@ -710,41 +707,113 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
         };
         let name = sourcePath(path);
         sources.push(SourceText.create(name.view(), bytes.view())!)!;
-        let index = sources.length - 1;
+    }
+    if (!hasTitle) {
+        title = docTitleOf(files[0].view())!;
+    }
+    let made = documentSources(sources, title.view(), missing)!;
+    if (made.internalError.length > 0) {
+        Console.writeError(StringView.fromUtf8(made.internalError.view())!);
+        return 70;
+    }
+    Console.writeError(StringView.fromUtf8(made.diagnostics.view())!);
+    if (made.failed) {
+        return 1;
+    }
+    if (missing) {
+        Console.writeBytes(made.text.view());
+        return if (made.missingCount == 0) 0 else 1;
+    }
+    if (hasOutput) {
+        match (writeFile(StringView.fromUtf8(output.view())!, made.text.view())) {
+            Ok() => {}
+            Err(e) => {
+                var message = String.create();
+                message.append("cannot write '")!;
+                message.append(StringView.fromUtf8(output.view())!)!;
+                message.append("': ")!;
+                message.append(e.message())!;
+                return fail(message.view());
+            }
+        }
+    } else {
+        Console.writeBytes(made.text.view());
+    }
+    return 0;
+}
+
+/// The page's title without `--title` or a package: the first file's name without its extension.
+fn docTitleOf(first: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var start = first.length;
+    while (start > 0 && first[start - 1] != '/' && first[start - 1] != '\\') {
+        start -= 1;
+    }
+    var end = first.length;
+    while (end > start && first[end - 1] != '.') {
+        end -= 1;
+    }
+    if (end == start) {
+        end = first.length + 1;
+    }
+    return copyBytes(first[start..end - 1]);
+}
+
+/// What `doc` makes of its sources (DocGenerator.Collect and Render), for the command and the MCP server's
+/// `ceesafe_doc` (ADR 0220 §2.2): the diagnostics rendered as text and whether one is an error (then there is no page),
+/// and the page titled `title`, or with `missing` the lines of the public items without a doc comment and their number.
+/// `internalError` is a message when the formatter failed on a file that parsed.
+struct DocText {
+    diagnostics: Vector<u8>;
+    failed: bool;
+    internalError: Vector<u8>;
+    text: Vector<u8>;
+    missingCount: u32;
+}
+
+fn documentSources(sources: Vector<SourceText>, title: Slice<u8>, missing: bool) -> Result<DocText, AllocError> {
+    var made = DocText {
+        diagnostics: Vector<u8>.create(),
+        failed: false,
+        internalError: Vector<u8>.create(),
+        text: Vector<u8>.create(),
+        missingCount: 0,
+    };
+    // Every file is parsed and formatted; any syntax error stops the page (DocGenerator.Collect).
+    var diagnostics = Diagnostics.create();
+    var docFiles = Vector<DocFile>.create();
+    for (index in 0..sources.length) {
         var front = Frontend.create();
-        let lexed = lex(sources[index].text.view(), truncate<u32>(index), mut front.symbols, mut front.diagnostics)!;
+        let lexed = lex(sources[index].text.view(), truncate<u32>(index), mut front.symbols, mut front.diagnostics)?;
         var scratch = Frontend.create();
-        let kept = lex(sources[index].text.view(), truncate<u32>(index), mut scratch.symbols, mut scratch.diagnostics)!;
-        front = parseFile(truncate<u32>(index), lexed, front)!;
+        let kept = lex(sources[index].text.view(), truncate<u32>(index), mut scratch.symbols, mut scratch.diagnostics)?;
+        front = parseFile(truncate<u32>(index), lexed, front)?;
         let failed = front.diagnostics.hasErrors();
         for (d in front.diagnostics.items.view()) {
-            diagnostics.items.push(copyDiagnostic(d)!)!;
+            diagnostics.items.push(copyDiagnostic(d)?)?;
         }
         if (failed) {
             continue;
         }
         var ignored = Diagnostics.create();
-        let formatted = formatSource(sources[index], truncate<u32>(index), mut ignored)!;
+        let formatted = formatSource(sources[index], truncate<u32>(index), mut ignored)?;
         let text = match (formatted.text) {
             Some(t) => t,
             null => {
-                var message = copyBytes("ceesafec doc: internal error in ".bytes())!;
-                appendBytes(mut message, sources[index].path.view())!;
-                appendText(mut message, ": the formatter failed\n")!;
-                Console.writeError(StringView.fromUtf8(message.view())!);
-                return 70;
+                appendText(mut made.internalError, "ceesafec doc: internal error in ")?;
+                appendBytes(mut made.internalError, sources[index].path.view())?;
+                appendText(mut made.internalError, ": the formatter failed\n")?;
+                return Ok(made);
             }
         };
-        let copy = SourceText.create(sources[index].path.view(), sources[index].text.view())!;
-        docFiles.push(newDocFile(copy, front, kept, text)!)!;
+        let copy = SourceText.create(sources[index].path.view(), sources[index].text.view())?;
+        docFiles.push(newDocFile(copy, front, kept, text)?)?;
     }
-    var rendered = Vector<u8>.create();
     for (d in diagnostics.items.view()) {
-        renderAny(mut rendered, d, sources)!;
+        renderAny(mut made.diagnostics, d, sources)?;
     }
-    Console.writeError(StringView.fromUtf8(rendered.view())!);
     if (diagnostics.hasErrors()) {
-        return 1;
+        made.failed = true;
+        return Ok(made);
     }
     // The impl blocks of every file, by the name of the type they are for.
     var impls = Vector<DocImpl>.create();
@@ -757,10 +826,10 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
                     let span = ast.typeSpans[interfaceType as usize];
                     impls.push(
                         DocImpl {
-                            forName: copyBytes(docTypeName(f, forType))!,
-                            interfaceText: copyBytes(f.source.text[span.start as usize..span.end as usize])!,
+                            forName: copyBytes(docTypeName(f, forType))?,
+                            interfaceText: copyBytes(f.source.text[span.start as usize..span.end as usize])?,
                         },
-                    )!;
+                    )?;
                 }
                 _ => {}
             }
@@ -768,45 +837,12 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
     }
     var entries = Vector<DocItem>.create();
     for (k in 0..docFiles.length) {
-        docEntries(docFiles[k], truncate<u32>(k), impls, mut entries)!;
+        docEntries(docFiles[k], truncate<u32>(k), impls, mut entries)?;
     }
     if (missing) {
-        var out = Vector<u8>.create();
-        let count = missingDocs(entries, docFiles, mut out)!;
-        Console.writeBytes(out.view());
-        return if (count == 0) 0 else 1;
+        made.missingCount = missingDocs(entries, docFiles, mut made.text)?;
+        return Ok(made);
     }
-    if (!hasTitle) {
-        // The first file's name without its extension.
-        let first = files[0].view();
-        var start = first.length;
-        while (start > 0 && first[start - 1] != '/' && first[start - 1] != '\\') {
-            start -= 1;
-        }
-        var end = first.length;
-        while (end > start && first[end - 1] != '.') {
-            end -= 1;
-        }
-        if (end == start) {
-            end = first.length + 1;
-        }
-        title = copyBytes(first[start..end - 1])!;
-    }
-    let page = renderDocPage(entries, title.view())!;
-    if (hasOutput) {
-        match (writeFile(StringView.fromUtf8(output.view())!, page.view())) {
-            Ok() => {}
-            Err(e) => {
-                var message = String.create();
-                message.append("cannot write '")!;
-                message.append(StringView.fromUtf8(output.view())!)!;
-                message.append("': ")!;
-                message.append(e.message())!;
-                return fail(message.view());
-            }
-        }
-    } else {
-        Console.writeBytes(page.view());
-    }
-    return 0;
+    made.text = renderDocPage(entries, title)?;
+    return Ok(made);
 }

@@ -1,9 +1,10 @@
 # ADR 0220 — The MCP server's `ceesafe_test` and `ceesafe_doc`
 
-- Status: **Proposed**, 2026-11-24, under the optimization and DX roadmap's Phase 1, item 2 (the owner: "Continue to the
-  remaining in the roadmap"). No code yet: §6's questions are the owner's.
+- Status: **Accepted** by the owner, 2026-11-24 ("Go ahead. I'm with your recommendations."), §6's three questions as
+  proposed; proposed the same day under the optimization and DX roadmap's Phase 1, item 2. **Implemented** the same
+  day (§7), not released.
 - Scope: tooling.md §6.3 (two tools), §10.2 (the outcomes, shared); `src/tooling/mcp_server.cee`,
-  `src/host/test_runner.cee` (its harness, made in memory as well as on disk); `tools/mcp_api_check.py`;
+  `src/host/test_runner.cee` (its harness, made in memory as well as on disk); `tools/mcp_test_check.py`;
   guide/for-agents.md and the agents template.
 
 ## 1. Context
@@ -64,7 +65,7 @@ harness, a child process, with the virtual clock and seeded order of type-system
   `out/ceesafe-test/` and the server compiles from memory; the outcome names and the JSON writer are shared.
 - The server's `instructions` and guide/for-agents.md: "after an edit that changes behaviour, `ceesafe_test` with
   `{"package": "."}`; `ceesafec test` in a shell for tests that touch files or C, and for the sweeps".
-- `tools/mcp_api_check.py`: a package with a passing test, a failing one, a panicking one, one that reads a file
+- `tools/mcp_test_check.py` (new; `tools/mcp_api_check.py` is the name lookup's): a package with a passing test, a failing one, a panicking one, one that reads a file
   (`fault`, the refusal named) and one that calls C (`skipped`); `ceesafe_doc` against `ceesafec doc`'s output for the
   same package, byte for byte, and `missing` against `doc --missing`.
 
@@ -85,7 +86,7 @@ harness, a child process, with the virtual clock and seeded order of type-system
 
 ## 5. Testing
 
-As §2.3: `tools/mcp_api_check.py`'s new cases, in the contract suite; the corpus and the fixed point unchanged (no
+As §2.3: `tools/mcp_test_check.py`, in the contract suite; the corpus and the fixed point unchanged (no
 language change).
 
 ## 6. Questions for the owner
@@ -94,3 +95,24 @@ language change).
 2. **The result:** `ceesafec test --format json`'s document, with `steps` for `milliseconds`, `truncated`, and the
    interpreter's `fault`, rather than a format of its own? **Proposed: yes.**
 3. **`ceesafe_doc`:** a tool with `missing`, rather than a resource? **Proposed: a tool.**
+
+## 7. Implementation notes (2026-11-24)
+
+- **`ceesafe_test`** (`testTool`): compiles the program once with the root package's test directories
+  (`packageProgramWith`, `sourcesOfWith`) to find the tests (`testEntries`), then again with the harness
+  (`harnessSource`) as a source named `ceesafe-test/harness.cee`, which is never a file, and the entry
+  `ceesafeTestMain` (`compileInMemoryFrom`). Each test is `interpretCaptured` with the harness's arguments, the
+  sandbox, its own step budget and the allocation report on. Its output is read by `classifyTestRun`, which
+  `ceesafec test` now calls too (moved out of `runTest`), so one function says what each outcome is. An exit status of
+  70 not caused by C is `fault`, with the end of standard error (`stderrTail`) as the message. `CapturedRun` gained
+  `steps`, which the result reports.
+- **`ceesafe_doc`** (`docTool`): `docCommand`'s collecting and rendering moved into `documentSources`, which both call;
+  the command's output is unchanged (`doc lib/core` and `doc --missing lib/std` byte for byte, before and after).
+  The title is the package's name, or for `files` and `paths` the first file's (`docTitleOf`, also the command's).
+- **Verified** (Mac, 2026-11-24): `tools/mcp_test_check.py`, new, in the contract suite. On
+  `tests/packages/test-command` all 24 tests have their `expected.tsv` `--interp` outcome, `hangs` a `fault` that names
+  the step limit; a filter runs the 6 `fails…` tests in order; an unknown filter is a tool error; from `files`, a
+  test that opens a file is a `fault` naming the sandbox; `ceesafe_doc`'s `missing` lists exactly the two items
+  written without doc comments. Against the compiler before this change it reports 15 problems. Also run:
+  `mcp_api_check`, `mcp_package_check`, `test_command_check` (24 tests), `lsp_sync_check`, `cli_check`, `spec_check`,
+  0 problems each; the fixed point (one-file C) holds.

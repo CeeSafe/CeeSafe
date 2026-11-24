@@ -432,59 +432,60 @@ fn runTest(
         millis: millis,
     };
     if (captured.started) {
-        let output = captured;
-        {
-            let err = output.stderr.view();
-            let attempts = numberAfter(err, "ceesafe alloc: attempts=");
-            // What isolated tasks that trapped left (ADR 0175 amendment 1) is the rule for a trap, not the test's leak.
-            let counted = numberAfter(err, " live=");
-            let isolated = numberAfter(err, "ceesafe alloc: isolated leaked=");
-            let live = if (counted == none() as u64 || isolated == none() as u64) counted
-                else (if (counted > isolated) counted - isolated else 0u64);
-            let points = numberAfter(err, "ceesafe cancel: points=");
-            result.attempts = if (attempts == none() as u64) 0 else attempts;
-            result.points = if (points == none() as u64) 0 else points;
-            if (options.interp && containsText(err, "the interpreter runs no C code")) {
-                result.outcome = 7; // --interp cannot run a test that calls C (ADR 0049 §3.3)
-                appendText(mut result.message, "it calls C, which the interpreter cannot run")!;
-            } else if (containsText(err, "ceesafe-test 1 timeout")) {
-                result.outcome = 4;
-            } else if (ownPanic(err) < err.length) {
-                result.outcome = 2;
-                result.message = failureMessage(err[ownPanic(err)..], "ceesafe panic", "");
-            } else if (containsText(err, "ceesafe-test 1 failed")) {
-                result.outcome = 1;
-                result.message = failureMessage(err, "ceesafe-test 1 failed", "ceesafe-test 1 end");
-            } else if (containsText(err, "ceesafe-test 1 unknown")) {
-                result.outcome = 6;
-            } else if (output.status == 0 && containsText(err, "ceesafe-test 1 passed")) {
-                result.outcome = if (live != none() as u64 && live > 0) 5 else 0;
-                if (result.outcome == 5) {
-                    appendDecimal(mut result.message, live)!;
-                    appendText(mut result.message, " allocation(s) still live at the end")!;
-                }
-            } else {
-                // A status a signal gives (128 + its number, as Process.capture reports one; on Windows an exception's
-                // code, negative as an i32) is a crash; any other is the test ending the process itself (Process.exit).
-                let signalled = output.status < 0 || (!hostIsWindows() && output.status > 128 && output.status <= 192);
-                result.outcome = if (signalled) 3 else 8;
-                appendText(mut result.message, "exit status ")!;
-                if (output.status < 0) {
-                    result.message.push('-')!;
-                }
-                appendDecimal(
-                    mut result.message,
-                    truncate<u64>(if (output.status < 0) 0 - (output.status as i64) else output.status as i64),
-                )!;
-            }
-            result.stdout = output.stdout;
-            result.stderr = output.stderr;
-        }
+        result.stdout = captured.stdout;
+        result.stderr = captured.stderr;
+        classifyTestRun(mut result, captured.status, options.interp);
     } else {
         appendText(mut result.message, "cannot run the test: ")!;
         appendText(mut result.message, captured.error.message())!;
     }
     return result;
+}
+
+/// A test run's outcome from its status and what it wrote (ADR 0049 §3.3's outcomes, read from the harness protocol's
+/// lines on standard error), for `test` and the MCP server's `ceesafe_test` (ADR 0220 §2.1): `result.stdout` and
+/// `result.stderr` are the run's; `interp`, whether the interpreter ran it.
+fn classifyTestRun(result: borrow mut TestOutcome, status: i32, interp: bool) {
+    let err = result.stderr.view();
+    let attempts = numberAfter(err, "ceesafe alloc: attempts=");
+    // What isolated tasks that trapped left (ADR 0175 amendment 1) is the rule for a trap, not the test's leak.
+    let counted = numberAfter(err, " live=");
+    let isolated = numberAfter(err, "ceesafe alloc: isolated leaked=");
+    let live = if (counted == none() as u64 || isolated == none() as u64) counted
+        else (if (counted > isolated) counted - isolated else 0u64);
+    let points = numberAfter(err, "ceesafe cancel: points=");
+    result.attempts = if (attempts == none() as u64) 0 else attempts;
+    result.points = if (points == none() as u64) 0 else points;
+    if (interp && containsText(err, "the interpreter runs no C code")) {
+        result.outcome = 7; // --interp cannot run a test that calls C (ADR 0049 §3.3)
+        appendText(mut result.message, "it calls C, which the interpreter cannot run")!;
+    } else if (containsText(err, "ceesafe-test 1 timeout")) {
+        result.outcome = 4;
+    } else if (ownPanic(err) < err.length) {
+        result.outcome = 2;
+        result.message = failureMessage(err[ownPanic(err)..], "ceesafe panic", "");
+    } else if (containsText(err, "ceesafe-test 1 failed")) {
+        result.outcome = 1;
+        result.message = failureMessage(err, "ceesafe-test 1 failed", "ceesafe-test 1 end");
+    } else if (containsText(err, "ceesafe-test 1 unknown")) {
+        result.outcome = 6;
+    } else if (status == 0 && containsText(err, "ceesafe-test 1 passed")) {
+        result.outcome = if (live != none() as u64 && live > 0) 5 else 0;
+        if (result.outcome == 5) {
+            appendDecimal(mut result.message, live)!;
+            appendText(mut result.message, " allocation(s) still live at the end")!;
+        }
+    } else {
+        // A status a signal gives (128 + its number, as Process.capture reports one; on Windows an exception's
+        // code, negative as an i32) is a crash; any other is the test ending the process itself (Process.exit).
+        let signalled = status < 0 || (!hostIsWindows() && status > 128 && status <= 192);
+        result.outcome = if (signalled) 3 else 8;
+        appendText(mut result.message, "exit status ")!;
+        if (status < 0) {
+            result.message.push('-')!;
+        }
+        appendDecimal(mut result.message, truncate<u64>(if (status < 0) 0 - (status as i64) else status as i64))!;
+    }
 }
 
 /// The sweep points of a passing run: every allocation (alloc), or every suspension, sampled past 200 as

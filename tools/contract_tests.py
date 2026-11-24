@@ -25,7 +25,7 @@
   properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the book (tools/book_check.py,
   Decision 0011), the debugger scripts, the MCP server's name lookup (tools/mcp_api_check.py) and its
-  package source (tools/mcp_package_check.py), and each kind of fix of tooling.md §5.2 (tools/fix_kinds_check.py).
+  package source (tools/mcp_package_check.py), its tests and documentation tools (tools/mcp_test_check.py), and each kind of fix of tooling.md §5.2 (tools/fix_kinds_check.py).
 - `extern "C"` blocks generated from C headers, by `ceesafec cbind` and by its oracle tools/cbind.py
   (tools/cbind_check.py; ADR 0095, ADR 0127).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
@@ -222,6 +222,7 @@ def main():
             # The parser's messages for forms other languages write (spec/diagnostics.md): one error each.
             ("habit messages", py + [f"{HERE}/habit_messages_check.py", "--compiler", cee]),
             ("mcp package", py + [f"{HERE}/mcp_package_check.py", "--compiler", cee]),
+            ("mcp test", py + [f"{HERE}/mcp_test_check.py", "--compiler", cee]),
             ("fix kinds", py + [f"{HERE}/fix_kinds_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),
             ("const statics", py + [f"{HERE}/const_statics_check.py", "--ceesafec", cee]),

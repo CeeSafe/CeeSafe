@@ -4,3 +4,13 @@ version = "0.1.0"
 kind = "executable"
 
 [dependencies]
+
+# The interpreter calls libm's math functions for the float methods of ADR 0218 (src/interpreter/math.cee), from
+# ceesafec's own C: a library of its own on Linux and FreeBSD (macOS's and Windows' C libraries hold them). Stage 0
+# builds the tree with this; `--emit c` then also writes ceesafe_link.txt on those hosts, a build aid the seed
+# comparisons leave out (the seed's README names -lm for every Unix).
+[target.linux]
+links = ["m"]
+
+[target.freebsd]
+links = ["m"]

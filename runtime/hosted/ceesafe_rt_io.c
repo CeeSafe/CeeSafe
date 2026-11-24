@@ -8,6 +8,12 @@
 #if defined(__APPLE__) && !defined(__APPLE_USE_RFC_3542)
 #define __APPLE_USE_RFC_3542 1 /* IPV6_RECVPKTINFO and IPV6_RECVTCLASS (ADR 0050) */
 #endif
+/* A 64-bit off_t on 32-bit Linux (glibc): file offsets past 2 GiB for pread, pwrite and ftruncate, and the 64-bit
+   struct flock the kernel's open-file-description locks read (ADR 0220). Not on Android, whose 32-bit libc lacks
+   some of the 64-bit calls before API level 24. */
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 /* pread, for a read at an offset (ADR 0051), under glibc's strict C11 headers, as ceesafe_rt_thread.c does. */
 #define _GNU_SOURCE

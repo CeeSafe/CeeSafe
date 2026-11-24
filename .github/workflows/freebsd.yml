@@ -60,9 +60,9 @@ jobs:
             mkdir -p out
             ./gen1 build -o out/ceesafec
             ./gen1 build --emit c -o c1
-            diff -r seed c1
+            diff -r -x ceesafe_link.txt seed c1
             out/ceesafec build --emit c -o c2
-            diff -r seed c2
+            diff -r -x ceesafe_link.txt seed c2
             echo "the fixed point holds on FreeBSD"
             # The release's smoke test (release.yml): the interpreter, a native build, a scripted window, the MCP server.
             printf 'fn main() {\n    Console.writeLine(40 + 2);\n}\n' > hello.cee

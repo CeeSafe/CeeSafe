@@ -691,6 +691,9 @@ TABLES.append(table(
         ("`Console.readLine(mut line) -> Result<bool, IoError>`",
          "Reads the next line of standard input into `line`, a `String` it empties first, without the line end; `false` at the end of the input.",
          "`Err(IoError.InvalidInput)` for a line that is not UTF-8"),
+        ("`Console.isTerminal(stream: ConsoleStream) -> bool`",
+         "Whether standard input, output or error (`ConsoleStream.Input`, `Output`, `Error`) is a terminal a person "
+         "types at; `false` for a pipe or a file.", NO),
     ],
     first="Function",
 ))

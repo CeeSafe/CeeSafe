@@ -15,6 +15,22 @@ names and signatures are the compiler's. With the MCP server, `ceesafe_api` look
 | `Console.writeError(text)`, `Console.writeErrorLine(text)` | `text: StringView`, to standard error |
 | `Console.read(mut buffer)` | `Result<usize, IoError>`; `0` at the end of input |
 | `Console.readLine(mut line)` | `Result<bool, IoError>`: the next line of input in `line`, a `String`, without its `\n` or `\r\n`; `false` at the end of input |
+| `Console.isTerminal(ConsoleStream.Input)` | `bool`: whether a person types at the stream (`Input`, `Output` or `Error`); `false` for a pipe or a file |
+
+A shell prompts only when its input is a terminal, and reads a script silently otherwise:
+
+```ceesafe
+fn main() {
+    if (Console.isTerminal(ConsoleStream.Input)) {
+        Console.write("> ");
+    }
+    Console.writeLine(Console.isTerminal(ConsoleStream.Output) || true);
+}
+```
+
+```text
+true
+```
 
 `Console` blocks its thread: in an `async fn`, use lib/std's `AsyncConsole` (N0295 otherwise).
 
@@ -124,6 +140,9 @@ no argument 1000
 | `f.modified()`, `f.kind()` | the open file's time and `PathKind`, from the file, not its path |
 | `IoError.StorageFull` | the volume is full (`ENOSPC`, `EDQUOT`) |
 | `IoError.TooManyOpenFiles` | out of descriptors (`EMFILE`, `ENFILE`): a shortage, not a failed disk (ADR 0104) |
+| `File.createReadWrite(path)` | `Result<File, IoError>` for reading and writing, created if missing, emptied if present (ADR 0221) |
+| `IoError.BadDescriptor` | "Bad file descriptor" (`EBADF`): reading a file opened only for writing (`File.create`), or writing one opened only for reading |
+| `f.lock(FileLock.Exclusive, start, length)`, `f.tryLock(…)`, `f.unlock(start, length)` | advisory locks on bytes of the file, which other programs (SQLite among them) see; `tryLock` is `Result<bool, IoError>`, `false` when another holds a conflicting lock (ADR 0220) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -145,6 +164,31 @@ fn main() {
 
 ```text
 No such file or directory
+```
+
+A lock is advisory: it keeps out only programs that ask for one too. Lock bytes past the data (SQLite locks bytes
+from 0x40000000), take a range the `File` does not already hold, and unlock exactly the ranges taken: that is the
+same on every system. Dropping the `File` releases its locks.
+
+```ceesafe
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/data")!;
+    {
+        let f = File.createReadWrite(path.view())!;
+        let mine = f.tryLock(FileLock.Exclusive, 0x40000000, 1)!;
+        Console.writeLine(mine);
+        f.unlock(0x40000000, 1)!;
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+```
+
+```text
+true
 ```
 
 ## `StringView` and `String`

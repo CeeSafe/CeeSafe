@@ -88,7 +88,7 @@ The integer types are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u
 | `x.abs() -> T` | The magnitude of a signed integer, in the same type. Unsigned types do not have it. | Panics `integer overflow` for the type's least value | [20.4](./ch20-04-arithmetic) |
 | `x.unsignedAbs() -> U` | The magnitude of a signed integer, in the unsigned type `U` of the same width (`u32` for an `i32`). | No | [20.4](./ch20-04-arithmetic) |
 | `x.rotateLeft(n: u32) -> T`, `x.rotateRight(n: u32) -> T` | The bits of an unsigned integer rotated by `n` places, `n` taken modulo the type's width. | No | [20.4](./ch20-04-arithmetic) |
-| `x.wrappingShl(n: u32) -> T`, `x.wrappingShr(n: u32) -> T` | An unsigned integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more. | No | [20.4](./ch20-04-arithmetic) |
+| `x.wrappingShl(n: u32) -> T`, `x.wrappingShr(n: u32) -> T` | An integer shifted by `n` places, `n` taken modulo the type's width, where `<<` and `>>` panic for an `n` of the width or more. On a signed integer, where `<<` and `>>` are refused, the left shift wraps in two's complement and the right shift is arithmetic: the sign is copied in, so `x.wrappingShr(n)` rounds `x / 2^n` down. | No | [20.4](./ch20-04-arithmetic) |
 | `x.leadingZeros() -> u32`, `x.trailingZeros() -> u32`, `x.countOnes() -> u32` | The number of zero bits at the top or at the bottom of an unsigned integer (the width for 0), or the number of one bits. | No | [20.4](./ch20-04-arithmetic) |
 | `x.byteSwap() -> T` | An integer with its bytes in the opposite order. | No | [20.4](./ch20-04-arithmetic) |
 
@@ -102,6 +102,16 @@ The float types are `f32` and `f64`. In the rows, `f` and `g` are two floats of 
 | `f.abs() -> T` | A float with its sign cleared. | No | [20.4](./ch20-04-arithmetic) |
 | `f.floor() -> T`, `f.ceil() -> T` | The nearest whole value below or above a float, still as a float. | No | [20.4](./ch20-04-arithmetic) |
 | `f.min(g: T) -> T`, `f.max(g: T) -> T` | The smaller or the larger of two floats; NaN if either is NaN. | No | [20.4](./ch20-04-arithmetic) |
+| `f.trunc() -> T`, `f.round() -> T`, `f.roundEven() -> T` | The nearest whole value toward zero, or the nearest with halves away from zero or to even, still as a float. | No | – |
+| `f.copySign(g: T) -> T` | A float with the magnitude of `f` and the sign of `g`. | No | – |
+| `f.exp() -> T`, `f.exp2() -> T`, `f.expM1() -> T`, `f.pow(g: T) -> T` | e or 2 to the power `f`, e to the power `f` minus 1, and `f` to the power `g`: the C library's functions, not in the freestanding profile, as every method from here to `logB`. | No | – |
+| `f.ln() -> T`, `f.log2() -> T`, `f.log10() -> T`, `f.ln1p() -> T` | The logarithm of a float in base e, 2 or 10, and the natural logarithm of 1 plus `f`. | No | – |
+| `f.sin() -> T`, `f.cos() -> T`, `f.tan() -> T`, `f.asin() -> T`, `f.acos() -> T`, `f.atan() -> T`, `f.atan2(x: T) -> T` | Trigonometry in radians; `y.atan2(x)` is the angle of the point (x, y). | No | – |
+| `f.sinh() -> T`, `f.cosh() -> T`, `f.tanh() -> T`, `f.asinh() -> T`, `f.acosh() -> T`, `f.atanh() -> T` | The hyperbolic functions and their inverses. | No | – |
+| `f.cbrt() -> T`, `f.hypot(g: T) -> T` | The cube root, and the square root of `f` squared plus `g` squared without overflow on the way. | No | – |
+| `f.fma(g: T, h: T) -> T` | `f` times `g` plus `h`, rounded once. | No | – |
+| `f.remainder(g: T) -> T`, `f.truncatingRemainder(g: T) -> T` | What is left after dividing by `g`, the quotient rounded to nearest (IEEE) or toward zero (C's `fmod`). | No | – |
+| `f.scaleB(n: i32) -> T`, `f.logB() -> T` | `f` times 2 to the power `n`, and the exponent of `f` as a float. | No | – |
 | `f.bits() -> u32` (`f32`), `f.bits() -> u64` (`f64`) | The IEEE 754 bit pattern of a float as an unsigned integer. | No | – |
 | `f32.fromBits(u: u32) -> f32`, `f64.fromBits(u: u64) -> f64` | The float that has the bit pattern `u`. Every pattern is a value, and some are NaN. | No | – |
 
@@ -140,6 +150,7 @@ A slice borrows a run of elements of an array, a vector or another slice: `Slice
 | `s.splitAt(mid: usize) -> SliceHalves<T>` | The two parts of a slice as `left` (the elements before `mid`) and `right` (from `mid` on). | Panics `slice range out of bounds` when `mid` is above the length | [16.1](./ch16-01-starting-threads) |
 | `d.splitAtMut(mid: usize) -> SliceHalvesMut<T>` | The two parts of an exclusive slice as `left` and `right`, which may both be written, since they do not overlap. | Panics `slice range out of bounds` when `mid` is above the length | – |
 | `d.sortBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts an exclusive slice or a vector by a closure that returns a negative number, zero or a positive number for less, equal and greater. The sort is not stable. | No | [8.1](./ch08-01-vectors) |
+| `d.sortStableBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts as `sortBy` does, keeping elements that compare equal in the order they had. It allocates nothing, and is slower than `sortBy`. | No | – |
 | `s.forEach(visit: borrow mut fn(borrow T))` | Calls a closure on each element of a slice, in order. | No | [8.1](./ch08-01-vectors) |
 | `s.any(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for some element of a slice; `false` for an empty slice. | No | [8.1](./ch08-01-vectors) |
 | `s.all(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for every element of a slice; `true` for an empty slice. | No | [8.1](./ch08-01-vectors) |
@@ -214,6 +225,44 @@ A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the r
 | `t.capacity` | The number of bytes a string has room for before it must grow, a `usize`. | No | – |
 | `t == u`, `t != u` | Whether two strings have the same bytes. A `String` and a `StringView` are compared as `t.view() == s`. | No | [8.2](./ch08-02-strings) |
 
+## `ByteStringView`
+
+A `ByteStringView` borrows text that may hold any bytes, UTF-8 or not, and converts to UTF-8 only when asked (ADR 0231). It is Copy, and needs a region parameter in a struct as a `StringView` does. In the rows, `v` is a `ByteStringView`; lengths and indexes count bytes. A `ByteString` has the members of this table through `b.view()`. The searches take `Slice<u8>` needles and are documented with [ByteStringView](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-bytestringview).
+
+| Member | What it does | Fails or panics | Taught in |
+|---|---|---|---|
+| `ByteStringView.fromText(text: StringView) -> ByteStringView`, `ByteStringView.fromBytes(bytes: Slice<u8>) -> ByteStringView` | A view of the bytes of a text, or of a slice. Nothing is copied. | No | – |
+| `v.bytes() -> Slice<u8>`, `v.length() -> usize`, `v.isEmpty() -> bool` | The bytes as a slice, their number, and whether there are none. | No | – |
+| `v.byteAt(i: usize) -> u8` | Byte `i`. | Panics `index out of bounds` when `i` is not below the length | – |
+| `v.slice(lo: usize, hi: usize) -> ByteStringView`, `v.sliceFrom(lo: usize) -> ByteStringView`, `v.sliceTo(hi: usize) -> ByteStringView` | A view of part of the bytes. A bound may fall inside a UTF-8 sequence. | Panics `slice range out of bounds` for a bad range | – |
+| `v.toUtf8() -> StringView?`, `v.isUtf8() -> bool` | The bytes as a `StringView` with no copy when they are UTF-8; whether they are. | `null` when the bytes are not valid UTF-8 | – |
+| `v.toUtf8Lossy() -> Result<String, AllocError>`, `v.appendLossyTo(out: borrow mut String) -> Result<void, AllocError>` | The text with one U+FFFD for each maximal subpart of an ill-formed sequence, as browsers and Python decode, in a new string or at the end of `out`. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `v.chunks() -> Utf8Chunks` | An iterator over `Utf8Chunk`s: each a `valid` `StringView` and the `invalid` `Slice<u8>` after it, to print the bytes with escapes. | No | – |
+| `v.equals(other: ByteStringView) -> bool`, `v.compare(other: ByteStringView) -> i32`, `v == w` | Whether two byte strings have the same bytes; their bytewise order. | No | – |
+| `v.indexOf(needle: Slice<u8>) -> usize?`, `v.lastIndexOf(needle: Slice<u8>) -> usize?`, `v.indexOfByte(b: u8) -> usize?` | The index where `needle`, or the byte `b`, first or last occurs. | `null` when it does not occur | – |
+| `v.contains(needle: Slice<u8>) -> bool`, `v.startsWith(prefix: Slice<u8>) -> bool`, `v.endsWith(suffix: Slice<u8>) -> bool`, `v.equalsIgnoreAsciiCase(other: Slice<u8>) -> bool` | As a `StringView`'s, on bytes. | No | – |
+| `v.trim() -> ByteStringView`, `v.trimStart() -> ByteStringView`, `v.trimEnd() -> ByteStringView` | The bytes without the ASCII whitespace at both ends, at the start, or at the end. | No | – |
+| `v.splitOnce(separator: Slice<u8>) -> ByteStringHalves?`, `v.split(separator: Slice<u8>) -> ByteStringSplit` | The bytes before and after the first `separator`; an iterator over the pieces between separators. | `null` from `splitOnce` when `separator` does not occur | – |
+| `v.toByteString() -> Result<ByteString, AllocError>` | A `ByteString` that owns a copy of the bytes. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `v.writeTo(w: borrow mut TextWriter)` | Writes the bytes as they are into a `TextWriter`. | No | – |
+
+## `ByteString`
+
+A `ByteString` owns text of any bytes on the heap and can grow (ADR 0231). It is a move type, and a `HashMap` and `OrderedMap` key. In the rows, `b` is a `ByteString`; it has the `ByteStringView` table's members through `b.view()`. Print one with `Console.writeBytes(b.bytes())`: `Console.write` takes text only.
+
+| Member | What it does | Fails or panics | Taught in |
+|---|---|---|---|
+| `ByteString.create() -> ByteString` | An empty byte string. It allocates nothing. | No | – |
+| `ByteString.withCapacity(n: usize) -> Result<ByteString, AllocError>` | An empty byte string with room for `n` bytes. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `ByteString.fromBytes(bytes: Vector<u8>) -> ByteString`, `b.intoBytes() -> Vector<u8>` | A byte string made of a vector's bytes, and the vector given back. Nothing is copied. | No | – |
+| `ByteString.copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError>`, `ByteString.fromText(text: StringView) -> Result<ByteString, AllocError>`, `b.clone() -> Result<ByteString, AllocError>` | A new byte string with a copy of the bytes of a slice, a text or a byte string. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `b.view() -> ByteStringView`, `b.bytes() -> Slice<u8>` | The bytes as a view that borrows the byte string, or as a slice. | No | – |
+| `b.length() -> usize`, `b.capacity() -> usize`, `b.isEmpty() -> bool` | The number of bytes, the room before it must grow, and whether there are none. | No | – |
+| `b.clear()`, `b.truncate(length: usize)` | Removes every byte, or keeps the first `length`. The capacity stays. | No | – |
+| `b.toUtf8() -> StringView?`, `b.toUtf8Lossy() -> Result<String, AllocError>` | As the view's: the text when the bytes are UTF-8, or the text with U+FFFD for bad sequences. | `null` from `toUtf8` when the bytes are not UTF-8; `Err(AllocError.OutOfMemory)` when the allocation fails from `toUtf8Lossy` | – |
+| `b.append(text: StringView) -> Result<void, AllocError>`, `b.appendBytes(bytes: Slice<u8>) -> Result<void, AllocError>`, `b.appendByte(byte: u8) -> Result<void, AllocError>` | Adds a text, bytes, or one byte at the end. | `Err(AllocError.OutOfMemory)` when the allocation fails; the byte string is unchanged | – |
+| `b.appendNumber(value: i64) -> Result<void, AllocError>`, `b.appendUnsigned(value: u64) -> Result<void, AllocError>` | Adds an integer at the end, in decimal. A `ByteString` also has `AppendFormatted`'s and `AppendText`'s methods, as a `String` does. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+
 ## Optionals: `T?`
 
 A `T?` is either `null` or `Some(value)`. In the rows, `o` is an optional of type `T?`.
@@ -271,7 +320,7 @@ A `Box<T>` owns one value on the heap. It is a move type, and destroying it dest
 
 ## `Vector<T>`
 
-A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
+A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|
@@ -286,6 +335,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 | `v.remove(at: usize) -> T` | Takes the element at index `at` out of a vector and moves the later elements down one place. | Panics `index out of bounds` when `at` is not below the length | [8.1](./ch08-01-vectors) |
 | `v.swapRemove(at: usize) -> T` | Takes the element at index `at` out of a vector and puts the last element in its place: one move, and the order changes. | Panics `index out of bounds` when `at` is not below the length | [8.1](./ch08-01-vectors) |
 | `v.clear()` | Destroys every element of a vector. The capacity stays. | No | [8.1](./ch08-01-vectors) |
+| `v.drain() -> VectorDrain<T>` | An iterator that moves the elements out of a vector in order, `for (x in v.drain())`, while it borrows the vector. The vector is empty afterwards, with its capacity; elements the loop did not take are destroyed when the iterator is. | No | – |
 | `v.truncate(n: usize)` | Destroys the elements of a vector from index `n` on. A vector that is already that short is unchanged. | No | [8.1](./ch08-01-vectors) |
 | `v.retain(keep: borrow mut fn(borrow T) -> bool)` | Keeps the elements of a vector for which a closure returns `true`, in order, and destroys the others. | No | [8.1](./ch08-01-vectors) |
 | `v.extend(s: Slice<T>) -> Result<void, AllocError>` | Adds a copy of every element of `s` at the end of a vector. `T` is Copy. | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | [12.2](./ch12-02-reading-a-file) |
@@ -297,6 +347,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 | `for (x in v) { }` | Runs the body once for each element of a vector: `x` is a copy of a Copy element, and a borrow of any other. | No | [8.1](./ch08-01-vectors) |
 | `v.pushBE(x: N) -> Result<void, AllocError>`, `v.pushLE(x: N) -> Result<void, AllocError>` | Adds the bytes of the fixed-width integer `x` at the end of a `Vector<u8>`, most significant byte first (`BE`) or last (`LE`). | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | – |
 | `v.appendHex(value: u64, minWidth: u32, upper: bool)`, `v.appendOctal(value: u64)`, `v.appendFixed(value: f64, digits: u32)`, `v.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32)` | The formatting methods of a `String`, on a `Vector<u8>`: each adds the formatted text's bytes and returns a `Result<void, AllocError>`. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `v.appendNumber(value: i64) -> Result<void, AllocError>`, `v.appendUnsigned(value: u64) -> Result<void, AllocError>` | Adds an integer in decimal at the end of a `Vector<u8>`. | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | [9.3](./ch09-03-allocation-failure) |
 | `v.appendChar(c: u32)`, `v.appendUtf8(bytes: Slice<u8>)` | The `appendChar` and `appendUtf8` of a `String`, on a `Vector<u8>`: each returns a `Result<bool, AllocError>`, `false` for what is not a character or not UTF-8. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
 | `v.add() -> ByteAppender` | The appender of a `String`, on a `Vector<u8>` of the system heap: the same steps, adding the text's bytes, and `done()`. | No | – |
 | `Vector.intoRaw(v: Vector<T>) -> VectorParts<T>` | Gives up a vector and returns its `pointer`, `length` and `capacity`. Nothing is freed. | No | – |
@@ -376,6 +427,7 @@ A range is written `lo..hi` and is not a value: it cannot be stored in a variabl
 | `Console.flush()` | Writes what standard output has buffered now, so that it is out before the program waits or is stopped. | No | [21.1](./ch21-01-one-connection) |
 | `Console.read(mut buffer) -> Result<usize, IoError>` | Reads bytes from standard input into `buffer`, a `SliceMut<u8>`, and returns how many; 0 at the end of the input. | `Err(IoError)` when the read fails | – |
 | `Console.readLine(mut line) -> Result<bool, IoError>` | Reads the next line of standard input into `line`, a `String` it empties first, without the line end; `false` at the end of the input. | `Err(IoError.InvalidInput)` for a line that is not UTF-8 | [2](./ch02-00-guessing-game) |
+| `Console.isTerminal(stream: ConsoleStream) -> bool` | Whether standard input, output or error (`ConsoleStream.Input`, `Output`, `Error`) is a terminal a person types at; `false` for a pipe or a file. | No | – |
 
 ## `Process`
 
@@ -435,4 +487,4 @@ The libraries have more types than this appendix lists. The chapters teach the o
 | `*T`, `*mut T`, `Ptr`, `CStr` | Raw pointers and C strings, for unsafe code and calls of C. | [20.1](./ch20-01-unsafe-code), [20.2](./ch20-02-calling-c) | [unsafe code and C](https://ceesafe.github.io/CeeSafe/guide/unsafe-and-c) |
 | `TextWriter`, `ByteOrder`, `VectorBytes`, `NumberParsing`, `Formatted` | Text formatted into a fixed buffer without allocating, and the static functions behind the byte and text methods of this appendix. | – | [lib/core](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-textwriter) |
 | `Layout`, `Allocator`, `Volatile<T>`, `MmioPtr`, `Cpu` | Programs without an operating system: allocators of your own, device registers, the processor. | [22.1](./ch22-01-the-freestanding-profile), [22.2](./ch22-02-kernel-code) | [kernel code](https://ceesafe.github.io/CeeSafe/guide/kernel) |
-| `Crc32`, `Crc32c`, `Adler32`, `Xxh64`, `Sha1`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `Deflate`, `Zlib`, `Gzip`, `Inflater`, `Deflater`, `Snappy`, `Zstd`, `ZstdDecoder`, `AsyncUdpSocket`, `AsyncDns`, `Window`, `Bluetooth`, `BluetoothLink` | Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib, gzip and snappy compression, zstd decoding, UDP and name lookup, native windows, Bluetooth printers. | – | [lib/std](https://ceesafe.github.io/CeeSafe/reference/api/std) |
+| `Crc32`, `Crc32c`, `Adler32`, `Xxh64`, `Sha1`, `Sha256`, `HmacSha256`, `Md5`, `Aes256Gcm`, `ConstantTime`, `Deflate`, `Zlib`, `Gzip`, `Inflater`, `Deflater`, `Snappy`, `Zstd`, `ZstdDecoder`, `ZstdEncoder`, `AsyncUdpSocket`, `AsyncDns`, `Window`, `Bluetooth`, `BluetoothLink` | Checksums and hashes, authenticated encryption and comparing secrets, deflate, zlib, gzip, snappy and zstd compression, UDP and name lookup, native windows, Bluetooth printers. | – | [lib/std](https://ceesafe.github.io/CeeSafe/reference/api/std) |

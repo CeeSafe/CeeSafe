@@ -1,0 +1,87 @@
+// A `Thread<void>` as a type argument (SQLite port finding 35): a thread's argument is its body's result, so
+// `Thread<void>` has `void` where a return type may (type-system.md §20.4, §38.2), and an instance whose signature
+// takes or returns one is no N0226. Before, every call whose signature named a `Thread<void>` was refused: a plain
+// function returning one, `swapRemove`, `remove`, `pop` through a generic function, `HashMap.put` and `remove`,
+// `SlotMap.insert`. Each thread is joined before the next line is printed, so the output is the program's order.
+fn idle() {}
+
+fn pass<T>(x: T) -> T => x;
+
+fn lastOf<T>(v: borrow mut Vector<T>) -> T? => v.pop();
+
+// A thread, or null when it cannot be started (an allocation the fault sweep fails): the program then stops early,
+// returning, so its allocation report is still written.
+fn start() -> Thread<void>? => match (Thread.spawn(move () => idle())) {
+    Ok(t) => t,
+    Err(_) => null,
+};
+
+fn run() -> Result<void, AllocError> {
+    var threads = Vector<Thread<void>>.create();
+    threads.push(start() ?? { return Ok(); })?;
+    threads.push(start() ?? { return Ok(); })?;
+    threads.insert(0, start() ?? { return Ok(); })?;
+    let first = threads.swapRemove(0);
+    pass(first).join();
+    Console.writeLine("swapRemove");
+    let second = threads.remove(0);
+    second.join();
+    Console.writeLine("remove");
+    match (lastOf(mut threads)) {
+        Some(t) => {
+            t.join();
+            Console.writeLine("pop");
+        }
+        null => {}
+    }
+    Console.writeLine(threads.length);
+    var byKey = HashMap<u32, Thread<void>>.create();
+    byKey.put(1, start() ?? { return Ok(); })?;
+    let key: u32 = 1;
+    match (byKey.remove(key)) {
+        Some(t) => {
+            t.join();
+            Console.writeLine("HashMap");
+        }
+        null => {}
+    }
+    var slots = SlotMap<Thread<void>>.create();
+    let h = slots.insert(start() ?? { return Ok(); })?;
+    match (slots.remove(h)) {
+        Some(t) => {
+            t.join();
+            Console.writeLine("SlotMap");
+        }
+        null => {}
+    }
+    let maybe: Thread<void>? = start();
+    match (maybe) {
+        Some(t) => {
+            t.join();
+            Console.writeLine("optional");
+        }
+        null => { return Ok(); }
+    }
+    var counts = Vector<Thread<u64>>.create();
+    match (Thread.spawn(move () => 4u64)) {
+        Ok(t) => { counts.push(t)?; }
+        Err(_) => { return Ok(); }
+    }
+    Console.writeLine(counts.swapRemove(0).join());
+    return Ok();
+}
+
+fn main() {
+    match (run()) {
+        Ok(_) => {}
+        Err(_) => { Console.writeLine("out of memory"); }
+    }
+}
+// expect-stdout: swapRemove
+// expect-stdout: remove
+// expect-stdout: pop
+// expect-stdout: 0
+// expect-stdout: HashMap
+// expect-stdout: SlotMap
+// expect-stdout: optional
+// expect-stdout: 4

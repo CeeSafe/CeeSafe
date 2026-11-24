@@ -15,6 +15,22 @@ names and signatures are the compiler's. With the MCP server, `ceesafe_api` look
 | `Console.writeError(text)`, `Console.writeErrorLine(text)` | `text: StringView`, to standard error |
 | `Console.read(mut buffer)` | `Result<usize, IoError>`; `0` at the end of input |
 | `Console.readLine(mut line)` | `Result<bool, IoError>`: the next line of input in `line`, a `String`, without its `\n` or `\r\n`; `false` at the end of input |
+| `Console.isTerminal(ConsoleStream.Input)` | `bool`: whether a person types at the stream (`Input`, `Output` or `Error`); `false` for a pipe or a file |
+
+A shell prompts only when its input is a terminal, and reads a script silently otherwise:
+
+```ceesafe
+fn main() {
+    if (Console.isTerminal(ConsoleStream.Input)) {
+        Console.write("> ");
+    }
+    Console.writeLine(Console.isTerminal(ConsoleStream.Output) || true);
+}
+```
+
+```text
+true
+```
 
 `Console` blocks its thread: in an `async fn`, use lib/std's `AsyncConsole` (N0295 otherwise).
 
@@ -124,6 +140,10 @@ no argument 1000
 | `f.modified()`, `f.kind()` | the open file's time and `PathKind`, from the file, not its path |
 | `IoError.StorageFull` | the volume is full (`ENOSPC`, `EDQUOT`) |
 | `IoError.TooManyOpenFiles` | out of descriptors (`EMFILE`, `ENFILE`): a shortage, not a failed disk (ADR 0104) |
+| `File.createReadWrite(path)` | `Result<File, IoError>` for reading and writing, created if missing, emptied if present (ADR 0221) |
+| `IoError.BadDescriptor` | "Bad file descriptor" (`EBADF`): reading a file opened only for writing (`File.create`), or writing one opened only for reading |
+| `f.lock(FileLock.Exclusive, start, length)`, `f.tryLock(…)`, `f.unlock(start, length)` | advisory locks on bytes of the file, which other programs (SQLite among them) see; `tryLock` is `Result<bool, IoError>`, `false` when another holds a conflicting lock (ADR 0220) |
+| `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -145,6 +165,67 @@ fn main() {
 
 ```text
 No such file or directory
+```
+
+A lock is advisory: it keeps out only programs that ask for one too. Lock bytes past the data (SQLite locks bytes
+from 0x40000000), take a range the `File` does not already hold, and unlock exactly the ranges taken: that is the
+same on every system. Dropping the `File` releases its locks.
+
+```ceesafe
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/data")!;
+    {
+        let f = File.createReadWrite(path.view())!;
+        let mine = f.tryLock(FileLock.Exclusive, 0x40000000, 1)!;
+        Console.writeLine(mine);
+        f.unlock(0x40000000, 1)!;
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+```
+
+```text
+true
+```
+
+A shared mapping is memory that other processes may write at any moment, so it is never a slice: bytes are copied
+out and in, and integers are atomics, which are atomic between processes too. An access outside the region, or an
+atomic not aligned to its size in the file, panics. To reach more of the file, map another region; regions of the
+same bytes are one memory.
+
+```ceesafe
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/index")!;
+    {
+        let f = File.createReadWrite(path.view())!;
+        let a = f.mapShared(0, 4096)!;
+        let b = f.mapShared(0, 64)!;
+        a.writeAt(8, "header".bytes());
+        let _ = a.compareExchange32(0, 0, 41, Ordering.AcquireRelease);
+        let _ = b.fetchAdd32(0, 1, Ordering.AcquireRelease);
+        SharedMapping.fence();
+        var copy = [0u8; 6];
+        b.readAt(8, mut copy[..]);
+        Console.writeLine(StringView.fromUtf8(copy[..])!);
+        Console.writeLine(a.load32(0, LoadOrdering.Acquire));
+        Console.writeLine(f.length()!);
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+```
+
+```text
+header
+42
+4096
 ```
 
 ## `StringView` and `String`
@@ -169,7 +250,7 @@ No such file or directory
 | `s.parseInt<T>()`, `s.parseIntRadix<T>(radix)`, `s.parseFloat<T>()` | `T?`: `null` for text that is not a `T` |
 
 The searches and parsers work on a `String` too, and on bytes: a `Slice<u8>` (or a `Vector<u8>`) takes and gives
-`Slice<u8>` where a view takes and gives `StringView`. Every view they return stays valid UTF-8. Floats parse
+`Slice<u8>` where a view takes and gives `StringView`; a string literal there is its bytes, `path.startsWith("/api")`. Every view they return stays valid UTF-8. Floats parse
 correctly rounded, and accept `inf`, `infinity` and `nan` in any case.
 
 A `StringView` is a borrow: a variable holding one is a `let`, and a struct or enum holding one needs a region
@@ -200,6 +281,54 @@ x = -7
 hi
 ```
 
+### Text that may not be UTF-8: `ByteString` and `ByteStringView`
+
+Text from C, a file name, or a database's TEXT column may hold bytes that are not UTF-8, which a `String` cannot.
+lib/core's `ByteString` (owned) and `ByteStringView` (borrowed, a region parameter in a struct as a `StringView`)
+keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-system.md §22.4):
+
+| Member | Type |
+|---|---|
+| `ByteStringView.fromText(text)`, `ByteStringView.fromBytes(bytes)` | a view of the bytes, no copy |
+| `ByteString.create()`, `ByteString.fromBytes(v)`, `b.intoBytes()` | a byte string; the `Vector<u8>` taken or given back, no copy |
+| `ByteString.fromText(text)`, `ByteString.copyOf(bytes)`, `b.clone()`, `v.toByteString()` | `Result<ByteString, AllocError>`, a copy |
+| `b.view()`, `b.bytes()`, `length()`, `isEmpty()`, `byteAt(i)`, `slice(lo, hi)`, `sliceFrom(lo)`, `sliceTo(hi)` | a `ByteStringView`; `Slice<u8>`; … |
+| `toUtf8()`, `isUtf8()` | `StringView?`, a view when the bytes are UTF-8; `bool` |
+| `toUtf8Lossy()`, `v.appendLossyTo(mut s)` | a `String` with U+FFFD for each maximal subpart of a bad sequence, as browsers and Python decode |
+| `v.chunks()` | the `Utf8Chunk`s: each a `valid` `StringView` then an `invalid` `Slice<u8>`, for printing with escapes |
+| `==`, `v.equals(w)`, `v.compare(w)` | the bytes compared; bytewise order. A `ByteString` is a `HashMap` and `OrderedMap` key |
+| `v.indexOf(bytes)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, … | as a `StringView`'s, with `Slice<u8>` needles |
+| `b.append(text)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n)`, `appendUnsigned(n)`, `appendHex`, `appendChar`, … | `Result<…, AllocError>`, as a `String`'s |
+
+`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`.
+
+```ceesafe
+fn main() {
+    var b = ByteString.create();
+    b.append("id=")!;
+    b.appendNumber(7)!;
+    b.appendByte(0xFF)!;
+    Console.writeLine(b.length());
+    Console.writeLine(b.toUtf8().isNull());
+    Console.writeLine(b.toUtf8Lossy()!.view());
+    for (chunk in b.view().chunks()) {
+        Console.write(chunk.valid);
+        Console.write(" then ");
+        Console.writeLine(chunk.invalid.length);
+    }
+    let name = ByteStringView.fromText("id=7");
+    Console.writeLine(b.view().startsWith(name.bytes()));
+}
+```
+
+```text
+5
+true
+id=7�
+id=7 then 1
+true
+```
+
 ## `Vector`, arrays and slices
 
 | Member | Type |
@@ -210,6 +339,8 @@ hi
 | `v.length`, `v.capacity`, `v[i]` | `usize`; an element place |
 | `v.clear()`, `v.truncate(n)`, `v.swap(i, j)` | |
 | `v.insert(at, x)`, `v.remove(at)`, `v.swapRemove(at)` | `Result<void, AllocError>`; `T`; `T` (the last element fills the gap); the index is checked at the call |
+| `v.drain()` | an iterator that moves the elements out first to last, `for (x in v.drain())`; `v` is borrowed until it ends, then empty with its capacity |
+| `s.sortBy(cmp)`, `s.sortStableBy(cmp)` | on a `SliceMut<T>` or a vector: `cmp(a, b)` is negative, zero or positive; `sortStableBy` keeps equal elements in their order |
 | `[]` | the empty `Slice<T>` or `SliceMut<T>`, where one is expected |
 | `a.writeLE(0, x)` on an array | an array's methods are its slice's: `a[..].writeLE(0, x)` |
 | `v.view()`, `v.viewMut()` | `Slice<T>`, `SliceMut<T>` |
@@ -307,7 +438,8 @@ Medium
 | `x.mulHigh(y)` | every integer type: the upper half of the full product (`wrappingMul` is the lower); never overflows |
 | `x.min(y)`, `x.max(y)` | every integer type |
 | `x.abs()`, `x.unsignedAbs()` | signed types: `abs` panics at the minimum, `unsignedAbs` is the unsigned type of the width |
-| `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)`, `x.wrappingShr(n)` | unsigned types; `n: u32`, taken modulo the width |
+| `x.rotateLeft(n)`, `x.rotateRight(n)` | unsigned types; `n: u32`, taken modulo the width |
+| `x.wrappingShl(n)`, `x.wrappingShr(n)` | every integer type; `n: u32`, taken modulo the width; on a signed type `wrappingShr` is arithmetic (`(-7i32).wrappingShr(1)` is `-4`) |
 | `x.leadingZeros()`, `x.trailingZeros()`, `x.countOnes()` | unsigned types; a `u32` (the width for 0) |
 | `x.byteSwap()` | every integer type: the bytes in the other order |
 | `x as T` | only conversions that never lose information; `a as u64 < b` compares |
@@ -325,6 +457,8 @@ Medium
 | `checkedTruncate<T>(x)`, `saturatingTruncate<T>(x)` | an integer or a float to an integer `T`: a `T?` that is `null` where `T` cannot hold the value (where `truncate` would wrap an integer or panic on a float); the nearest bound of `T` (NaN gives 0) |
 | `round<T>(x)` | to a float type, rounding to nearest |
 | `f.sqrt()`, `f.abs()`, `f.floor()`, `f.ceil()`, `f.min(g)`, `f.max(g)`, `f.bits()` | floats |
+| `f.trunc()`, `f.round()`, `f.roundEven()`, `f.copySign(g)` | floats: toward zero, half away from zero, half to even; `f`'s magnitude with `g`'s sign |
+| `f.exp()`, `f.exp2()`, `f.expM1()`, `f.ln()`, `f.log2()`, `f.log10()`, `f.ln1p()`, `f.pow(g)`, `f.sin()`, `f.cos()`, `f.tan()`, `f.asin()`, `f.acos()`, `f.atan()`, `f.atan2(g)`, `f.sinh()`, `f.cosh()`, `f.tanh()`, `f.asinh()`, `f.acosh()`, `f.atanh()`, `f.cbrt()`, `f.hypot(g)`, `f.fma(g, h)`, `f.remainder(g)`, `f.truncatingRemainder(g)`, `f.scaleB(n)`, `f.logB()` | floats: the C library's functions, hosted only ([Math methods](closures.md#math-methods)) |
 
 ```ceesafe
 fn main() {
@@ -367,6 +501,7 @@ true
 | `Secret.wipe(mut place)` | sets a zeroable place, or `mut bytes[a..b]`, to zero bytes in a way the C compiler keeps: for keys (see [memory](memory.md#secrets)) |
 | `FixedBufferAllocator.over(mut bytes)` | an allocator over a caller's buffer, for freestanding code |
 | `Arena`, `Scratch`, `Pool<T>`, `SlotMap<T>`, `StableVector<T>` | see [memory](memory.md) and [collections](collections.md) |
+| `Thread.cpuCount()` | `u32`, at least 1: the CPUs the process may run on (on Linux its affinity mask) |
 | `Thread.spawn`, `Thread.both`, `Async.run`, `Async.scope` | see [threads](threads.md) and [async](async.md) |
 | `OnceLock<T>.constant()`, `Mutex<T>.constant(v)`, `Vector<T>.empty()` | static initialisers: an empty cell, a mutex whose lock is made at its first use, an empty vector ([In a static](threads.md#in-a-static)) |
 | `OnceCell<T>`, `OnceLock<T>` | a value written once and then lent as `borrow T`: `getOrInit(init)`, `tryInit<E>(init)`, `get()`, `set(v)`; `OnceLock` is the one threads share ([threads](threads.md#built-once-oncelock)) |
@@ -385,7 +520,7 @@ fn main() {
 ## Compression: `Deflate`, `Zlib`, `Gzip`, `Snappy` and `Zstd`
 
 lib/std's deflate (RFC 1951), and its zlib (RFC 1950) and gzip (RFC 1952) framings, and snappy's raw block format,
-both ways, and Zstandard (RFC 8878) decoding, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
+both ways, and Zstandard (RFC 8878) both ways, in pure CeeSafe ([ADR 0196](../spec/decisions/0196-compression-codecs.md); the [lib/std page](../spec/api/std.md) has every
 signature):
 
 | Function or type | Type |
@@ -399,14 +534,17 @@ signature):
 | `Adler32` | zlib's checksum, with `create`, `update`, `finish` and `of`, as `Crc32` (gzip's) |
 | `Snappy.decompress(input, limit, mut out)`, `Snappy.compress(input, level, mut out)` | snappy's raw block (Parquet's `SNAPPY` pages; Avro's `snappy` blocks, which add the big-endian `Crc32` of the bytes), as `Deflate`'s calls; snappy has one level, so `level` is ignored |
 | `Snappy.length(input)` | `usize?`: the length a block's preamble states, read alone, or `null`; `decompress` refuses one above its limit before allocating |
-| `Zstd.decompress(input, limit, mut out)` | Zstandard frames (Parquet's `ZSTD` pages, PyIceberg's default; Avro's `zstandard` blocks), as `Deflate`'s call; skippable frames are skipped, a stated content size above `limit` is refused before allocating; no encoder yet |
+| `Zstd.decompress(input, limit, mut out)` | Zstandard frames (Parquet's `ZSTD` pages, PyIceberg's default; Avro's `zstandard` blocks), as `Deflate`'s call; skippable frames are skipped, a stated content size above `limit` is refused before allocating |
+| `Zstd.compress(input, level, mut out)` | `Result<void, AllocError>`: one frame that states its size, without a checksum; libzstd's levels 1 to 9 in meaning and parameters, 0 its default (3), above 9 taken as 9 |
 | `ZstdDecoder.create(limit, windowLimit)`, `z.step(input, mut out)` | a zstd decoder that streams, as `Inflater`; it allocates a window of `windowLimit` bytes at `create` (libzstd's default limit is 2^27) and refuses a frame whose window is larger |
+| `ZstdEncoder.create(level, checksum)`, `e.update(input, mut out)`, `e.flush(mut out)`, `e.finish(mut out)` | a zstd encoder that streams, as `Deflater`: `flush` writes what it holds as blocks (all so far decodes), `finish` ends the frame, with its XXH64 if `checksum`; its memory is the level's tables and up to twice its window (2 MiB at level 3) |
 | `Xxh64` | XXH64 with a seed, zstd's checksum, with `create(seed)`, `update`, `finish` and `of(bytes, seed)` |
 
 Every decoder takes a limit, so a decompression bomb costs at most `limit` bytes, and no input panics one: every
 refusal is a `DecodeError`. `Inflater.step` and `ZstdDecoder.step` allocate nothing after `create` and has no effect (`@effects()`), so
 async code may call it, but its CPU time is in proportion to the slices it is given: async code decodes some 64 KiB
-at a time, or hands a whole buffer to `Async.blocking`. Compression leaks content through the output's length (CRIME,
+at a time, or hands a whole buffer to `Async.blocking`. The encoders allocate (`@effects(alloc)`) and take time in
+proportion to their input, so async code compresses through `Async.blocking` too. Compression leaks content through the output's length (CRIME,
 BREACH): do not compress a secret together with bytes an attacker chooses.
 
 ```ceesafe
@@ -468,6 +606,20 @@ fn main() {
     let p = decoder.step(frame[..], mut buffer[..])!;
     Console.writeLine(p.written);
     Console.writeLine(Xxh64.of("123456789".bytes(), 0));
+    var z = Vector<u8>.create();
+    Zstd.compress(text, 3, mut z)!;
+    var zback = Vector<u8>.create();
+    Zstd.decompress(z.view(), 1 << 20, mut zback)!;
+    Console.writeLine(zback.view() == text);
+    var encoder = ZstdEncoder.create(1, true)!;
+    var streamed = Vector<u8>.create();
+    encoder.update(text[0..20], mut streamed)!;
+    encoder.flush(mut streamed)!;
+    encoder.update(text[20..], mut streamed)!;
+    encoder.finish(mut streamed)!;
+    var sback = Vector<u8>.create();
+    Zstd.decompress(streamed.view(), 1 << 20, mut sback)!;
+    Console.writeLine(sback.view() == text);
 }
 ```
 
@@ -481,6 +633,8 @@ more than 10 bytes
 to be, or not to be, that is the question: to be, or not to be
 16
 10139926970967174787
+true
+true
 ```
 
 ## Every signature above
@@ -526,6 +680,10 @@ fn collections() -> Result<void, AllocError> {
     v.swap(0, 1);
     v.truncate(1);
     let m: SliceMut<u32> = v.viewMut();
+    v.sortStableBy((a, b) => if (a < b) -1 else if (a > b) 1 else 0);
+    for (moved in v.drain()) {
+        let kept: u32 = moved;
+    }
     v.clear();
     var t: String = String.withCapacity(8)?;
     t.clear();
@@ -585,6 +743,8 @@ fn numbers() {
     let bits: u64 = f.bits();
     let w: u32 = 0x80000001;
     let rotated: u32 = w.rotateLeft(1).rotateRight(2).wrappingShl(33).wrappingShr(1);
+    let halved: i64 = x.wrappingShr(1);
+    let doubled: i64 = x.wrappingShl(1);
     let counts: u32 = w.leadingZeros() + w.trailingZeros() + w.countOnes();
     let swapped: i16 = (-2i16).byteSwap();
 }

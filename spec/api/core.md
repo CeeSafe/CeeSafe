@@ -23,6 +23,12 @@
 - [struct AtomicBool](#struct-atomicbool)
 - [struct ByteOrder](#struct-byteorder)
 - [struct VectorBytes](#struct-vectorbytes)
+- [struct ByteStringView](#struct-bytestringview)
+- [struct ByteString](#struct-bytestring)
+- [struct ByteStringHalves](#struct-bytestringhalves)
+- [struct ByteStringSplit](#struct-bytestringsplit)
+- [struct Utf8Chunk](#struct-utf8chunk)
+- [struct Utf8Chunks](#struct-utf8chunks)
 - [struct RawCell](#struct-rawcell)
 - [struct Cell](#struct-cell)
 - [struct RefCell](#struct-refcell)
@@ -37,6 +43,7 @@
 - [enum TextAlign](#enum-textalign)
 - [struct Formatted](#struct-formatted)
 - [interface AppendFormatted](#interface-appendformatted)
+- [interface AppendDecimal](#interface-appenddecimal)
 - [interface AppendText](#interface-appendtext)
 - [enum PanicKind](#enum-panickind)
 - [struct TaskCrash](#struct-taskcrash)
@@ -56,6 +63,9 @@
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
 - [struct SliceCopying](#struct-slicecopying)
+- [struct VectorDrain](#struct-vectordrain)
+- [struct VectorDrainFailing](#struct-vectordrainfailing)
+- [struct VectorDrainSecret](#struct-vectordrainsecret)
 - [struct VectorEditing](#struct-vectorediting)
 - [struct VectorCopying](#struct-vectorcopying)
 - [struct VectorParts](#struct-vectorparts)
@@ -1794,6 +1804,492 @@ public fn appendPadded(
 
 Appends `text` in a field `width` characters wide, filled with `fill` where `align` puts it (ADR 0087 §2.9).
 
+## struct ByteStringView
+
+```ceesafe
+@derive(Equal)
+public struct ByteStringView<region r>
+```
+
+A borrowed text of any bytes, valid for region `r` as a `StringView<r>` is: a view of a `ByteString`, of a
+`StringView`'s bytes or of any `Slice<u8>`. Copy; `==` compares the bytes. A field of this type needs a region
+parameter, as a view's does.
+
+### ByteStringView.fromText
+
+```ceesafe
+public fn fromText(text: StringView<r>) -> ByteStringView<r>
+```
+
+The bytes of `text`, as a byte string: no copy. A string literal, a `StringView` or a `String` (lent).
+
+### ByteStringView.fromBytes
+
+```ceesafe
+public fn fromBytes(bytes: Slice<r, u8>) -> ByteStringView<r>
+```
+
+`bytes`, as a byte string: no copy, and no check.
+
+### ByteStringView.bytes
+
+```ceesafe
+public fn bytes(borrow this) -> Slice<r, u8>
+```
+
+The bytes.
+
+### ByteStringView.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The length in bytes.
+
+### ByteStringView.isEmpty
+
+```ceesafe
+public fn isEmpty(borrow this) -> bool
+```
+
+Whether there are no bytes.
+
+### ByteStringView.byteAt
+
+```ceesafe
+public fn byteAt(borrow this, index: usize) -> u8
+```
+
+The byte at `index`; panics past the end, as `s[index]` does.
+
+### ByteStringView.slice
+
+```ceesafe
+public fn slice(borrow this, start: usize, end: usize) -> ByteStringView<r>
+```
+
+The bytes from `start` up to `end`; panics as `s[start..end]` does when they are not inside. A slice may cut
+a UTF-8 sequence: the bytes are any bytes.
+
+### ByteStringView.sliceFrom
+
+```ceesafe
+public fn sliceFrom(borrow this, start: usize) -> ByteStringView<r>
+```
+
+The bytes from `start` to the end.
+
+### ByteStringView.sliceTo
+
+```ceesafe
+public fn sliceTo(borrow this, end: usize) -> ByteStringView<r>
+```
+
+The first `end` bytes.
+
+### ByteStringView.toUtf8
+
+```ceesafe
+public fn toUtf8(borrow this) -> StringView<r>?
+```
+
+The text as a `StringView` when the bytes are UTF-8 (the Unicode Standard's Table 3-7, as
+`StringView.fromUtf8` checks), with no copy; null when they are not.
+
+### ByteStringView.isUtf8
+
+```ceesafe
+public fn isUtf8(borrow this) -> bool
+```
+
+Whether the bytes are UTF-8.
+
+### ByteStringView.toUtf8Lossy
+
+```ceesafe
+public fn toUtf8Lossy(borrow this) -> Result<String, AllocError>
+```
+
+A new string of the text, each maximal subpart of an ill-formed sequence replaced by U+FFFD (the Unicode
+Standard's §3.9 "U+FFFD substitution of maximal subparts", which the WHATWG Encoding Standard's decoder and
+Python's `bytes.decode('utf-8', 'replace')` follow). Valid UTF-8 is copied as it is.
+
+### ByteStringView.appendLossyTo
+
+```ceesafe
+public fn appendLossyTo(borrow this, out: borrow mut String) -> Result<void, AllocError>
+```
+
+Appends `toUtf8Lossy`'s text to `out`. On failure `out` holds the text appended before it.
+
+### ByteStringView.chunks
+
+```ceesafe
+public fn chunks(borrow this) -> Utf8Chunks<r>
+```
+
+The text in pieces, for a printer that escapes what is not UTF-8: each `Utf8Chunk` is a run of valid UTF-8
+and then one maximal subpart of an ill-formed sequence (1 to 3 bytes), which only the last chunk may lack.
+Empty bytes give no chunk.
+
+### ByteStringView.equals
+
+```ceesafe
+public fn equals(borrow this, other: ByteStringView) -> bool
+```
+
+Whether the bytes are the same as `other`'s: `==` across regions.
+
+### ByteStringView.compare
+
+```ceesafe
+public fn compare(borrow this, other: ByteStringView) -> i32
+```
+
+Bytewise order: negative, zero or positive as this text comes before, is the same as or comes after
+`other`; a prefix comes before the longer text. For UTF-8 it is code point order, as for `String`.
+
+### ByteStringView.indexOf
+
+```ceesafe
+public fn indexOf(borrow this, needle: Slice<u8>) -> usize?
+```
+
+Where `needle` first is, in bytes; 0 for an empty needle.
+
+### ByteStringView.lastIndexOf
+
+```ceesafe
+public fn lastIndexOf(borrow this, needle: Slice<u8>) -> usize?
+```
+
+Where `needle` last is; the length for an empty needle.
+
+### ByteStringView.indexOfByte
+
+```ceesafe
+public fn indexOfByte(borrow this, b: u8) -> usize?
+```
+
+Where the byte `b` first is.
+
+### ByteStringView.contains
+
+```ceesafe
+public fn contains(borrow this, needle: Slice<u8>) -> bool
+```
+
+Whether `needle` occurs.
+
+### ByteStringView.startsWith
+
+```ceesafe
+public fn startsWith(borrow this, prefix: Slice<u8>) -> bool
+```
+
+Whether the bytes begin with `prefix`.
+
+### ByteStringView.endsWith
+
+```ceesafe
+public fn endsWith(borrow this, suffix: Slice<u8>) -> bool
+```
+
+Whether the bytes end with `suffix`.
+
+### ByteStringView.equalsIgnoreAsciiCase
+
+```ceesafe
+public fn equalsIgnoreAsciiCase(borrow this, other: Slice<u8>) -> bool
+```
+
+Whether the bytes are `other`'s, `A`–`Z` and `a`–`z` taken as the same.
+
+### ByteStringView.trim
+
+```ceesafe
+public fn trim(borrow this) -> ByteStringView<r>
+```
+
+Without ASCII whitespace at either end.
+
+### ByteStringView.trimStart
+
+```ceesafe
+public fn trimStart(borrow this) -> ByteStringView<r>
+```
+
+Without ASCII whitespace at the start.
+
+### ByteStringView.trimEnd
+
+```ceesafe
+public fn trimEnd(borrow this) -> ByteStringView<r>
+```
+
+Without ASCII whitespace at the end.
+
+### ByteStringView.splitOnce
+
+```ceesafe
+public fn splitOnce(borrow this, separator: Slice<u8>) -> ByteStringHalves<r>?
+```
+
+The bytes before the first `separator` and after it, or null if it does not occur. An empty separator is
+found at the start.
+
+### ByteStringView.split
+
+```ceesafe
+public fn split(borrow this, separator: Slice<r, u8>) -> ByteStringSplit<r>
+```
+
+The pieces between separators, in order, as `StringView`'s `split`: `"a,,b"` by `","` is `"a"`, `""`, `"b"`;
+empty bytes are one empty piece; an empty separator gives the bytes whole.
+
+### ByteStringView.toByteString
+
+```ceesafe
+public fn toByteString(borrow this) -> Result<ByteString, AllocError>
+```
+
+A new byte string with a copy of the bytes.
+
+### ByteStringView.writeTo
+
+```ceesafe
+public fn writeTo(borrow this, w: borrow mut TextWriter)
+```
+
+Writes the bytes, as they are, to `w`.
+
+## struct ByteString
+
+```ceesafe
+@derive(Equal)
+public struct ByteString
+```
+
+An owned text of any bytes, in a growable buffer: a `String` that may hold bytes that are not UTF-8. A move type,
+as `Vector<u8>` is; `==` compares the bytes. Text enters it as text (`append`, numbers, characters) or as bytes
+(`appendBytes`, `appendByte`), and nothing is checked or replaced.
+
+### ByteString.create
+
+```ceesafe
+public fn create() -> ByteString
+```
+
+An empty byte string; no allocation.
+
+### ByteString.withCapacity
+
+```ceesafe
+public fn withCapacity(capacity: usize) -> Result<ByteString, AllocError>
+```
+
+An empty byte string with room for `capacity` bytes.
+
+### ByteString.fromBytes
+
+```ceesafe
+public fn fromBytes(bytes: Vector<u8>) -> ByteString
+```
+
+The bytes of `bytes`, which it takes: no copy.
+
+### ByteString.copyOf
+
+```ceesafe
+public fn copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError>
+```
+
+A new byte string with a copy of `bytes`: one allocation, none for no bytes.
+
+### ByteString.fromText
+
+```ceesafe
+public fn fromText(text: StringView) -> Result<ByteString, AllocError>
+```
+
+A new byte string with a copy of `text`'s bytes (a literal, a `StringView`, or a `String`, lent).
+
+### ByteString.clone
+
+```ceesafe
+public fn clone(borrow this) -> Result<ByteString, AllocError>
+```
+
+A new byte string with a copy of the bytes.
+
+### ByteString.intoBytes
+
+```ceesafe
+public fn intoBytes(this) -> Vector<u8>
+```
+
+The bytes, which the byte string gives up: no copy.
+
+### ByteString.view
+
+```ceesafe
+public fn view(borrow this) -> ByteStringView
+```
+
+A view of the text, a loan of the byte string.
+
+### ByteString.bytes
+
+```ceesafe
+public fn bytes(borrow this) -> Slice<u8>
+```
+
+The bytes, a loan of the byte string.
+
+### ByteString.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The length in bytes.
+
+### ByteString.capacity
+
+```ceesafe
+public fn capacity(borrow this) -> usize
+```
+
+How many bytes it can hold before it grows.
+
+### ByteString.isEmpty
+
+```ceesafe
+public fn isEmpty(borrow this) -> bool
+```
+
+Whether there are no bytes.
+
+### ByteString.clear
+
+```ceesafe
+public fn clear(borrow mut this)
+```
+
+Removes every byte; the capacity stays.
+
+### ByteString.truncate
+
+```ceesafe
+public fn truncate(borrow mut this, length: usize)
+```
+
+Keeps the first `length` bytes (all of them if there are no more).
+
+### ByteString.toUtf8
+
+```ceesafe
+public fn toUtf8(borrow this) -> StringView?
+```
+
+The text as a `StringView` when the bytes are UTF-8, a loan of the byte string; null when they are not.
+
+### ByteString.toUtf8Lossy
+
+```ceesafe
+public fn toUtf8Lossy(borrow this) -> Result<String, AllocError>
+```
+
+`view().toUtf8Lossy()`: a new string, U+FFFD for each maximal subpart of an ill-formed sequence.
+
+### ByteString.append
+
+```ceesafe
+public fn append(borrow mut this, text: StringView) -> Result<void, AllocError>
+```
+
+Appends the bytes of `text`. Each append grows the buffer at most once and leaves it as it was if that fails.
+
+### ByteString.appendBytes
+
+```ceesafe
+public fn appendBytes(borrow mut this, bytes: Slice<u8>) -> Result<void, AllocError>
+```
+
+Appends `bytes`, whatever they are.
+
+### ByteString.appendByte
+
+```ceesafe
+public fn appendByte(borrow mut this, b: u8) -> Result<void, AllocError>
+```
+
+Appends the byte `b`.
+
+### ByteString.appendNumber
+
+```ceesafe
+public fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError>
+```
+
+Appends `value` in decimal, with a `-` before a negative value, as `String.appendNumber` writes an integer.
+
+### ByteString.appendUnsigned
+
+```ceesafe
+public fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError>
+```
+
+Appends `value` in decimal: `appendNumber` for a `u64` past `i64`'s range.
+
+Implements `AppendFormatted`.
+
+Implements `AppendText`.
+
+## struct ByteStringHalves
+
+```ceesafe
+public struct ByteStringHalves<region r> {
+    public left: ByteStringView<r>;
+    public right: ByteStringView<r>;
+}
+```
+
+The parts of a byte string before and after a separator: what `s.splitOnce(sep)` finds.
+
+## struct ByteStringSplit
+
+```ceesafe
+public struct ByteStringSplit<region r>
+```
+
+The pieces of a byte string between separators, in order: `s.split(sep)`.
+
+Implements `Iterator<ByteStringView<r>>`.
+
+## struct Utf8Chunk
+
+```ceesafe
+public struct Utf8Chunk<region r> {
+    public valid: StringView<r>;
+    public invalid: Slice<r, u8>;
+}
+```
+
+A piece of a byte string (`s.chunks()`): a run of valid UTF-8, then the bytes of one maximal subpart of an
+ill-formed sequence after it, empty only in the last chunk. A printer writes `valid` and escapes `invalid`.
+
+## struct Utf8Chunks
+
+```ceesafe
+public struct Utf8Chunks<region r>
+```
+
+The chunks of a byte string, in order: `s.chunks()`. `next()` gives each, then null.
+
+Implements `Iterator<Utf8Chunk<r>>`.
+
 ## struct RawCell
 
 ```ceesafe
@@ -2403,6 +2899,18 @@ public interface AppendFormatted {
 and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
 UTF-8.
 
+## interface AppendDecimal
+
+```ceesafe
+public interface AppendDecimal {
+    fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError>;
+    fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError>;
+}
+```
+
+`v.appendNumber(n)` and `v.appendUnsigned(n)` (ADR 0237 §2.2): decimal digits added to a `Vector<u8>`, as a
+`ByteString`'s methods of those names add them. (A `String`'s built-in `appendNumber` takes any number.)
+
 ## interface AppendText
 
 ```ceesafe
@@ -2985,6 +3493,19 @@ past a depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. A s
 left as it is, and one strictly descending run is reversed. Allocates nothing; the shorter side is sorted
 first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
 
+### SliceAlgorithms.sortStableBy
+
+```ceesafe
+@effectsOf(cmp)
+public fn sortStableBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
+```
+
+Orders `s` as `sortBy` does, and keeps the elements that `cmp` finds equal in the order they had: a stable
+sort (ADR 0225). Allocates nothing: insertion sort of blocks of 20 elements, then the blocks merged in place,
+pairwise and bottom up, by SymMerge (Kim and Kutzner, 2004), which rotates where a merge sort would copy to a
+buffer. O(n log n) calls of `cmp` and O(n log² n) swaps, so it is slower than `sortBy` on long slices. An
+inconsistent `cmp` leaves some permutation of `s`.
+
 ### SliceAlgorithms.forEach
 
 ```ceesafe
@@ -3053,6 +3574,89 @@ public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize)
 
 Copies the `count` elements from index `from` to index `to`, as C's `memmove`: the two ranges may overlap, and
 the elements end as the source was before the copy. Panics, copying nothing, if either range passes the end.
+
+## struct VectorDrain
+
+```ceesafe
+public struct VectorDrain<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` (ADR 0224, type-system.md §23.1): the elements of a vector moved out one at a time, first to last, as
+an iterator, `for (x in v.drain())`, while the vector is borrowed exclusively. The vector is left empty with its
+capacity: elements that were not taken are destroyed with the iterator, first to last. `drain` reverses the
+elements once, by swaps, `next` pops the last, and the drop reverses what is left back, so draining n elements is
+O(n) and allocates nothing. `VectorDrainFailing` and
+`VectorDrainSecret` are the same for a vector of `FailingAllocator` and of `SecretHeap`, whose `pop` wipes the slot.
+
+### VectorDrain.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T>) -> VectorDrain<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrain.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
+
+## struct VectorDrainFailing
+
+```ceesafe
+public struct VectorDrainFailing<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` for a vector of `FailingAllocator`: as VectorDrain.
+
+### VectorDrainFailing.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T, FailingAllocator>) -> VectorDrainFailing<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrainFailing.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
+
+## struct VectorDrainSecret
+
+```ceesafe
+public struct VectorDrainSecret<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` for a vector of `SecretHeap`: as VectorDrain; each slot is wiped as its element leaves.
+
+### VectorDrainSecret.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T, SecretHeap>) -> VectorDrainSecret<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrainSecret.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
 
 ## struct VectorEditing
 

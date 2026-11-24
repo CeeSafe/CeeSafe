@@ -60,48 +60,41 @@ fn methodFileOf(c: borrow Checker, f: u32, structFile: u32) -> u32 {
     return structFile;
 }
 
-/// The struct item named `symbol` in package `package`, or none.
-fn structItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
+/// The struct or enum item named `symbol` that file `file` of package `package` means, as packageItem finds it
+/// (ADR 0230): the file's private one, then the package's; else another file's private one, whose use is then
+/// N0296; none if there is none.
+fn typeItemNamed(c: borrow Checker, symbol: u32, package: u32, file: u32) -> u32 {
+    var shared = none();
+    var other = none();
     for (u in 0..c.front.ast.units.length) {
-        if (packageOfFile(c, c.front.ast.units[u].file) != package) {
+        let unitFile = c.front.ast.units[u].file;
+        if (packageOfFile(c, unitFile) != package) {
             continue;
         }
         let items = c.front.ast.units[u].items;
         for (k in 0..items.count) {
             let item = c.front.ast.at(items, k);
-            match (c.front.ast.items[item as usize].kind) {
-                ItemKind.Struct(_) => {
-                    if (c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol == symbol) {
-                        return item;
-                    }
+            let entry = c.front.ast.items[item as usize];
+            let kindMatches = match (entry.kind) {
+                ItemKind.Struct(_) => true,
+                ItemKind.Enum(_, _, _) => true,
+                _ => false,
+            };
+            if (!kindMatches || c.front.ast.idents[entry.name as usize].symbol != symbol) {
+                continue;
+            }
+            if (!isPrivateVisibility(entry.visibility)) {
+                if (shared == none()) {
+                    shared = item;
                 }
-                _ => {}
+            } else if (unitFile == file) {
+                return item;
+            } else if (other == none()) {
+                other = item;
             }
         }
     }
-    return none();
-}
-
-/// The enum item named `symbol` in package `package`, or none.
-fn enumItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
-    for (u in 0..c.front.ast.units.length) {
-        if (packageOfFile(c, c.front.ast.units[u].file) != package) {
-            continue;
-        }
-        let items = c.front.ast.units[u].items;
-        for (k in 0..items.count) {
-            let item = c.front.ast.at(items, k);
-            match (c.front.ast.items[item as usize].kind) {
-                ItemKind.Enum(_, _, _) => {
-                    if (c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol == symbol) {
-                        return item;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    return none();
+    return if (shared != none()) shared else other;
 }
 
 fn enumIsGeneric(c: borrow Checker, item: u32) -> bool => match (c.front.ast.items[item as usize].kind) {
@@ -169,16 +162,18 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         _ => none(),
                     };
                     let symbol = if (nameIdent == none()) none() else c.front.ast.idents[nameIdent as usize].symbol;
-                    let structItem = if (symbol == none()) none() else structItemNamed(
+                    let named = if (symbol == none()) none() else typeItemNamed(
                         c,
                         symbol,
                         packageOfFile(c, file),
+                        file,
                     );
-                    let enumItem = if (symbol == none() || structItem != none()) none() else enumItemNamed(
-                        c,
-                        symbol,
-                        packageOfFile(c, file),
-                    );
+                    let isStruct = named != none() && match (c.front.ast.items[named as usize].kind) {
+                        ItemKind.Struct(_) => true,
+                        _ => false,
+                    };
+                    let structItem = if (isStruct) named else none();
+                    let enumItem = if (isStruct) none() else named;
                     // The block's own bounds are well formed (§25.8), whatever they are compared with below.
                     checkRegionBounds(c, regionParameters, false)?;
                     if (enumItem != none()) {
@@ -395,7 +390,9 @@ fn declareEnumMethods(c: borrow mut Checker, index: u32) -> Result<void, AllocEr
             entry.environment,
             false,
         )? else declareFunctionIn(c, m.function, entry.typ, entry.environment)?;
-        c.implMethods.push(ImplMethod { typ: entry.typ, name: id.symbol, function: function })?;
+        c.implMethods.push(
+            ImplMethod { typ: entry.typ, name: id.symbol, function: function, interfaceEntry: none() },
+        )?;
     }
     c.setFile(savedFile);
     return Ok();

@@ -1,0 +1,214 @@
+// Shared mappings of a region of a file (ADR 0232): copies in and out; two mappings of overlapping bytes are one
+// memory, and a read of the file sees it; the file grows to cover a mapping and is never shortened; an offset not on
+// a page; the 32- and 64-bit atomics with their orderings; threads counting through two mappings with
+// compareExchange32; a child process (this program again) counting beside the parent through its own mapping; the
+// errors. Where no child can be started (the interpreter, ADR 0232 §2.5) a thread does the child's part, so the
+// output is the same. Python's mmap, a file shortened under a mapping and SQLite's -shm are tools/file_map_check.py's.
+
+fn counted() -> u32 => 10000;
+
+/// Adds 1 to the u32 at byte `at`, `times` times, by compare-exchange loops.
+fn count(m: borrow SharedMapping, at: usize, times: u32) {
+    var left = times;
+    while (left > 0) {
+        left -= 1;
+        var seen = m.load32(at, LoadOrdering.Relaxed);
+        loop {
+            match (m.compareExchange32(at, seen, seen + 1, Ordering.AcquireRelease)) {
+                Ok(_) => { break; }
+                Err(now) => { seen = now; }
+            }
+        }
+    }
+}
+
+/// The child's part: map the counter's page of the file and count.
+fn child(path: StringView) -> Result<void, IoError> {
+    let f = File.openReadWrite(path)?;
+    let m = f.mapShared(8192, 64)?;
+    count(m, 8, counted());
+    return Ok();
+}
+
+fn basics(path: StringView) -> Result<void, IoError> {
+    let f = File.createReadWrite(path)?;
+    // A mapping past the end of an empty file: the file grows to cover it.
+    let a = f.mapShared(4096, 4096)?;
+    Console.writeLine(a.length());
+    Console.writeLine(a.offset());
+    Console.writeLine(f.length()?);
+    // Copies in and out.
+    a.writeAt(10, "shared".bytes());
+    var got = [0u8; 6];
+    a.readAt(10, mut got[..]);
+    Console.writeLine(StringView.fromUtf8(got[..]) ?? "?");
+    // The file sees it.
+    var read = [0u8; 6];
+    let n = f.readAt(mut read[..], 4106)?;
+    Console.writeLine(n);
+    Console.writeLine(StringView.fromUtf8(read[..]) ?? "?");
+    // So does what the file is written with, through the mapping.
+    f.writeAt("FILE".bytes(), 4200)?;
+    var four = [0u8; 4];
+    a.readAt(104, mut four[..]);
+    Console.writeLine(StringView.fromUtf8(four[..]) ?? "?");
+    // A second mapping of overlapping bytes, from an offset not on a page: one memory.
+    let b = f.mapShared(4100, 100)?;
+    var back = [0u8; 6];
+    b.readAt(6, mut back[..]);
+    Console.writeLine(StringView.fromUtf8(back[..]) ?? "?");
+    b.store32(16, 0xCAFE, StoreOrdering.Release); // file byte 4116, a's byte 20
+    Console.writeLine(a.load32(20, LoadOrdering.Acquire));
+    // Atomics.
+    Console.writeLine(a.fetchAdd32(20, 2, Ordering.SequentiallyConsistent));
+    match (a.compareExchange32(20, 1, 5, Ordering.Relaxed)) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(v) => { Console.writeLine(v); }
+    }
+    match (a.compareExchange32(20, 0xCB00, 7, Ordering.Acquire)) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(v) => { Console.writeLine(v); }
+    }
+    Console.writeLine(b.load32(16, LoadOrdering.SequentiallyConsistent));
+    a.store64(24, 0x0102030405060708, StoreOrdering.SequentiallyConsistent);
+    Console.writeLine(a.load64(24, LoadOrdering.Relaxed));
+    Console.writeLine(a.fetchAdd64(24, 0x10, Ordering.Release));
+    match (b.compareExchange64(20, 0x0102030405060718, 9, Ordering.SequentiallyConsistent)) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(v) => { Console.writeLine(v); }
+    }
+    Console.writeLine(a.load64(24, LoadOrdering.Acquire));
+    SharedMapping.fence();
+    a.sync()?;
+    // A mapping inside the file does not shorten it.
+    let c = f.mapShared(0, 16)?;
+    Console.writeLine(c.length());
+    Console.writeLine(f.length()?);
+    return Ok();
+}
+
+/// Four threads, two through each of two mappings of the same bytes, then a child process beside this one.
+fn counting(path: StringView) -> Result<void, IoError> {
+    let f = File.openReadWrite(path)?;
+    let a = Arc<SharedMapping>.create(f.mapShared(8192, 64)?)!;
+    let b = Arc<SharedMapping>.create(f.mapShared(8192, 64)?)!;
+    let m0 = a.clone();
+    let m1 = b.clone();
+    let m2 = a.clone();
+    let m3 = b.clone();
+    let t0 = Thread.spawn(move () => { count(m0.get(), 0, counted()); })!;
+    let t1 = Thread.spawn(move () => { count(m1.get(), 0, counted()); })!;
+    let t2 = Thread.spawn(move () => { count(m2.get(), 0, counted()); })!;
+    let t3 = Thread.spawn(move () => { count(m3.get(), 0, counted()); })!;
+    t0.join();
+    t1.join();
+    t2.join();
+    t3.join();
+    Console.writeLine(a.get().load32(0, LoadOrdering.SequentiallyConsistent));
+    // A child process: this program, told to count at byte 8 of the same page.
+    var arguments = Vector<StringView>.create();
+    arguments.push("child")!;
+    arguments.push(path)!;
+    var started: ChildProcess? = null;
+    match (Process.executable()) {
+        Ok(program) => {
+            match (Process.spawn(program.view(), arguments, ChildOptions.quiet())) {
+                Ok(p) => { started = Some(p); }
+                Err(_) => {}
+            }
+        }
+        Err(_) => {}
+    }
+    match (started) {
+        Some(p) => {
+            var running = p;
+            count(a.get(), 8, counted());
+            match (running.wait()?) {
+                ChildExit.Status(0) => {}
+                _ => { Console.writeLine("the child failed"); }
+            }
+        }
+        null => {
+            var owned = String.create();
+            owned.append(path)!;
+            let stand = Thread.spawn(move () => { child(owned.view())!; })!;
+            count(a.get(), 8, counted());
+            stand.join();
+        }
+    }
+    Console.writeLine(b.get().load32(8, LoadOrdering.SequentiallyConsistent));
+    return Ok();
+}
+
+fn errors(path: StringView) -> Result<void, IoError> {
+    let f = File.openReadWrite(path)?;
+    match (f.mapShared(0, 0)) {
+        Ok(_) => { Console.writeLine("length 0 mapped"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (f.mapShared(0x7FFFFFFFFFFFFFFF, 1)) {
+        Ok(_) => { Console.writeLine("past 2^63 mapped"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    let r = File.open(path)?;
+    match (r.mapShared(0, 16)) {
+        Ok(_) => { Console.writeLine("a read-only file mapped"); }
+        Err(IoError.BadDescriptor) => { Console.writeLine("BadDescriptor"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    return Ok();
+}
+
+fn main() {
+    let role = Process.argument(1);
+    if (role.isSome()) {
+        let path = Process.argument(2) ?? "";
+        match (child(path)) {
+            Ok() => {}
+            Err(_) => { Process.exit(1); }
+        }
+        return;
+    }
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db-shm")!;
+    match (basics(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (counting(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (errors(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: 4096
+// expect-stdout: 4096
+// expect-stdout: 8192
+// expect-stdout: shared
+// expect-stdout: 6
+// expect-stdout: shared
+// expect-stdout: FILE
+// expect-stdout: shared
+// expect-stdout: 51966
+// expect-stdout: 51966
+// expect-stdout: 51968
+// expect-stdout: 51968
+// expect-stdout: 7
+// expect-stdout: 72623859790382856
+// expect-stdout: 72623859790382856
+// expect-stdout: 72623859790382872
+// expect-stdout: 9
+// expect-stdout: 16
+// expect-stdout: 8192
+// expect-stdout: 40000
+// expect-stdout: 20000
+// expect-stdout: Invalid argument
+// expect-stdout: Invalid argument
+// expect-stdout: BadDescriptor

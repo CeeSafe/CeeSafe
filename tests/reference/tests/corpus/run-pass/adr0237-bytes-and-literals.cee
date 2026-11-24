@@ -1,0 +1,54 @@
+// ADR 0237 §2.2, §2.3: decimal appended to a Vector<u8>, and a string literal as the needle of a byte slice's search.
+fn main() {
+    var v = Vector<u8>.create();
+    v.appendNumber(-9223372036854775808)!;
+    v.push(' ')!;
+    v.appendNumber(0)!;
+    v.push(' ')!;
+    v.appendUnsigned(18446744073709551615)!;
+    let port: u16 = 8080;
+    v.push(' ')!;
+    v.appendUnsigned(port as u64)!;
+    Console.writeLine(StringView.fromUtf8(v.view()) ?? "?");
+
+    let path = "/api/users".bytes();
+    Console.writeLine(path.startsWith("/api"));
+    Console.writeLine(path.startsWith("/app"));
+    Console.writeLine(path.endsWith("users"));
+    Console.writeLine(path.contains("pi/"));
+    Console.writeLine(path.equalsIgnoreAsciiCase("/API/Users"));
+    Console.writeLine(path.indexOf("users") ?? 99);
+    Console.writeLine(path.lastIndexOf("/") ?? 99);
+    Console.writeLine(path.startsWith(""));
+    Console.writeLine(path.startsWith("/é"));
+    Console.writeLine(v.startsWith("-922"));
+    match (path.splitOnce("api/")) {
+        Some(h) => { Console.writeLine(StringView.fromUtf8(h.right) ?? "?"); }
+        null => { Console.writeLine("none"); }
+    }
+    var parts = path.split("/");
+    loop {
+        match (parts.next()) {
+            Some(p) => { Console.writeLine(p.length); }
+            null => { break; }
+        }
+    }
+    // a Slice<u8> needle as before
+    Console.writeLine(path.startsWith("/api".bytes()));
+}
+// expect-stdout: -9223372036854775808 0 18446744073709551615 8080
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: 4
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: users
+// expect-stdout: 0
+// expect-stdout: 3
+// expect-stdout: 5
+// expect-stdout: true

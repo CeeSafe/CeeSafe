@@ -83,6 +83,11 @@ An integer literal takes its type from where it is used. In `let year: u16 = 202
 hex, binary and octal (`0xFF`, `0b1010`, `0o17`), with `_` between digits. A value that does not fit its type is a
 compile error.
 
+The elements of an array literal follow the same rule: an expected array or slice type gives them their type
+(`let a: [u64; 2] = [1, 2];`, `sum([1, 2][..])` for a `Slice<u64>` parameter), and otherwise the first element
+does. `let a = [0, 2, 3];` is an `[i32; 3]` however `a` is used later, as `let x = 1;` is an `i32`: write the type,
+or a suffix on the first element, `[0i64, 2, 3]`.
+
 A character literal is the character's Unicode value, typed like any other literal:
 
 ```ceesafe
@@ -296,6 +301,12 @@ fn main() {
 ```
 
 A constant is evaluated at compile time. An overflow there is a compile error rather than a run-time stop.
+
+A constant may be an array of numbers (floats included), bools, text or plain structs: `const LIMITS: [f64; 3] =
+[1.0, 60.0, 3600.0];`. A use of a constant is its value, a copy; a table that a function returns as a slice is a
+`static`, which has one address: `static NAMES: [StringView; 2] = ["cid", "name"];` and
+`fn names() -> Slice<static, StringView> => NAMES[..];`. A slice of an array literal cannot be returned, since the
+literal is a temporary.
 
 A constant may be text, and in a constant or a static `+` joins constant text, so a prefix is written once:
 

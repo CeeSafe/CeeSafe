@@ -51,6 +51,9 @@ fn checkResourceFunction(
     } else if (owner == builtinFile() && sameText(text, "openRegular")) {
         function = bfFileOpenRegular(); // ADR 0078 §3
         ok = c.types.file;
+    } else if (owner == builtinFile() && sameText(text, "createReadWrite")) {
+        function = bfFileCreateReadWrite(); // ADR 0221 §2.1
+        ok = c.types.file;
     } else if (owner == builtinFile() && sameText(text, "remove")) {
         function = bfFileRemove();
         ok = c.types.voidType;
@@ -126,6 +129,9 @@ fn resourceUsage(function: u32) -> StringView {
     if (function == bfFileOpenRegular()) {
         return "File.openRegular(path)";
     }
+    if (function == bfFileCreateReadWrite()) {
+        return "File.createReadWrite(path)";
+    }
     if (function == bfTcpListen()) {
         return "TcpListener.bind(address, port)";
     }
@@ -165,7 +171,14 @@ fn checkResourceMethod(
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
     if (isFile && (sameText(text, "modified") || sameText(text, "kind")) && !c.freestanding) {
-        return checkFileMetadata(c, member, arguments, resource, targetSpan, span);
+        return checkFileMetadata(c, "FileMetadata", member, arguments, resource, targetSpan, span);
+    }
+    if (isFile && (sameText(text, "lock") || sameText(text, "tryLock") || sameText(text, "unlock")) &&
+        !c.freestanding) {
+        return checkFileMetadata(c, "FileLocks", member, arguments, resource, targetSpan, span); // ADR 0220
+    }
+    if (isFile && sameText(text, "mapShared") && !c.freestanding) {
+        return checkFileMetadata(c, "SharedMapping", member, arguments, resource, targetSpan, span); // ADR 0232
     }
     var function = none();
     var arity: u32 = 0;
@@ -304,9 +317,12 @@ fn checkResourceMethod(
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }
 
-/// `f.modified()` and `f.kind()` (ADR 0078 §3): lib/std's FileMetadata function of that name, called with `f` borrowed.
+/// `f.modified()` and `f.kind()` (ADR 0078 §3), `f.lock(…)`, `f.tryLock(…)` and `f.unlock(…)` (ADR 0220),
+/// `f.mapShared(…)` (ADR 0232): lib/std's function of that name in `owner` (FileMetadata, FileLocks, SharedMapping),
+/// called with `f` borrowed and the call's arguments.
 fn checkFileMetadata(
     c: borrow mut Checker,
+    owner: StringView,
     member: u32,
     arguments: Range,
     resource: u32,
@@ -315,7 +331,7 @@ fn checkFileMetadata(
 ) -> Result<u32, AllocError> {
     let symbol = c.front.ast.idents[member as usize].symbol;
     let none0 = Vector<u32>.create();
-    let function = libraryFunction(c, "FileMetadata", none0.view(), symbol, span)?;
+    let function = libraryFunction(c, owner, none0.view(), symbol, span)?;
     if (function == none()) {
         c.notPorted(span.start, span.end, "this file method", "S5")?;
         checkArgumentsLoosely(c, arguments)?;
@@ -364,8 +380,10 @@ fn checkIoErrorMessage(c: borrow mut Checker, receiver: u32, span: Span) -> Resu
 fn integerMethodNames() -> StringView =>
     "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul mulHigh min max abs unsignedAbs rotateLeft rotateRight wrappingShl wrappingShr leadingZeros trailingZeros countOnes byteSwap";
 
-/// The names of the built-in methods of a float value (FloatMethod, §35.5, §35.8), as integerMethodNames.
-fn floatMethodNames() -> StringView => "bits sqrt abs floor ceil min max";
+/// The names of the built-in methods of a float value (FloatMethod, §35.5, §35.8), as integerMethodNames: the
+/// first seven, then ADR 0218's in the order of their builtins (bfFloatExp …).
+fn floatMethodNames() -> StringView =>
+    "bits sqrt abs floor ceil min max exp exp2 expM1 ln log2 log10 ln1p sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh cbrt logB pow atan2 hypot remainder truncatingRemainder fma scaleB trunc round roundEven copySign";
 
 /// Which word of `names` (words separated by one space) `name` is, counting from 0, or none.
 fn wordIndex(names: StringView, name: Slice<u8>) -> u32 {
@@ -433,7 +451,23 @@ fn floatMethod(name: Slice<u8>) -> u32 {
         bfFloatMin(),
         bfFloatMax(),
     ];
+    if (index >= 7) {
+        return bfFloatExp() + (index - 7); // ADR 0218's, in their builtins' order
+    }
     return functions[index as usize];
+}
+
+/// How many arguments a float method takes (§35.8, ADR 0218): `fma` two, `min`, `max`, `scaleB` and the other
+/// methods of two operands one, the rest none.
+fn floatMethodArity(function: u32) -> u32 {
+    if (function == bfFloatFma()) {
+        return 2;
+    }
+    if (function == bfFloatMin() || function == bfFloatMax() || function == bfFloatScaleB() ||
+        function == bfFloatCopySign() || (function >= bfFloatPow() && function <= bfFloatTruncatingRemainder())) {
+        return 1;
+    }
+    return 0;
 }
 
 /// `x.wrappingAdd(y)`, `x.min(y)` and the rest (CheckIntegerMethod): one argument of the receiver's type; never panics.
@@ -517,9 +551,10 @@ fn checkIntegerAbs(
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }
 
-/// `x.rotateLeft(n)` … `x.byteSwap()` (ADR 0071 §2.3). Every one but `byteSwap` needs an unsigned receiver, as the bit
-/// operators do (§6). Rotations and the masking shifts take a `u32` amount, taken modulo the width; the counts are
-/// `u32`. None of them panics.
+/// `x.rotateLeft(n)` … `x.byteSwap()` (ADR 0071 §2.3). Every one but `byteSwap` and the masking shifts needs an
+/// unsigned receiver, as the bit operators do (§6); `wrappingShl` and `wrappingShr` take a signed one too, where the
+/// right shift is arithmetic (ADR 0223). Rotations and the masking shifts take a `u32` amount, taken modulo the width;
+/// the counts are `u32`. None of them panics.
 fn checkIntegerBits(
     c: borrow mut Checker,
     member: u32,
@@ -529,7 +564,8 @@ fn checkIntegerBits(
     span: Span,
 ) -> Result<u32, AllocError> {
     let typ = c.typeOf(receiver);
-    if (function != bfIntByteSwap() && c.types.info(typ).signed) {
+    let anySign = function == bfIntByteSwap() || function == bfIntWrappingShl() || function == bfIntWrappingShr();
+    if (!anySign && c.types.info(typ).signed) {
         var message = Vector<u8>.create();
         appendText(mut message, "type ")?;
         appendQuotedType(mut message, c, typ)?;
@@ -537,7 +573,7 @@ fn checkIntegerBits(
         appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
         appendText(
             mut message,
-            ": bit operations are on unsigned types; reinterpret with 'truncate<u32>(x)' (ADR 0071 §2.3)",
+            ": bit operations are on unsigned types; reinterpret with 'truncate<u32>(x)' (ADR 0071 §2.3), or shift with 'x.wrappingShl(n)' and 'x.wrappingShr(n)' (ADR 0223)",
         )?;
         c.error(notAStruct(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -578,12 +614,26 @@ fn checkFloatMethod(
     function: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let binary = function == bfFloatMin() || function == bfFloatMax();
-    if (arguments.count != (if (binary) 1u32 else 0u32)) {
+    let arity = floatMethodArity(function);
+    if (arguments.count != arity) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
-        appendText(mut message, if (binary) " takes one argument" else " takes no arguments")?;
+        appendText(
+            mut message,
+            if (arity == 2) " takes two arguments"
+                else if (arity == 1) " takes one argument"
+                else " takes no arguments",
+        )?;
         c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (isLibmBuiltin(function) && c.freestanding) {
+        // The C library's math functions (ADR 0218 §2.4): CosmoOS has no libm.
+        var what = Vector<u8>.create();
+        appendQuotedName(mut what, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(mut what, ", a C library math function,")?;
+        hostedOnly(c, span, what.view())?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -594,17 +644,19 @@ fn checkFloatMethod(
         let list = c.hir.list(values[..])?;
         return c.expr(HirExpr.BuiltinCall(function, list), bitsType, span.start, span.end);
     }
-    if (!binary) {
-        let values = [receiver];
-        let list = c.hir.list(values[..])?;
-        return c.expr(HirExpr.BuiltinCall(function, list), typ, span.start, span.end);
+    var values = Vector<u32>.create();
+    values.push(receiver)?;
+    for (k in 0..arity) {
+        // `scaleB`'s power of two is an `i32`, as C's scalbn takes an int; every other operand has `x`'s type, so a
+        // flexible literal takes it.
+        let expected = if (function == bfFloatScaleB()) c.types.i32 else typ;
+        let otherSyntax = c.front.ast.at(arguments, k);
+        let other = checkExpr(c, otherSyntax, expected)?;
+        if (c.isBottom(other)) {
+            return c.errorResult(span.start, span.end);
+        }
+        values.push(other)?;
     }
-    let otherSyntax = c.front.ast.at(arguments, 0);
-    let other = checkExpr(c, otherSyntax, typ)?;
-    if (c.isBottom(other)) {
-        return c.errorResult(span.start, span.end);
-    }
-    let values = [receiver, other];
-    let list = c.hir.list(values[..])?;
+    let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), typ, span.start, span.end);
 }

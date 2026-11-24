@@ -479,8 +479,9 @@ fn addCloseTypeName(
     }
     let visible = match (c.front.symbols.find(candidate)) {
         Some(s) => match (c.item(s.id)) {
-            Entity.Struct(_) => true,
-            Entity.Enum(_) => true,
+            // Not another file's private type (ADR 0230), which this file cannot name.
+            Entity.Struct(k) => isNameableHere(c, Entity.Struct(k)),
+            Entity.Enum(k) => isNameableHere(c, Entity.Enum(k)),
             _ => false,
         },
         null => false,

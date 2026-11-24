@@ -19,13 +19,17 @@ fn checkThreadSpawn(
     if (sameText(c.name(memberIdent.symbol), "service")) {
         return checkThreadService(c, member, arguments, span);
     }
+    if ((sameText(c.name(memberIdent.symbol), "sleep") || sameText(c.name(memberIdent.symbol), "cpuCount")) &&
+        !c.freestanding) {
+        return checkLibraryService(c, "ThreadServices", member, arguments, span); // ADR 0222 §2.1, ADR 0237 §2.1
+    }
     if (!sameText(c.name(memberIdent.symbol), "spawn")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'Thread' has no function ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
         appendText(
             mut message,
-            "; use 'Thread.spawn(move () => …)', 'Thread.service(name, move () => …)' or 'Thread.both(() => …, () => …)'",
+            "; use 'Thread.spawn(move () => …)', 'Thread.service(name, move () => …)', 'Thread.both(() => …, () => …)', 'Thread.sleep(ms)' or 'Thread.cpuCount()'",
         )?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -342,6 +346,7 @@ fn checkThreadBoth(c: borrow mut Checker, arguments: Range, span: Span) -> Resul
 }
 
 /// `t.join()` (CheckThreadMethod, §38.2): consumes the thread, waits for it, and gives its body's result.
+/// `t.isFinished()` (ADR 0222 §2.3) borrows it and never waits.
 fn checkThreadMethod(
     c: borrow mut Checker,
     member: u32,
@@ -351,10 +356,21 @@ fn checkThreadMethod(
 ) -> Result<u32, AllocError> {
     let memberIdent = c.front.ast.idents[member as usize];
     let threadType = c.typeOf(thread);
+    if (sameText(c.name(memberIdent.symbol), "isFinished") && arguments.count == 0) {
+        let threadSpan = c.spanOf(thread);
+        let borrowed = borrowReceiver(c, thread, false, threadSpan)?;
+        if (c.isBottom(borrowed)) {
+            return c.errorResult(span.start, span.end);
+        }
+        let boolType = c.types.boolType;
+        let borrowedValues = [borrowed];
+        let borrowedList = c.hir.list(borrowedValues[..])?;
+        return c.expr(HirExpr.BuiltinCall(bfThreadFinished(), borrowedList), boolType, span.start, span.end);
+    }
     if (!sameText(c.name(memberIdent.symbol), "join") || arguments.count != 0) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, threadType)?;
-        appendText(mut message, " has only 'join()' (type-system.md §38.2)")?;
+        appendText(mut message, " has only 'join()' and 'isFinished()' (type-system.md §38.2)")?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);

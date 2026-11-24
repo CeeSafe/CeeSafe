@@ -32,6 +32,15 @@ struct ImplMethod {
     typ: u32;
     name: u32; // a symbol
     function: u32;
+    interfaceEntry: u32; // the impl's interface (Checker.interfaces); none for an inherent block's or an enum's function
+}
+
+/// The interface a bound gave a method call in generic code (ADR 0229 §2.2): an instance of the code, where the
+/// receiver is a type with methods of the name from several interfaces, calls the method of this one.
+struct BoundCall {
+    file: u32;
+    start: u32; // the method name's position
+    interfaceEntry: u32;
 }
 
 /// A bound's method declared for a type parameter (the reference's _boundMethods).
@@ -86,7 +95,7 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
     }
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(ident.symbol))?;
-    if (c.types.lookup(text.view()) != none() || isDeclared(c, ident.symbol)) {
+    if (c.types.lookup(text.view()) != none() || isDeclaredAs(c, ident.symbol, isPrivateVisibility(entry.visibility))) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, text.view())?;
@@ -785,7 +794,7 @@ fn openMethodFor(
         reported = diagnosticsMark(c) != mark;
         return Ok(none());
     }
-    return Ok(implMethodFor(c, typ, name));
+    return Ok(implMethodIn(c, typ, name, original.interfaceEntry));
 }
 
 /// A generic impl (ADR 0054): its target names the impl's type parameters.
@@ -1110,7 +1119,9 @@ fn implementFor(
             implEnvironment,
             false,
         )? else declareFunctionIn(c, f, forType, implEnvironment)?;
-        if (implMethodFor(c, forType, id.symbol) != none() || containsU32(implemented, id.symbol)) {
+        // Another interface's method of the name is no clash (ADR 0229 §2.1); the type's own, or this interface's
+        // for another argument list (ADR 0165 §7), is.
+        if (clashingImplMethod(c, forType, id.symbol, interfaceEntry) || containsU32(implemented, id.symbol)) {
             var message = Vector<u8>.create();
             appendQuotedType(mut message, c, forType)?;
             appendText(mut message, " already has a method named ")?;
@@ -1118,7 +1129,7 @@ fn implementFor(
             c.error(duplicateMember(), id.start, id.end, message)?;
             continue;
         }
-        c.implMethods.push(ImplMethod { typ: forType, name: id.symbol, function: hir })?;
+        addImplMethod(c, forType, id.symbol, hir, interfaceEntry)?;
         implemented.push(id.symbol)?;
         var problem = Vector<u8>.create();
         let ownCount = c.front.ast.functions[signature as usize].typeParameters.count;
@@ -1216,17 +1227,20 @@ fn inheritDefault(
     span: Span,
 ) -> Result<void, AllocError> {
     let name = c.front.ast.idents[c.front.ast.functions[method as usize].name as usize].symbol;
-    if (implMethodFor(c, forType, name) != none() || ownsFunctionNamed(c, forType, name)) {
+    let interfaceEntry = c.types.bounds[bound as usize].interfaceEntry;
+    if (clashingImplMethod(c, forType, name, interfaceEntry) || ownsFunctionNamed(c, forType, name)) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, forType)?;
         appendText(mut message, " already has a method named ")?;
         appendQuotedName(mut message, c, name)?;
         appendText(mut message, ", which the impl would inherit as the default of ")?;
         quotedBound(mut message, c, bound)?;
-        appendText(mut message, ": a type has one method of each name (ADR 0086 §2.1)")?;
+        appendText(
+            mut message,
+            ": a type's own methods and an interface's do not share a name (ADR 0086 §2.1, ADR 0229)",
+        )?;
         return c.error(duplicateMember(), span.start, span.end, message);
     }
-    let interfaceEntry = c.types.bounds[bound as usize].interfaceEntry;
     let savedFile = c.file;
     {
         let fileToSet = c.interfaces[interfaceEntry as usize].file;
@@ -1247,7 +1261,7 @@ fn inheritDefault(
     c.hir.functions[function as usize].siteFile = savedFile;
     c.hir.functions[function as usize].siteStart = span.start;
     c.hir.functions[function as usize].siteEnd = span.end;
-    return c.implMethods.push(ImplMethod { typ: forType, name: name, function: function });
+    return addImplMethod(c, forType, name, function, interfaceEntry);
 }
 
 /// `Self` in an interface's defaults (ADR 0086 §2.1): a type parameter bounded by the interface, with its own
@@ -1503,8 +1517,8 @@ fn verifyUserAllocator(c: borrow mut Checker, typ: u32, span: Span) -> Result<bo
         let bound = c.types.addBound(entry, "Allocator".bytes(), noArguments.view())?;
         let allocateName = c.intern("allocate")?;
         let deallocateName = c.intern("deallocate")?;
-        let allocate = implMethodFor(c, typ, allocateName);
-        let deallocate = implMethodFor(c, typ, deallocateName);
+        let allocate = implMethodIn(c, typ, allocateName, entry);
+        let deallocate = implMethodIn(c, typ, deallocateName, entry);
         if (implements(c, typ, bound) && allocate != none() && deallocate != none()) {
             c.types.structs[definition as usize].allocateMethod = allocate;
             c.types.structs[definition as usize].deallocateMethod = deallocate;
@@ -1522,23 +1536,46 @@ fn verifyUserAllocator(c: borrow mut Checker, typ: u32, span: Span) -> Result<bo
 
 /// The methods a value of `typ` has (FindMethod, §21): its own, those of its impls, or for a type parameter, its
 /// bounds'. None if there is none of that name; reports an ambiguous bound.
-fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<u32, AllocError> {
+fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<u32, AllocError> =>
+    findMethodVia(c, typ, name, span, none());
+
+/// findMethod, or with `via` (an interface's entry) the method that interface declares (ADR 0229 §2.3): not the
+/// type's own, and through a bound or `dyn` only that interface's.
+fn findMethodVia(c: borrow mut Checker, typ: u32, name: u32, span: Span, via: u32) -> Result<u32, AllocError> {
     completeMembers(c, typ, span)?; // an instance whose functions waited for a use (lazy_instances.cee)
     let definition = c.types.info(typ).structDef;
-    if (definition != none()) {
+    if (definition != none() && via == none()) {
         let ownBound = findStructFunction(c, definition, name);
         if (ownBound != none()) {
             checkMethodVisible(c, ownBound, span)?;
             return Ok(ownBound);
         }
     }
-    let implemented = implMethodFor(c, typ, name);
+    // Several interfaces may give the type a method of the name (ADR 0229 §2.2).
+    var implemented = none();
+    if (via != none()) {
+        implemented = implMethodIn(c, typ, name, via);
+    } else {
+        let choice = chooseImplMethod(c, typ, name, span)?;
+        if (choice.first != none()) {
+            reportAmbiguousMethod(c, typ, name, choice, span)?;
+        }
+        implemented = choice.function;
+    }
     if (implemented != none()) {
         checkEnumMethodVisible(c, implemented, span)?; // a function of an enum's own (ADR 0107)
         checkMethodPrivate(c, implemented, span)?;     // and private to its block's file (ADR 0109)
         return Ok(implemented);
     }
     if (c.types.isDyn(typ)) {
+        let dynBound = c.types.info(typ).dynInterface;
+        if (via != none() && (dynBound == none() || !interfaceReaches(
+            c,
+            c.types.bounds[dynBound as usize].interfaceEntry,
+            via,
+        ))) {
+            return Ok(none());
+        }
         return dynMethod(c, typ, name);
     }
     if (!c.types.is(typ, TypeKind.TypeParameter)) {
@@ -1548,7 +1585,7 @@ fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<
     var signatures = Vector<u32>.create();
     for (bound in c.types.typeParameters[c.types.info(typ).typeParameter as usize].bounds.view()) {
         let signature = interfaceMethod(c, c.types.bounds[bound as usize].interfaceEntry, name);
-        if (signature != none()) {
+        if (signature != none() && (via == none() || c.types.bounds[bound as usize].interfaceEntry == via)) {
             candidates.push(bound)?;
             signatures.push(signature)?;
         }
@@ -1560,7 +1597,11 @@ fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<
         quotedBound(mut message, c, candidates[0])?;
         appendText(mut message, " and ")?;
         quotedBound(mut message, c, candidates[1])?;
-        appendText(mut message, " declare it")?;
+        appendText(mut message, " declare it; name the interface: '")?;
+        appendBytes(mut message, c.types.rangeText(c.types.bounds[candidates[0] as usize].name))?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(name))?;
+        appendText(mut message, "(value, …)' (type-system.md §21.4)")?;
         c.error(implMismatch(), span.start, span.end, message)?;
     }
     if (candidates.length == 0) {
@@ -1568,6 +1609,8 @@ fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<
     }
     let bound = candidates[0];
     let b = c.types.bounds[bound as usize];
+    // An instance of this code, whose type may have methods of the name from several interfaces, calls this one's.
+    c.boundCalls.push(BoundCall { file: c.file, start: span.start, interfaceEntry: b.interfaceEntry })?;
     for (m in c.boundMethods.view()) {
         if (m.typ == typ && m.name == name && c.types.bounds[m.bound as usize].interfaceEntry == b.interfaceEntry &&
             sameLists(c, c.types.bounds[m.bound as usize].arguments, b.arguments)) {

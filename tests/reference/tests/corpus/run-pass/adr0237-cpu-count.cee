@@ -1,0 +1,8 @@
+// Thread.cpuCount() (ADR 0237 §2.1): at least 1, and the same when asked again (the interpreter answers 1).
+fn main() {
+    let n = Thread.cpuCount();
+    Console.writeLine(n >= 1 && n <= 65536);
+    Console.writeLine(Thread.cpuCount() == n);
+}
+// expect-stdout: true
+// expect-stdout: true

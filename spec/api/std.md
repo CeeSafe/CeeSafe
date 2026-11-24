@@ -44,6 +44,7 @@
 - [struct Snappy](#struct-snappy)
 - [struct Zstd](#struct-zstd)
 - [struct ZstdDecoder](#struct-zstddecoder)
+- [struct ZstdEncoder](#struct-zstdencoder)
 - [struct TextAppend](#struct-textappend)
 - [struct TextAppender](#struct-textappender)
 - [struct ByteAppend](#struct-byteappend)
@@ -66,11 +67,15 @@
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
 - [struct FileMetadata](#struct-filemetadata)
+- [enum FileLock](#enum-filelock)
+- [struct FileLocks](#struct-filelocks)
+- [enum ConsoleStream](#enum-consolestream)
 - [struct UnixTime](#struct-unixtime)
 - [struct Clock](#struct-clock)
 - [struct Random](#struct-random)
 - [struct IsolationReport](#struct-isolationreport)
 - [struct Isolation](#struct-isolation)
+- [struct SharedMapping](#struct-sharedmapping)
 - [enum SocketAddress](#enum-socketaddress)
 - [interface SocketEndpoint](#interface-socketendpoint)
 - [struct SocketAddresses](#struct-socketaddresses)
@@ -86,6 +91,7 @@
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
 - [struct SharedMemory](#struct-sharedmemory)
+- [struct ThreadServices](#struct-threadservices)
 - [struct Mutex](#struct-mutex)
 - [struct MutexGuard](#struct-mutexguard)
 - [struct Arc](#struct-arc)
@@ -1164,6 +1170,17 @@ public fn recv(borrow this) -> T?
 The next value, waiting while the channel is empty; `null` once it is closed and empty.
 Safety: a slot from begin_recv is the channel's, under its lock until end_recv, and holds a value.
 
+### Channel.recvTimeout
+
+```ceesafe
+public fn recvTimeout(borrow this, ms: u64) -> Result<T?, AsyncError>
+```
+
+The next value, waiting at most `ms` milliseconds on the monotonic clock (ADR 0222 §2.2): `Ok(Some(v))`, or
+`Ok(null)` once the channel is closed and empty, as `recv`; `Err(AsyncError.TimedOut)` if neither came in
+time. A buffered value is taken even when `ms` is 0. The thread blocks meanwhile; it does not spin.
+Safety: as `recv`.
+
 ### Channel.sendAsync
 
 ```ceesafe
@@ -2163,9 +2180,9 @@ public struct Zstd
 ```
 
 Zstandard's frame format (RFC 8878) in whole buffers: Parquet's `ZSTD` pages (PyIceberg's default, and Iceberg's
-since 1.4) and Avro's `zstandard` blocks. Decoding only: there is no encoder yet (ADR 0196, phase 4).
+since 1.4) and Avro's `zstandard` blocks. `ZstdDecoder` and `ZstdEncoder` stream.
 
-No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time.
+No input panics the decoder: every refusal is a `DecodeError`. Neither direction is constant time.
 
 ### Zstd.decompress
 
@@ -2180,6 +2197,23 @@ whose window is above 2 GiB is `TooLarge`, and so is one whose stated content si
 leaves, before anything is allocated (`out` grows to the stated size at once, or as blocks need it if no size
 is stated). Output that disagrees with the stated size, or a content size no frame of its length could
 produce, is `Malformed`; a wrong checksum is `ChecksumMismatch`. On an error, `out` is as it was.
+
+### Zstd.compress
+
+```ceesafe
+public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Compresses all of `input` as one frame onto the end of `out`, at `level`: libzstd's levels 1 to 9, in meaning
+and parameters (its `clevels.h`, for the input's size); 0 is its default, 3, and a level above 9 is 9. The
+frame states the content size and has no checksum (`ZstdEncoder` writes one). Its window is the input's size,
+or the level's if that is smaller (512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8, 4 MiB at 9). Memory is the
+level's tables, cut to the input's size, and a block's scratch: about 1.5 MiB for 1 MiB at level 3, 0.3 MiB for
+16 KiB; the input is read where it is. Any zstd decoder reads the frame; it is not libzstd's byte for byte. On
+an error, `out` is as it was.
+
+Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with
+bytes an attacker chooses.
 
 ## struct ZstdDecoder
 
@@ -2225,6 +2259,63 @@ public fn step(borrow mut this, input: Slice<u8>, out: SliceMut<u8>) -> Result<P
 Decodes from `input` into `out` until the input is used up, `out` is full, or a frame ends (`done`). Input it
 reads but cannot use yet (part of a header or of a compressed block) it keeps, so the next step continues with
 the bytes after `read`.
+
+## struct ZstdEncoder
+
+```ceesafe
+public struct ZstdEncoder
+```
+
+A Zstandard encoder that streams (RFC 8878): `update` appends the blocks its input completes and keeps the rest,
+`flush` writes what it holds as blocks, so a decoder given the output so far decodes all of the input so far
+(libzstd's ZSTD_e_flush), and `finish` ends the frame with its last block and, if asked for, its checksum. After
+`finish` the next `update` begins a new frame. A frame states its window and not its content size.
+
+Levels are libzstd's in meaning and parameters, 1 to 9 (its `clevels.h` for inputs of unknown size): 0 is its
+default, 3, and a level above 9 is 9. The window is 512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8 and 4 MiB at 9.
+`create` allocates the level's tables and a block's scratch, about 0.8 MiB at level 1, 1.5 MiB at 3 and 12.8 MiB at
+9; the input is held in a buffer that grows as it comes, to twice the window. Nothing else is allocated but `out`.
+After an `AllocError` the frame being written cannot be finished: start a new encoder. The output is not libzstd's
+byte for byte, and any zstd decoder reads it.
+
+Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with bytes an
+attacker chooses.
+
+### ZstdEncoder.create
+
+```ceesafe
+@effects(alloc)
+public fn create(level: u32, checksum: bool) -> Result<ZstdEncoder, AllocError>
+```
+
+An encoder at `level` that ends each frame with its XXH64 checksum if `checksum`.
+
+### ZstdEncoder.update
+
+```ceesafe
+@effects(alloc)
+public fn update(borrow mut this, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes `input`, appending to `out` the blocks it completes.
+
+### ZstdEncoder.flush
+
+```ceesafe
+@effects(alloc)
+public fn flush(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes everything given so far as blocks, so a decoder given the output so far decodes all of it.
+
+### ZstdEncoder.finish
+
+```ceesafe
+@effects(alloc)
+public fn finish(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError>
+```
+
+Encodes the rest, ends the frame with its last block and checksum, and makes ready for a new frame.
 
 ## struct TextAppend
 
@@ -2868,6 +2959,17 @@ public fn flush()
 killed. Standard error is never buffered.
 Safety: the runtime only flushes the C library's standard output.
 
+### HostServices.isTerminal
+
+```ceesafe
+public fn isTerminal(stream: ConsoleStream) -> bool
+```
+
+`Console.isTerminal(stream)` (ADR 0221 §2.3): whether the standard stream is a terminal a person types at or
+reads (`isatty`; on Windows a console, by `GetConsoleMode`, so `NUL` is not one). A pipe, a file or a closed
+stream is `false`.
+Safety: the runtime only asks the system.
+
 ### HostServices.readLine
 
 ```ceesafe
@@ -2946,6 +3048,72 @@ public fn kind(file: borrow File) -> Result<PathKind, IoError>
 `f.kind()`: what the open file is. A directory opened for reading is `Directory`; a device, FIFO or socket is
 `Other`.
 Safety: the runtime reads the file's descriptor during the call only.
+
+## enum FileLock
+
+```ceesafe
+public enum FileLock {
+    Shared,
+    Exclusive,
+}
+```
+
+The kind of an advisory lock on bytes of a file (ADR 0220).
+
+## struct FileLocks
+
+```ceesafe
+public struct FileLocks
+```
+
+Advisory locks on byte ranges of an open file (ADR 0220): POSIX `fcntl` record locks, the ones SQLite and other
+programs take, owned by the open `File` where the system has open-file-description locks (Linux, macOS), else by
+the process; `LockFileEx` on Windows. `f.lock(kind, start, length)`, `f.tryLock(…)` and `f.unlock(start, length)`
+are the checker's names for FileLocks.lock(f, …) and the rest. Dropping the `File` releases its locks.
+Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked (Windows neither
+converts nor splits a lock; POSIX does both).
+
+### FileLocks.lock
+
+```ceesafe
+public fn lock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<void, IoError>
+```
+
+`f.lock(kind, start, length)`: waits until bytes `start` to `start + length - 1` are locked. A range may lie
+past the end of the file. `InvalidInput` for `length` 0 or a range that ends past 2^63 - 1; `BadDescriptor`
+on POSIX for a shared lock on a file not open for reading, or an exclusive one on a file not open for writing.
+Safety: the runtime reads the file's descriptor during the call only.
+
+### FileLocks.tryLock
+
+```ceesafe
+public fn tryLock(file: borrow File, kind: FileLock, start: u64, length: u64) -> Result<bool, IoError>
+```
+
+`f.tryLock(kind, start, length)`: as `lock`, but never waits: `Ok(true)` if the lock was taken, `Ok(false)`
+if another holder's lock conflicts.
+Safety: as `lock`.
+
+### FileLocks.unlock
+
+```ceesafe
+public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError>
+```
+
+`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+Safety: as `lock`.
+
+## enum ConsoleStream
+
+```ceesafe
+public enum ConsoleStream {
+    Input,
+    Output,
+    Error,
+}
+```
+
+A standard stream, for `Console.isTerminal` (ADR 0221 §2.3).
 
 ## struct UnixTime
 
@@ -3086,6 +3254,190 @@ Has each crash of `set`'s isolated children put in `crashes` from now, without w
 fit is counted (`set.missedCrashes()`). The set keeps a handle of the channel until it ends. False if there
 is no memory for it.
 Safety: the runtime takes a count of the channel, which it gives back when the set ends.
+
+## struct SharedMapping
+
+```ceesafe
+@noncopy
+public struct SharedMapping {
+    drop { … }
+}
+```
+
+A region of a file mapped shared (ADR 0232): what one mapping writes, every other mapping of those bytes sees,
+in this process and in others, and so does a read of the file. SQLite's wal-index (`<database>-shm`) is one.
+
+```
+let shm = File.openOrCreate("db-shm")?;
+let region = shm.mapShared(0, 32768)?;          // SharedMapping.mapShared(shm, 0, 32768)
+var header = [0u8; 48];
+region.readAt(0, mut header[..]);              // a copy out
+SharedMapping.fence();
+let _ = region.compareExchange32(100, 0, 1, Ordering.AcquireRelease);
+```
+
+Another process may write the memory at any moment, so it is never a slice: bytes are copied out and in, and
+integers are read and written as atomics, between processes too. An access out of the mapping's bounds, or an
+atomic not aligned to its size in the file, panics. The value is Send and Share; dropping it unmaps the region
+(the `File` may be dropped before). A program that needs more of the file maps another region, as SQLite maps
+32 KiB at a time. Natively, a file shortened by someone else while it is mapped ends the program by `SIGBUS` at
+the next access to a page past the new end (§2.3 of the ADR). Hosted, on Linux, macOS, the BSDs, Android and
+Windows; under `ceesafec run --interp` it is modelled by reads and writes of the file, whose atomics are not
+atomic against another process.
+
+### SharedMapping.mapShared
+
+```ceesafe
+public fn mapShared(file: borrow File, offset: u64, length: usize) -> Result<SharedMapping, IoError>
+```
+
+`f.mapShared(offset, length)`: maps bytes `offset` to `offset + length - 1` of `file`, shared, for reading and
+writing; a shorter file is first extended with zero bytes (never shortened). `InvalidInput` for `length` 0 or a
+range that ends past 2^63 - 1; `BadDescriptor` for a file not open for reading and writing.
+Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
+
+### SharedMapping.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### SharedMapping.offset
+
+```ceesafe
+public fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### SharedMapping.readAt
+
+```ceesafe
+public fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+it. Panics if the bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### SharedMapping.writeAt
+
+```ceesafe
+public fn writeAt(borrow this, at: usize, bytes: Slice<u8>)
+```
+
+Copies `bytes` to byte `at` of the region. Panics if they do not all fit inside it.
+Safety: as readAt; the runtime reads `bytes` only.
+
+### SharedMapping.load32
+
+```ceesafe
+public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+inside the region or `offset() + at` is not a multiple of 4.
+Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+
+### SharedMapping.store32
+
+```ceesafe
+public fn store32(borrow this, at: usize, value: u32, order: StoreOrdering)
+```
+
+Stores `value` at byte `at` atomically with `order` (AtomicU32.storeWith). Panics as load32.
+Safety: as load32.
+
+### SharedMapping.compareExchange32
+
+```ceesafe
+public fn compareExchange32(
+    borrow this,
+    at: usize,
+    expected: u32,
+    desired: u32,
+    order: Ordering,
+) -> Result<u32, u32>
+```
+
+Ok(the old value) if the u32 at byte `at` was `expected` and is now `desired`; else Err(the value it has),
+atomically between processes, with `order` (AtomicU32.compareExchangeWith). Panics as load32.
+Safety: as load32.
+
+### SharedMapping.fetchAdd32
+
+```ceesafe
+public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32
+```
+
+Adds `value` to the u32 at byte `at`, wrapping, atomically with `order`; the value before. Panics as load32.
+Safety: as load32.
+
+### SharedMapping.load64
+
+```ceesafe
+public fn load64(borrow this, at: usize, order: LoadOrdering) -> u64
+```
+
+The u64 at byte `at`, as load32 (AtomicU64.loadWith). Panics if its eight bytes are not inside the region or
+`offset() + at` is not a multiple of 8.
+Safety: as load32.
+
+### SharedMapping.store64
+
+```ceesafe
+public fn store64(borrow this, at: usize, value: u64, order: StoreOrdering)
+```
+
+Stores the u64 `value` at byte `at`, as store32. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.compareExchange64
+
+```ceesafe
+public fn compareExchange64(
+    borrow this,
+    at: usize,
+    expected: u64,
+    desired: u64,
+    order: Ordering,
+) -> Result<u64, u64>
+```
+
+compareExchange32 for the u64 at byte `at`. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.fetchAdd64
+
+```ceesafe
+public fn fetchAdd64(borrow this, at: usize, value: u64, order: Ordering) -> u64
+```
+
+fetchAdd32 for the u64 at byte `at`. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.fence
+
+```ceesafe
+public fn fence()
+```
+
+A sequentially consistent fence (SQLite's unixShmBarrier): every copy and atomic before it is ordered before
+every one after it.
+Safety: the runtime only orders memory.
+
+### SharedMapping.sync
+
+```ceesafe
+public fn sync(borrow this) -> Result<void, IoError>
+```
+
+Writes the region's changed pages to the file and waits for them (`msync`); on Windows `FlushViewOfFile`, after
+which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
+Safety: the runtime is given what it mapped.
 
 ## enum SocketAddress
 
@@ -3622,6 +3974,36 @@ public fn address(borrow this) -> *mut u8
 The mapping's address, for code with a layout and a protocol of its own. Reading or writing through it is
 `unsafe`: another process may write the same bytes at any moment.
 
+## struct ThreadServices
+
+```ceesafe
+public struct ThreadServices
+```
+
+Thread services that are not a thread's own (ADR 0222): `Thread.sleep(ms)` is the checker's name for
+ThreadServices.sleep(ms), as `Console.flush()` is HostServices.flush().
+
+### ThreadServices.sleep
+
+```ceesafe
+public fn sleep(ms: u64)
+```
+
+`Thread.sleep(ms)`: the calling thread waits at least `ms` milliseconds; 0 returns at once. It blocks the
+thread, so an async function cannot call it (its effect is `sleep`): a task waits with `Timer.sleep(ms)`.
+Safety: the runtime only waits.
+
+### ThreadServices.cpuCount
+
+```ceesafe
+public fn cpuCount() -> u32
+```
+
+`Thread.cpuCount()`: how many CPUs this process may run on, at least 1 (ADR 0237): on Linux those in its
+affinity mask (so `taskset` and a container's cpuset count, a CPU-time quota does not), elsewhere the online
+ones. Asked of the system each time; it never waits. The interpreter runs one thread at a time and answers 1.
+Safety: the runtime only reads the system's count.
+
 ## struct Mutex
 
 ```ceesafe
@@ -3766,6 +4148,18 @@ public fn get(borrow this) -> borrow T
 
 The shared value, for as long as this owner is borrowed.
 Safety: the value lives while any owner does; T is Share, so shared references to it may cross threads.
+
+### Arc.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> (borrow mut T)?
+```
+
+The value, to change in place, when this is its only owner (ADR 0224); null while another owner exists, which
+may be reading it on another thread. Values that several owners change go in a `Mutex`: `Arc<Mutex<T>>`.
+Safety: a count of one is this owner alone. No other owner can appear while it is borrowed exclusively, since
+only an owner makes another (`clone`, through a borrow of it), and Arc has no weak references. The load is
+sequentially consistent, so it is ordered after every earlier owner's drop, as the last owner's drop is.
 
 ## enum SpawnError
 
@@ -4224,6 +4618,7 @@ public enum WindowKey {
     Character(u32),
     Function(u8),
     Other(u32),
+    Back,
 }
 ```
 
@@ -4958,6 +5353,19 @@ Turns touches on or off (ADR 0155); whether the system gives this window touches
 for a scripted window, false elsewhere, where nothing changes. On, every finger is queued for `nextTouch` and no
 finger is the pointer any more (a finger that was, lifts it); off, the default, the first finger down is the
 pointer, as ADR 0154 has it, and every finger down when they are turned off is `Cancelled`.
+Safety: the runtime reads the flag.
+
+### Window.setBackWanted
+
+```ceesafe
+public fn setBackWanted(borrow mut this, on: bool) -> bool
+```
+
+Whether the program wants the system's Back (ADR 0233), and whether this window has one: true on Android and for
+a scripted window, false elsewhere, where nothing changes. Wanted, Back is a `Key(WindowKey.Back, …)` event and
+the system does nothing with it; not wanted, the default, it is the system's, which ends the window (`Closed`).
+A program wants it while it has somewhere to go back to (an open page, a dialog) and lets it go at its first
+page, so Back leaves the app there, as Android's apps do. While the soft keyboard shows, Back hides it first.
 Safety: the runtime reads the flag.
 
 ### Window.nextTouch

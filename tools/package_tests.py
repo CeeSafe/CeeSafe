@@ -188,6 +188,14 @@ r"""Package tests for system libraries in the manifest (ADR 0047), on a copy of 
     `#define CEE_POLLS 1` line and, compiled with no flag (POSIX), give the same program. `polls` that is not a
     boolean, in a [target.OS] table or in a freestanding package is one N0321; `--polls` with `--no-polls`,
     `--no-polls` with `--cflag -DCEE_POLLS=1`, and `--polls` with `--profile freestanding` are usage errors.
+46. file-private-names (ADR 0230, type-system.md §2, the SQLite port's finding 15): src/printf.cee and
+    src/datetime.cee each declare private `appendInteger`, a generic `twice`, a struct `Row` with a method and an
+    `impl Shape for Row`, an enum `Mode` with an `impl Mode` block, an interface `Shape` used as `dyn`, a constant
+    and a static; printf.cee's private `Layout` and `label` hide lib/core's `Layout` and main.cee's `label` there
+    only. `check` is clean and the program prints 1148 and 74 (worked out in main.cee), in the interpreter and
+    compiled, with each private item's C name marked by its file. A fifth file naming `appendInteger` gets N0296
+    with the file it is private to, and its unknown type `Rwo` no "did you mean 'Row'"; the language server's
+    definition of `appendInteger` in datetime.cee is datetime.cee's.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1665,6 +1673,62 @@ def polls_from_manifest(compiler, work, problems):
             problems.append(f"polls: build {' '.join(flags)} is not a usage error: {p.returncode} {p.stderr[:200]}")
 
 
+def file_private_names(compiler, work, problems):
+    """46. Each file's private items have a scope of their own (ADR 0230)."""
+    base = os.path.join(work, "file-private-names")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "file-private-names"), base)
+    p = run([compiler, "check"], base)
+    if p.returncode != 0:
+        problems.append(f"file-private-names: check failed: {p.stdout[-600:]}{p.stderr[-600:]}")
+    p = run([compiler, "run", "--interp"], base)
+    if p.returncode != 0 or p.stdout.split() != ["1148", "74"]:
+        problems.append(f"file-private-names: the interpreter should print 1148 and 74: {p.returncode} "
+                        f"{p.stdout!r} {p.stderr[-300:]}")
+    p = run([compiler, "build"], base)
+    exe = os.path.join(base, "out", "fileprivatenames.exe" if WINDOWS else "fileprivatenames")
+    q = run([exe], base) if p.returncode == 0 else p
+    if p.returncode != 0 or q.stdout.split() != ["1148", "74"]:
+        problems.append(f"file-private-names: the built program should print 1148 and 74: {p.returncode} "
+                        f"{q.stdout!r} {p.stderr[-600:]}")
+    emitted = os.path.join(work, "file-private-names-c")
+    p = run([compiler, "build", "--emit", "c", "-o", emitted], base)
+    text = ""
+    if p.returncode == 0:
+        for name in os.listdir(emitted):
+            if name.endswith(".c"):
+                with open(os.path.join(emitted, name), encoding="utf-8") as f:
+                    text += f.read()
+    marked = sorted(set(re.findall(r"ceeF_00[0-9]+_appendInteger", text)))
+    if p.returncode != 0 or len(marked) != 2:
+        problems.append(f"file-private-names: the C should define two marked appendInteger: {marked} "
+                        f"{p.stderr[-300:]}")
+    other = os.path.join(base, "src", "other.cee")
+    with open(other, "w", encoding="utf-8") as f:
+        f.write("fn other() -> i64 {\n    var out = Vector<u8>.create();\n    appendInteger(mut out, 1);\n"
+                "    let r: Rwo = otherRow();\n    return 0;\n}\n")
+    p = run([compiler, "check", "--diagnostics-format=json"], base)
+    try:
+        diagnostics = json.loads(p.stdout)["diagnostics"]
+        found = sorted((d["code"], os.path.basename(d["file"]), d["start"]["line"]) for d in diagnostics)
+        messages = " ".join(d["message"] for d in diagnostics)
+    except (ValueError, KeyError):
+        found, messages = [p.stdout[:300] + p.stderr[:300]], ""
+    if (p.returncode != 1 or ("N0296", "other.cee", 3) not in found or ("N0204", "other.cee", 4) not in found
+            or "is private to src/" not in messages or "'Row'" in messages):
+        problems.append(f"file-private-names: expected N0296 at other.cee:3 naming the file, and N0204 at 4 that "
+                        f"offers no private 'Row': {p.returncode} {found} {messages[:400]}")
+    os.remove(other)
+    source = os.path.join(base, "src", "datetime.cee")
+    with open(source, encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    call = next(k for k, line in enumerate(lines) if line.strip().startswith("appendInteger(mut out"))
+    _, answered = language_server(compiler, source, (call, lines[call].index("appendInteger") + 2),
+                                  "textDocument/definition")
+    if "datetime.cee" not in answered or '"line": 1,' not in answered:
+        problems.append(f"file-private-names: the definition of appendInteger in datetime.cee should be its own, "
+                        f"line 2: {answered[:300]!r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
@@ -2686,6 +2750,7 @@ def main():
         manifest_frameworks(compiler, work, problems)
         library_build_default(compiler, work, problems)
         polls_from_manifest(compiler, work, problems)
+        file_private_names(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
     print(f"package_tests: 42 checks; {len(problems)} problems{skipped}")

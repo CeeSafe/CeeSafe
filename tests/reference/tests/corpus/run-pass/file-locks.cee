@@ -1,0 +1,92 @@
+// Advisory locks on byte ranges (ADR 0220), the portable contract, the same on every host: a File locks ranges it
+// does not hold and unlocks exactly the ranges it locked; unlocking bytes not held is no error; a range may lie past
+// the end; length 0 and a range past 2^63 - 1 are InvalidInput; a lock that another thread's File holds is waited
+// for. Conversion and splitting (POSIX only) and conflicts between Files of one program (hosts with
+// open-file-description locks) are tools/file_lock_check.py's, natively and in the interpreter, with other
+// processes'. The ranges are SQLite's (PENDING, RESERVED, SHARED: 0x40000000, 0x40000001, 0x40000002 + 510).
+
+fn pending() -> u64 => 0x40000000;
+fn reserved() -> u64 => 0x40000001;
+fn sharedFirst() -> u64 => 0x40000002;
+
+fn run(path: StringView) -> Result<void, IoError> {
+    let a = File.createReadWrite(path)?;
+    // A reader, then a writer: SQLite's steps from SHARED to EXCLUSIVE, by unlocking and locking again.
+    Console.writeLine(a.tryLock(FileLock.Shared, sharedFirst(), 510)?);
+    Console.writeLine(a.tryLock(FileLock.Exclusive, reserved(), 1)?);
+    Console.writeLine(a.tryLock(FileLock.Exclusive, pending(), 1)?);
+    a.unlock(sharedFirst(), 510)?;
+    a.lock(FileLock.Exclusive, sharedFirst(), 510)?;
+    a.unlock(sharedFirst(), 510)?;
+    a.unlock(pending(), 1)?;
+    a.unlock(reserved(), 1)?;
+    // Unlocking bytes the File does not hold is no error.
+    a.unlock(0, 1)?;
+    Console.writeLine(a.tryLock(FileLock.Exclusive, 0, 0x7FFFFFFFFFFFFFFF)?);
+    a.unlock(0, 0x7FFFFFFFFFFFFFFF)?;
+    Console.writeLine(a.tryLock(FileLock.Shared, sharedFirst(), 510)?);
+    a.unlock(sharedFirst(), 510)?;
+    // Errors.
+    match (a.tryLock(FileLock.Shared, 0, 0)) {
+        Ok(_) => { Console.writeLine("length 0 locked"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (a.lock(FileLock.Exclusive, 0x7FFFFFFFFFFFFFFF, 2)) {
+        Ok() => { Console.writeLine("past 2^63 locked"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (a.unlock(0xFFFFFFFFFFFFFFFF, 1)) {
+        Ok() => { Console.writeLine("past 2^63 unlocked"); }
+        Err(IoError.InvalidInput) => { Console.writeLine("InvalidInput"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    return Ok();
+}
+
+/// A lock that waits: another thread's File holds the byte, and unlocks it after a while. Where locks are the
+/// process's (no open-file-description locks), the two Files do not conflict and nothing waits; the output is the same.
+fn waiting(path: StringView) -> Result<void, IoError> {
+    let mine = File.openReadWrite(path)?;
+    let ready = Channel<bool>.create(1)!;
+    let told = ready.clone();
+    var owned = String.create();
+    owned.append(path)!;
+    let holder = Thread.spawn(move () => {
+        let theirs = File.openReadWrite(owned.view())!;
+        theirs.lock(FileLock.Exclusive, pending(), 1)!;
+        told.send(true)!;
+        Thread.sleep(50);
+        theirs.unlock(pending(), 1)!;
+    })!;
+    let _ = ready.recv();
+    mine.lock(FileLock.Exclusive, pending(), 1)?;
+    Console.writeLine("waited for the lock");
+    holder.join();
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    match (run(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (waiting(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: Invalid argument
+// expect-stdout: Invalid argument
+// expect-stdout: InvalidInput
+// expect-stdout: waited for the lock

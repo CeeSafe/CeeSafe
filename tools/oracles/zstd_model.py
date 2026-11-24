@@ -1068,9 +1068,14 @@ class LibZstd:
             out += dst.raw[:ob.pos]
             if len(out) > limit:
                 return None
-            if ib.pos == ib.size and ob.pos < cap:
-                # All input taken and the output not full: r == 0 means at a frame's end.
-                return bytes(out) if r == 0 else None
+            if ib.pos == ib.size:
+                # All input taken: r == 0 means at a frame's end, even if the output was filled exactly. Otherwise
+                # the stream is called again while it writes (it may hold a block's input and have given only part
+                # of its output); a call that writes nothing means the input was cut short.
+                if r == 0:
+                    return bytes(out)
+                if ob.pos == 0:
+                    return None
 
     def decompress_once(self, data, capacity):
         """libzstd's one-call decoder: the bytes, or None."""
@@ -1166,7 +1171,9 @@ def compare(lib, frame, limit=1 << 26):
     if ours is None and why in STRICTER:
         return "stricter"
     if theirs is None and ours is not None and lib.decompress_once(frame, max(1, len(ours))) == ours:
-        # libzstd's stream refuses an RLE block of exactly 128 KiB, which the RFC allows and its one call reads.
+        # A frame libzstd's stream refuses and its one call reads. Phase 3 counted RLE blocks of exactly 128 KiB here,
+        # but that was this file's reading of the stream (LibZstd.decompress stopped when the last call filled its
+        # 128 KiB of output exactly, ADR 0196 phase 4): the stream reads them.
         return "once"
     return (f"libzstd {'refuses' if theirs is None else 'decodes'} a frame the model "
             f"{'refuses (' + why + ')' if ours is None else 'decodes'}: {frame.hex()[:120]}")

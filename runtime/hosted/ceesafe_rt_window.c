@@ -168,6 +168,7 @@
 #define CEE_KEY_PAGE_UP 12
 #define CEE_KEY_PAGE_DOWN 13
 #define CEE_KEY_SPACE 14
+#define CEE_KEY_BACK 15 /* the system's Back (Android), while the program wants it (ADR 0233) */
 #define CEE_KEY_FUNCTION 100
 #define CEE_KEY_CHARACTER 0x10000
 #define CEE_KEY_OTHER 0x20000
@@ -397,6 +398,8 @@ struct cee_window {
        `pointer_finger`, with its key and last place); the last number given and the last touch's time. Only the program's first
        thread touches them. */
     int touches_on;
+    /* Whether the program wants the system's Back (ADR 0233): then Back is a key event, else the system's. */
+    int back_wanted;
     struct cee_window_touch touches[CEE_TOUCH_QUEUE];
     unsigned touch_head, touch_count;
     struct cee_window_finger fingers[CEE_TOUCH_DOWN];
@@ -472,6 +475,7 @@ int64_t ceesafe_window_dialog(void *window, int32_t kind, const uint8_t *title, 
 int64_t ceesafe_window_drop(void *window, float *position, const uint8_t **paths);
 uint32_t ceesafe_window_drag_over(void *window, float *position);
 int32_t ceesafe_window_set_touches(void *window, int32_t on);
+int32_t ceesafe_window_set_back(void *window, int32_t on);
 int32_t ceesafe_window_touch(void *window, uint32_t *id, int32_t *phase, float *position, uint64_t *time);
 void ceesafe_window_safe_area(void *window, float *insets);
 void ceesafe_window_keyboard_inset(void *window, float *inset);
@@ -1483,7 +1487,7 @@ static int cee_window_key_name(const char *name, size_t length, int32_t *key) {
                  {"backspace", CEE_KEY_BACKSPACE}, {"delete", CEE_KEY_DELETE}, {"left", CEE_KEY_LEFT},
                  {"right", CEE_KEY_RIGHT},     {"up", CEE_KEY_UP},           {"down", CEE_KEY_DOWN},
                  {"home", CEE_KEY_HOME},       {"end", CEE_KEY_END},         {"pageup", CEE_KEY_PAGE_UP},
-                 {"pagedown", CEE_KEY_PAGE_DOWN}, {"space", CEE_KEY_SPACE}};
+                 {"pagedown", CEE_KEY_PAGE_DOWN}, {"space", CEE_KEY_SPACE}, {"back", CEE_KEY_BACK}};
     for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) {
         if (strlen(names[k].name) == length && memcmp(names[k].name, name, length) == 0) {
             *key = names[k].key;
@@ -1952,6 +1956,12 @@ static void cee_window_script_pump(struct cee_window *w) {
                 cee_touch_moved(w, key, e.x, e.y, time);
             } else {
                 cee_touch_ended(w, key, e.x, e.y, time, e.fields[1] == CEE_TOUCH_CANCELLED);
+            }
+        } else if (e.kind == CEE_EVENT_KEY && e.fields[0] == CEE_KEY_BACK && !w->back_wanted) {
+            /* Back that the program does not want is the system's, as on a phone (ADR 0233): it ends the window,
+               which is Closed; its release goes with it. */
+            if (e.fields[1]) {
+                cee_window_push(w, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0f, 0.0f);
             }
         } else {
             cee_window_push(w, e.kind, e.fields[0], e.fields[1], e.fields[2], e.fields[3], e.x, e.y);
@@ -12422,7 +12432,20 @@ static int cee_android_event(struct cee_window *w, AInputEvent *event) {
         w->touches_on = on;
         return 1;
     }
-    return 0; /* keys, Back among them, are the system's: Back ends the activity, which gives Closed (onDestroy) */
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY && AKeyEvent_getKeyCode(event) == AKEYCODE_BACK &&
+        w->back_wanted) {
+        /* Back while the program wants it (ADR 0233): a key event, taken from the system. A held Back repeats as
+           the system's own does. (While the soft keyboard shows, its input method takes Back first, to hide it.) */
+        int32_t action = AKeyEvent_getAction(event);
+        if (action == AKEY_EVENT_ACTION_DOWN) {
+            cee_window_push(w, CEE_EVENT_KEY, CEE_KEY_BACK, 1, AKeyEvent_getRepeatCount(event) > 0, 0, 0.0f, 0.0f);
+        } else if (action == AKEY_EVENT_ACTION_UP) {
+            cee_window_push(w, CEE_EVENT_KEY, CEE_KEY_BACK, 0, 0, 0, 0.0f, 0.0f);
+        }
+        return 1;
+    }
+    return 0; /* other keys, and Back the program does not want, are the system's: Back ends the activity, which
+                 gives Closed (onDestroy) */
 }
 
 /* Takes what the activity recorded (the queue to attach or detach, focus, the end), then the input events, then the
@@ -19192,6 +19215,21 @@ int32_t ceesafe_window_set_touches(void *window, int32_t on) {
         w->touches_on = 0;
     }
     return 1;
+}
+
+/* ---- Back (ADR 0233) --------------------------------------------------------------------------------------------- */
+
+/* Whether the program wants the system's Back: on, Back is a key event (CEE_KEY_BACK); off, the default, it is the
+   system's, which ends the window. Whether this window has a Back: Android's, and a scripted window's ("back"). */
+int32_t ceesafe_window_set_back(void *window, int32_t on) {
+    struct cee_window *w = (struct cee_window *)window;
+#if defined(__ANDROID__)
+    int has = 1;
+#else
+    int has = w->scripted;
+#endif
+    w->back_wanted = has && on;
+    return has;
 }
 
 /* The next app event (ADR 0159): WindowAppEvent's number, or -1. With none queued, the window takes the system's (or

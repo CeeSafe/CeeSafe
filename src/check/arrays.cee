@@ -233,8 +233,13 @@ fn arrayElement(c: borrow mut Checker, element: u32, expected: u32) -> Result<u3
     return Ok(value);
 }
 
-/// The element type an expected sized array gives, or none.
+/// The element type an expected sized array gives, or an expected slice (ADR 0226 §2.1: `sum([1, 2])` for a
+/// `Slice<u64>` parameter has `u64` elements), or none.
 fn expectedElement(c: borrow Checker, expected: u32) -> u32 {
+    if (expected != none() && c.types.isSlice(expected)) {
+        let pointee = c.types.info(expected).pointee;
+        return if (c.types.info(pointee).isStr) none() else c.types.info(pointee).element;
+    }
     if (expected == none() || !c.types.is(expected, TypeKind.Array) || c.types.isUnsized(expected)) {
         return none();
     }
@@ -504,8 +509,25 @@ fn isStaticInitializerShape(c: borrow Checker, e: u32, depth: u32) -> bool {
 }
 
 /// `a[i]`.
-fn synthIndex(c: borrow mut Checker, targetSyntax: u32, indexSyntax: u32, span: Span) -> Result<u32, AllocError> {
-    let synthesized = synth(c, targetSyntax, none())?;
+fn synthIndex(c: borrow mut Checker, targetSyntax: u32, indexSyntax: u32, span: Span) -> Result<u32, AllocError> =>
+    synthIndexExpecting(c, targetSyntax, indexSyntax, none(), span);
+
+/// `a[i]` where a type is expected: an array literal indexed takes an expected number as its element type (ADR 0226
+/// §2.1: `let g: u64 = [7, 8][i];`).
+fn synthIndexExpecting(
+    c: borrow mut Checker,
+    targetSyntax: u32,
+    indexSyntax: u32,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let literal = match (c.front.ast.exprs[unparenthesized(c, targetSyntax) as usize]) {
+        ExprNode.ArrayLiteral(_) => true,
+        _ => false,
+    };
+    let number = expected != none() && (c.types.is(expected, TypeKind.Integer) || c.types.is(expected, TypeKind.Float));
+    let hint = if (literal && number) c.types.sliceOf(expected, false)? else none();
+    let synthesized = synth(c, targetSyntax, hint)?;
     let target = autoDeref(c, synthesized)?;
     let usize = c.types.usize;
     let position = checkExpr(c, indexSyntax, usize)?;
@@ -533,8 +555,25 @@ fn synthSlice(
     highSyntax: u32,
     mutable: bool,
     span: Span,
+) -> Result<u32, AllocError> => synthSliceExpecting(c, targetSyntax, lowSyntax, highSyntax, mutable, none(), span);
+
+/// `e[low..high]` where a slice type is expected: an array literal sliced takes its element type from it (ADR 0226
+/// §2.1: `[1, 2][..]` returned as a `Slice<u64>`).
+fn synthSliceExpecting(
+    c: borrow mut Checker,
+    targetSyntax: u32,
+    lowSyntax: u32,
+    highSyntax: u32,
+    mutable: bool,
+    expected: u32,
+    span: Span,
 ) -> Result<u32, AllocError> {
-    let synthesized = synth(c, targetSyntax, none())?;
+    let literal = match (c.front.ast.exprs[unparenthesized(c, targetSyntax) as usize]) {
+        ExprNode.ArrayLiteral(_) => true,
+        _ => false,
+    };
+    let hint = if (literal && expected != none() && c.types.isSlice(expected)) expected else none();
+    let synthesized = synth(c, targetSyntax, hint)?;
     let usize = c.types.usize;
     let low = if (lowSyntax == none()) none() else checkExpr(c, lowSyntax, usize)?;
     let high = if (highSyntax == none()) none() else checkExpr(c, highSyntax, usize)?;

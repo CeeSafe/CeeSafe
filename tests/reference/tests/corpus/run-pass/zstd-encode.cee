@@ -1,0 +1,252 @@
+// lib/std's Zstd.compress and ZstdEncoder (ADR 0196 phase 4). A round trip's oracle is its input: every frame written
+// here is decoded whole and in small steps by lib/std's decoder, whose own oracles are libzstd and
+// tools/oracles/zstd_model.py (run-pass/zstd.cee). The frame headers are as the owner decided (ADR 0196, "Decided for
+// phase 4"): a whole frame states its size and has no checksum, a stream's states its window; the empty frame is
+// libzstd's byte for byte. tools/codec_check.py has libzstd and the model read every frame of the long lists, compiled
+// only.
+
+fn message(n: usize, seed: usize) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    for (k in 0..n) {
+        v.push(truncate<u8>(k * 167 + seed * 13 + (k >> 7)))!;
+    }
+    return v;
+}
+
+fn words(n: usize, seed: u32) -> Vector<u8> {
+    let names = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"];
+    var v = Vector<u8>.create();
+    var x = seed;
+    while (v.length < n) {
+        x = (x.wrappingMul(1103515245).wrappingAdd(12345)) & 0x7FFFFFFF;
+        v.extend(names[((x >> 16) & 7) as usize].bytes())!;
+        v.push(if (((x >> 8) & 3) != 0) 32u8 else 10u8)!;
+    }
+    v.truncate(n);
+    return v;
+}
+
+fn runs(n: usize, seed: u32) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    var x = seed;
+    while (v.length < n) {
+        x = (x.wrappingMul(1103515245).wrappingAdd(12345)) & 0x7FFFFFFF;
+        let b = truncate<u8>((x >> 16) & 3);
+        for (k in 0..1 + (x >> 8) % 300) {
+            v.push(b)!;
+        }
+    }
+    v.truncate(n);
+    return v;
+}
+
+fn shape(name: StringView, n: usize, seed: u32) -> Vector<u8> {
+    if (name == "message") { return message(n, seed as usize); }
+    if (name == "words") { return words(n, seed); }
+    if (name == "runs") { return runs(n, seed); }
+    var v = Vector<u8>.create();
+    v.resize(n, 0)!;
+    return v;
+}
+
+/// Decodes in steps of 1 to 7 bytes of input and 1 to 13 of output.
+fn steps(input: Slice<u8>, limit: usize, windowLimit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
+    var d = ZstdDecoder.create(limit as u64, windowLimit)?;
+    var buffer = [0u8; 13];
+    var at: usize = 0;
+    var k: usize = 0;
+    while (true) {
+        k += 1;
+        let si = 1 + (k * 5) % 7;
+        let so = 1 + (k * 3) % 13;
+        let end = if (input.length - at < si) input.length else at + si;
+        let p = d.step(input[at..end], mut buffer[0..so])?;
+        out.extend(buffer[0..p.written])!;
+        at += p.read;
+        if (p.done && at == input.length) { return Ok(); }
+        if (!p.done && p.read == 0 && p.written == 0 && end == input.length) { return Err(DecodeError.Malformed); }
+    }
+    return Ok();
+}
+
+/// Whether `frame` decodes to `data` whole, and in steps if `windowLimit` is not 0 (the interpreter is slow, so only
+/// some frames are decoded in steps; a stream decoder's ring is its window).
+fn decodes(frame: Slice<u8>, data: Slice<u8>, windowLimit: usize) -> bool {
+    var whole = Vector<u8>.create();
+    let a = match (Zstd.decompress(frame, data.length, mut whole)) {
+        Ok() => whole.view() == data,
+        Err(_) => false,
+    };
+    if (windowLimit == 0) { return a; }
+    var stepped = Vector<u8>.create();
+    let b = match (steps(frame, data.length, windowLimit, mut stepped)) {
+        Ok() => stepped.view() == data,
+        Err(_) => false,
+    };
+    return a && b;
+}
+
+/// Compressed whole at `levels`, with a byte already in the vector, which must survive, each decoded in steps if
+/// `stepped`; and streamed at levels 1 (decoded in steps too if `stepped`) and 3, in pieces of 97 (20,011 above 10,000 bytes) with a
+/// flush after every third and a checksum.
+fn roundTrip(name: StringView, n: usize, seed: u32, levels: Slice<u32>, stepped: bool) {
+    let data = shape(name, n, seed);
+    let window = if (!stepped) 0usize else if (n < 1024) 1024usize else n;
+    var whole: usize = 0;
+    for (level in levels) {
+        var packed = Vector<u8>.create();
+        packed.push(9)!;
+        Zstd.compress(data.view(), level, mut packed)!;
+        if (packed[0] == 9 && decodes(packed[1..], data.view(), window)) { whole += 1; }
+    }
+    var streamed: u32 = 0;
+    for (level in [1u32, 3]) {
+        var e = ZstdEncoder.create(level, true)!;
+        var packed = Vector<u8>.create();
+        var at: usize = 0;
+        var pieces: usize = 0;
+        let piece = if (n > 10000) 20011usize else 97usize;
+        while (at < n) {
+            let end = if (n - at < piece) n else at + piece;
+            e.update(data[at..end], mut packed)!;
+            at = end;
+            pieces += 1;
+            if (pieces % 3 == 0) { e.flush(mut packed)!; }
+        }
+        e.finish(mut packed)!;
+        if (decodes(packed.view(), data.view(), if (level == 1 && stepped) 1usize << 19 else 0)) { streamed += 1; }
+    }
+    Console.write("round trip ");
+    Console.write(name);
+    Console.write(" ");
+    Console.write(n);
+    Console.write(": ");
+    Console.write(whole);
+    Console.write(" of ");
+    Console.write(levels.length);
+    Console.write(" whole, ");
+    Console.write(streamed);
+    Console.writeLine(" of 2 streamed");
+}
+
+fn hex(bytes: Slice<u8>) {
+    let digits = "0123456789abcdef".bytes();
+    var line = Vector<u8>.create();
+    for (b in bytes) {
+        line.push(digits[(b >> 4) as usize])!;
+        line.push(digits[(b & 15) as usize])!;
+    }
+    Console.writeLine(StringView.fromUtf8(line.view()) ?? "");
+}
+
+/// The frame headers: a whole frame is a single segment that states its size (the descriptor's top two bits say in how
+/// many bytes) and has no checksum; a stream's states its window (2^19 at level 1) and not its size, with a checksum
+/// if asked for.
+fn headers() {
+    let data = words(3000, 21);
+    var whole = Vector<u8>.create();
+    Zstd.compress(data.view(), 3, mut whole)!;
+    let fhd = whole[4];
+    Console.write("whole frame: single segment ");
+    Console.write((fhd & 32) != 0);
+    Console.write(", size in 2 bytes ");
+    Console.write((fhd >> 6) == 1 && whole.readLE<u16>(5) as usize + 256 == 3000);
+    Console.write(", checksum ");
+    Console.writeLine((fhd & 4) != 0);
+    var e = ZstdEncoder.create(1, true)!;
+    var streamed = Vector<u8>.create();
+    e.update(data.view(), mut streamed)!;
+    e.finish(mut streamed)!;
+    let sfd = streamed[4];
+    Console.write("stream frame: single segment ");
+    Console.write((sfd & 32) != 0);
+    Console.write(", window log ");
+    Console.write(10 + (streamed[5] >> 3) as u32);
+    Console.write(", size stated ");
+    Console.write((sfd >> 6) != 0);
+    Console.write(", checksum ");
+    Console.writeLine((sfd & 4) != 0);
+    let nothing = Vector<u8>.create();
+    var empty = Vector<u8>.create();
+    Zstd.compress(nothing.view(), 3, mut empty)!;
+    Console.write("empty: ");
+    hex(empty.view());
+}
+
+/// Level 0 is level 3, and a level above 9 is 9.
+fn levels() {
+    let data = words(2000, 31);
+    var a = Vector<u8>.create();
+    var b = Vector<u8>.create();
+    Zstd.compress(data.view(), 0, mut a)!;
+    Zstd.compress(data.view(), 3, mut b)!;
+    Console.write("level 0 is level 3: ");
+    Console.writeLine(a.view() == b.view());
+    var c = Vector<u8>.create();
+    var d = Vector<u8>.create();
+    Zstd.compress(data.view(), 22, mut c)!;
+    Zstd.compress(data.view(), 9, mut d)!;
+    Console.write("level 22 is level 9: ");
+    Console.writeLine(c.view() == d.view());
+}
+
+/// A flush: what was given before it decodes in full before the frame ends; after `finish`, a new frame begins.
+fn flushes() {
+    let data = words(3000, 41);
+    var e = ZstdEncoder.create(3, false)!;
+    var packed = Vector<u8>.create();
+    e.update(data[0..1000], mut packed)!;
+    e.flush(mut packed)!;
+    let flushed = packed.length;
+    e.update(data[1000..3000], mut packed)!;
+    e.finish(mut packed)!;
+    var d = ZstdDecoder.create(3000, 1 << 21)!;
+    var buffer = Vector<u8>.create();
+    buffer.resize(4096, 0)!;
+    let p = d.step(packed[0..flushed], mut buffer[..])!;
+    Console.write("flush: ");
+    Console.write(p.read == flushed && !p.done && p.written == 1000 && buffer[0..1000] == data[0..1000]);
+    let q = d.step(packed[flushed..], mut buffer[1000..])!;
+    Console.write(" ");
+    Console.writeLine(q.done && q.written == 2000 && buffer[0..3000] == data.view());
+    let more = message(500, 3);
+    e.update(more.view(), mut packed)!;
+    e.finish(mut packed)!;
+    var both = Vector<u8>.create();
+    both.extend(data.view())!;
+    both.extend(more.view())!;
+    Console.write("two frames: ");
+    Console.writeLine(decodes(packed.view(), both.view(), 1 << 21));
+}
+
+fn main() {
+    let all = [0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12];
+    roundTrip("words", 0, 1, all[..], true);
+    roundTrip("words", 1, 2, all[..], true);
+    roundTrip("words", 17, 3, all[..], true);
+    roundTrip("words", 2000, 4, all[..], true);
+    // One level of each strategy for inputs up to 16 KiB: fast, dfast, greedy, lazy, lazy2.
+    let each = [1u32, 3, 4, 5, 9];
+    roundTrip("message", 1000, 5, each[..], true);
+    roundTrip("runs", 1500, 6, each[..], true);
+    let some = [1u32, 3];
+    roundTrip("zeros", 140000, 7, some[..], false);
+    headers();
+    levels();
+    flushes();
+}
+
+// expect-stdout: round trip words 0: 11 of 11 whole, 2 of 2 streamed
+// expect-stdout: round trip words 1: 11 of 11 whole, 2 of 2 streamed
+// expect-stdout: round trip words 17: 11 of 11 whole, 2 of 2 streamed
+// expect-stdout: round trip words 2000: 11 of 11 whole, 2 of 2 streamed
+// expect-stdout: round trip message 1000: 5 of 5 whole, 2 of 2 streamed
+// expect-stdout: round trip runs 1500: 5 of 5 whole, 2 of 2 streamed
+// expect-stdout: round trip zeros 140000: 2 of 2 whole, 2 of 2 streamed
+// expect-stdout: whole frame: single segment true, size in 2 bytes true, checksum false
+// expect-stdout: stream frame: single segment false, window log 19, size stated false, checksum true
+// expect-stdout: empty: 28b52ffd2000010000
+// expect-stdout: level 0 is level 3: true
+// expect-stdout: level 22 is level 9: true
+// expect-stdout: flush: true true
+// expect-stdout: two frames: true

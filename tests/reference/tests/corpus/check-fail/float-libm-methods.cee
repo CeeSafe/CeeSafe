@@ -1,0 +1,27 @@
+// The float methods of ADR 0218 (type-system.md §35.8): their argument counts (N0209), their operands' types (N0205:
+// `x`'s type, `scaleB`'s an `i32`), and their names reserved on float types (N0228).
+
+interface Curve {
+    fn exp(borrow this) -> f64;
+}
+
+impl Curve for f64 {
+    fn exp(borrow this) -> f64 => 1.0; // error[N0228]
+}
+
+fn counts(x: f64) {
+    let _ = x.sin(1.0);           // error[N0209]
+    let _ = x.pow();              // error[N0209]
+    let _ = x.fma(1.0);           // error[N0209]
+    let _ = x.scaleB();           // error[N0209]
+    let _ = x.copySign(1.0, 2.0); // error[N0209]
+}
+
+fn types(x: f64, y: f32, n: i64) {
+    let _ = x.pow(y);      // error[N0205]
+    let _ = x.atan2(1);    // error[N0205]
+    let _ = x.scaleB(n);   // error[N0205]
+    let _ = x.scaleB(1.5); // error[N0205]
+    let _ = y.fma(y, x);   // error[N0205]
+    let _ = n.exp();       // error[N0234]
+}

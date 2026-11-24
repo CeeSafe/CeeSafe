@@ -4,7 +4,8 @@
 // tools/oracles/zstd_model.py).
 //
 // A case: op (u8: 1 decode, 2 encode, 3 Adler-32, 4 snappy decode, 5 snappy encode, 6 snappy length, 7 zstd decode,
-// 8 XXH64), format (u8: 0 raw, 1 zlib, 2 gzip), level (u8; for a zstd decode, the log of its stream's window limit), a pad byte,
+// 8 XXH64, 9 zstd encode), format (u8: 0 raw, 1 zlib, 2 gzip; for a zstd encode, 1 if the stream has a checksum), level
+// (u8; for a zstd decode, the log of its stream's window limit), a pad byte,
 // limit (u64), a and b (u32: a decode's step sizes in and out, an encode's piece size and flush interval), the length
 // of the data (u32) and the data, all little-endian.
 // Its result: a decode's status (u8: 0 ok, 1 Malformed, 2 TooLarge, 3 Unsupported, 4 ChecksumMismatch, 5
@@ -14,7 +15,9 @@
 // (status 6 if that byte changed or a refusal left output); a snappy encode's output, a length (u32) and the bytes;
 // a snappy length, a u8 (1 if the preamble is one) and the length (u64); a zstd decode's status, length and CRC-32
 // whole, onto a vector that holds a byte already, as a snappy decode's, then in steps with a ZstdDecoder; an XXH64's
-// value (u64) with the seed `limit`, fed whole and in three pieces.
+// value (u64) with the seed `limit`, fed whole and in three pieces; a zstd encode's frame from Zstd.compress, then
+// from a ZstdEncoder fed `a` bytes at a time and flushed after every `b` pieces (0: never), each its status as
+// lib/std's decoder reads it back (0, 6 if the bytes differ, else the refusal's), its length (u32) and its bytes.
 
 fn readAll(path: StringView) -> Vector<u8> {
     var f = File.open(path)!;
@@ -143,6 +146,17 @@ fn encodeStreamed(format: u8, input: Slice<u8>, level: u32, piece: usize, every:
     d.finish(out)!;
 }
 
+/// A zstd frame lib/std's encoder wrote for `data`: whether lib/std's decoder gives `data` back (u8: 0, or
+/// 6 if it gives other bytes, else the refusal's status), then the frame's length (u32) and bytes.
+fn zstdEncoded(frame: borrow Vector<u8>, data: Slice<u8>, results: borrow mut Vector<u8>) {
+    var back = Vector<u8>.create();
+    let r = Zstd.decompress(frame.view(), data.length, mut back);
+    let status = statusOf(r);
+    results.push(if (status == 0 && back.view() != data) 6u8 else status)!;
+    results.pushLE(truncate<u32>(frame.length))!;
+    results.extend(frame.view())!;
+}
+
 fn main() {
     let cases = readAll(Process.argument(1)!);
     var results = Vector<u8>.create();
@@ -208,6 +222,23 @@ fn main() {
             var y = Vector<u8>.create();
             let ry = zstdSteps(data, limit, 1usize << level, a, b, mut y);
             report(ry, y, mut results);
+        } else if (op == 9) {
+            var x = Vector<u8>.create();
+            Zstd.compress(data, level, mut x)!;
+            zstdEncoded(x, data, mut results);
+            var e = ZstdEncoder.create(level, format == 1)!;
+            var y = Vector<u8>.create();
+            var k: usize = 0;
+            var pieces: usize = 0;
+            while (k < n) {
+                let end = if (n - k < a) n else k + a;
+                e.update(data[k..end], mut y)!;
+                k = end;
+                pieces += 1;
+                if (b != 0 && pieces % b == 0) { e.flush(mut y)!; }
+            }
+            e.finish(mut y)!;
+            zstdEncoded(y, data, mut results);
         } else if (op == 8) {
             var c = Xxh64.create(limit);
             let third = n / 3;

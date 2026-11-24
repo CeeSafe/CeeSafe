@@ -1,0 +1,14 @@
+// ADR 0227 §2.1: a shared borrow of a temporary is valid within its statement; a mutable one is still N0247 (what
+// the call changed would be lost), and so is `mut` of a value.
+fn five() -> i64 => 5;
+
+fn look(v: borrow i64) -> i64 => v + 1;
+
+fn bump(v: borrow mut i64) { v += 1; }
+
+fn main() {
+    let a = look(borrow 5);
+    let b = look(borrow five());
+    let c = borrow mut five(); // error[N0247]
+    bump(mut five()); // error[N0247]
+}

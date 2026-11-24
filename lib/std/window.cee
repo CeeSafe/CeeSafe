@@ -97,6 +97,7 @@ extern "C" {
     fn ceesafe_window_drag_over(window: *mut void, position: *mut f32) -> u32;
     @effects()
     fn ceesafe_window_set_touches(window: *mut void, on: i32) -> i32;
+    fn ceesafe_window_set_back(window: *mut void, on: i32) -> i32;
     @effects()
     fn ceesafe_window_touch(
         window: *mut void,
@@ -276,6 +277,8 @@ public enum WindowKey {
     Function(u8),
     /// The system's code for any other key.
     Other(u32),
+    /// The system's Back (Android's button or gesture), while the program wants it (`Window.setBackWanted`, ADR 0233).
+    Back,
 }
 
 /// The pointer's shape over the content.
@@ -1120,6 +1123,16 @@ public struct Window {
         return unsafe { ceesafe_window_set_touches(this.raw, if (on) 1 else 0) } != 0;
     }
 
+    /// Whether the program wants the system's Back (ADR 0233), and whether this window has one: true on Android and for
+    /// a scripted window, false elsewhere, where nothing changes. Wanted, Back is a `Key(WindowKey.Back, …)` event and
+    /// the system does nothing with it; not wanted, the default, it is the system's, which ends the window (`Closed`).
+    /// A program wants it while it has somewhere to go back to (an open page, a dialog) and lets it go at its first
+    /// page, so Back leaves the app there, as Android's apps do. While the soft keyboard shows, Back hides it first.
+    /// Safety: the runtime reads the flag.
+    public fn setBackWanted(borrow mut this, on: bool) -> bool {
+        return unsafe { ceesafe_window_set_back(this.raw, if (on) 1 else 0) } != 0;
+    }
+
     /// The next touch on this window, or null; it never blocks (ADR 0155). Touches are queued beside the events, in
     /// order, while touches are on, and a queued touch ends `waitEvent`, `waitFrame` and `Window.waitAny`, as an event
     /// does. A window keeps at most 256 touches not taken: when full, a finger's newest move replaces its last queued
@@ -1209,6 +1222,7 @@ public struct Window {
             12 => WindowKey.PageUp,
             13 => WindowKey.PageDown,
             14 => WindowKey.Space,
+            15 => WindowKey.Back,
             _ => WindowKey.Other(truncate<u32>(code)),
         };
     }
@@ -1378,6 +1392,7 @@ public struct Menu {
         WindowKey.Character(c) => if (c > 0x20 && c <= 0x10FFFF && (c < 0xD800 || c > 0xDFFF)) 0x10000 + c else 0,
         WindowKey.Function(n) => if (n >= 1 && n <= 12) 100 + (n as u32) else 0,
         WindowKey.Other(_) => 0,
+        WindowKey.Back => 0,
     };
 }
 

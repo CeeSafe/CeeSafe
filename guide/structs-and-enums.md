@@ -420,6 +420,10 @@ arms must still cover every value. A guard only reads: it cannot move, assign or
 the arm's bindings (N0355). In a match that moves a payload into its binding, the move happens only once the guard
 holds.
 
+Floats have no patterns: `Value.Real(1000.0) =>` is an error (N0108) that says to write a guard,
+`Value.Real(r) if r == 1000.0 =>`, or `v is Value.Real(r) && r == 1000.0`. A float compares with `==`, exactly, with
+`NaN` equal to nothing and `-0.0` equal to `0.0`; a comparison written out shows that, where a pattern would hide it.
+
 ### Strings and slices
 
 A string literal is a pattern on a `StringView`, and on a `Slice<u8>`, where it matches the text's bytes. A slice

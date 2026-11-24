@@ -489,7 +489,7 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         if (isReservedName(c, decl.name)?) {
             continue;
         }
-        if (isDeclared(c, id.symbol)) {
+        if (isDeclaredAs(c, id.symbol, isPrivateVisibility(decl.visibility))) {
             var message = Vector<u8>.create();
             appendText(mut message, "'")?;
             appendBytes(mut message, c.name(id.symbol))?;

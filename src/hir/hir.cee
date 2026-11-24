@@ -270,6 +270,11 @@ struct HirFunction {
     repeatsGeneric: bool;
     /// A method of an impl of an interface: its flows are narrowed to the interface's method's (ADR 0131).
     keepsInterfaceFlows: bool;
+    /// A method an impl of an interface gives its owner (ADR 0229): the interface's entry (Checker.interfaces), or
+    /// none. `sharedName` when another interface's impl gives the owner a method of the same name: its C name then
+    /// names the interface (c-backend.md §2.1).
+    implInterface: u32;
+    sharedName: bool;
     /// A closure: the captures (by index) through which its body stores what the others hold (ADR 0131), known once
     /// its body is borrow-checked, which is before the function it is written in.
     captureStores: Vector<u32>;
@@ -524,6 +529,8 @@ struct HirProgram {
             inheritedDefault: false,
             repeatsGeneric: false,
             keepsInterfaceFlows: false,
+            implInterface: 0xFFFFFFFF,
+            sharedName: false,
             captureStores: Vector<u32>.create(),
             captureStoreSources: Vector<u64>.create(),
         })?;

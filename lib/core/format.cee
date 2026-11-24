@@ -416,6 +416,31 @@ impl AppendFormatted for Vector<u8> {
         Formatted.padded(this, text, width, align, fill);
 }
 
+/// `v.appendNumber(n)` and `v.appendUnsigned(n)` (ADR 0237 §2.2): decimal digits added to a `Vector<u8>`, as a
+/// `ByteString`'s methods of those names add them. (A `String`'s built-in `appendNumber` takes any number.)
+public interface AppendDecimal {
+    /// `value` in decimal, with a `-` before a negative value.
+    fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError>;
+    /// `value` in decimal: `appendNumber` for a `u64` past `i64`'s range.
+    fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError>;
+}
+
+impl AppendDecimal for Vector<u8> {
+    fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError> {
+        var digits = [0u8; 24];
+        var w = TextWriter.create(mut digits[..]);
+        w.signed(value);
+        return this.extend(w.written());
+    }
+
+    fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError> {
+        var digits = [0u8; 24];
+        var w = TextWriter.create(mut digits[..]);
+        w.decimal(value);
+        return this.extend(w.written());
+    }
+}
+
 /// `s.appendChar(c)` and `s.appendUtf8(bytes)` (ADR 0138 §6): text added a character, or a run of bytes, at a time.
 /// Implemented here for a `Vector<u8>`, and in lib/std for a `String`, which stays UTF-8: a character is encoded
 /// straight in, and bytes are checked once, with no copy before they are appended.

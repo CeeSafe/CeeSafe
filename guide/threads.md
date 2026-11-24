@@ -169,6 +169,30 @@ fn main() {
 1000
 ```
 
+An owner that is the only one left may change the value without a lock: `a.getMut()` lends it exclusively when no
+other owner exists, and is null otherwise. Once the threads that had clones are joined, the value is the program's
+alone again.
+
+```ceesafe
+fn main() {
+    var totals = Arc<Vector<u64>>.create(Vector<u64>.create())!;
+    let reader = totals.clone();
+    Console.writeLine(totals.getMut().isNull()); // `reader` is another owner
+    let worker = Thread.spawn(move () => reader.get().length)!;
+    let _ = worker.join(); // the thread's owner went with it
+    match (totals.getMut()) {
+        Some(values) => { values.push(42)!; }
+        null => {}
+    }
+    Console.writeLine(totals.get().length);
+}
+```
+
+```text
+true
+1
+```
+
 `lock` waits until the lock is free. `tryLock` never waits: it returns the guard, or null if a thread holds the lock
 (the calling thread included). A guard unlocks where it is destroyed: at the end of its block, or earlier where it is
 moved away, as by `let _ = guard;`.
@@ -387,6 +411,96 @@ fn main() {
 - Tasks use the same channel with `sendAsync` and `recvAsync` ([Async tasks](async.md)).
 - The interpreter runs threads one at a time, and reports a thread that waits to send on a full channel as a
   deadlock: there, give the channel room for what is sent before the receiver runs, as above.
+
+## How many threads
+
+`Thread.cpuCount()` is the number of CPUs the process may run on, at least 1. On Linux it follows `taskset` and a
+container's cpuset. A program that splits work over the machine starts that many threads:
+
+```ceesafe
+fn main() {
+    let workers = Thread.cpuCount();
+    Console.writeLine(workers >= 1);
+}
+```
+
+Expected output:
+
+```
+true
+```
+
+## Waiting for a time, and reaping finished threads
+
+`Thread.sleep(ms)` blocks the calling thread for at least `ms` milliseconds. `channel.recvTimeout(ms)` is `recv`
+with a limit: `Ok(Some(v))` for a value, `Ok(null)` once the channel is closed and empty, and
+`Err(AsyncError.TimedOut)` if neither happened in time. Neither spins: the thread sleeps until the time is up or a
+value arrives. A pool hands out a connection, or gives up:
+
+```ceesafe
+fn main() {
+    let pool = Channel<u32>.create(2)!;
+    match (pool.recvTimeout(20)) {
+        Ok(Some(c)) => { Console.writeLine(c); }
+        Ok(null) => { Console.writeLine("closed"); }
+        Err(_) => { Console.writeLine("busy: try again later"); }
+    }
+    let giver = pool.clone();
+    let t = Thread.spawn(move () => {
+        Thread.sleep(5);
+        giver.send(7)!;
+    })!;
+    match (pool.recvTimeout(10000)) {
+        Ok(Some(c)) => { Console.writeLine(c); }
+        _ => { Console.writeLine("none"); }
+    }
+    t.join();
+}
+```
+
+```text
+busy: try again later
+7
+```
+
+`t.isFinished()` asks, without waiting, whether a thread has returned; a `join()` after `true` does not wait. A
+server that starts a thread per client keeps them in a vector and joins the finished ones now and then, so the
+vector does not grow for ever:
+
+```ceesafe
+fn main() {
+    var clients = Vector<Thread<u64>>.create();
+    for (k in 0..4u64) {
+        clients.push(Thread.spawn(move () => {
+            Thread.sleep(k * 2);
+            return 1u64; // the requests this client made
+        })!)!;
+    }
+    var served: u64 = 0;
+    while (clients.length > 0) {
+        var k: usize = 0;
+        while (k < clients.length) {
+            if (clients[k].isFinished()) {
+                served += clients.swapRemove(k).join();
+            } else {
+                k += 1;
+            }
+        }
+        Thread.sleep(1);
+    }
+    Console.writeLine(served);
+}
+```
+
+```text
+4
+```
+
+- `Thread.sleep` and `recvTimeout` block the thread, so an `async fn` cannot call them: a task uses
+  `await Timer.sleep(ms)` and `Async.timeout`.
+- The interpreter runs on a virtual clock: a sleep there moves the clock instead of waiting, once every other thread
+  waits too. `isFinished` only answers there; the other threads run when the caller waits, so poll with a sleep
+  between, as above.
 
 ## Stopping a thread that waits in `accept`
 

@@ -80,7 +80,13 @@ fn resolveReferenceType(
 }
 
 /// `borrow e` and `borrow mut e` (Synth's BorrowExpr case).
-fn synthBorrow(c: borrow mut Checker, mutable: bool, operandSyntax: u32, span: Span) -> Result<u32, AllocError> {
+fn synthBorrow(
+    c: borrow mut Checker,
+    mutable: bool,
+    operandSyntax: u32,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
     match (c.front.ast.exprs[operandSyntax as usize]) {
         ExprNode.Slice(target, low, high) => { return synthSlice(c, target, low, high, mutable, span); }
         ExprNode.Name(name, _) => {
@@ -90,7 +96,13 @@ fn synthBorrow(c: borrow mut Checker, mutable: bool, operandSyntax: u32, span: S
         }
         _ => {}
     }
-    let operand = synth(c, operandSyntax, none())?;
+    // An expected `borrow T` types an integer literal lent (ADR 0227 §2.1: `look(borrow 5)` for a `borrow i64`); an
+    // argument's expectation is already the pointee (checkArgument's hint).
+    let lent = if (expected != none() && c.types.is(
+        expected,
+        TypeKind.Reference,
+    ) && !c.types.isSlice(expected)) c.types.info(expected).pointee else expected;
+    let operand = synth(c, operandSyntax, integerHint(c, lent))?;
     if (c.isBottom(operand)) {
         return Ok(operand);
     }
@@ -102,6 +114,12 @@ fn synthBorrow(c: borrow mut Checker, mutable: bool, operandSyntax: u32, span: S
         )?;
         c.error(referenceNotAllowed(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
+    }
+    if (!mutable && toPlace(c, operand)? == none() && !isPathThroughReference(c, operand, false)? &&
+        rootedInTemporary(c, operand)) {
+        // `borrow 1u32`, `borrow make()`: the value is held in a temporary to the end of the statement and lent from
+        // there, as a method's receiver is (ADR 0227 §2.1). A loan kept past the statement is N0243.
+        return borrowReceiver(c, operand, false, span);
     }
     return borrowPlace(c, operand, mutable, span);
 }
@@ -137,6 +155,16 @@ fn synthDeref(c: borrow mut Checker, operandSyntax: u32, span: Span) -> Result<u
         if (c.types.is(t, TypeKind.RawPointer)) {
             appendText(mut message, "; read a raw pointer with 'p.read()' in an 'unsafe' block")?;
         }
+        if (c.types.is(t, TypeKind.Box)) {
+            // ADR 0228 §2.1: say how a box's contents are reached and moved out (§18.2, §18.3).
+            let contents = c.types.info(t).pointee;
+            appendText(mut message, "; a box is read through without '*': 'b.f' and 'b.m()' reach its contents, and ")?;
+            appendText(mut message, "they move out where their type, ")?;
+            appendQuotedType(mut message, c, contents)?;
+            appendText(mut message, ", is expected, as in 'let inner: ")?;
+            appendBytes(mut message, c.typeName(contents))?;
+            appendText(mut message, " = b;' (type-system.md §18.3)")?;
+        }
         c.error(typeMismatch(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
@@ -159,6 +187,13 @@ fn misplacedMutArgument(c: borrow mut Checker, span: Span) -> Result<u32, AllocE
     c.error(mutArgumentMismatch(), span.start, span.end, message)?;
     return c.errorResult(span.start, span.end);
 }
+
+/// Whether `e` is written as an array literal, or a slice of one (`[1, 2]`, `[1, 2][..]`; ADR 0226 §2.1).
+fn writtenArrayLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[unparenthesized(c, e) as usize]) {
+    ExprNode.ArrayLiteral(_) => true,
+    ExprNode.Slice(target, _, _) => writtenArrayLiteral(c, target),
+    _ => false,
+};
 
 /// A box's contents or a vector's elements, lent where the parameter wants its pointee.
 fn contentsFor(c: borrow mut Checker, value: u32, parameterType: u32) -> Result<u32, AllocError> {
@@ -259,7 +294,11 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
     if (!c.types.is(parameterType, TypeKind.Reference)) {
         return checkExpr(c, argument, parameterType);
     }
-    let hint = integerHint(c, pointee);
+    // An array literal for a slice parameter takes its element type from it (ADR 0226 §2.1).
+    let hint = if (c.types.isSlice(parameterType) && writtenArrayLiteral(c, argument)) parameterType else integerHint(
+        c,
+        pointee,
+    );
     var value = synth(c, argument, hint)?;
     value = contentsFor(c, value, parameterType)?;
     let valueType = c.typeOf(value);
@@ -302,6 +341,17 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
         appendQuotedType(mut message, c, parameterType)?;
         appendText(mut message, ", found ")?;
         appendQuotedType(mut message, c, valueType)?;
+        if (c.types.isSlice(parameterType) && c.types.is(valueType, TypeKind.Array) && !c.types.isUnsized(valueType) &&
+            c.types.info(valueType).element == c.types.info(pointee).element) {
+            // An array is lent as a slice by slicing it (§16.3); the sure fix writes `[..]` (ADR 0226 §2.1).
+            appendText(mut message, "; an array is passed as a slice by slicing it: write '[..]' after it")?;
+            var title = Vector<u8>.create();
+            appendText(mut title, "write '[..]' after the array")?;
+            var text = Vector<u8>.create();
+            appendText(mut text, "[..]")?;
+            c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.end, span.end, text)?;
+            return c.errorResult(span.start, span.end);
+        }
         c.error(typeMismatch(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
@@ -1424,6 +1474,20 @@ fn resolveReturnSources(
             appendText(
                 mut message,
                 "a function without reference parameters cannot return a reference: there is nothing it could borrow from",
+            )?;
+            if (c.types.isSlice(returnType)) {
+                // ADR 0226 §2.4: a table of constants is a `static`, and the result names the region `static`.
+                appendText(
+                    mut message,
+                    "; to return a table of constants, put it in a 'static' and write the region 'static' in the result: 'static NAMES: [StringView; 2] = [\"a\", \"b\"];' and 'fn names() -> Slice<static, StringView> => NAMES[..];' (type-system.md §25.6, §39)",
+                )?;
+            }
+        } else if (!c.types.is(returnType, TypeKind.Reference)) {
+            // A result that holds a reference without being one, `Result<Slice<u8>, E>`: a source list would make the
+            // whole result a reference; a region parameter names the source (ADR 0228 §2.2).
+            appendText(
+                mut message,
+                "this function has several reference parameters: give the function a region parameter and write it in the result's type and in the type of each parameter the result borrows from, e.g. 'fn f<region r>(a: Slice<r, u8>, b: Slice<u8>) -> Result<Slice<r, u8>, E>' ('borrow(a) T' would make the whole result a reference; type-system.md §25.6)",
             )?;
         } else {
             appendText(

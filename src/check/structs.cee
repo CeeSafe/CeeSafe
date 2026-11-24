@@ -63,7 +63,7 @@ fn declareBuiltinTypes(c: borrow mut Checker) -> Result<void, AllocError> {
 }
 
 /// N0201 for a struct or enum named like a built-in type (both reasons, in DeclareStruct's and DeclareEnum's order).
-fn checkTypeItemName(c: borrow mut Checker, ident: Ident) -> Result<bool, AllocError> {
+fn checkTypeItemName(c: borrow mut Checker, ident: Ident, isPrivate: bool) -> Result<bool, AllocError> {
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(ident.symbol))?;
     if (c.types.lookup(text.view()) != none()) {
@@ -74,7 +74,7 @@ fn checkTypeItemName(c: borrow mut Checker, ident: Ident) -> Result<bool, AllocE
         c.error(duplicateItem(), ident.start, ident.end, message)?;
         return Ok(false);
     }
-    if (isDeclared(c, ident.symbol)) {
+    if (isDeclaredAs(c, ident.symbol, isPrivate)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, text.view())?;
@@ -98,7 +98,7 @@ fn declareStruct(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     };
     checkRegionParameters(c, s.regionParameters, s.typeParameters)?;
     checkRegionBounds(c, s.regionParameters, false)?;
-    if (!checkTypeItemName(c, ident)?) {
+    if (!checkTypeItemName(c, ident, isPrivateVisibility(entry.visibility))?) {
         return Ok();
     }
     var name = Vector<u8>.create();
@@ -146,7 +146,7 @@ fn declareEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     };
     checkRegionParameters(c, regions, parameters)?;
     checkRegionBounds(c, regions, false)?;
-    if (!checkTypeItemName(c, ident)?) {
+    if (!checkTypeItemName(c, ident, isPrivateVisibility(entry.visibility))?) {
         return Ok();
     }
     var name = Vector<u8>.create();
@@ -534,8 +534,9 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
     17 => "AddressNotAvailable",
     18 => "Unsupported",
     19 => "HostNotFound",
-    20 => "StorageFull",     // ADR 0077
-    _ => "TooManyOpenFiles", // ADR 0104
+    20 => "StorageFull",      // ADR 0077
+    21 => "TooManyOpenFiles", // ADR 0104
+    _ => "BadDescriptor",     // ADR 0221 §2.2
 };
 
 fn addVariant(c: borrow mut Checker, definition: u32, name: u32, start: u32, end: u32) -> Result<u32, AllocError> {
@@ -600,7 +601,7 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
         return Ok();
     }
     if (entry.builtin == 1) {
-        for (k in 0..22usize) {
+        for (k in 0..23usize) {
             let symbol = c.intern(ioErrorVariant(k))?;
             let variant = addVariant(c, definition, symbol, 0, 0)?;
             if (k == 10) {
@@ -970,7 +971,7 @@ fn intoMethod(c: borrow Checker, source: u32, target: u32) -> u32 {
             function = findStructFunction(c, definition, name);
         }
         if (function == none()) {
-            function = implMethodFor(c, source, name);
+            function = implMethodWithSyntax(c, source, name, syntax); // one of several of the name (ADR 0229)
         }
         if (function != none() && c.hir.functions[function as usize].syntax == syntax &&
             (target == none() || c.hir.functions[function as usize].returnType == target)) {

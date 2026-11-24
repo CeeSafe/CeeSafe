@@ -365,7 +365,7 @@ fn main() {
 ```
 
 ```text
-main.cee:2:27: error[N0200]: 'Slice<i32>' has no method 'map'; it has 'copyFrom', 'fill', 'copyWithin', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt' and 'splitAtMut'
+main.cee:2:27: error[N0200]: 'Slice<i32>' has no method 'map'; it has 'copyFrom', 'fill', 'copyWithin', 'swap', 'sortBy', 'sortStableBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt' and 'splitAtMut'
   |
 2 |     let total = [1, 2, 3].map((x) => x * 2).filter((x) => x > 2).sum();
   |                           ^^^

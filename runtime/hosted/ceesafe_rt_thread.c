@@ -17,7 +17,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <errno.h>
 #include <pthread.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #endif
@@ -32,12 +36,21 @@ struct cee_thread {
 #endif
     void *(*body)(void *);
     void *arg;
+    uint32_t finished; /* ADR 0222 §2.3: set (ceesafe_atomic_*) by the entry once the body has returned */
 };
+
+/* The thread's entry: the body, then the flag ceesafe_thread_finished reads. The body's result was written into the
+   thread's record before it returned, and the sequentially consistent store and load order it before the reader. */
+static void *cee_thread_entry(void *p) {
+    cee_thread *t = (cee_thread *)p;
+    (void)t->body(t->arg);
+    ceesafe_atomic_store_u32(&t->finished, 1u);
+    return NULL;
+}
 
 #if defined(_WIN32) && !defined(CEE_COSMOOS)
 static DWORD WINAPI ceesafe_thread_entry(LPVOID p) {
-    cee_thread *t = (cee_thread *)p;
-    (void)t->body(t->arg);
+    (void)cee_thread_entry(p);
     return 0;
 }
 #endif
@@ -49,8 +62,9 @@ cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg) {
     }
     t->body = body;
     t->arg = arg;
+    t->finished = 0u;
 #if defined(CEE_COSMOOS)
-    if (cosmo_thread_start(&t->thread, body, arg, 0) != 0) {
+    if (cosmo_thread_start(&t->thread, cee_thread_entry, t, 0) != 0) {
         ceesafe_free(t, CEE_ALLOC_SYSTEM);
         return NULL;
     }
@@ -61,12 +75,53 @@ cee_thread *ceesafe_thread_start(void *(*body)(void *), void *arg) {
         return NULL;
     }
 #else
-    if (pthread_create(&t->thread, NULL, body, arg) != 0) {
+    if (pthread_create(&t->thread, NULL, cee_thread_entry, t) != 0) {
         ceesafe_free(t, CEE_ALLOC_SYSTEM);
         return NULL;
     }
 #endif
     return t;
+}
+
+bool ceesafe_thread_finished(cee_thread *t) {
+    return ceesafe_atomic_load_u32(&t->finished) != 0u;
+}
+
+/* `Thread.sleep(ms)` (ADR 0222 §2.1): at least `ms` milliseconds; a signal's interruption sleeps the time left. */
+void ceesafe_thread_sleep(uint64_t ms) {
+#if defined(CEE_COSMOOS)
+    /* A timed wait on a condition nothing signals (cosmo_cond_timedwait takes nanoseconds from now), a second at a
+       time so the count never overflows. Not built or run here: a wake before a step's end would shorten the sleep,
+       if CosmoOS's condition ever woke without a signal. */
+    if (ms == 0u) {
+        return;
+    }
+    cosmo_mutex_t m = (cosmo_mutex_t)COSMO_MUTEX_INIT;
+    cosmo_cond_t c = (cosmo_cond_t)COSMO_COND_INIT;
+    cosmo_mutex_lock(&m);
+    while (ms > 0u) {
+        uint64_t step = ms > 1000u ? 1000u : ms;
+        (void)cosmo_cond_timedwait(&c, &m, (unsigned long long)step * 1000000ull);
+        ms -= step;
+    }
+    cosmo_mutex_unlock(&m);
+#elif defined(_WIN32)
+    while (ms > 0u) {
+        DWORD step = ms > 0x7FFFFFFFu ? 0x7FFFFFFFu : (DWORD)ms; /* below INFINITE */
+        Sleep(step);
+        ms -= step;
+    }
+#else
+    if (ms == 0u) {
+        return;
+    }
+    struct timespec t = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
+    if ((uint64_t)t.tv_sec != ms / 1000u) {
+        t.tv_sec = (time_t)((~(uint64_t)0) >> 33); /* a time_t of 32 bits: about 34 years, then on */
+    }
+    while (nanosleep(&t, &t) != 0 && errno == EINTR) {
+    }
+#endif
 }
 
 /* ---- Service threads (ADR 0182): started, named and never joined ---------------------------------------------- */
@@ -166,6 +221,54 @@ void ceesafe_thread_join(cee_thread *t) {
     (void)pthread_join(t->thread, NULL);
 #endif
     ceesafe_free(t, CEE_ALLOC_SYSTEM);
+}
+
+/* `Thread.cpuCount()` (ADR 0237). On Linux the affinity mask, in a buffer that doubles while the kernel says it is too
+   small (a machine may have more CPUs than cpu_set_t holds); elsewhere, or when that fails, the online CPUs. */
+uint32_t ceesafe_thread_cpu_count(void) {
+#if defined(CEE_COSMOOS)
+    return 1u; /* CosmoOS's userland has no call for it */
+#elif defined(_WIN32)
+    DWORD_PTR process = 0;
+    DWORD_PTR system = 0;
+    DWORD online = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    /* A mask is for one processor group: it counts only where the machine has one. */
+    if (GetActiveProcessorGroupCount() == 1 && GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) {
+        DWORD allowed = 0;
+        while (process != 0) {
+            allowed += (DWORD)(process & 1u);
+            process >>= 1;
+        }
+        if (allowed > 0) {
+            return (uint32_t)allowed;
+        }
+    }
+    return online > 0 ? (uint32_t)online : 1u;
+#else
+#if defined(__linux__)
+    for (int cpus = 1024; cpus <= 65536; cpus *= 2) {
+        cpu_set_t *set = CPU_ALLOC(cpus);
+        if (set == NULL) {
+            break;
+        }
+        size_t size = CPU_ALLOC_SIZE(cpus);
+        CPU_ZERO_S(size, set);
+        /* The process's main thread: a worker that pinned itself does not change the answer. */
+        int failed = sched_getaffinity(getpid(), size, set);
+        int error = errno;
+        int allowed = failed == 0 ? CPU_COUNT_S(size, set) : 0;
+        CPU_FREE(set);
+        if (failed == 0 && allowed > 0) {
+            return (uint32_t)allowed;
+        }
+        if (failed == 0 || error != EINVAL) {
+            break;
+        }
+    }
+#endif
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    return online > 0 ? (uint32_t)online : 1u;
+#endif
 }
 
 /* ---- Mutexes (type-system.md §38.3): the platform lock, allocated so a Mutex<T> may move ---------------------- */

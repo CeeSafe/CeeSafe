@@ -1,0 +1,111 @@
+// `v.drain()` (type-system.md §23.1, ADR 0224): the elements move out first to last while the vector is borrowed; a
+// loop that leaves early destroys the rest, first to last, with the iterator; the vector is empty afterwards and keeps
+// its capacity. It works on a field through `borrow mut`, on an empty vector, and on vectors of FailingAllocator and
+// SecretHeap. Every element is destroyed once (`dN` lines), checked with --check-leaks.
+// expect-stdout: 1
+// expect-stdout: d1
+// expect-stdout: 2
+// expect-stdout: d2
+// expect-stdout: d3
+// expect-stdout: d4
+// expect-stdout: d5
+// expect-stdout: 0
+// expect-stdout: 8
+// expect-stdout: 3
+// expect-stdout: 30
+// expect-stdout: 0
+// expect-stdout: a b c
+// expect-stdout: 0
+// expect-stdout: 6
+// expect-stdout: 0
+// expect-stdout: 15
+// expect-stdout: done
+// expect-stdout: d7
+
+struct Item {
+    id: i32;
+
+    drop {
+        Console.write("d");
+        Console.writeLine(this.id);
+    }
+}
+
+struct Table {
+    rows: Vector<u32>;
+
+    fn total(borrow mut this) -> u32 {
+        var sum: u32 = 0;
+        for (r in this.rows.drain()) {
+            sum += r;
+        }
+        return sum;
+    }
+}
+
+fn main() {
+    var items = Vector<Item>.withCapacity(8)!;
+    for (i in 1..6) {
+        items.push(Item { id: i })!;
+    }
+    for (item in items.drain()) {
+        Console.writeLine(item.id);
+        if (item.id == 2) {
+            break;
+        }
+    }
+    Console.writeLine(items.length);
+    Console.writeLine(items.capacity);
+
+    var table = Table { rows: Vector<u32>.create() };
+    table.rows.push(5)!;
+    table.rows.push(10)!;
+    table.rows.push(15)!;
+    Console.writeLine(table.rows.length);
+    Console.writeLine(table.total());
+    Console.writeLine(table.rows.length);
+
+    var words = Vector<String>.create();
+    words.push(String.from("a")!)!;
+    words.push(String.from("b")!)!;
+    words.push(String.from("c")!)!;
+    var line = String.create();
+    for (w in words.drain()) {
+        if (line.length != 0) {
+            line.append(" ")!;
+        }
+        line.append(w.view())!;
+    }
+    Console.writeLine(line.view());
+
+    var empty = Vector<u64>.create();
+    var count: u32 = 0;
+    for (x in empty.drain()) {
+        count += 1;
+    }
+    Console.writeLine(count);
+
+    var failing = Vector<u8, FailingAllocator>.create();
+    failing.push(1)!;
+    failing.push(2)!;
+    failing.push(3)!;
+    var sum: u32 = 0;
+    for (b in failing.drain()) {
+        sum += b as u32;
+    }
+    Console.writeLine(sum);
+    Console.writeLine(failing.length);
+
+    var secret = Vector<u64, SecretHeap>.create();
+    for (k in 1u64..6u64) {
+        secret.push(k)!;
+    }
+    var total: u64 = 0;
+    for (k in secret.drain()) {
+        total += k;
+    }
+    Console.writeLine(total);
+
+    items.push(Item { id: 7 })!;
+    Console.writeLine("done");
+}

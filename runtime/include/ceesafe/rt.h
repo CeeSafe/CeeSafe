@@ -642,6 +642,19 @@ static inline int8_t cee_bswap_i8(int8_t x) { return x; }
 static inline int16_t cee_bswap_i16(int16_t x) { return cee_as_i16(cee_bswap_u16((uint16_t)x)); }
 static inline int32_t cee_bswap_i32(int32_t x) { return cee_as_i32(cee_bswap_u32((uint32_t)x)); }
 static inline int64_t cee_bswap_i64(int64_t x) { return cee_as_i64(cee_bswap_u64((uint64_t)x)); }
+/* The masking shifts on signed types (ADR 0223). The left shift is the unsigned one, converted back without
+   implementation-defined behaviour; the right shift is arithmetic, written so that only non-negative values are
+   shifted: for x < 0, ~x is non-negative and ~(~x >> n) is floor(x / 2^n). */
+#define CEE_SHIFTS_SIGNED(T, S, US, N)                                                                 \
+    static inline T cee_shl_wrap_##S(T x, uint32_t n) { return cee_as_##S(cee_shl_wrap_##US((uint##N##_t)x, n)); } \
+    static inline T cee_shr_wrap_##S(T x, uint32_t n) {                                                 \
+        n &= (N##u) - 1u;                                                                               \
+        return x < 0 ? (T)~(T)((T)~x >> n) : (T)(x >> n);                                               \
+    }
+CEE_SHIFTS_SIGNED(int8_t, i8, u8, 8)
+CEE_SHIFTS_SIGNED(int16_t, i16, u16, 16)
+CEE_SHIFTS_SIGNED(int32_t, i32, u32, 32)
+CEE_SHIFTS_SIGNED(int64_t, i64, u64, 64)
 
 #if defined(CEE_FLOATS)
 /* ---- Floats: representation and conversions (type-system.md §35.4–§35.6) ----------------------- */
@@ -674,8 +687,8 @@ CEE_FTOI(uint16_t, u16, x > -1.0, 65536.0, 0u, UINT16_MAX)
 CEE_FTOI(uint32_t, u32, x > -1.0, 4294967296.0, 0u, UINT32_MAX)
 CEE_FTOI(uint64_t, u64, x > -1.0, 18446744073709551616.0, 0u, UINT64_MAX)
 
-/* Math methods (type-system.md §35.8), never a libm call: CosmoOS has no libm, and baseline x86-64 has no instruction
-   for floor or ceil (roundsd needs SSE4.1). */
+/* Math methods (type-system.md §35.8). These are never a libm call: CosmoOS has no libm, and baseline x86-64 has no
+   instruction for floor or ceil (roundsd needs SSE4.1). The transcendental ones, below, are (ADR 0218). */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <math.h> /* MSVC's sqrt is in its C runtime, which every program links */
 #endif
@@ -761,6 +774,89 @@ static inline float cee_max_f32(float a, float b) {
     if (a == b) return (cee_f32_bits(a) >> 31) != 0 ? b : a;
     return a > b ? a : b;
 }
+/* trunc, round (half away from zero) and roundEven (half to even), exact and portable as floor and ceil are (ADR
+   0218 §2.3): a value with |x| >= 2^52 (2^23), an infinity or NaN is already integral; otherwise t, x toward zero, is
+   exact, and so is d = x - t (|d| < 1, Sterbenz), which decides the step. A zero result takes x's sign. */
+static inline double cee_trunc_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    return cee_with_sign_f64((double)(int64_t)x, x);
+}
+static inline double cee_round_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    double t = (double)(int64_t)x, d = x - t;
+    if (d >= 0.5) t += 1.0;
+    else if (d <= -0.5) t -= 1.0;
+    return cee_with_sign_f64(t, x);
+}
+static inline double cee_round_even_f64(double x) {
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) return x;
+    int64_t i = (int64_t)x;
+    double t = (double)i, d = x - t;
+    bool odd = (i % 2) != 0;
+    if (d > 0.5 || (d == 0.5 && odd)) t += 1.0;
+    else if (d < -0.5 || (d == -0.5 && odd)) t -= 1.0;
+    return cee_with_sign_f64(t, x);
+}
+static inline float cee_trunc_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    return cee_with_sign_f32((float)(int32_t)x, x);
+}
+static inline float cee_round_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    float t = (float)(int32_t)x, d = x - t;
+    if (d >= 0.5f) t += 1.0f;
+    else if (d <= -0.5f) t -= 1.0f;
+    return cee_with_sign_f32(t, x);
+}
+static inline float cee_round_even_f32(float x) {
+    if (!(x > -8388608.0f && x < 8388608.0f)) return x;
+    int32_t i = (int32_t)x;
+    float t = (float)i, d = x - t;
+    bool odd = (i % 2) != 0;
+    if (d > 0.5f || (d == 0.5f && odd)) t += 1.0f;
+    else if (d < -0.5f || (d == -0.5f && odd)) t -= 1.0f;
+    return cee_with_sign_f32(t, x);
+}
+static inline double cee_copy_sign_f64(double x, double y) { return cee_with_sign_f64(x, y); }
+static inline float cee_copy_sign_f32(float x, float y) { return cee_with_sign_f32(x, y); }
+/* The methods that are the C library's math functions (§35.8, ADR 0218), in ceesafe_rt_math.c (hosted only; the
+   checker rejects them in the freestanding profile). */
+#define CEE_MATH_DECLARE1(NAME)                                                                                    \
+    double ceesafe_math_##NAME##_f64(double x);                                                                    \
+    float ceesafe_math_##NAME##_f32(float x);
+#define CEE_MATH_DECLARE2(NAME)                                                                                    \
+    double ceesafe_math_##NAME##_f64(double x, double y);                                                          \
+    float ceesafe_math_##NAME##_f32(float x, float y);
+CEE_MATH_DECLARE1(exp)
+CEE_MATH_DECLARE1(exp2)
+CEE_MATH_DECLARE1(expm1)
+CEE_MATH_DECLARE1(log)
+CEE_MATH_DECLARE1(log2)
+CEE_MATH_DECLARE1(log10)
+CEE_MATH_DECLARE1(log1p)
+CEE_MATH_DECLARE1(sin)
+CEE_MATH_DECLARE1(cos)
+CEE_MATH_DECLARE1(tan)
+CEE_MATH_DECLARE1(asin)
+CEE_MATH_DECLARE1(acos)
+CEE_MATH_DECLARE1(atan)
+CEE_MATH_DECLARE1(sinh)
+CEE_MATH_DECLARE1(cosh)
+CEE_MATH_DECLARE1(tanh)
+CEE_MATH_DECLARE1(asinh)
+CEE_MATH_DECLARE1(acosh)
+CEE_MATH_DECLARE1(atanh)
+CEE_MATH_DECLARE1(cbrt)
+CEE_MATH_DECLARE1(logb)
+CEE_MATH_DECLARE2(pow)
+CEE_MATH_DECLARE2(atan2)
+CEE_MATH_DECLARE2(hypot)
+CEE_MATH_DECLARE2(remainder)
+CEE_MATH_DECLARE2(fmod)
+double ceesafe_math_fma_f64(double x, double y, double z);
+float ceesafe_math_fma_f32(float x, float y, float z);
+double ceesafe_math_scalbn_f64(double x, int32_t n);
+float ceesafe_math_scalbn_f32(float x, int32_t n);
 #endif /* CEE_FLOATS */
 
 /* ---- Bounds checks (type-system.md §16.3) ------------------------------------------------- */
@@ -1175,6 +1271,13 @@ void ceesafe_thread_join(cee_thread *t);
 /* A service thread (type-system.md §38.2, ADR 0182): starts body(arg) named `name` (the first 15 bytes, where the
    platform names threads) and never joins it; the thread frees its own record. 0 if it could not be started. */
 int ceesafe_thread_service(void *(*body)(void *), void *arg, const uint8_t *name, uint64_t length);
+/* ADR 0222 §2.3: whether the thread's body has returned (a sequentially consistent load of the flag its entry sets
+   after the body), so a join after a true answer does not wait. It never waits. */
+bool ceesafe_thread_finished(cee_thread *t);
+/* ADR 0222 §2.1: the calling thread waits at least `ms` milliseconds; 0 returns at once. */
+void ceesafe_thread_sleep(uint64_t ms);
+/* ADR 0237: how many CPUs this process may run on, at least 1. It never waits. */
+uint32_t ceesafe_thread_cpu_count(void);
 /* A platform mutex in allocated memory, or NULL. */
 void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);
@@ -1534,6 +1637,9 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 /* ADR 0104: after StorageFull. EMFILE and ENFILE; Windows' ERROR_TOO_MANY_OPEN_FILES, which the runtime maps to
    EMFILE. */
 #define CEE_IO_TOO_MANY_OPEN_FILES 21u
+/* ADR 0221 §2.2: after TooManyOpenFiles. EBADF: a read of a file opened only for writing, a write of one opened only
+   for reading; Windows' ERROR_INVALID_HANDLE, which the runtime maps to EBADF. */
+#define CEE_IO_BAD_DESCRIPTOR 22u
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);
@@ -1608,6 +1714,33 @@ int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *sec
    2 directory, 3 other), from fstat; negated errno on failure. */
 int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t *nanoseconds);
 int64_t ceesafe_host_file_kind(void const *file);
+/* ADR 0220: an advisory lock on bytes start .. start + length - 1 of an open File (its first field is the descriptor):
+   kind 0 unlocks, 1 is shared, 2 exclusive; wait 1 waits for a conflicting lock to go. Open-file-description locks
+   (F_OFD_SETLK) where the kernel has them, else process-associated fcntl locks; LockFileEx on Windows. 0 when done,
+   1 when a lock that does not wait met a conflict, or a negated errno. lib/std checks the range first. */
+int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length);
+/* ADR 0221 §2.3: 1 if standard input (0), output (1) or error (2) is a terminal (isatty; GetConsoleMode on
+   Windows), else 0. */
+int64_t ceesafe_host_is_terminal(uint32_t stream);
+/* ADR 0232: a shared mapping of bytes offset .. offset + length - 1 of an open File (its first field is the
+   descriptor), for reading and writing; the file is first extended to cover them, never shortened. out[0] the
+   address of byte `offset`, out[1] and out[2] what was mapped (from a page or granule boundary), out[3] the Windows
+   mapping handle. 0 or a negated errno (EBADF for a file not open for reading and writing). lib/std checks the range
+   first. The accessors take the address and the mapping's byte `at` apart; lib/std checks bounds and alignment. */
+int64_t ceesafe_host_map_file(void const *file, uint64_t offset, uint64_t length, uint64_t *out);
+void ceesafe_host_map_unmap(uint64_t base, uint64_t length, uint64_t handle);
+int64_t ceesafe_host_map_sync(uint64_t base, uint64_t length);
+void ceesafe_host_map_read(uint64_t address, uint64_t at, uint8_t *into, uint64_t length);
+void ceesafe_host_map_write(uint64_t address, uint64_t at, uint8_t const *bytes, uint64_t length);
+uint32_t ceesafe_host_map_load32(uint64_t address, uint64_t at, int32_t order);
+void ceesafe_host_map_store32(uint64_t address, uint64_t at, uint32_t value, int32_t order);
+uint32_t ceesafe_host_map_cas32(uint64_t address, uint64_t at, uint32_t expected, uint32_t desired, int32_t order);
+uint32_t ceesafe_host_map_add32(uint64_t address, uint64_t at, uint32_t value, int32_t order);
+uint64_t ceesafe_host_map_load64(uint64_t address, uint64_t at, int32_t order);
+void ceesafe_host_map_store64(uint64_t address, uint64_t at, uint64_t value, int32_t order);
+uint64_t ceesafe_host_map_cas64(uint64_t address, uint64_t at, uint64_t expected, uint64_t desired, int32_t order);
+uint64_t ceesafe_host_map_add64(uint64_t address, uint64_t at, uint64_t value, int32_t order);
+void ceesafe_host_map_fence(void);
 #if defined(_WIN32)
 /* realpath(3) and the descriptor calls ceesafec's `embed` makes (ADR 0087 §2.8), which Windows lacks; C code that
  * declares them, as an `extern "C"` block does, calls these, which take UTF-8 paths (the wide calls underneath):
@@ -1859,6 +1992,9 @@ void ceesafe_chan_close(void *c);
 /* Whether ceesafe_chan_close has been called (ADR 0060), read under the lock. */
 bool ceesafe_chan_closed(void *c);
 void ceesafe_chan_wait(void *c, uint64_t epoch);
+/* ADR 0222 §2.2: as ceesafe_chan_wait, but returns once ceesafe_async_now() reaches `deadline` (milliseconds on the
+   monotonic clock) even if the channel did not change. It may return early: the caller looks again. */
+void ceesafe_chan_wait_until(void *c, uint64_t epoch, uint64_t deadline);
 bool ceesafe_chan_park(void *c, void *node, uint64_t epoch);
 void ceesafe_chan_unpark(void *c, void *node);
 /* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is

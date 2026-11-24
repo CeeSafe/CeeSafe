@@ -118,6 +118,7 @@ SliceAlgorithms.forEach	@effectsOf(visit) public fn forEach(s: Slice<T>, visit: 
 SliceAlgorithms.partitionPoint	@effectsOf(test) public fn partitionPoint(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> usize
 SliceAlgorithms.retain	@effectsOf(keep) public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
 SliceAlgorithms.sortBy	@effectsOf(cmp) public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
+SliceAlgorithms.sortStableBy	@effectsOf(cmp) public fn sortStableBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
 SliceCopying	public struct SliceCopying<T: Copy>
 SliceCopying.copyWithin	public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize)
 SliceSplitting	public struct SliceSplitting<region r, T>

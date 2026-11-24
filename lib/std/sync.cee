@@ -23,6 +23,27 @@ extern "C" {
     fn ceesafe_mutex_once_lock();
     @effects()
     fn ceesafe_mutex_once_unlock();
+    @effects(sleep)
+    fn ceesafe_thread_sleep(ms: u64);
+    @effects()
+    fn ceesafe_thread_cpu_count() -> u32;
+}
+
+/// Thread services that are not a thread's own (ADR 0222): `Thread.sleep(ms)` is the checker's name for
+/// ThreadServices.sleep(ms), as `Console.flush()` is HostServices.flush().
+public struct ThreadServices {
+    /// `Thread.sleep(ms)`: the calling thread waits at least `ms` milliseconds; 0 returns at once. It blocks the
+    /// thread, so an async function cannot call it (its effect is `sleep`): a task waits with `Timer.sleep(ms)`.
+    /// Safety: the runtime only waits.
+    public fn sleep(ms: u64) {
+        unsafe { ceesafe_thread_sleep(ms); }
+    }
+
+    /// `Thread.cpuCount()`: how many CPUs this process may run on, at least 1 (ADR 0237): on Linux those in its
+    /// affinity mask (so `taskset` and a container's cpuset count, a CPU-time quota does not), elsewhere the online
+    /// ones. Asked of the system each time; it never waits. The interpreter runs one thread at a time and answers 1.
+    /// Safety: the runtime only reads the system's count.
+    public fn cpuCount() -> u32 => unsafe { ceesafe_thread_cpu_count() };
 }
 
 /// Mutual exclusion: the data is reached only through a guard, which one thread holds at a time.
@@ -199,6 +220,19 @@ public struct Arc<T: Share> {
     /// The shared value, for as long as this owner is borrowed.
     /// Safety: the value lives while any owner does; T is Share, so shared references to it may cross threads.
     public fn get(borrow this) -> borrow T => borrow this.shared().value;
+
+    /// The value, to change in place, when this is its only owner (ADR 0224); null while another owner exists, which
+    /// may be reading it on another thread. Values that several owners change go in a `Mutex`: `Arc<Mutex<T>>`.
+    /// Safety: a count of one is this owner alone. No other owner can appear while it is borrowed exclusively, since
+    /// only an owner makes another (`clone`, through a borrow of it), and Arc has no weak references. The load is
+    /// sequentially consistent, so it is ordered after every earlier owner's drop, as the last owner's drop is.
+    public fn getMut(borrow mut this) -> (borrow mut T)? {
+        if (this.shared().count.load() != 1) {
+            return null;
+        }
+        let inner: borrow mut ArcInner<T> = unsafe { Ptr.toBorrowMut(this.inner) };
+        return Some(borrow mut inner.value);
+    }
 
     /// Safety: as get.
     fn shared(borrow this) -> borrow ArcInner<T> => unsafe { Ptr.toBorrow(this.inner as *ArcInner<T>) };

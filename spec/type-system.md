@@ -82,9 +82,16 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   block's (ADR 0064 §1); and a field (§12). Naming it in another file of the package is N0296, wherever the name is written:
   called, used as a value, in a type, a bound, an `impl` header, a struct literal or a pattern. The item is found
   and then refused, so the message says which file it is private to, and the check goes on with the item.
-  - The package still has one scope. A private item's name is taken in the whole package: a second item of that
-    name in another file is N0201, and where the name is that of a `lib/core` item it hides the library's in every
-    file of the package, where using it is N0296.
+  - **Each file's private items have a scope of their own (ADR 0230).** The package's `public` and `internal` items
+    share one scope; a file's `private` top-level items are a scope of that file, so two files may each declare a
+    private item of one name, and each means its own. A name in a file means, in this order: a local, parameter or
+    type parameter; the file's own private item; the package's item; `dep.X` and the file's imports; lib/core's item
+    and a built-in function; else another file's private item of the package, which is found and refused (N0296).
+    So a private item may have the name of a package item of another file, or of a lib/core item, and hides it in
+    its own file only. In one file two items of one name are N0201, private or not. The entry function (`main`)
+    keeps one scope in the package, private or not; C names that C defines (`extern "C"` functions, `@export`,
+    `@repr` types) stay one namespace (§28.2). An `impl` names its interface and type, and `impl T { … }` its
+    target, as its file means them.
   - Only naming is confined. A value whose type is a private struct or enum may reach another file through a
     function that is not private, and be held, passed on and inferred there; its fields and methods keep their own
     visibility. A generic function's body is checked as its own file's code in every instance, whichever file asks
@@ -226,8 +233,17 @@ of the same width and never panics. Neither exists on unsigned types (N0234).
 **Bit methods** (ADR 0071 §2.3). On every unsigned type, `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)` and
 `x.wrappingShr(n)` take a `u32` amount (a flexible literal adapts), taken modulo the bit width, and are of type `T`;
 `x.leadingZeros()`, `x.trailingZeros()` and `x.countOnes()` are a `u32` (the width for a zero `x`). On a signed type
-they are N0234, as the bit operators are restricted to unsigned types. `x.byteSwap()` is on every integer type: the
-bytes in the other order, of type `T` (two's complement for signed types; a one-byte type is unchanged).
+they are N0234, as the bit operators are restricted to unsigned types, except the masking shifts. `x.byteSwap()` is
+on every integer type: the bytes in the other order, of type `T` (two's complement for signed types; a one-byte type
+is unchanged).
+
+**Shifts of signed integers** (ADR 0223). `x.wrappingShl(n)` and `x.wrappingShr(n)` are on every signed type too,
+with the same `u32` amount taken modulo the width `w`, and of type `T`. `wrappingShl` is the unsigned shift of the
+same bits: the result is `x` × 2^(n mod w) modulo 2^w, in two's complement. `wrappingShr` is **arithmetic**: the
+bits shifted in are copies of the sign bit, so the result is ⌊`x` / 2^(n mod w)⌋, rounded towards negative
+infinity (`(-7i32).wrappingShr(1)` is −4, `(-1i32).wrappingShr(31)` is −1). Neither panics; an amount of the width
+or more wraps round (`x.wrappingShr(w)` is `x`), as on unsigned types. A shift that saturates instead of wrapping,
+⌊`x` / 2^n⌋ for every `n`, is `x.wrappingShr(n.min(w - 1))`.
 
 None of them panics except `abs`. Their names are reserved on integer types: an `impl` for an integer type cannot define a method
 with one of these names (N0228). In C they are `static inline` helpers of `rt.h` with no undefined behaviour: a
@@ -236,7 +252,8 @@ wrapping operation computes in the unsigned type of the same width and converts 
 
 Bitwise operators and shifts are restricted to unsigned types in M1. This avoids the
 implementation-defined and undefined parts of C's signed bit operations. Reinterpret
-with `truncate<u32>(x)`. Relaxing this later is backward compatible. A shift amount that is a
+with `truncate<u32>(x)`, or shift a signed value with `x.wrappingShl(n)` and the arithmetic `x.wrappingShr(n)`, whose
+behaviour is defined for every amount (ADR 0223). Relaxing this later is backward compatible. A shift amount that is a
 flexible literal is typed as `u32`. Other mismatches are N0207.
 
 ## 7. Conversions
@@ -356,8 +373,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   another constant of the type. A use is the value, like the literal: its fields are read (`KEY.fmtid.data4[7]`),
   and it is copied, passed and bound as any value. A struct that owns memory or holds a loan is N0216 (N0246 for a
   region parameter), at the constant's type.
-- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool`, `StringView`,
-  `Slice<u8>` (static bytes, below) or a plain struct (ADR 0180), and
+- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, a float type, `CChar` (ADR 0226
+  §2.3), `bool`, `StringView`, `Slice<u8>` (static bytes, below) or a plain struct (ADR 0180), and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
   sliced or borrowed. A table to
@@ -521,8 +538,13 @@ The algorithm that enforces these rules is in `lifetimes.md`.
 
 ### 13.2 Creating references
 - `borrow p` / `borrow mut p`, where `p` is a **place**: a local, `this`, a field path, or a path
-  through a reference such as `r.f` (`(*r).f`). Borrowing anything else is N0247; bind the value
+  through a reference such as `r.f` (`(*r).f`). Borrowing anything else mutably is N0247; bind the value
   to a local first.
+- `borrow e` of a value that is no place (ADR 0227 §2.1): a literal, a call's result, or a field or element path
+  from one (`borrow 1u32`, `borrow make()`, `borrow make().name`) is a shared borrow of a temporary that lives until
+  the end of its statement, as a receiver's is (below). It may be passed or used within the statement
+  (`map.contains(borrow 1u32)`); kept in a `let` used after the statement, it is N0243. `borrow mut e` of a value is
+  still N0247: what a call would change is a temporary no one could read.
 - `borrow mut p` requires `p` to be mutable: rooted at a `var` local, or reached through a
   `borrow mut` reference (N0248). A `let` binding, a parameter, a by-value `this`, and anything
   reached through a shared reference are immutable. That holds through a `borrow mut` or
@@ -549,7 +571,8 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   not a place, `make().view()` or `text.split(",").next()`, is evaluated into a temporary that lives until the end of
   its statement (§14.5), and the receiver borrows it; so is a field path on one (`holder().name.view()`). A result
   derived from it may be used within the statement; kept in a `let` used after it, it is N0243. A path through a
-  reference is not copied: it is borrowed as a place. An explicit `borrow e` or `mut e` of a value is still N0247.
+  reference is not copied: it is borrowed as a place. An explicit `borrow e` of a value is the same shared borrow of a
+  temporary (above; ADR 0227 §2.1); `borrow mut e` or `mut e` of a value is still N0247.
 
 ### 13.3 Using references
 - **Auto-deref.** Where a value of type `T` is needed (an operand, a by-value argument, an
@@ -656,6 +679,11 @@ struct File {
   `p` to `f` has a `drop` block. `p` is then partially initialised. `p.f` may be reassigned, after
   which `p` is whole again. Reading `p` as a whole, or borrowing it, needs all of it initialised
   (N0250).
+- **A field of an unwrapped temporary** (ADR 0227 §2.2). `e?.f` and `e!.f`, where `e` is no place (a call's result:
+  `make()?.name`, `replace(mut best, null)!.seek`) and `f` is not Copy, are `{ let unwrapped = e?; unwrapped.f }`:
+  the unwrapped value is held in a hidden local of its own, `f` is moved out of it (a partial move, so a struct with a
+  `drop` block on the path is N0252), and the rest of it is destroyed at the end of that block, the end of the
+  expression. Of a place, `opt!.f` stays N0251: `opt!` would consume `opt` to read one field of it.
 - **Not allowed:**
   - moving out of a place reached through a reference (N0251), because the referent must stay
     valid; this includes `this` in `borrow`/`borrow mut` methods;
@@ -782,6 +810,10 @@ Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
 A payload that is a single identifier is a binding, unless it names a constant (below); `Some(…)`, `Ok(…)`, `Err(…)`
 and `E.V…` there are patterns.
+- **No float patterns** (ADR 0228 §2.3). A float literal where a pattern is expected (`V.Real(1000.0)`, `-0.5 =>`) is
+  parsed, and refused with N0108, which says to bind the value and compare it (`V.Real(r) if r == 1000.0`, or
+  `v is V.Real(r) && r == 1000.0`); a `match` on a float is N0207, which says to write an `if` chain. Floats are
+  compared by `==` (§35): exactly, with `NaN` equal to nothing and `-0.0 == 0.0`, which a pattern would hide.
 - **Struct patterns** (ADR 0123). `P { x, var y, z: 0, .. }` matches a value of the struct `P`, or a reference to
   one, when each field pattern matches its field. `match`, `is` and `let` take a struct scrutinee.
   - `P` names the value's struct as a literal does, without type arguments (`Point`, `Pair`, `geometry.Point`,
@@ -1115,7 +1147,14 @@ fn area(s: Shape) -> u32 {
 
 ### 16.2 Values
 - `[e1, …, en]`: all elements have the same type (the expected element type, or the first
-  element's), n ≥ 1.
+  element's), n ≥ 1. The expected element type is that of an expected array type `[T; N]`, or (ADR 0226 §2.1) of an
+  expected slice type `Slice<T>`: a literal sliced where a slice is expected (`[1, 2][..]` returned as a
+  `Slice<u64>`) or passed for a `Slice<T>` parameter (`sum([1, 2][..])`); and a literal indexed where a number type
+  `T` is expected has `T` elements (`let g: u64 = [7, 8][i];`). An array passed for a slice parameter
+  without `[..]` is N0205, whose sure fix writes `[..]`. A literal with no expected type takes the first element's:
+  `let a = [1, 2];` is `[i32; 2]`, as `let x = 1;` is an `i32` (§4), however `a` is used later; an N0205 on one of its
+  elements says to give the type where it is declared (`let a: [u64; 2] = [1, 2];`) or a suffix to the first element
+  (`[1u64, 2]`).
 - `[v; N]`: N copies of `v`. For a Copy `v`, `v` is evaluated once and copied. For a non-Copy `v` (ADR 0198
   §2.2), `v` must be a static initialiser (§39.4: a `@constant` call such as `AtomicU64.constant(0)`, or a struct
   literal of them), which has no effects and no drop, so its value is laid down `N` times and once or `N`
@@ -1273,7 +1312,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
   written, and **panics** "index out of bounds" there otherwise.
 
 **Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments; on byte slices with
-`Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it.
+`Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it. On bytes, an argument
+that is a string literal is its UTF-8 bytes (`path.startsWith("/api")`; ADR 0237 §2.3); another `StringView` is N0205.
 - `s.indexOf(t)` and `s.lastIndexOf(t)`: `usize?`, where `t` first or last starts; an empty `t` is at `0`, and at
   `s.length` for `lastIndexOf`. `s.indexOfByte(b)` (`b: u8`): `usize?`.
 - `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)` and `s.equalsIgnoreAsciiCase(t)`: `bool`; only `A`–`Z` and
@@ -1518,6 +1558,8 @@ Diagnostics: N0263 (an allocator argument that is not an allocator type).
   `list = rest;` with `rest: Box<List>`, an argument for a `T` parameter. The box is consumed like any moved value
   and its memory is returned to the allocator; `T` is not destroyed (it has a new owner), so a `T` with a `drop`
   block may be moved out whole. Through a reference it is rejected (N0251), as above.
+- `*b` of a box is N0205 (`*` reads through a reference, §13.3); the message says that a box is read through without
+  `*` and that its contents move out where a `T` is expected, `let inner: T = b;` (ADR 0228 §2.1).
 
 ### 18.4 Moving payloads out in `match` (M3c; replaces N0258)
 ```text
@@ -1906,8 +1948,9 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
     with a field of the type `void`, have no meaning: N0226 where the instance is used.
   - There is no value of `void`, so in an instance a type parameter that is `void` cannot be part of another type:
     an optional's value (`T?`), an element (`Vector<T>`, `[T; N]`, `Slice<T>`), a referent (`borrow T`) or any other
-    type argument but a `Result`'s success type and a generic enum's. In the instance's signature that is N0226 at
-    the call; in its body, N0222 there, as any error of an instance's body.
+    type argument but a `Result`'s success type, a generic enum's and a thread's result (`Thread<void>`, §38.2,
+    whose argument is what the body returns). In the instance's signature that is N0226 at the call; in its body,
+    N0222 there, as any error of an instance's body.
   - A call of an instance whose signature, with `void` for a type parameter, has `void` where §2 allows none (a
     parameter, `T?`, a `Result`'s error) is N0226 at the call (ADR 0138 §7): `r.ok()` on a `Result<void, E>` is one,
     and `isOk()` tests it. The instance is never compiled.
@@ -2103,8 +2146,9 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   - An impl that inherits a default gets an **instance** of it with `Self` = the target (once per instance for a
     generic impl). The instance is an ordinary method of the target: it is called on the concrete type, through a
     bound and through a `dyn` table (whose slot holds the instance), and dispatch stays static. An instance that does
-    not check for its target is N0222 at the impl. If the target already has a method of the inherited name (its own,
-    or another impl's), that is N0228 at the impl: a type has one method of each name.
+    not check for its target is N0222 at the impl. If the target already has a method of the inherited name of its
+    own (its body's, an inherent block's), that is N0228 at the impl. Another interface's impl may give it a method of
+    the same name (ADR 0229; §21.4).
   - The interface's `@effects` list bounds a default as it bounds every impl (§37.3). There is no call from an
     override to the default it replaces.
 - **`Self`** (ADR 0086 §2.2). In an interface, `Self` is the implementing type: opaque in its signatures and defaults,
@@ -2169,7 +2213,10 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
     enum (N0267). The built-in types, and everything lib/core and lib/std declare, are the libraries': a program
     implements its own interfaces for them, and lib/std's interfaces for its own types.
   - An `impl` block's methods are ordinary methods of `T`. `x.area()` works on any `Square`, and
-    their names must not clash with `T`'s other methods (N0228).
+    their names must not clash with `T`'s own methods (its body's, an inherent block's, an enum's block's) or its
+    fields and variants (N0228). They may share a name with another interface's impl's methods, with the same
+    signature or another (ADR 0229): §21.4 says which a call names. Two argument lists of one generic interface still
+    clash (N0228, ADR 0165 §7).
 - Interfaces are not types: an interface is a bound (§21.2), and since M13 also the `I` of a `dyn I` type behind a
   pointer, which dispatches at run time (§37; ADR 0015).
 - A method signature may carry an effect list, `@effects() fn visit(borrow mut this);`, which bounds every `impl` of
@@ -2180,7 +2227,7 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 - **Inside generic code**, a value whose type is `T` (or a reference to one) may call the methods
   of `T`'s bounds, with the signatures the interfaces give (after substitution). A call that no
   bound provides is N0234. If two bounds provide the same method name, the call is ambiguous
-  (N0267).
+  (N0267); `I.m(x, …)` names one (§21.4).
 - **`Copy`** is a built-in bound: a `T: Copy` is a Copy type in the generic code (it can be used
   twice and stored in arrays) and never needs drop. Only Copy types satisfy it.
 - **At every instantiation** (a call, type or value that gives `T`), each bound must hold: the
@@ -2203,8 +2250,60 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   `Slice<AtomicU64>`. The methods that copy (`fill`, `copyFrom`, `copyWithin`, `extend`) keep `T: Copy` (N0259);
   `swap`, `sortBy`, `forEach`, `any`, `all` and `partitionPoint` take any `T`.
 
-Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, or an
-ambiguous bound method), N0268 (a type argument that does not satisfy a bound).
+### 21.4 Methods of one name from several interfaces (ADR 0229)
+```ceesafe
+interface PageSource { fn usableSize(borrow this) -> usize; }
+interface PageSink { fn usableSize(borrow this) -> usize; fn write(borrow mut this, page: u32); }
+
+struct Pager { size: usize; }
+
+impl PageSource for Pager { fn usableSize(borrow this) -> usize => this.size - 8; }
+impl PageSink for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 32;
+    fn write(borrow mut this, page: u32) {}
+}
+
+fn sinkSize<T: PageSink>(p: borrow T) -> usize => p.usableSize();  // the sink's, for every T
+
+fn main() {
+    var pager = Pager { size: 4096 };
+    Console.writeLine(sinkSize(pager));                  // 4064
+    Console.writeLine(PageSource.usableSize(pager));     // 4088
+    PageSink.write(mut pager, 1);
+    pager.write(2);                                      // one 'write': no interface named
+}
+```
+A type may implement several interfaces that declare methods of the same name (§21.1). Which one a call names:
+- **Through a bound** `T: I`, the bound's (two bounds that declare it: N0267, §21.2), and so in **every instance** of
+  the generic code: an instance calls the method of the interface its generic version's call went through (§20.3),
+  whatever other interfaces the type argument has a method of that name from. The same holds for an interface's
+  default (`Self` bounded by the interface), a generic impl's methods and a generic struct's or enum's, and for
+  static functions called `T.create(…)`.
+- **Through `dyn I`**: the table's slot holds the type's method for `I` (§37.4).
+- **Qualified**, `I.m(x, a, …)`, or `I<A, …>.m(x, …)` with the interface's arguments: interface `I`'s method `m`
+  (`I`'s own or a supertrait's), with `x` as `this`. `x` is written as an argument to the receiver is: `x` for `this`
+  (moved or copied) and `borrow this` (a value is borrowed, a reference passed), `mut x` for `borrow mut this` (a
+  `borrow mut` reference may be passed as it is); a missing or misplaced `mut` is N0249, with the fix. A value and a
+  box are read through as in a method call. The type of `x` implements `I` (with those arguments): a concrete type,
+  a type parameter bounded by `I`, or a `dyn` of `I` or of a subinterface; otherwise N0268. With no argument it is
+  N0209; a name that `I` does not declare N0200; a static function N0233, since there is no value to name the type
+  by. A generic method takes its own type arguments as a method call does, `I.m<U>(x)`. The form is valid in generic
+  code as elsewhere: it is how `T: PageSource + PageSink` calls each `usableSize`.
+- **On the concrete type**, `x.m(…)`: the method, if the type has one of the name. If several interfaces give it
+  one, those the call cannot see do not count (an interface file-private to another file, ADR 0109, or not public
+  in another package; a method `private` in another file). One left is the call's; two or more are N0267, whose
+  message names each qualified form. When exactly one of them is a method taking as many arguments as the call
+  has, the fix rewrites the call into its form (`pager.label()` → `Labelled.label(pager)`, `mut pager` for a
+  `borrow mut this` method; tooling.md §5.2). The choice is never made by the arguments themselves: there is no
+  overloading.
+- **A static function on the concrete type**, `Pager.make()` where two interfaces give one: N0267, saying to call it
+  through a bound (`fn make<T: Labelled>() -> T => T.make();`).
+- An inherent method and an interface's method of one name on one type stay N0228 (§21.1), so no call chooses
+  between them.
+
+Diagnostics: N0267 (an `impl` that does not match its interface, a duplicate `impl`, an
+ambiguous bound method, or a call on a type that cannot choose between its interfaces' methods of one name), N0268 (a
+type argument that does not satisfy a bound, or `I.m(x)` where `x` does not implement `I`).
 
 ## 22. Optionals and string views (M6c)
 
@@ -2374,6 +2473,41 @@ lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after i
 
 Diagnostics: none new.
 
+### 22.4 `ByteString` and `ByteStringView<region r>`: text of any bytes (ADR 0231)
+
+lib/core's `ByteString` (owned, a move type over a `Vector<u8>`) and `ByteStringView<region r>` (a Copy view over a
+`Slice<r, u8>`, valid for `r` as a `StringView<r>` is) hold text whose bytes need not be UTF-8: C's `char *`, a
+file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked for. Their fields are private (N0296).
+- **Making one.** `ByteStringView.fromText(text)` (`text: StringView`, so a literal or a lent `String`) and
+  `ByteStringView.fromBytes(bytes)` view the bytes in place; `ByteString.fromBytes(v)` takes a `Vector<u8>` and
+  `b.intoBytes()` gives it back, neither copying; `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
+  `copyOf(bytes)`, `b.clone()` and `v.toByteString()` make a new one (the last four copy). `b.view()` and `b.bytes()`
+  are loans of `b`. A string literal is not a `ByteStringView` (N0205): `fromText` makes one.
+- **UTF-8.** `toUtf8()` is the text as a `StringView`, with no copy, when the bytes are UTF-8 (Table 3-7, as
+  `StringView.fromUtf8` checks), else `null`; `isUtf8()`. `toUtf8Lossy()` (`Result<String, AllocError>`) and
+  `v.appendLossyTo(mut s)` replace each maximal subpart of an ill-formed sequence by one U+FFFD (the Unicode
+  Standard's §3.9 practice, the WHATWG decoder's and Python's `decode('utf-8', 'replace')`): the longest prefix of a
+  well-formed sequence where none is, or the one byte that begins none. `v.chunks()` is an iterator (§16.4) of
+  `Utf8Chunk<r>`s, each a `valid: StringView<r>` run then an `invalid: Slice<r, u8>` maximal subpart, empty only in
+  the last chunk; empty bytes give none.
+- **Bytes.** `length()`, `isEmpty()`, `byteAt(i)`, `slice(start, end)`, `sliceFrom(start)`, `sliceTo(end)` (panics
+  out of range, as slicing does; a slice may cut a sequence), and on a view the searches of §16.6 with `Slice<u8>`
+  needles: `indexOf`, `lastIndexOf`, `indexOfByte`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`,
+  `trim`, `trimStart`, `trimEnd`, `splitOnce` (`ByteStringHalves<r>?`) and `split` (`ByteStringSplit<r>`, an
+  iterator of views).
+- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes. `v.equals(w)` compares views of
+  two regions, `v.compare(w)` orders bytewise (negative, zero, positive; a prefix first). `ByteString` implements
+  lib/std's `HashKey` and `OrderKey`; a view, a scoped type, keys no map (N0274).
+- **Appending** to a `ByteString`, each `Result<…, AllocError>`, growing at most once and unchanged on failure:
+  `append(text: StringView)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n: i64)`,
+  `appendUnsigned(n: u64)`, and lib/core's `AppendFormatted` (`appendHex`, `appendOctal`, `appendFixed`,
+  `appendPadded`) and `AppendText` (`appendChar`, `appendUtf8`, which append only a scalar value or UTF-8);
+  `clear()`, `truncate(n)`, `capacity()`.
+- **Output.** `Console.writeBytes(b.bytes())` writes the bytes as they are, and `v.writeTo(mut w)` into a
+  `TextWriter`. `Console.write` prints text only: a byte string there is N0207, whose message names `writeBytes`.
+
+Diagnostics: none new (N0205, N0207, N0270, N0274, N0296).
+
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
 ### 23.1 `Vector<T, A>`
@@ -2438,7 +2572,15 @@ fn main() -> i32 {
     and panics there ("index out of bounds"). They are lib/core's VectorEditing<T>: the elements move by `swap`, so
     they may be of any type. If `insert` cannot grow the vector, it is unchanged and `x` is destroyed;
   - for a `Vector<u8, A>`, byte order, searching and parsing (§16.6), on its elements;
-  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `retain`): §16.5 and §36.4;
+  - `v.drain()` (ADR 0224): an iterator (§16.4) that moves the elements out first to last, `for (x in v.drain())`.
+    It borrows `v` exclusively (`borrow mut this`) until it is dropped, so the vector cannot be used meanwhile
+    (N0241). Its `next()` is `T?`, `null` once every element was taken. When the iterator is dropped, the vector
+    is empty and keeps its capacity: elements not taken (a loop left with `break` or `return`) are destroyed first
+    to last, as `clear` destroys them. It allocates nothing and is O(n) for n elements: the elements are reversed
+    once, by swaps, and each `next` pops the last. It is lib/core's VectorDrain<r, T> (VectorDrainFailing,
+    VectorDrainSecret for the other allocators; a `SecretHeap` slot is wiped as its element leaves);
+  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `sortStableBy`, `forEach`, `any`, `all`,
+    `partitionPoint`, `retain`): §16.5 and §36.4;
   - `v.view()`: the elements as a `Slice<T>`, and `v.viewMut()` as a `SliceMut<T>`;
   - a `Vector<T>` argument for a `Slice<T>` parameter is borrowed as `v.view()`, and `mut v` for a
     `SliceMut<T>` parameter as `v.viewMut()` (like a box's contents, §18.2);
@@ -2510,6 +2652,8 @@ fn main() -> i32 {
     `Result<bool, AllocError>`: the character in UTF-8, or the bytes when they are UTF-8 (checked once, with no copy
     first); `false`, appending nothing, for a value that is not a Unicode scalar value or bytes that are not UTF-8.
     They are lib/core's `AppendText` interface, for `Vector<u8>` in lib/core and `String` in lib/std;
+  - a `Vector<u8>`'s `v.appendNumber(n)` (`n: i64`) and `v.appendUnsigned(n)` (`n: u64`) (ADR 0237 §2.2), each
+    `Result<void, AllocError>`: `n` in decimal, as a `ByteString`'s. They are lib/core's `AppendDecimal` interface;
   - `s.add()` (ADR 0217), on a `String` and on a `Vector<u8>` of the system heap: an appender that holds `s` borrowed
     mutably, lib/std's `TextAppender<r>` or `ByteAppender<r>` (the call `TextAppend.add(mut s)` or
     `ByteAppend.add(mut s)`). Its steps `text(view)`, `char(c)`, `number(n: u64)`, `signed(n: i64)`,
@@ -2802,7 +2946,11 @@ Each parameter and the result of a function have **flow names**:
   parameter (v0 elision). With several scoped parameters and none written: in a method whose receiver is one of
   them, the receiver's (ADR 0160 §2: `fn find(borrow this, name: StringView) -> Slice<u8>?` borrows from `this`, and
   is tied to it as by `borrow(this)`, not a deep result), unless the result's written type names a type parameter;
-  otherwise N0245 (as in v0).
+  otherwise N0245 (as in v0). Where the result is no reference itself but holds one (`Result<Slice<u8>, E>`, an
+  optional of a view), a source list `borrow(a) T` would make the whole result a reference, so N0245's message names
+  a region parameter instead: `fn f<region r>(a: Slice<r, u8>, b: Slice<u8>) -> Result<Slice<r, u8>, E>`; so does
+  the N0245 of a method whose result borrows from a parameter other than the receiver (ADR 0228 §2.2). A function
+  with no scoped parameter that returns a slice is told to return a `static` table as `Slice<static, T>`.
 - for a result `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions written on the
   reference itself, whose pointee names regions (`-> borrow HeaderList<r>`): the reference's own region is elided
   as above, when there is a single scoped parameter. So the result is tied to that parameter, and is not a deep
@@ -3040,13 +3188,16 @@ after it (ADR 0044, so the earlier variants keep their tags) the network kinds `
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
 `AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host",
 and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`, and (ADR 0104)
-`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`.
+`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`, and (ADR 0221 §2.2)
+`BadDescriptor`: `EBADF`, Windows' `ERROR_INVALID_HANDLE`. It is what reading a `File` opened only for writing
+(`File.create`, `File.openAppend`) or writing one opened only for reading (`File.open`) gives, and a lock of the wrong
+kind (§26.3).
 `e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
 platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
 "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
 "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
-supported", "Host not found", which no errno has, "No space left on device" and "Too many open files"; `Other`'s is
-"Input/output error".
+supported", "Host not found", which no errno has, "No space left on device", "Too many open files" and "Bad file
+descriptor"; `Other`'s is "Input/output error".
 
 | Variant | POSIX | Winsock |
 |---|---|---|
@@ -3065,7 +3216,8 @@ deadline of the program's. A `match` that names the first eleven variants and ha
 not cover the network kinds (N0256): a source change of 0.7.0; one that names the first nineteen does not cover
 `HostNotFound` (N0256): a source change of ADR 0060's release; one that names the first twenty does not cover
 `StorageFull`: a source change of ADR 0077's; one that names the first twenty-one does not cover `TooManyOpenFiles`: a
-source change of ADR 0104's.
+source change of ADR 0104's; one that names the first twenty-two does not cover `BadDescriptor`: a source change of
+ADR 0221's.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
@@ -3111,6 +3263,30 @@ source change of ADR 0104's.
   the data private under any umask. The interpreter answers `Unsupported` for this and `File.modified`.
 - `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.
+- `File.createReadWrite(path)` (ADR 0221 §2.1): `Result<File, IoError>`, created if missing and emptied if present,
+  for reading and writing (`O_RDWR | O_CREAT | O_TRUNC`, mode 0666 & ~umask). With `openReadWrite`, `openOrCreate` and
+  `createNew` it names every open with read and write access.
+- **Advisory locks** (ADR 0220; lib/std's `FileLocks`, hosted; `borrow this`): `f.lock(kind: FileLock, start: u64,
+  length: u64)` waits for a lock on bytes `start` to `start + length - 1`, `Result<void, IoError>`;
+  `f.tryLock(kind, start, length)` never waits: `Result<bool, IoError>`, `false` when another holder's lock
+  conflicts; `f.unlock(start, length)` releases the `File`'s locks on the range (bytes it does not hold are no
+  error). `FileLock` is `Shared` or `Exclusive`: shared locks of different holders coexist, an exclusive one
+  conflicts with any other holder's lock on any of its bytes.
+  - A range may lie past the end of the file. `length` 0, or a range that ends past 2^63 - 1, is `InvalidInput`.
+    POSIX needs a file open for reading for a shared lock and for writing for an exclusive one (`BadDescriptor`).
+  - They are the system's record locks, so other programs see them: POSIX `fcntl` locks, which SQLite takes, and
+    `LockFileEx` on Windows. Where the system has open-file-description locks (Linux, macOS), a lock belongs to the
+    `File`: two `File`s of one program conflict as two processes do, and a `File`'s own lock over a range is replaced
+    (converted, or split by an unlock). Elsewhere (FreeBSD and the other BSDs) it belongs to the process: a program's
+    `File`s do not conflict, and closing any of them releases the process's locks on the file. On Windows a lock
+    never converts or splits, and is mandatory for other handles' reads and writes of its bytes. Portable use: lock a
+    range the `File` does not hold, unlock exactly the ranges it locked, and lock bytes the program does not read.
+  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock` and `unlock` none.
+  - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
+    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4). It does not check
+    the `File`'s access mode.
+- **Shared mappings** (ADR 0232; lib/std's `SharedMapping`, hosted; `borrow this`): `f.mapShared(offset: u64,
+  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20).
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
   read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
@@ -3122,6 +3298,10 @@ source change of ADR 0104's.
   standard error; standard output is flushed first, so the two keep their relative order.
 - `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.
   It is hosted only (lib/std's `HostServices.flush`). Standard error is not buffered.
+- `Console.isTerminal(stream: ConsoleStream) -> bool` (ADR 0221 §2.3; lib/std's `HostServices.isTerminal`, hosted),
+  `ConsoleStream` being `Input`, `Output` or `Error`: whether the standard stream is a terminal (`isatty`; on Windows a
+  console, by `GetConsoleMode`, so `NUL` is not one). A pipe, a file or a closed stream is `false`; it has no effect.
+  The interpreter answers for its own streams, and `false` for each when its output is captured (`ceesafe_run`).
 - `Console.readLine(mut line)` (ADR 0106; `line: borrow mut String`; lib/std's `HostServices.readLine`, hosted only
   like the rest of `Console`) is `Result<bool, IoError>`: it reads the next line of standard input into `line`,
   replacing what `line` held.
@@ -3396,7 +3576,9 @@ Diagnostics: none new.
   - `Character(u32)`: a letter, as lowercase, a digit, or the unshifted character of a punctuation key, on the
     layout in use;
   - `Function(u8)`: F1 to F12;
-  - `Other(u32)`: the system's code for any other key.
+  - `Other(u32)`: the system's code for any other key;
+  - `Back` (ADR 0233): the system's Back, Android's button or gesture, only while the program wants it
+    (`setBackWanted`, below).
 - **Size and drawing.** `w.size()` is `WindowSize { width, height }` in points, and `w.scale()` is pixels per point
   as an `f32`, such as 2.0 on a Retina display.
   - **`w.present(pixels: Slice<u32>, width, height)`** is `Result<void, WindowError>`. It shows a `width × height`
@@ -3448,8 +3630,8 @@ Diagnostics: none new.
     shortcut: MenuShortcut?)` adds an enabled, unchecked item to the last one, and `m.addSeparator()` a line; each is
     `Result<void, AllocError>`, copies its title, and on an error leaves `m` as it was. `m.setEnabled(id, bool)` and
     `m.setChecked(id, bool)` change every item with that id, and allocate nothing. Ids are the program's choice.
-  - **`MenuShortcut { key: WindowKey, modifiers: WindowModifiers }`.** An `Other` key, a `Function` outside 1 to 12,
-    and a `Character` that is not a printable scalar show no shortcut.
+  - **`MenuShortcut { key: WindowKey, modifiers: WindowModifiers }`.** An `Other` key, `Back`, a `Function` outside 1
+    to 12, and a `Character` that is not a printable scalar show no shortcut.
   - **`w.setMenu(menu: borrow Menu)`** is `Result<void, WindowError>`. It shows the menus as the window's, replacing
     those it showed, and an empty `Menu` removes them. The window keeps a copy, so a change to `menu` shows when it is
     set again. It is `Unsupported` on X11, and for a menu with an item or separator before its first `addMenu` or with
@@ -3539,6 +3721,13 @@ Diagnostics: none new.
     version 5 (`XdndAware`). The files are the source's `text/uri-list`, whose `file:` URIs of this host are
     percent-decoded; the window converts it while the drag hovers, so a drag shows in `dragOver` only once the source
     answered, and again at the drop. A list larger than one X11 request (an `INCR` transfer) gives no files.
+- **Back** (ADR 0233). **`w.setBackWanted(on: bool) -> bool`** (`borrow mut`) says whether the program wants the
+  system's Back, and returns whether the window has one: true on Android and for a scripted window, false elsewhere,
+  where it changes nothing. Wanted, Back is a `Key(WindowKey.Back, down, repeat, …)` event, its press and its
+  release, and the system does nothing with it; not wanted, the default, it is the system's, which ends the window
+  (`Closed`; on Android the activity finishes). A program wants Back while it has somewhere to go back to (a page it
+  opened, a dialog) and lets it go at its first page, as Android's apps do, so Back leaves the app there. While the
+  soft keyboard shows, the input method takes Back first and hides it.
 - **Touches** (ADR 0155). On a touch screen each finger can be followed, for gestures that the program recognizes
   itself:
   - **`w.setTouches(on: bool) -> bool`** (`borrow mut`) turns touches on or off and returns whether the system gives
@@ -3830,7 +4019,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `openStyled`, `minimize`, `toggleMaximized`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop` and `setAccessNodes`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `setBackWanted`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `programTitleBar`, `setTitleBar`, `maximized`, `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -3897,7 +4086,8 @@ Diagnostics: none new.
     - `down:B,X,Y` and `up:B,X,Y`, with B 0 to 2 for primary, secondary and middle;
     - `click:X,Y`: a primary down on FRAME and its up on FRAME+1;
     - `wheel:DX,DY`;
-    - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`;
+    - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`; NAME `back` is the system's Back (ADR 0233),
+      which, when the program does not want it as the item is delivered, is `Closed` (its release nothing);
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
     - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
@@ -3925,7 +4115,7 @@ Diagnostics: none new.
       while touches are off; numbered by the runtime while they are on). Its time is its frame's at 60 frames a
       second.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
-    `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
+    `pageup`, `pagedown`, `space`, `back` (ADR 0233), `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
     `ceesafe-window W H`, then the W×H pixels as RGBA bytes.
   - **Waiting.** `waitFrame` returns at once. `waitEvent` returns at once while the script still holds events (they
@@ -4099,6 +4289,41 @@ Diagnostics: none new.
 - **Where** (ADR 0177 §5, step by step): Android, macOS and Windows, both transports; iOS, Low Energy
   (`pairedPrinters` and a Classic link are `Unsupported`). Linux, FreeBSD, CosmoOS and `ceesafec run --interp`:
   `Unsupported`. Until a system's step is done, its calls are `Unsupported` too.
+
+### 26.20 Shared mappings of a file (ADR 0232)
+- **`f.mapShared(offset: u64, length: usize)`** (lib/std's `SharedMapping.mapShared(f, offset, length)`; `f`
+  borrowed for the call): `Result<SharedMapping, IoError>`, bytes `offset` to `offset + length - 1` of the file
+  mapped shared. What one mapping writes, every mapping of those bytes sees, in this process and in others, and so
+  do the file's reads and writes. `offset` need not be aligned. `length` 0, or a range that ends past 2^63 - 1, is
+  `InvalidInput`; a file not open for reading and writing (`openReadWrite`, `openOrCreate`, `createNew`,
+  `createReadWrite`) is `BadDescriptor`.
+- **The file covers the region first**: a shorter file is extended with zero bytes (POSIX: one byte written at the
+  region's last byte, which never shortens a file another process grew; Windows: the mapping object's size), and
+  never shortened.
+- **The value** is a move type that needs drop, Send and Share; it does not borrow the `File`, which may be dropped
+  first. Dropping it unmaps the region. A program that needs more of the file maps another region (SQLite maps its
+  `-shm` 32 KiB at a time); regions may overlap.
+- **Access is by copies and atomics, never a slice** (another process may write the bytes at any moment, §25):
+  `m.readAt(at: usize, into: SliceMut<u8>)` and `m.writeAt(at, bytes: Slice<u8>)` copy (a copy taken while another
+  process writes may mix old and new bytes); `m.load32(at, LoadOrdering)`, `m.store32(at, value, StoreOrdering)`,
+  `m.compareExchange32(at, expected, desired, Ordering) -> Result<u32, u32>`, `m.fetchAdd32(at, value, Ordering)`,
+  and `load64`, `store64`, `compareExchange64`, `fetchAdd64`, are `AtomicU32`'s and `AtomicU64`'s `…With`
+  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order.
+  `SharedMapping.fence()` is a sequentially consistent fence. `m.sync()` writes the region's changed pages to the
+  file and waits (`msync`; `FlushViewOfFile` on Windows). `m.length()` and `m.offset()` describe the region.
+- **A copy whose bytes are not all inside the region panics**, and so does an atomic whose bytes are not, or whose
+  file offset (`offset() + at`) is not a multiple of its size.
+- **A file shortened under a mapping** by another party (another process, or the program's own `f.setLength`):
+  natively an access to a page wholly past the new end ends the program by `SIGBUS`, the system's default; the
+  access does not complete, so nothing wrong is read or written (ADR 0232 §2.3). Windows refuses to shorten a mapped
+  file.
+- `mapShared` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
+- **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
+  Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a
+  positional read or write of the file, so the program's mappings and threads see one memory and other processes see
+  its bytes, but an interpreted atomic is not atomic against another process; integers are little-endian; a file
+  shortened under the mapping, or removed or renamed while mapped, is a fault at the next access; `--sandbox`
+  refuses it.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 
@@ -5325,7 +5550,8 @@ fn main() {
 - The interpreter computes in CeeSafe's own `f32` and `f64` (`ceesafec`'s C `float` and `double`), which round the same way. Compiled and interpreted programs
   give the same results, NaN bits aside (§35.3).
 - Not in G7 (ADR 0011 §3.8): `%`, a math library beyond §35.8, and other float formats. Parsing floats from text came
-  with ADR 0071 (§16.6).
+  with ADR 0071 (§16.6), the math library with ADR 0218 (§35.8; `x.truncatingRemainder(y)` is C's `fmod`, so `%`
+  remains undefined on floats). Hexadecimal float literals are not in the language.
 
 ### 35.7 Printing (M11 G7b)
 - `Console.write`, `Console.writeLine` and `String.appendNumber` accept `f32` and `f64` (and references to them).
@@ -5349,24 +5575,73 @@ fn main() {
   The file is linked only into programs that print a float. The interpreter finds the same digits by an exact search
   over rationals instead (`src/interpreter/float_format.cee`).
 
-### 35.8 Math methods (M11 G7c; ADR 0011 §5 Q5)
+### 35.8 Math methods (M11 G7c; ADR 0011 §5 Q5; ADR 0218)
 | Method | Result | Behaviour |
 |---|---|---|
 | `x.sqrt()` | same type | the square root, correctly rounded (IEEE `squareRoot`). `(-0.0).sqrt()` is `-0.0`; a negative operand or NaN gives NaN |
 | `x.abs()` | same type | `x` with its sign cleared, NaN included |
 | `x.floor()`, `x.ceil()` | same type | the nearest integral value below or above (IEEE `roundToIntegralTowardNegative`/`Positive`). Integral values, infinities and NaN are unchanged, and a zero result keeps `x`'s sign: `(-0.5).ceil()` is `-0.0` |
 | `x.min(y)`, `x.max(y)` | same type | IEEE 754-2019 `minimum`/`maximum`: NaN if either is NaN, and `-0.0` is below `0.0`. `y` is checked against `x`'s type, so a flexible literal takes it |
+| `x.trunc()` | same type | the nearest integral value toward zero (IEEE `roundToIntegralTowardZero`; C's `trunc`) |
+| `x.round()` | same type | the nearest integral value, halves away from zero (IEEE `roundToIntegralTiesToAway`; C's `round`): `2.5` gives `3.0`, `-0.5` gives `-0.0`, `0.49999999999999994` gives `0.0` |
+| `x.roundEven()` | same type | the nearest integral value, halves to even (IEEE `roundToIntegralTiesToEven`; C's `rint` in the default rounding mode): `2.5` gives `2.0` |
+| `x.copySign(y)` | same type | `x`'s magnitude with `y`'s sign bit, NaN included (IEEE `copySign`) |
 
-- None of them panics, and none calls a C math library: CosmoOS has no libm.
-  - `floor`, `ceil`, `abs`, `min` and `max` are exact portable C over integers and bits in `rt.h`. On baseline x86-64
-    there is no instruction for `floor` or `ceil`; `roundsd` needs SSE4.1.
+For `trunc`, `round` and `roundEven`, as for `floor` and `ceil`: integral values, infinities and NaN are unchanged,
+and a zero result keeps `x`'s sign.
+
+**The C library's functions (ADR 0218).** Each of these is the platform C library's function of the name given, for
+`f64`, or its `f` form (`expf` …) for `f32`; operands of two or three are checked against `x`'s type, as `min`'s are:
+
+| Method | C | Method | C | Method | C |
+|---|---|---|---|---|---|
+| `x.exp()` | `exp` | `x.sin()` | `sin` | `x.sinh()` | `sinh` |
+| `x.exp2()` | `exp2` | `x.cos()` | `cos` | `x.cosh()` | `cosh` |
+| `x.expM1()` | `expm1` | `x.tan()` | `tan` | `x.tanh()` | `tanh` |
+| `x.ln()` | `log` | `x.asin()` | `asin` | `x.asinh()` | `asinh` |
+| `x.log2()` | `log2` | `x.acos()` | `acos` | `x.acosh()` | `acosh` |
+| `x.log10()` | `log10` | `x.atan()` | `atan` | `x.atanh()` | `atanh` |
+| `x.ln1p()` | `log1p` | `y.atan2(x)` | `atan2(y, x)` | `x.cbrt()` | `cbrt` |
+| `x.pow(y)` | `pow` | `x.hypot(y)` | `hypot` | `x.logB()` | `logb` |
+| `x.fma(y, z)` | `fma`: `x × y + z`, rounded once | `x.remainder(y)` | `remainder` (IEEE `remainder`) | `x.truncatingRemainder(y)` | `fmod` |
+| `x.scaleB(n)` | `scalbn`: `x × 2ⁿ`, `n: i32` | | | | |
+
+- **Results.** Whatever the platform's libm gives, NaN, infinities, signed zeros and domain errors included, which
+  C11 Annex F specifies for a libm that follows it (glibc's, macOS's and FreeBSD's do; the Windows C runtime's
+  mostly): `(-1.0).ln()` is NaN, `0.0.ln()` is `-Infinity`, `1000.0.exp()` is `Infinity`, `(-0.0).sin()` is `-0.0`,
+  `0.0.atan2(-0.0)` is π. None panics, and `errno` is not part of the result. An inexact result's last bits are the
+  libm's and may differ from one platform to another: `fma`, `remainder`, `truncatingRemainder`, `scaleB` and `logB`
+  are exact, and the others are as accurate as the platform makes them (correctly rounded or within an ulp or two on
+  those named).
+- **frexp.** `x.logB()` is `x`'s exponent as a float (`-Infinity` for a zero, `Infinity` for an infinity, NaN for
+  NaN) and `x.scaleB(n)` scales by a power of two, so for a finite non-zero `x`,
+  `x.scaleB(-truncate<i32>(x.logB()))` is the significand in [1, 2). C's `frexp` returns two values, which CeeSafe has
+  no type for (ADR 0216).
+- **In C** each is a call of `ceesafe_math_<C name>_f64`/`_f32` in `ceesafe_rt_math.c`, a runtime file of its own that
+  calls the libm function and nothing more. Being a separate translation unit, it never sees a constant operand, so
+  no C compiler evaluates a call at compile time or rewrites it (gcc folds `exp(2.0)` with MPFR; clang turns
+  `pow(2.0, y)` into `exp2(y)`), and the result is the libm's at run time. A program links the file only if it calls
+  one of them, and the link then adds `-lm`, except on Windows (tooling.md §8.3). With `--emit lib` the host links
+  libm (c-backend.md §1).
+- **In the interpreter** each calls the same libm function, from ceesafec (`src/interpreter/math.cee`), so a program
+  prints the same under `run --interp` as its build does on the same machine.
+- **Hosted only.** With `--profile freestanding` a call of one is N0293: CosmoOS has no libm. `trunc`, `round`,
+  `roundEven` and `copySign`, like the methods above them, are in every profile.
+
+The rest:
+
+- None of the methods of the first table panics, and none calls a C math library: CosmoOS has no libm.
+  - `floor`, `ceil`, `trunc`, `round`, `roundEven`, `abs`, `copySign`, `min` and `max` are exact portable C over
+    integers and bits in `rt.h`. On baseline x86-64 there is no instruction for `floor` or `ceil`; `roundsd` needs
+    SSE4.1.
   - `sqrt` is the hardware square root, which is correctly rounded on both targets. It is reached through
     `__builtin_elementwise_sqrt` with clang and `__builtin_sqrt` with gcc, built with `-fno-math-errno` (ceesafec passes
     it), so it never sets `errno` or calls `sqrt`. MSVC uses its C runtime's `sqrt`.
-- The interpreter uses CeeSafe's own methods of the same names, so it computes what compiled code does.
-- The eight names `bits`, `fromBits`, `sqrt`, `abs`, `floor`, `ceil`, `min` and `max` are reserved on float types: an
-  interface method of one of those names cannot be implemented for a float type (N0228). Wrong argument counts are
-  N0209.
+- The interpreter uses CeeSafe's own methods of the same names, so it computes what compiled code does; `trunc`,
+  `round` and `roundEven` it computes as `rt.h` does, from `floor` and `ceil`.
+- The names of every method of this section, and `bits` and `fromBits`, are reserved on float types: an interface
+  method of one of those names cannot be implemented for a float type (N0228). Wrong argument counts are N0209, and an
+  operand of another type (`scaleB`'s of another than `i32`) N0205.
 
 ### 35.9 `--no-float` (M11 G7c; ADR 0011 §3.7)
 - `ceesafec build --no-float` and `ceesafec check --no-float` reject every float type, float literal and `f32.fromBits`/
@@ -5601,6 +5876,7 @@ fn main() {
 | Method | Receiver | Closure type | Result |
 |---|---|---|---|
 | `s.sortBy(cmp)` | `SliceMut<T>`, or a vector (lending its elements mutably) | `borrow mut fn(borrow T, borrow T) -> i32` | `void` |
+| `s.sortStableBy(cmp)` (ADR 0225) | as `sortBy` | as `sortBy` | `void` |
 | `s.forEach(visit)` | `Slice<T>` (a `SliceMut<T>` coerces), or a vector | `borrow mut fn(borrow T)` | `void` |
 | `s.any(test)`, `s.all(test)` | as `forEach` | `borrow mut fn(borrow T) -> bool` | `bool` |
 | `s.partitionPoint(test)` (ADR 0104) | as `forEach` | `borrow mut fn(borrow T) -> bool` | `usize` |
@@ -5619,6 +5895,12 @@ fn main() {
     descending run is reversed, after at most n − 1 calls of `cmp`.
   - If `cmp` is not a consistent order, or changes what it captures, the elements end in some order: they are
     still a permutation of the input, and nothing panics or misbehaves.
+- **`sortStableBy`** (ADR 0225) orders the elements as `sortBy` does, and is **stable**: elements for which `cmp`
+  returns zero keep the order they had. With an inconsistent `cmp` it behaves as `sortBy` does.
+  - It allocates nothing, calls `cmp` O(n log n) times, makes O(n log² n) swaps and uses O(1) stack beyond a fixed
+    frame: insertion sort of blocks of 20 elements, then the blocks merged pairwise, bottom up, by SymMerge (Kim and
+    Kutzner), which merges in place with binary searches and rotations. It is slower than `sortBy` on long inputs,
+    which is why `sortBy` stays the unstable introsort.
 - **`partitionPoint`** (ADR 0104) is a binary search. For a slice **partitioned** by `test` (every element for which
   it returns `true` comes before every element for which it returns `false`) it returns the index of the first
   element for which `test` is false: the length if there is none, 0 for an empty slice. So for a slice sorted by a
@@ -5813,7 +6095,9 @@ fn main() {
 
 ### 37.4 Representation (c-backend.md §2)
 - A `borrow dyn I`, a `borrow mut dyn I` and a `Box<dyn I, A>` with a zero-sized `A` are each two words:
-  `{ data, vt }`. `data` points at the value, and `vt` points at the table for (`T`, `I`).
+  `{ data, vt }`. `data` points at the value, and `vt` points at the table for (`T`, `I`). A slot holds `T`'s
+  method for the slot's interface (`I`, or the supertrait that declares it), whatever other interface gives `T` a
+  method of the same name (§21.4, ADR 0229).
 - The table is a `static const` struct per pair (`T`, `I`) that a coercion names. It holds the drop glue, the value's
   size and alignment (for a user allocator's `deallocate`), then one function per method of `I`, in declaration
   order. Each function is a generated adapter taking `void *` as its receiver, so no function is called through a
@@ -5921,14 +6205,30 @@ fn main() {
   joined. `main` returning ends the process with the thread wherever it is; the captures it still holds are not
   dropped, as nothing of the process is. A body that returns drops what it did not move and frees its environment,
   on its own thread. This is the one exception to "no detached threads", and named so where it is written.
+- **`t.isFinished()`** (ADR 0222 §2.3) borrows a `Thread<T>`: `true` once the thread's body has returned, so a
+  `join()` after it does not wait. It never waits. A server keeps its client threads in a vector and joins the
+  finished ones (`clients.swapRemove(k).join()`) now and then. In the interpreter it only answers: a thread runs
+  there when the caller waits, so a loop that polls must wait between polls (`Thread.sleep`).
+- **`Thread.sleep(ms: u64)`** (ADR 0222 §2.1; lib/std's `ThreadServices.sleep`, hosted): the calling thread waits at
+  least `ms` milliseconds (`nanosleep`, resumed for the time left after a signal; `Sleep` on Windows); 0 returns at
+  once. A task waits with `await Timer.sleep(ms)` instead. In the interpreter it is a wait on the virtual clock
+  (§40.8): other threads run, and when every thread waits, the clock moves to the earliest deadline.
+- **`Thread.cpuCount() -> u32`** (ADR 0237 §2.1; lib/std's `ThreadServices.cpuCount`, hosted): how many CPUs the process
+  may run on, at least 1: on Linux those of its affinity mask (`taskset`, a container's cpuset), elsewhere the online
+  ones. A CPU-time quota does not count. The interpreter answers 1. It has no effect (§32).
 - A panic in any thread aborts the process (OD-5).
-- **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, and dropping a `Thread<T>`, have
-  `sleep`.
+- **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, dropping a `Thread<T>`, and
+  `Thread.sleep` have `sleep`; `isFinished` has none.
 
 ### 38.3 Shared state (library types: `lib/std/sync.cee`, and the atomics in `lib/core/atomics.cee`)
 - **`Arc<T: Share>`**: shared ownership.
   - `Arc.create(v)` returns `Result<Arc<T>, AllocError>`. `a.clone()` returns another owner of the same value, and
     `a.get()` returns a `borrow T` (shared only).
+  - `a.getMut()` (ADR 0224) returns `(borrow mut T)?`: the value, lent exclusively for as long as `a` is, when `a`
+    is its only owner (the count is 1), and `null` otherwise. It takes `borrow mut this`, so no other owner can be
+    made from `a` meanwhile, and `Arc` has no weak references, so a count of 1 stays 1 for the loan. The count is
+    read sequentially consistently, after every earlier owner's drop. Values that several owners change are put in
+    a `Mutex`: `Arc<Mutex<T>>`.
   - The count is atomic. The last owner's drop destroys the value and frees it.
 - **`Mutex<T: Send>`**: mutual exclusion.
   - `Mutex.create(v)` returns `Result<Mutex<T>, AllocError>`; the platform lock is allocated.
@@ -6342,7 +6642,11 @@ program's own `close`; POSIX hosts, `IoError.Unsupported` on Windows), `AsyncMut
 held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
 `tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or
-null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null). Its operations return `Result<T, AsyncError>`,
+null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null; and, ADR 0222 §2.2,
+`recvTimeout(ms)` for threads, `Result<T?, AsyncError>`: as `recv`, but `Err(AsyncError.TimedOut)` when no value came
+and the channel did not close within `ms` milliseconds on the monotonic clock, the thread blocked meanwhile on the
+channel's condition variable; a buffered value is taken even when `ms` is 0; effect `sleep`; in the interpreter a
+wait on the virtual clock, as `Thread.sleep`, §38.2). Its operations return `Result<T, AsyncError>`,
 where `AsyncError` has four variants:
 
 | Variant | Meaning | What `?` converts into it, in a function that returns `Result<_, AsyncError>` |

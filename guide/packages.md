@@ -116,8 +116,21 @@ fn main() {
   nothing, is visible in every file of its package and nowhere else. `private` is visible only in the file that
   declares it: a `private fn`, struct, enum, interface, constant or static, a `private` method or associated
   constant, and a `private` field. Using one from another file is an error (N0296) that names the file it belongs
-  to. A private item's name is still taken in the whole package, so two files cannot each have a `private fn
-  helper`; and a value of a private type may travel to other files, which only cannot write its name.
+  to. A value of a private type may travel to other files, which only cannot write its name.
+- Each file's private items have a scope of their own. Two files written apart may each have a `private fn
+  helper` (or a private struct `Row`, a private constant, …), and each file means its own; in the generated C their
+  names carry their file. A private item may even have the name of an item of another file, or of lib/core, and
+  hides it in its own file only. In one file, two items of one name are still an error (N0201). So helpers a file
+  keeps to itself can have short names:
+
+  <!-- ceesafe: skip -->
+  ```ceesafe
+  // printf.cee
+  private fn appendInteger(out: borrow mut Vector<u8>, n: i64) { … }
+
+  // datetime.cee: another function, written apart from printf.cee's
+  private fn appendInteger(out: borrow mut Vector<u8>, n: i64) { … }
+  ```
 - Two packages may declare the same name: in the generated C, a dependency's items carry its package's name.
 
 ## Working on a dependency

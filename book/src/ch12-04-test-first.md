@@ -227,14 +227,14 @@ fn main() {
 ```
 
 ```text
-main.cee:1:51: error[N0245]: this function has several reference parameters: name the ones the result is borrowed from, e.g. 'borrow(a, b) T'
+main.cee:1:51: error[N0245]: this function has several reference parameters: give the function a region parameter and write it in the result's type and in the type of each parameter the result borrows from, e.g. 'fn f<region r>(a: Slice<r, u8>, b: Slice<u8>) -> Result<Slice<r, u8>, E>' ('borrow(a) T' would make the whole result a reference; type-system.md §25.6)
   |
 1 | fn search(query: StringView, text: StringView) -> Result<Vector<StringView>, AllocError> {
   |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-The form the message suggests, `borrow(text) T`, is for a function whose result is itself a borrow. Here the
-result is a vector that the caller owns, and the borrows are inside it. For that, use the region parameter of
+The other form, `borrow(text) T`, is for a function whose result is itself a borrow. Here the result is a
+vector that the caller owns, and the borrows are inside it, so the message names a region: the region parameter of
 Listing 12-15.
 
 ::: warning Mistake: changing the text while the lines are in use

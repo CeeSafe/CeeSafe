@@ -10,8 +10,8 @@ sizes are the compressed bytes. Then snappy, where libsnappy is installed (snapp
 include and lib directories): both decoders read libsnappy's block of each input (Snappy.decompress;
 snappy_uncompress), and both encoders compress it (Snappy.compress; snappy_compress). Then zstd, where libzstd is
 installed (zstd.c, with --zstd-prefix): both decoders read libzstd's frames of each input at levels 1, 3 and 19
-(Zstd.decompress; ZSTD_decompressDCtx); lib/std has no zstd encoder yet. The results are recorded in
-guide/performance.md.
+(Zstd.decompress; ZSTD_decompressDCtx), and both encoders compress each input at levels 1, 3, 6 and 9
+(Zstd.compress; ZSTD_compressCCtx). The results are recorded in guide/performance.md.
 
 usage: python3 benchmarks/codecs/run.py [--ceesafec out/ceesafec] [--cc cc] [--runs 3] [--size 33554432]
                                         [--snappy-prefix /opt/homebrew] [--zstd-prefix /opt/homebrew]
@@ -149,6 +149,17 @@ def main():
                 zi, zsize = run([z, "unzstd", zpath, str(len(data)), str(args.runs)])
                 ci, _ = run([cee, "unzstd", zpath, str(len(data)), str(args.runs)])
                 print(f"| {name} | {level} | {zsize:,} | {zi:,} | {ci:,} | {ci / zi:.0%} |", flush=True)
+        print(f"libzstd {zlib_.version}; best of {args.runs}; MB/s of uncompressed data; sizes in bytes")
+        print("| input | level | libzstd size | lib/std size | lib/std / libzstd | encode libzstd | encode lib/std | "
+              "lib/std / libzstd |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for name, data in inputs:
+            path = paths[name]
+            for level in (1, 3, 6, 9):
+                zd, zsize = run([z, "zstd", path, str(level), str(args.runs)])
+                cd, csize = run([cee, "zstd", path, str(level), str(args.runs)])
+                print(f"| {name} | {level} | {zsize:,} | {csize:,} | {csize / zsize:.3f} | {zd:,} | {cd:,} | "
+                      f"{cd / zd:.0%} |", flush=True)
     return 0
 
 

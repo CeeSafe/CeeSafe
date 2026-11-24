@@ -18,12 +18,15 @@ enum HostHandle {
 struct InterpThread {
     started: bool;
     finished: bool;
-    waitingKind: u32; // 0 runnable, 1 a thread to finish, 2 a mutex to be free
-    waitingOn: u64;   // the thread's index, or the mutex's address
-    isClosure: bool;  // Thread.both's first closure, else a spawned body
-    function: u32;    // a spawned body's NIR function
-    data: u64;        // its environment, or the closure value's environment pointer
-    block: u64;       // the thread's record, where the result goes
+    // 0 runnable, 1 a thread to finish, 2 a mutex to be free, 3 a channel to change, 4 the clock to reach `deadline`
+    // (Thread.sleep, ADR 0222), 5 a file lock to be free of conflicts (ADR 0220)
+    waitingKind: u32;
+    waitingOn: u64;  // the thread's index, the mutex's address, the channel and its epoch, or the lock request's index
+    deadline: u64;   // ADR 0222: when a wait of kind 3 or 4 ends anyway, on the virtual clock (ms); noDeadline() if never
+    isClosure: bool; // Thread.both's first closure, else a spawned body
+    function: u32;   // a spawned body's NIR function
+    data: u64;       // its environment, or the closure value's environment pointer
+    block: u64;      // the thread's record, where the result goes
     resultType: u32;
     service: bool; // `Thread.service` (ADR 0182): no record; resultType is its environment's type, freed at its end
 }
@@ -46,7 +49,31 @@ struct InterpRuntime {
     channels: Vector<InterpChannel>; // ADR 0032: a channel's handle is its index + 1
     shutListeners: Vector<u32>;      // ADR 0126: the handles (by index) of the listeners shut down
     signalChannel: u64;              // ADR 0125: the handle of the subscription's channel, or 0
+    locks: Vector<InterpLock>;       // ADR 0220: the program's file locks, among its own Files
+    lockWaits: Vector<InterpLock>;   // ADR 0220: the request a thread waiting in `lock` makes, by its index
+    mappings: Vector<InterpMapping>; // ADR 0232: a mapping's number is its index + 1
 }
+
+/// A shared mapping of a file (ADR 0232 §2.5): the file's path and the region. Every access is a positional read or
+/// write of the file, so the program's mappings, threads and reads of the file see one memory.
+struct InterpMapping {
+    path: String;
+    offset: u64;
+    length: u64;
+    live: bool;
+}
+
+/// A file lock (ADR 0220 §2.4): bytes `start` to `end - 1` of the file a descriptor names, held by that descriptor
+/// (an open-file-description lock).
+struct InterpLock {
+    fd: i32;
+    start: u64;
+    end: u64;
+    exclusive: bool;
+}
+
+/// A deadline that never comes (ADR 0222).
+fn noDeadline() -> u64 => 0xFFFFFFFFFFFFFFFF;
 
 /// A channel in the interpreter (lib/std/channel.cee over runtime/hosted/ceesafe_rt_async.c's model).
 struct InterpChannel {
@@ -79,6 +106,9 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     channels: Vector<InterpChannel>.create(),
     shutListeners: Vector<u32>.create(),
     signalChannel: 0,
+    locks: Vector<InterpLock>.create(),
+    lockWaits: Vector<InterpLock>.create(),
+    mappings: Vector<InterpMapping>.create(),
 };
 
 /// ceesafe_init's argv (ADR 0088 §2.2): copied, as the native runtime copies it.
@@ -99,6 +129,7 @@ fn startRuntime(it: borrow mut Interp) -> Result<void, Stop> {
             finished: false,
             waitingKind: 0,
             waitingOn: 0,
+            deadline: noDeadline(),
             isClosure: false,
             function: none(),
             data: 0,
@@ -159,6 +190,9 @@ fn errnoOfMessage(text: StringView) -> i64 {
     }
     if (sameText(text.bytes(), ioMessage(21))) {
         return 24; // EMFILE on Linux, macOS and MSVC: IoError.TooManyOpenFiles (ADR 0104)
+    }
+    if (sameText(text.bytes(), ioMessage(22))) {
+        return 9; // EBADF on every host: IoError.BadDescriptor (ADR 0221 §2.2)
     }
     let system = hostErrnos();
     for (k in 11..19u64) {
@@ -247,6 +281,9 @@ fn ioKindOf(error: i64) -> u64 {
     }
     if (error == 24 || error == 23) {
         return 21; // EMFILE, ENFILE, the same on Linux, macOS and MSVC: IoError.TooManyOpenFiles (ADR 0104)
+    }
+    if (error == 9) {
+        return 22; // EBADF, 9 on every host: IoError.BadDescriptor (ADR 0221 §2.2)
     }
     for (k in 11..19u64) {
         if (error == networkErrno(k, system)) {
@@ -368,6 +405,7 @@ fn closeDescriptor(it: borrow mut Interp, fd: i32) -> Result<void, Stop> {
             it.runtime.handles[k] = HostHandle.Closed;
             let index = truncate<u32>(k);
             it.runtime.shutListeners.retain((shut) => shut != index);
+            it.runtime.locks.retain((held) => held.fd != fd); // closing a File releases its locks (ADR 0220)
         }
         null => {}
     }
@@ -446,6 +484,7 @@ fn ioMessage(kind: u64) -> StringView => match (kind) {
     19 => "Host not found",
     20 => "No space left on device",
     21 => "Too many open files",
+    22 => "Bad file descriptor",
     _ => "Input/output error",
 };
 
@@ -474,7 +513,7 @@ fn ioBuiltin(
         let errorType = builtinArgumentType(n, arguments, 0);
         let value = argument(it, c, n, frame, arguments, 0)?;
         var kind = value.bits(0, enumTagSize(c, errorType))?;
-        if (kind > 21) {
+        if (kind > 22) {
             kind = 10;
         }
         let text = ioMessage(kind);
@@ -508,7 +547,8 @@ fn ioBuiltin(
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
         }
     }
-    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend()) {
+    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend() ||
+        b == bfFileCreateReadWrite()) {
         // ADR 0075 §2.1: the file is checked and created here; reads and writes reopen it (HostHandle.PathFile).
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
@@ -531,7 +571,8 @@ fn ioBuiltin(
         if (!exists && b == bfFileOpenReadWrite()) {
             return Ok(interpIoResult(c, resultType, 0, 2)?);
         }
-        if (!exists) {
+        if (!exists || b == bfFileCreateReadWrite()) {
+            // Created, or (File.createReadWrite, ADR 0221 §2.1) emptied.
             match (File.create(text)) {
                 Ok(_) => {}
                 Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
@@ -1338,6 +1379,25 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_path_kind")) {
         return "Ps:l";
+    }
+    if (sameText(name, "ceesafe_host_file_lock")) {
+        return "Puuss:l"; // ADR 0220
+    }
+    if (sameText(name, "ceesafe_host_is_terminal")) {
+        return "u:l"; // ADR 0221 §2.3
+    }
+    match (mappingShape(name)) {
+        Some(shape) => { return shape; } // ADR 0232
+        null => {}
+    }
+    if (sameText(name, "ceesafe_thread_sleep")) {
+        return "s:-"; // ADR 0222 §2.1
+    }
+    if (sameText(name, "ceesafe_thread_cpu_count")) {
+        return ":u"; // ADR 0237
+    }
+    if (sameText(name, "ceesafe_chan_wait_until")) {
+        return "Pss:-"; // ADR 0222 §2.2
     }
     if (sameText(name, "ceesafe_host_dir_create")) {
         return "Ps:l";
@@ -2221,6 +2281,40 @@ fn callC(
         let error = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
         return Ok(valueOf(ioKindOf(error as i64), 4));
     }
+    if (sameText(n0, "ceesafe_thread_sleep")) {
+        // Thread.sleep (ADR 0222 §2.4): a wait until the virtual clock (§40.8) reaches the deadline; the other
+        // threads run meanwhile, and the clock moves when none can.
+        let ms = arguments[0].bits(0, 8)?;
+        if (ms > 0) {
+            waitUntil(it, c, n, 4, 0, ms)?;
+        }
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_thread_cpu_count")) {
+        return Ok(valueOf(1, 4)); // ADR 0237: one thread runs at a time
+    }
+    if (sameText(n0, "ceesafe_host_is_terminal")) {
+        return Ok(hostResult(interpIsTerminal(it, arguments[0].bits(0, 4)?)));
+    }
+    if (sameText(n0, "ceesafe_host_file_lock")) {
+        return Ok(Some(fileLock(it, c, n, arguments)?));
+    }
+    if (mappingShape(n0).isSome()) {
+        return mappingService(it, n0, arguments); // ADR 0232
+    }
+    if (sameText(n0, "ceesafe_chan_wait_until")) {
+        // recvTimeout (ADR 0222 §2.4): until the channel changes or the virtual clock reaches the deadline.
+        let k = chanIndex(arguments[0].bits(0, 8)?);
+        let epoch = arguments[1].bits(0, 8)?;
+        let deadline = arguments[2].bits(0, 8)?;
+        if (it.runtime.channels[k].epoch == epoch && it.asyncClock < deadline) {
+            let me = it.runtime.current;
+            it.runtime.threads[me as usize].deadline = deadline;
+            waitHere(it, c, n, 3, ((k as u64) << 40) | (epoch & 0xFFFFFFFFFF))?;
+            it.runtime.threads[me as usize].deadline = noDeadline();
+        }
+        return Ok(null);
+    }
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_chan_")) {
         return channelService(it, c, n, n0, arguments);
     }
@@ -2348,11 +2442,48 @@ fn runnable(it: borrow Interp, k: usize) -> bool {
         return mutexOwner(it, t.waitingOn) == none();
     }
     if (t.waitingKind == 3) {
-        // A channel's blocking wait: until its epoch moves (index << 40 | the low 40 bits of the epoch seen).
+        // A channel's blocking wait: until its epoch moves (index << 40 | the low 40 bits of the epoch seen), or
+        // recvTimeout's deadline comes (ADR 0222).
         let channel = borrow it.runtime.channels[(t.waitingOn >> 40) as usize];
-        return (channel.epoch & 0xFFFFFFFFFF) != (t.waitingOn & 0xFFFFFFFFFF);
+        return (channel.epoch & 0xFFFFFFFFFF) != (t.waitingOn & 0xFFFFFFFFFF) || it.asyncClock >= t.deadline;
+    }
+    if (t.waitingKind == 4) {
+        return it.asyncClock >= t.deadline; // Thread.sleep (ADR 0222)
+    }
+    if (t.waitingKind == 5) {
+        return !lockConflicts(it, borrow it.runtime.lockWaits[t.waitingOn as usize]); // a file lock (ADR 0220)
     }
     return true;
+}
+
+/// The earliest deadline after the virtual clock of a thread that waits for one (ADR 0222), or none.
+fn nextDeadline(it: borrow Interp) -> u64? {
+    var earliest: u64? = null;
+    for (t in it.runtime.threads.view()) {
+        let timed = t.waitingKind == 3 || t.waitingKind == 4;
+        if (!t.finished && timed && t.deadline != noDeadline() && t.deadline > it.asyncClock &&
+            (earliest == null || t.deadline < earliest!)) {
+            earliest = Some(t.deadline);
+        }
+    }
+    return earliest;
+}
+
+/// A wait of `kind` until the virtual clock is `ms` later (ADR 0222 §2.4).
+fn waitUntil(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    kind: u32,
+    on: u64,
+    ms: u64,
+) -> Result<void, Stop> {
+    let me = it.runtime.current;
+    let limit = noDeadline() - 1;
+    it.runtime.threads[me as usize].deadline = if (ms > limit - it.asyncClock) limit else it.asyncClock + ms;
+    waitHere(it, c, n, kind, on)?;
+    it.runtime.threads[me as usize].deadline = noDeadline();
+    return Ok();
 }
 
 /// Waits until the running thread's wait is over: the baton goes to the first runnable thread in spawn order, which
@@ -2386,6 +2517,14 @@ fn waitHere(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, kind
             }
         }
         if (startable == none()) {
+            // Every thread waits: time passes, to the earliest deadline of a timed wait (ADR 0222 §2.4).
+            match (nextDeadline(it)) {
+                Some(deadline) => {
+                    it.asyncClock = deadline;
+                    continue;
+                }
+                null => {}
+            }
             return Err(fault("deadlock: every thread is waiting for another (type-system.md §38)"));
         }
         runThread(it, c, n, startable)?;
@@ -2449,6 +2588,7 @@ fn addThread(it: borrow mut Interp, isClosure: bool, function: u32, data: u64, b
             finished: false,
             waitingKind: 0,
             waitingOn: 0,
+            deadline: noDeadline(),
             isClosure: isClosure,
             function: function,
             data: data,
@@ -2582,6 +2722,20 @@ fn threadBuiltin(
         }
         freeMemory(it, record)?;
         return Ok(null);
+    }
+    if (b == bfThreadFinished()) {
+        // t.isFinished() (ADR 0222 §2.3): the Thread<T> borrowed holds its block, whose first word is the runtime's
+        // thread record. It only answers: a thread runs when the caller waits (§2.4).
+        let reference = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
+        let block = pointerAt(it, reference)?;
+        let record = pointerAt(it, block)?;
+        for (k in 0..it.runtime.recordAddresses.length) {
+            if (it.runtime.recordAddresses[k] == record) {
+                let finished = it.runtime.threads[it.runtime.recordThreads[k] as usize].finished;
+                return Ok(valueOf(if (finished) 1 else 0, 1));
+            }
+        }
+        return Err(fault("isFinished of a thread the interpreter does not know"));
     }
     // ceeTJ_: waits for the thread, takes its result, and frees its record and closure.
     let referenceType = builtinArgumentType(n, arguments, 0);
@@ -4981,3 +5135,334 @@ fn writeFileAt(path: StringView, bytes: Slice<u8>, offset: u64) -> Result<void, 
 
 /// A PathFile's position that means "at the end": `File.openAppend` (ADR 0077).
 fn appendPosition() -> u64 => 0xFFFFFFFFFFFFFFFF;
+
+// ---- File locks (ADR 0220 §2.4) and terminals (ADR 0221 §2.3) ----
+
+extern "C" {
+    // POSIX's isatty (the C runtime's on Windows): 1 if the descriptor is a terminal.
+    fn isatty(fd: i32) -> i32;
+}
+
+/// ceesafe_host_is_terminal for the interpreter's own streams; none is a terminal when its output is captured and its
+/// input given (ceesafe_run), as for a native program under pipes.
+/// Safety: isatty only asks about descriptor 0, 1 or 2.
+fn interpIsTerminal(it: borrow Interp, stream: u64) -> i64 {
+    if (it.options.capture || it.options.sandboxed || stream > 2) {
+        return 0;
+    }
+    return if (unsafe { isatty(truncate<i32>(stream)) } != 0) 1 else 0;
+}
+
+/// Whether `request` conflicts with a lock another descriptor of the program holds: an overlap where either is
+/// exclusive. The descriptor's own locks never conflict (an open-file-description lock).
+fn lockConflicts(it: borrow Interp, request: borrow InterpLock) -> bool {
+    for (held in it.runtime.locks.view()) {
+        if (held.fd != request.fd && held.start < request.end && request.start < held.end &&
+            (held.exclusive || request.exclusive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Sets the descriptor's locks on [start, end): its old ones there are cut away (split around the range), then the
+/// new one, if any, is added: fcntl's rule for one owner.
+fn setLocks(it: borrow mut Interp, fd: i32, start: u64, end: u64, exclusive: bool?) {
+    var kept = Vector<InterpLock>.create();
+    for (held in it.runtime.locks.view()) {
+        if (held.fd != fd || held.end <= start || end <= held.start) {
+            kept.push(InterpLock { fd: held.fd, start: held.start, end: held.end, exclusive: held.exclusive })!;
+            continue;
+        }
+        if (held.start < start) {
+            kept.push(InterpLock { fd: fd, start: held.start, end: start, exclusive: held.exclusive })!;
+        }
+        if (end < held.end) {
+            kept.push(InterpLock { fd: fd, start: end, end: held.end, exclusive: held.exclusive })!;
+        }
+    }
+    match (exclusive) {
+        Some(e) => { kept.push(InterpLock { fd: fd, start: start, end: end, exclusive: e })!; }
+        null => {}
+    }
+    it.runtime.locks = kept;
+}
+
+/// ceesafe_host_file_lock (ADR 0220 §2.4): the program's locks among its own Files, with open-file-description rules.
+/// A lock that waits does so as for a mutex: other threads run, and a lock no thread can free is a deadlock. Other
+/// processes do not see these locks: the stage-0 compiler's library has none to take.
+fn fileLock(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    arguments: borrow Vector<Value>,
+) -> Result<Value, Stop> {
+    requireHostIo(it)?;
+    let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+    let kind = arguments[1].bits(0, 4)?;
+    let wait = arguments[2].bits(0, 4)? != 0;
+    let start = arguments[3].bits(0, 8)?;
+    let length = arguments[4].bits(0, 8)?;
+    var isFile = false;
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            isFile = match (borrow it.runtime.handles[k]) {
+                HostHandle.OpenFile(_, _) => true,
+                HostHandle.PathFile(_, _) => true,
+                _ => false,
+            };
+        }
+        null => {}
+    }
+    if (!isFile) {
+        return Ok(hostFailure(9)); // EBADF, 9 on every host
+    }
+    if (length == 0 || start > 0x7FFFFFFFFFFFFFFF || length > 0x7FFFFFFFFFFFFFFF - start) {
+        return Ok(hostFailure(errnoInvalid())); // lib/std checks first; the runtime's own check
+    }
+    let end = start + length;
+    if (kind == 0) {
+        setLocks(it, fd, start, end, null);
+        return Ok(hostResult(0));
+    }
+    let request = InterpLock { fd: fd, start: start, end: end, exclusive: kind == 2 };
+    if (lockConflicts(it, borrow request)) {
+        if (!wait) {
+            return Ok(hostResult(1));
+        }
+        it.runtime.lockWaits.push(request)!;
+        let index = it.runtime.lockWaits.length - 1;
+        waitHere(it, c, n, 5, index as u64)?;
+    }
+    setLocks(it, fd, start, end, Some(kind == 2));
+    return Ok(hostResult(0));
+}
+
+// ---- Shared mappings of a file (ADR 0232 §2.5) ----
+
+/// The shape of a runtime function of lib/std's SharedMapping, or null for another name.
+fn mappingShape(name: Slice<u8>) -> StringView? {
+    if (sameText(name, "ceesafe_host_map_file")) {
+        return "PssP:l";
+    }
+    if (sameText(name, "ceesafe_host_map_unmap")) {
+        return "sss:-";
+    }
+    if (sameText(name, "ceesafe_host_map_sync")) {
+        return "ss:l";
+    }
+    if (sameText(name, "ceesafe_host_map_read") || sameText(name, "ceesafe_host_map_write")) {
+        return "ssPs:-";
+    }
+    if (sameText(name, "ceesafe_host_map_load32")) {
+        return "ssi:u";
+    }
+    if (sameText(name, "ceesafe_host_map_store32")) {
+        return "ssui:-";
+    }
+    if (sameText(name, "ceesafe_host_map_cas32")) {
+        return "ssuui:u";
+    }
+    if (sameText(name, "ceesafe_host_map_add32")) {
+        return "ssui:u";
+    }
+    if (sameText(name, "ceesafe_host_map_load64")) {
+        return "ssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_store64")) {
+        return "sssi:-";
+    }
+    if (sameText(name, "ceesafe_host_map_cas64")) {
+        return "ssssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_add64")) {
+        return "sssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_fence")) {
+        return ":-";
+    }
+    return null;
+}
+
+/// lib/std's SharedMapping (ADR 0232 §2.5), modelled by the file itself: a mapping is its file's path and region,
+/// and every copy and atomic a positional read or write of the file at the region's offset. The program's threads
+/// run one at a time, so a compare-exchange is atomic among them; another process sees the bytes but not that.
+fn mappingService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_host_map_fence")) {
+        return Ok(null); // the model's accesses are already in order
+    }
+    if (sameText(name, "ceesafe_host_map_file")) {
+        return Ok(Some(mapFile(it, arguments)?));
+    }
+    let number = arguments[0].bits(0, 8)?;
+    if (number == 0 || number > (it.runtime.mappings.length as u64) ||
+        !it.runtime.mappings[(number - 1) as usize].live) {
+        return Err(fault("a shared mapping that is not mapped"));
+    }
+    let k = (number - 1) as usize;
+    if (sameText(name, "ceesafe_host_map_unmap")) {
+        it.runtime.mappings[k].live = false;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_sync")) {
+        return Ok(Some(hostResult(0))); // done once each write returned: the interpreter has no crash to survive
+    }
+    var path = String.create();
+    path.append(it.runtime.mappings[k].path.view())!;
+    let at = it.runtime.mappings[k].offset + arguments[1].bits(0, 8)?;
+    if (sameText(name, "ceesafe_host_map_read")) {
+        let into = arguments[2].bits(0, 8)?;
+        let count = arguments[3].bits(0, 8)?;
+        var done: u64 = 0;
+        while (done < count) {
+            var chunk = [0u8; 4096];
+            let step = if (count - done > 4096) 4096 else count - done;
+            mappedRead(path.view(), at + done, mut chunk[0..step as usize])?;
+            for (i in 0..step) {
+                it.memory.storeBits(into + done + i, chunk[i as usize] as u64, 1)?;
+            }
+            done += step;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_write")) {
+        let from = arguments[2].bits(0, 8)?;
+        let count = arguments[3].bits(0, 8)?;
+        var bytes = Vector<u8>.create();
+        for (i in 0..count) {
+            bytes.push(truncate<u8>(it.memory.loadBits(from + i, 1)?))!;
+        }
+        mappedWrite(path.view(), at, bytes.view())?;
+        return Ok(null);
+    }
+    let width: u64 = if (name[name.length - 2] == '3') 4 else 8;
+    let old = mappedInteger(path.view(), at, width)?;
+    if (sameText(name, "ceesafe_host_map_load32") || sameText(name, "ceesafe_host_map_load64")) {
+        return Ok(valueOf(old, width as usize));
+    }
+    let value = arguments[2].bits(0, width as usize)?;
+    if (sameText(name, "ceesafe_host_map_store32") || sameText(name, "ceesafe_host_map_store64")) {
+        mappedStore(path.view(), at, value, width)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_add32") || sameText(name, "ceesafe_host_map_add64")) {
+        let sum = old.wrappingAdd(value);
+        mappedStore(path.view(), at, if (width == 4) sum & 0xFFFFFFFF else sum, width)?;
+        return Ok(valueOf(old, width as usize));
+    }
+    // compare-exchange: arguments[2] expected, arguments[3] desired
+    if (old == value) {
+        mappedStore(path.view(), at, arguments[3].bits(0, width as usize)?, width)?;
+    }
+    return Ok(valueOf(old, width as usize));
+}
+
+/// ceesafe_host_map_file's model: the File must be one the program opened for reading and writing; the file is
+/// extended to cover the region, never shortened; out[0] and out[1] are the mapping's number, out[2] its length.
+fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
+    requireHostIo(it)?;
+    let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+    let offset = arguments[1].bits(0, 8)?;
+    let length = arguments[2].bits(0, 8)?;
+    let out = arguments[3].bits(0, 8)?;
+    var path = String.create();
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            match (borrow it.runtime.handles[k]) {
+                // An appending file is write-only, as a File.open or File.create one is one-way: EBADF, as mmap's
+                // EACCES is reported natively.
+                HostHandle.PathFile(p, position) => {
+                    if (position != appendPosition()) {
+                        path.append(p.view())!;
+                    }
+                }
+                _ => {}
+            }
+        }
+        null => {}
+    }
+    if (path.view().length == 0) {
+        return Ok(hostFailure(9)); // EBADF, 9 on every host
+    }
+    if (length == 0 || offset > 0x7FFFFFFFFFFFFFFF || length > 0x7FFFFFFFFFFFFFFF - offset) {
+        return Ok(hostFailure(errnoInvalid())); // lib/std checks first; the runtime's own check
+    }
+    let end = offset + length;
+    var file = match (File.openReadWrite(path.view())) {
+        Ok(f) => f,
+        Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+    };
+    let size = match (file.length()) {
+        Ok(s) => s,
+        Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+    };
+    if (size < end) {
+        let zero = [0u8; 1];
+        match (file.writeAt(zero[..], end - 1)) {
+            Ok() => {}
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        }
+    }
+    it.runtime.mappings.push(InterpMapping { path: path, offset: offset, length: length, live: true })!;
+    let number = it.runtime.mappings.length as u64;
+    it.memory.storeBits(out, number, 8)?;
+    it.memory.storeBits(out + 8, number, 8)?;
+    it.memory.storeBits(out + 16, length, 8)?;
+    it.memory.storeBits(out + 24, 0, 8)?;
+    return Ok(hostResult(0));
+}
+
+/// The bytes at `at` of the mapped file at `path`. A file shortened under the mapping faults, as the native SIGBUS
+/// ends the program (ADR 0232 §2.3).
+fn mappedRead(path: StringView, at: u64, into: SliceMut<u8>) -> Result<void, Stop> {
+    var file = match (File.openReadWrite(path)) {
+        Ok(f) => f,
+        Err(_) => { return Err(fault("a shared mapping's file cannot be opened again by its path")); }
+    };
+    var done: usize = 0;
+    while (done < into.length) {
+        match (file.readAt(mut into[done..into.length], at + done as u64)) {
+            Ok(0) => { return Err(fault("a shared mapping's file was shortened under it (SIGBUS natively)")); }
+            Ok(got) => { done += got; }
+            Err(_) => { return Err(fault("a shared mapping's file could not be read")); }
+        }
+    }
+    return Ok();
+}
+
+fn mappedWrite(path: StringView, at: u64, bytes: Slice<u8>) -> Result<void, Stop> {
+    var file = match (File.openReadWrite(path)) {
+        Ok(f) => f,
+        Err(_) => { return Err(fault("a shared mapping's file cannot be opened again by its path")); }
+    };
+    let size = match (file.length()) {
+        Ok(s) => s,
+        Err(_) => { return Err(fault("a shared mapping's file could not be read")); }
+    };
+    if (size < at + bytes.length as u64) {
+        return Err(fault("a shared mapping's file was shortened under it (SIGBUS natively)"));
+    }
+    return match (file.writeAt(bytes, at)) {
+        Ok() => Ok(),
+        Err(_) => Err(fault("a shared mapping's file could not be written")),
+    };
+}
+
+/// The little-endian integer of `width` bytes at `at` of the mapped file.
+fn mappedInteger(path: StringView, at: u64, width: u64) -> Result<u64, Stop> {
+    var bytes = [0u8; 8];
+    mappedRead(path, at, mut bytes[0..width as usize])?;
+    var value: u64 = 0;
+    for (i in 0..width as usize) {
+        value |= (bytes[i] as u64) << (8 * i as u64);
+    }
+    return Ok(value);
+}
+
+fn mappedStore(path: StringView, at: u64, value: u64, width: u64) -> Result<void, Stop> {
+    var bytes = [0u8; 8];
+    for (i in 0..width as usize) {
+        bytes[i] = truncate<u8>(value >> (8 * i as u64));
+    }
+    return mappedWrite(path, at, bytes[0..width as usize]);
+}

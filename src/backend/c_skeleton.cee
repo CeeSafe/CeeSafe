@@ -394,6 +394,14 @@ fn appendStaticName(c: borrow Checker, out: borrow mut Vector<u8>, item: u32) ->
         return appendBytes(out, c.hir.textOf(symbol)); // C data's own symbol (ADR 0080 §3.2)
     }
     appendText(out, "ceeS_")?;
+    // A package's file may have a private static of a name another file's private static has (ADR 0230).
+    for (entry in c.statics.view()) {
+        if (entry.hir == item && entry.item != none() && entry.file != none() &&
+            !c.fileIsLibrary[entry.file as usize] &&
+            isPrivateVisibility(c.front.ast.items[entry.item as usize].visibility)) {
+            appendPrivateMark(out, entry.file)?;
+        }
+    }
     for (b in c.name(c.hir.statics[item as usize].name)) {
         out.push(if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) b else '_')?;
     }
@@ -771,6 +779,56 @@ fn collectStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -
     return Ok();
 }
 
+/// A float in a static's initialiser, a C constant expression (ADR 0226 §2.3): `cee_f64_from_bits` is a function, which
+/// C does not allow there. A finite value is a hexadecimal literal, exact by construction (C11 §6.4.4.2), so the value
+/// still never depends on the C compiler's decimal conversion (type-system.md §35.6); an infinity is an overflowing
+/// product, which IEEE arithmetic makes one; a NaN is `0.0 / 0.0`, a NaN whose sign and payload the C compiler picks.
+fn appendStaticFloat(out: borrow mut Vector<u8>, bits: u64, single: bool) -> Result<void, AllocError> {
+    let mantissaBits: u64 = if (single) 23 else 52;
+    let exponentMask: u64 = if (single) 0xFF else 0x7FF;
+    let bias: u64 = if (single) 127 else 1023;
+    let sign = (bits >> (if (single) 31u64 else 63u64)) & 1;
+    let exponent = (bits >> mantissaBits) & exponentMask;
+    let mantissa = bits & ((1u64 << mantissaBits) - 1);
+    let cast: StringView = if (single) "(float)" else "";
+    out.push('(')?;
+    if (exponent == exponentMask) {
+        if (mantissa != 0) {
+            appendText(out, cast)?;
+            return appendText(out, "(0.0 / 0.0))");
+        }
+        if (sign != 0) {
+            out.push('-')?;
+        }
+        appendText(out, cast)?;
+        return appendText(out, "(1e300 * 1e300))");
+    }
+    if (sign != 0) {
+        out.push('-')?;
+    }
+    appendText(out, if (exponent == 0) "0x0." else "0x1.")?;
+    // The fraction in whole hex digits: 52 bits are 13, and 23 bits shifted left by one are 6.
+    let digits: u64 = if (single) 6 else 13;
+    let fraction = if (single) mantissa << 1 else mantissa;
+    for (k in 0..digits) {
+        let nibble = (fraction >> ((digits - 1 - k) * 4)) & 0xF;
+        out.push(truncate<u8>(if (nibble < 10) nibble + 48 else nibble + 55))?; // '0'.., 'A'..
+    }
+    out.push('p')?;
+    // A subnormal's exponent is the smallest normal one, 1 - bias.
+    let unbiased = if (exponent == 0) 1 else exponent;
+    if (unbiased < bias) {
+        out.push('-')?;
+        appendDecimal(out, bias - unbiased)?;
+    } else {
+        appendDecimal(out, unbiased - bias)?;
+    }
+    if (single) {
+        out.push('f')?;
+    }
+    return appendText(out, ")");
+}
+
 /// A static's evaluated initialiser as a C constant initialiser (StaticInitializer); `place` is the C place it
 /// initialises, which `here` takes the address of (ADR 0027).
 fn appendStaticInitializer(
@@ -786,8 +844,9 @@ fn appendStaticInitializer(
         HirExpr.IntConst(v) => { appendConstant(c, out, v, t)?; }
         HirExpr.BoolConst(v) => { appendText(out, if (v) "true" else "false")?; }
         HirExpr.FloatConst(f) => {
-            let bits = if (c.types.info(t).bits == 32) (round<f32>(f)).bits() as u64 else f.bits();
-            appendConstant(c, out, IntValue { negative: false, magnitude: bits }, t)?;
+            let single = c.types.info(t).bits == 32;
+            let bits = if (single) (round<f32>(f)).bits() as u64 else f.bits();
+            appendStaticFloat(out, bits, single)?;
         }
         HirExpr.StringConst(text) => {
             let bytes = c.hir.textOf(text);

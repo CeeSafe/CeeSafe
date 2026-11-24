@@ -1,5 +1,6 @@
-// ADR 0196 §2.3, phase 3: Zstd.decompress and ZstdDecoder.create allocate, so code declared with no effect cannot
-// call them (N0295); a ZstdDecoder's step allocates nothing, so it can, and so can XXH64.
+// ADR 0196 §2.3, phases 3 and 4: Zstd.decompress and ZstdDecoder.create allocate, and so do the encoders, so code
+// declared with no effect cannot call them (N0295); a ZstdDecoder's step allocates nothing, so it can, and so can
+// XXH64.
 @effects()
 fn decodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
     return Zstd.decompress(input, 100, out); // error[N0295]
@@ -7,6 +8,19 @@ fn decodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeE
 
 @effects()
 fn creates() -> Result<ZstdDecoder, AllocError> => ZstdDecoder.create(100, 1024); // error[N0295]
+
+@effects()
+fn compresses(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    return Zstd.compress(input, 3, out); // error[N0295]
+}
+
+@effects()
+fn createsEncoder() -> Result<ZstdEncoder, AllocError> => ZstdEncoder.create(3, false); // error[N0295]
+
+@effects()
+fn updates(e: borrow mut ZstdEncoder, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    return e.update(input, out); // error[N0295]
+}
 
 @effects()
 fn steps(d: borrow mut ZstdDecoder, input: Slice<u8>, out: SliceMut<u8>) -> Result<Progress, DecodeError> =>

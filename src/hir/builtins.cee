@@ -184,9 +184,88 @@ fn bfArrayFrom() -> u32 => 143;
 /// `Secret.wipe(mut place)` (ADR 0197 §2.2): the place, or a mutable slice's elements, set to zero bytes through
 /// `ceesafe_wipe`, which the C compiler keeps.
 fn bfSecretWipe() -> u32 => 144;
+/// The float methods of ADR 0218 (type-system.md §35.8). From bfFloatExp to bfFloatScaleB they are the C library's
+/// functions (ceesafe_rt_math.c), hosted only: first the ones of one operand, then of two, then `fma` and `scaleB`.
+/// From bfFloatTrunc on they are exact portable C in rt.h, as `floor` and `ceil` are.
+fn bfFloatExp() -> u32 => 145;
+fn bfFloatExp2() -> u32 => 146;
+fn bfFloatExpM1() -> u32 => 147;
+fn bfFloatLn() -> u32 => 148;
+fn bfFloatLog2() -> u32 => 149;
+fn bfFloatLog10() -> u32 => 150;
+fn bfFloatLn1p() -> u32 => 151;
+fn bfFloatSin() -> u32 => 152;
+fn bfFloatCos() -> u32 => 153;
+fn bfFloatTan() -> u32 => 154;
+fn bfFloatAsin() -> u32 => 155;
+fn bfFloatAcos() -> u32 => 156;
+fn bfFloatAtan() -> u32 => 157;
+fn bfFloatSinh() -> u32 => 158;
+fn bfFloatCosh() -> u32 => 159;
+fn bfFloatTanh() -> u32 => 160;
+fn bfFloatAsinh() -> u32 => 161;
+fn bfFloatAcosh() -> u32 => 162;
+fn bfFloatAtanh() -> u32 => 163;
+fn bfFloatCbrt() -> u32 => 164;
+fn bfFloatLogB() -> u32 => 165;
+fn bfFloatPow() -> u32 => 166;
+fn bfFloatAtan2() -> u32 => 167;
+fn bfFloatHypot() -> u32 => 168;
+fn bfFloatRemainder() -> u32 => 169;
+fn bfFloatTruncatingRemainder() -> u32 => 170;
+fn bfFloatFma() -> u32 => 171;
+fn bfFloatScaleB() -> u32 => 172;
+fn bfFloatTrunc() -> u32 => 173;
+fn bfFloatRound() -> u32 => 174;
+fn bfFloatRoundEven() -> u32 => 175;
+fn bfFloatCopySign() -> u32 => 176;
 
-/// Whether `b` is one of ADR 0075 §2.1's file builtins.
-fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
+/// Whether `b` is a float method that is a C library function (ADR 0218 §2.2).
+fn isLibmBuiltin(b: u32) -> bool => b >= bfFloatExp() && b <= bfFloatScaleB();
+
+/// Whether `b` is one of ADR 0218's float methods.
+fn isFloatMathBuiltin(b: u32) -> bool => b >= bfFloatExp() && b <= bfFloatCopySign();
+
+/// The C library's name of a libm float method (ADR 0218 §2.2): `ln` is `log`, `scaleB` is `scalbn`. The runtime's
+/// functions are `ceesafe_math_<name>_f32`/`_f64`, and the interpreter calls the same functions of libm.
+fn libmName(b: u32) -> StringView => match (b) {
+    145 => "exp",
+    146 => "exp2",
+    147 => "expm1",
+    148 => "log",
+    149 => "log2",
+    150 => "log10",
+    151 => "log1p",
+    152 => "sin",
+    153 => "cos",
+    154 => "tan",
+    155 => "asin",
+    156 => "acos",
+    157 => "atan",
+    158 => "sinh",
+    159 => "cosh",
+    160 => "tanh",
+    161 => "asinh",
+    162 => "acosh",
+    163 => "atanh",
+    164 => "cbrt",
+    165 => "logb",
+    166 => "pow",
+    167 => "atan2",
+    168 => "hypot",
+    169 => "remainder",
+    170 => "fmod",
+    171 => "fma",
+    _ => "scalbn",
+};
+/// `File.createReadWrite(path)` (ADR 0221 §2.1): created or emptied, for reading and writing.
+fn bfFileCreateReadWrite() -> u32 => 177;
+/// `t.isFinished()` (ADR 0222 §2.3): whether a thread's body has returned; it never waits.
+fn bfThreadFinished() -> u32 => 178;
+
+/// Whether `b` is one of ADR 0075 §2.1's file builtins, or a later open of a file for reading and writing.
+fn isDurableFileBuiltin(b: u32) -> bool =>
+    (b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular()) || b == bfFileCreateReadWrite();
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -335,6 +414,40 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     142 => "ThreadService",
     143 => "ArrayFrom",
     144 => "SecretWipe",
+    145 => "FloatExp",
+    146 => "FloatExp2",
+    147 => "FloatExpM1",
+    148 => "FloatLn",
+    149 => "FloatLog2",
+    150 => "FloatLog10",
+    151 => "FloatLn1p",
+    152 => "FloatSin",
+    153 => "FloatCos",
+    154 => "FloatTan",
+    155 => "FloatAsin",
+    156 => "FloatAcos",
+    157 => "FloatAtan",
+    158 => "FloatSinh",
+    159 => "FloatCosh",
+    160 => "FloatTanh",
+    161 => "FloatAsinh",
+    162 => "FloatAcosh",
+    163 => "FloatAtanh",
+    164 => "FloatCbrt",
+    165 => "FloatLogB",
+    166 => "FloatPow",
+    167 => "FloatAtan2",
+    168 => "FloatHypot",
+    169 => "FloatRemainder",
+    170 => "FloatTruncatingRemainder",
+    171 => "FloatFma",
+    172 => "FloatScaleB",
+    173 => "FloatTrunc",
+    174 => "FloatRound",
+    175 => "FloatRoundEven",
+    176 => "FloatCopySign",
+    177 => "FileCreateReadWrite",
+    178 => "ThreadFinished",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

@@ -134,7 +134,7 @@ jobs:
           exe="$seed/ceesafec"; [ -f "$exe.exe" ] && exe="$exe.exe"
           "$exe" --version | tr -d '\r' | grep -Fx "ceesafec ${{ needs.version.outputs.version }}"
           "$exe" build --emit c -o c
-          diff -r -x README.md -x COPYING -x COPYING.RUNTIME -x 'ceesafec*' -x '*.obj' -x '*.o' c "$seed"
+          diff -r -x ceesafe_link.txt -x README.md -x COPYING -x COPYING.RUNTIME -x 'ceesafec*' -x '*.obj' -x '*.o' c "$seed"
 
   build:
     needs: [version, seed]
@@ -173,14 +173,14 @@ jobs:
           cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
       - name: Generation 1 from the seed (cc)
         if: ${{ !matrix.msvc }}
-        run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1
+        run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1 -lm -lpthread
       - name: Generation 2, built by generation 1
         run: |
           gen1=./gen1; [ -f gen1.exe ] && gen1=./gen1.exe
           mkdir -p stage
           "$gen1" build ${{ matrix.cross }} -o "stage/${{ matrix.exe }}"
           "$gen1" build --emit c -o c1
-          diff -r seed c1
+          diff -r -x ceesafe_link.txt seed c1
           ls -la stage
       - name: Generation 2 emits the seed
         id: run
@@ -199,7 +199,7 @@ jobs:
           fi
           echo "runnable=true" >> "$GITHUB_OUTPUT"
           run build --emit c -o c2
-          diff -r seed c2
+          diff -r -x ceesafe_link.txt seed c2
       - name: MinGW's gcc links the hosted runtime
         # tooling.md §8.3: ceesafec names Winsock, GDI and BCrypt for gcc, which ignores the runtime's #pragma comment.
         if: matrix.rid == 'win-x64'
@@ -358,9 +358,9 @@ jobs:
             mkdir -p stage
             ./gen1 build -o stage/ceesafec
             ./gen1 build --emit c -o c1
-            diff -r seed c1
+            diff -r -x ceesafe_link.txt seed c1
             stage/ceesafec build --emit c -o c2
-            diff -r seed c2
+            diff -r -x ceesafe_link.txt seed c2
             stage/ceesafec --version | grep -Fx "ceesafec $VERSION"
             printf 'fn main() {\n    Console.writeLine(40 + 2);\n}\n' > hello.cee
             test "$(stage/ceesafec run --interp hello.cee)" = 42

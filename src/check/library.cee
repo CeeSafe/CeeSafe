@@ -27,7 +27,7 @@ fn libraryFunction(
 }
 
 /// `s.swap(i, j)`, and the slice methods written in lib/core (CheckSliceAlgorithm): `sortBy`, `forEach`, `any`, `all`, `partitionPoint`
-/// (SliceAlgorithms<T>), `splitAt`, `splitAtMut` (SliceSplitting<r, T>), `copyWithin` (SliceCopying<T: Copy>). `slice` is the receiver, already borrowed.
+/// (SliceAlgorithms<T>; `sortStableBy` too, ADR 0225), `splitAt`, `splitAtMut` (SliceSplitting<r, T>), `copyWithin` (SliceCopying<T: Copy>). `slice` is the receiver, already borrowed.
 fn checkSliceAlgorithm(
     c: borrow mut Checker,
     member: u32,
@@ -47,7 +47,10 @@ fn checkSliceAlgorithm(
     let sliceType = c.typeOf(slice);
     let element = c.types.info(c.types.info(sliceType).pointee).element;
     let mutable = c.types.info(sliceType).mutableReference;
-    if ((sameText(text, "sortBy") || sameText(text, "swap") || sameText(text, "splitAtMut") ||
+    if ((sameText(
+        text,
+        "sortBy",
+    ) || sameText(text, "sortStableBy") || sameText(text, "swap") || sameText(text, "splitAtMut") ||
         sameText(text, "copyWithin")) && !mutable) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
@@ -83,7 +86,10 @@ fn checkSliceAlgorithm(
         return c.expr(HirExpr.BuiltinCall(bfSliceSwap(), list), voidType, span.start, span.end);
     }
     var receiver = slice;
-    if (!sameText(text, "sortBy") && !sameText(text, "splitAtMut") && !sameText(text, "copyWithin") && mutable) {
+    if (!sameText(
+        text,
+        "sortBy",
+    ) && !sameText(text, "sortStableBy") && !sameText(text, "splitAtMut") && !sameText(text, "copyWithin") && mutable) {
         let shared = c.types.sliceOf(element, false)?;
         receiver = coerce(c, slice, shared, targetSpan)?;
     }
@@ -156,9 +162,21 @@ fn checkVectorRetain(
 /// `Process.capture` and `File.kind` (CheckHostService, §26.7, §26.8): calls of lib/std's HostServices function of that
 /// name, in the hosted profile.
 fn checkHostService(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    return checkLibraryService(c, "HostServices", member, arguments, span);
+}
+
+/// A call of the lib/std struct `holder`'s static function named as `member`: `Thread.sleep(ms)` is
+/// ThreadServices.sleep(ms) (ADR 0222 §2.1), and checkHostService's HostServices.
+fn checkLibraryService(
+    c: borrow mut Checker,
+    holder: StringView,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
     let symbol = c.front.ast.idents[member as usize].symbol;
     let none0 = Vector<u32>.create();
-    let function = libraryFunction(c, "HostServices", none0.view(), symbol, span)?;
+    let function = libraryFunction(c, holder, none0.view(), symbol, span)?;
     if (function == none()) {
         c.notPorted(span.start, span.end, "this host service", "S5")?;
         checkArgumentsLoosely(c, arguments)?;

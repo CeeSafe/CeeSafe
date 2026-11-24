@@ -1,0 +1,85 @@
+// The masking shifts on signed integers (type-system.md §6, ADR 0223): the amount is taken modulo the width, the
+// left shift wraps in two's complement, and the right shift is arithmetic, so it rounds towards negative infinity.
+// The expected values are Python's: `x >> (n % w)`, and `x << (n % w)` brought into the type's range modulo 2^w.
+// The last line is SQLite's pwr10to2 at -7, `(p * 108853) >> 15`, which needs the arithmetic shift.
+
+fn pwr10to2(p: i32) -> i32 => (p * 108853).wrappingShr(15);
+
+fn main() {
+    let a: i8 = -128;
+    Console.writeLine(a.wrappingShr(1));
+    Console.writeLine(a.wrappingShr(7));
+    Console.writeLine(a.wrappingShr(8));
+    let b: i8 = -1;
+    Console.writeLine(b.wrappingShr(3));
+    let c: i8 = 127;
+    Console.writeLine(c.wrappingShr(3));
+    Console.writeLine(a.wrappingShl(1));
+    let one8: i8 = 1;
+    Console.writeLine(one8.wrappingShl(7));
+    let three: i8 = 3;
+    Console.writeLine(three.wrappingShl(9));
+    let d: i16 = -300;
+    Console.writeLine(d.wrappingShr(4));
+    let e: i16 = 300;
+    Console.writeLine(e.wrappingShl(8));
+    let f: i16 = -2;
+    Console.writeLine(f.wrappingShl(15));
+    let g: i16 = -32767 - 1;
+    Console.writeLine(g.wrappingShr(15));
+    let h: i32 = -1000;
+    Console.writeLine(h.wrappingShr(3));
+    Console.writeLine(h.wrappingShr(35));
+    Console.writeLine(h.wrappingShl(30));
+    let i: i32 = -2147483647 - 1;
+    Console.writeLine(i.wrappingShr(31));
+    Console.writeLine(i.wrappingShr(32));
+    let one32: i32 = 1;
+    Console.writeLine(one32.wrappingShl(31));
+    let five: i32 = 5;
+    Console.writeLine(five.wrappingShr(0));
+    let j: i64 = -762971;
+    Console.writeLine(j.wrappingShr(15));
+    let k: i64 = -1;
+    Console.writeLine(k.wrappingShr(63));
+    let l: i64 = -9223372036854775807 - 1;
+    Console.writeLine(l.wrappingShr(63));
+    let one64: i64 = 1;
+    Console.writeLine(one64.wrappingShl(63));
+    let m: i64 = -3;
+    Console.writeLine(m.wrappingShl(66));
+    let n: i64 = 123456789;
+    Console.writeLine(n.wrappingShr(70));
+    let o: isize = -17;
+    Console.writeLine(o.wrappingShr(2));
+    Console.writeLine(o.wrappingShl(2));
+    Console.writeLine(pwr10to2(-7));
+}
+// expect-stdout: -64
+// expect-stdout: -1
+// expect-stdout: -128
+// expect-stdout: -1
+// expect-stdout: 15
+// expect-stdout: 0
+// expect-stdout: -128
+// expect-stdout: 6
+// expect-stdout: -19
+// expect-stdout: 11264
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -125
+// expect-stdout: -125
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -2147483648
+// expect-stdout: -2147483648
+// expect-stdout: 5
+// expect-stdout: -24
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: -9223372036854775808
+// expect-stdout: -12
+// expect-stdout: 1929012
+// expect-stdout: -5
+// expect-stdout: -68
+// expect-stdout: -24

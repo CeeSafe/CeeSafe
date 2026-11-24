@@ -29,7 +29,12 @@ fn checkTypeCall(
         return checkStaticCall(c, structEntry, member, arguments, calleeSpan, span);
     }
     completeMembers(c, typ, memberSpan)?; // an instance whose functions waited for a use
-    var function = implMethodFor(c, typ, memberIdent.symbol);
+    var reported = false;
+    var function = chooseStaticFunction(c, typ, memberIdent.symbol, memberSpan, mut reported)?; // ADR 0229 §2.2
+    if (reported) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     let enumEntry = enumEntryOfType(c, typ);
     if (function == none() && enumEntry != none() && reportUnmetImplBounds(c, typ, memberIdent.symbol, memberSpan)?) {
         checkArgumentsLoosely(c, arguments)?;

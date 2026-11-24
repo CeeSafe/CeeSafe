@@ -163,12 +163,74 @@ log
   not use fields. An error in it is reported there, even if no impl inherits it.
 - An impl that inherits a default gets its own copy, compiled for the target type: a call on the type, through a
   bound or through `dyn` calls it directly or through the table, as for a method the impl writes.
-- A type has one method of each name: an inherited default whose name the type already has is an error at the impl.
+- An inherited default whose name the type already has as its own method is an error at the impl. Another
+  interface may give the type a method of the same name (below).
 - In an `impl` block and in a struct's or enum's body, `Self` is the type itself, with its parameters:
   `Self { … }`, `Self.make()` and `Self.MAX` work as with the type's name.
 - A method without a receiver is a static function: `fn create(options: borrow Options) -> Self;` is called as
   `T.create(o)` through a bound `T`, as `Self.create(o)` in a default and as `Rule.create(o)` on a type. A method may
   also have type parameters of its own, `fn visit<T: Copy>(borrow mut this, value: T)`, instantiated per call.
+
+## Two interfaces with a method of the same name
+
+Interfaces written apart often share a name. A type may implement both, with the same signature or another, and
+each interface's callers get its own method:
+
+```ceesafe
+interface PageSource {
+    fn usableSize(borrow this) -> usize;
+}
+
+interface PageSink {
+    fn usableSize(borrow this) -> usize;
+    fn write(borrow mut this, page: u32);
+}
+
+struct Pager {
+    size: usize;
+    written: u32;
+}
+
+impl PageSource for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 8;
+}
+
+impl PageSink for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 32;
+
+    fn write(borrow mut this, page: u32) {
+        this.written += page;
+    }
+}
+
+fn sinkSize<T: PageSink>(sink: borrow T) -> usize => sink.usableSize();
+
+fn main() {
+    var pager = Pager { size: 4096, written: 0 };
+    Console.writeLine(sinkSize(pager));
+    Console.writeLine(PageSource.usableSize(pager));
+    PageSink.write(mut pager, 3);
+    pager.write(4);
+    Console.writeLine(pager.written);
+}
+```
+
+```text
+4064
+4088
+7
+```
+
+- Through a bound or a `dyn`, a call is that interface's, in every instance of the generic code: `sinkSize` calls
+  the sink's `usableSize` although `Pager` has two.
+- `PageSource.usableSize(pager)` names the interface. The value comes first, written as an argument to `this` is:
+  `mut pager` for a `borrow mut this` method.
+- On the type itself, a name it has once needs nothing (`pager.write(4)`). A name it has from two interfaces is an
+  error, N0267, which names both qualified forms; where only one of them takes the call's arguments, `ceesafec fix`
+  writes it.
+- A static function the type has from two interfaces is called through a bound: `fn make<T: Labelled>() -> T =>
+  T.make();`.
+- A type's own method and an interface's method still cannot share a name.
 
 ## Constants and associated types
 

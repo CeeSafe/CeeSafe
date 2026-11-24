@@ -1,0 +1,403 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: text of any bytes (ADR 0231). `String` and `StringView` hold UTF-8 only; a `ByteString` (owned) and a
+// `ByteStringView<r>` (borrowed) hold text that is usually UTF-8 but need not be, as C's `char *`, a file name, or
+// SQLite's TEXT may. Bundled with ceesafec and part of every package. HashKey and OrderKey for them are in lib/std,
+// beside the interfaces.
+//
+// The bytes are kept as they are: nothing is replaced or checked until a program asks for UTF-8 (`toUtf8`, a view
+// when the bytes are valid; `toUtf8Lossy`, a string with U+FFFD for each maximal subpart of an ill-formed sequence;
+// `chunks`, the valid runs and the bytes between them).
+
+/// A borrowed text of any bytes, valid for region `r` as a `StringView<r>` is: a view of a `ByteString`, of a
+/// `StringView`'s bytes or of any `Slice<u8>`. Copy; `==` compares the bytes. A field of this type needs a region
+/// parameter, as a view's does.
+@derive(Equal)
+public struct ByteStringView<region r> {
+    private data: Slice<r, u8>;
+
+    /// The bytes of `text`, as a byte string: no copy. A string literal, a `StringView` or a `String` (lent).
+    public fn fromText(text: StringView<r>) -> ByteStringView<r> => ByteStringView { data: text.bytes() };
+
+    /// `bytes`, as a byte string: no copy, and no check.
+    public fn fromBytes(bytes: Slice<r, u8>) -> ByteStringView<r> => ByteStringView { data: bytes };
+
+    /// The bytes.
+    public fn bytes(borrow this) -> Slice<r, u8> => this.data;
+
+    /// The length in bytes.
+    public fn length(borrow this) -> usize => this.data.length;
+
+    /// Whether there are no bytes.
+    public fn isEmpty(borrow this) -> bool => this.data.length == 0;
+
+    /// The byte at `index`; panics past the end, as `s[index]` does.
+    public fn byteAt(borrow this, index: usize) -> u8 => this.data[index];
+
+    /// The bytes from `start` up to `end`; panics as `s[start..end]` does when they are not inside. A slice may cut
+    /// a UTF-8 sequence: the bytes are any bytes.
+    public fn slice(borrow this, start: usize, end: usize) -> ByteStringView<r> {
+        let all = this.data;
+        return ByteStringView { data: all[start..end] };
+    }
+
+    /// The bytes from `start` to the end.
+    public fn sliceFrom(borrow this, start: usize) -> ByteStringView<r> {
+        let all = this.data;
+        return ByteStringView { data: all[start..] };
+    }
+
+    /// The first `end` bytes.
+    public fn sliceTo(borrow this, end: usize) -> ByteStringView<r> {
+        let all = this.data;
+        return ByteStringView { data: all[..end] };
+    }
+
+    /// The text as a `StringView` when the bytes are UTF-8 (the Unicode Standard's Table 3-7, as
+    /// `StringView.fromUtf8` checks), with no copy; null when they are not.
+    public fn toUtf8(borrow this) -> StringView<r>? => StringView.fromUtf8(this.data);
+
+    /// Whether the bytes are UTF-8.
+    public fn isUtf8(borrow this) -> bool => StringView.fromUtf8(this.data) != null;
+
+    /// A new string of the text, each maximal subpart of an ill-formed sequence replaced by U+FFFD (the Unicode
+    /// Standard's §3.9 "U+FFFD substitution of maximal subparts", which the WHATWG Encoding Standard's decoder and
+    /// Python's `bytes.decode('utf-8', 'replace')` follow). Valid UTF-8 is copied as it is.
+    public fn toUtf8Lossy(borrow this) -> Result<String, AllocError> {
+        var out = String.withCapacity(this.data.length)?;
+        this.appendLossyTo(mut out)?;
+        return Ok(out);
+    }
+
+    /// Appends `toUtf8Lossy`'s text to `out`. On failure `out` holds the text appended before it.
+    public fn appendLossyTo(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        var pieces = this.chunks();
+        for (chunk in pieces) {
+            out.append(chunk.valid)?;
+            if (chunk.invalid.length > 0) {
+                out.append("\u{FFFD}")?;
+            }
+        }
+        return Ok();
+    }
+
+    /// The text in pieces, for a printer that escapes what is not UTF-8: each `Utf8Chunk` is a run of valid UTF-8
+    /// and then one maximal subpart of an ill-formed sequence (1 to 3 bytes), which only the last chunk may lack.
+    /// Empty bytes give no chunk.
+    public fn chunks(borrow this) -> Utf8Chunks<r> => Utf8Chunks { data: this.data, position: 0 };
+
+    /// Whether the bytes are the same as `other`'s: `==` across regions.
+    public fn equals(borrow this, other: ByteStringView) -> bool => ByteScanOrder.compare(this.data, other.data) == 0;
+
+    /// Bytewise order: negative, zero or positive as this text comes before, is the same as or comes after
+    /// `other`; a prefix comes before the longer text. For UTF-8 it is code point order, as for `String`.
+    public fn compare(borrow this, other: ByteStringView) -> i32 => ByteScanOrder.compare(this.data, other.data);
+
+    /// Where `needle` first is, in bytes; 0 for an empty needle.
+    public fn indexOf(borrow this, needle: Slice<u8>) -> usize? => ByteSearch.indexOf(this.data, needle);
+
+    /// Where `needle` last is; the length for an empty needle.
+    public fn lastIndexOf(borrow this, needle: Slice<u8>) -> usize? => ByteSearch.lastIndexOf(this.data, needle);
+
+    /// Where the byte `b` first is.
+    public fn indexOfByte(borrow this, b: u8) -> usize? => ByteSearch.indexOfByte(this.data, b);
+
+    /// Whether `needle` occurs.
+    public fn contains(borrow this, needle: Slice<u8>) -> bool => ByteSearch.contains(this.data, needle);
+
+    /// Whether the bytes begin with `prefix`.
+    public fn startsWith(borrow this, prefix: Slice<u8>) -> bool => ByteSearch.startsWith(this.data, prefix);
+
+    /// Whether the bytes end with `suffix`.
+    public fn endsWith(borrow this, suffix: Slice<u8>) -> bool => ByteSearch.endsWith(this.data, suffix);
+
+    /// Whether the bytes are `other`'s, `A`–`Z` and `a`–`z` taken as the same.
+    public fn equalsIgnoreAsciiCase(borrow this, other: Slice<u8>) -> bool =>
+        ByteSearch.equalsIgnoreAsciiCase(this.data, other);
+
+    /// Without ASCII whitespace at either end.
+    public fn trim(borrow this) -> ByteStringView<r> => ByteStringView { data: ByteSearch.trim(this.data) };
+
+    /// Without ASCII whitespace at the start.
+    public fn trimStart(borrow this) -> ByteStringView<r> => ByteStringView { data: ByteSearch.trimStart(this.data) };
+
+    /// Without ASCII whitespace at the end.
+    public fn trimEnd(borrow this) -> ByteStringView<r> => ByteStringView { data: ByteSearch.trimEnd(this.data) };
+
+    /// The bytes before the first `separator` and after it, or null if it does not occur. An empty separator is
+    /// found at the start.
+    public fn splitOnce(borrow this, separator: Slice<u8>) -> ByteStringHalves<r>? {
+        let halves = ByteSearch.splitOnce(this.data, separator)?;
+        return ByteStringHalves {
+            left: ByteStringView { data: halves.left },
+            right: ByteStringView { data: halves.right },
+        };
+    }
+
+    /// The pieces between separators, in order, as `StringView`'s `split`: `"a,,b"` by `","` is `"a"`, `""`, `"b"`;
+    /// empty bytes are one empty piece; an empty separator gives the bytes whole.
+    public fn split(borrow this, separator: Slice<r, u8>) -> ByteStringSplit<r> =>
+        ByteStringSplit { pieces: ByteSearch.split(this.data, separator) };
+
+    /// A new byte string with a copy of the bytes.
+    public fn toByteString(borrow this) -> Result<ByteString, AllocError> => ByteString.copyOf(this.data);
+
+    /// Writes the bytes, as they are, to `w`.
+    public fn writeTo(borrow this, w: borrow mut TextWriter) {
+        w.bytes(this.data);
+    }
+}
+
+/// An owned text of any bytes, in a growable buffer: a `String` that may hold bytes that are not UTF-8. A move type,
+/// as `Vector<u8>` is; `==` compares the bytes. Text enters it as text (`append`, numbers, characters) or as bytes
+/// (`appendBytes`, `appendByte`), and nothing is checked or replaced.
+@derive(Equal)
+public struct ByteString {
+    private data: Vector<u8>;
+
+    /// An empty byte string; no allocation.
+    public fn create() -> ByteString => ByteString { data: Vector<u8>.create() };
+
+    /// An empty byte string with room for `capacity` bytes.
+    public fn withCapacity(capacity: usize) -> Result<ByteString, AllocError> =>
+        Ok(ByteString { data: Vector<u8>.withCapacity(capacity)? });
+
+    /// The bytes of `bytes`, which it takes: no copy.
+    public fn fromBytes(bytes: Vector<u8>) -> ByteString => ByteString { data: bytes };
+
+    /// A new byte string with a copy of `bytes`: one allocation, none for no bytes.
+    public fn copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError> {
+        var copy = Vector<u8>.withCapacity(bytes.length)?;
+        copy.extend(bytes)?;
+        return Ok(ByteString { data: copy });
+    }
+
+    /// A new byte string with a copy of `text`'s bytes (a literal, a `StringView`, or a `String`, lent).
+    public fn fromText(text: StringView) -> Result<ByteString, AllocError> => ByteString.copyOf(text.bytes());
+
+    /// A new byte string with a copy of the bytes.
+    public fn clone(borrow this) -> Result<ByteString, AllocError> => ByteString.copyOf(this.data.view());
+
+    /// The bytes, which the byte string gives up: no copy.
+    public fn intoBytes(this) -> Vector<u8> => this.data;
+
+    /// A view of the text, a loan of the byte string.
+    public fn view(borrow this) -> ByteStringView => ByteStringView { data: this.data.view() };
+
+    /// The bytes, a loan of the byte string.
+    public fn bytes(borrow this) -> Slice<u8> => this.data.view();
+
+    /// The length in bytes.
+    public fn length(borrow this) -> usize => this.data.length;
+
+    /// How many bytes it can hold before it grows.
+    public fn capacity(borrow this) -> usize => this.data.capacity;
+
+    /// Whether there are no bytes.
+    public fn isEmpty(borrow this) -> bool => this.data.length == 0;
+
+    /// Removes every byte; the capacity stays.
+    public fn clear(borrow mut this) {
+        this.data.clear();
+    }
+
+    /// Keeps the first `length` bytes (all of them if there are no more).
+    public fn truncate(borrow mut this, length: usize) {
+        this.data.truncate(length);
+    }
+
+    /// The text as a `StringView` when the bytes are UTF-8, a loan of the byte string; null when they are not.
+    public fn toUtf8(borrow this) -> StringView? => StringView.fromUtf8(this.data.view());
+
+    /// `view().toUtf8Lossy()`: a new string, U+FFFD for each maximal subpart of an ill-formed sequence.
+    public fn toUtf8Lossy(borrow this) -> Result<String, AllocError> {
+        let v = this.view();
+        return v.toUtf8Lossy();
+    }
+
+    /// Appends the bytes of `text`. Each append grows the buffer at most once and leaves it as it was if that fails.
+    public fn append(borrow mut this, text: StringView) -> Result<void, AllocError> => this.data.extend(text.bytes());
+
+    /// Appends `bytes`, whatever they are.
+    public fn appendBytes(borrow mut this, bytes: Slice<u8>) -> Result<void, AllocError> => this.data.extend(bytes);
+
+    /// Appends the byte `b`.
+    public fn appendByte(borrow mut this, b: u8) -> Result<void, AllocError> => this.data.push(b);
+
+    /// Appends `value` in decimal, with a `-` before a negative value, as `String.appendNumber` writes an integer.
+    public fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError> {
+        var digits = [0u8; 24];
+        var w = TextWriter.create(mut digits[..]);
+        w.signed(value);
+        return this.data.extend(w.written());
+    }
+
+    /// Appends `value` in decimal: `appendNumber` for a `u64` past `i64`'s range.
+    public fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError> {
+        var digits = [0u8; 24];
+        var w = TextWriter.create(mut digits[..]);
+        w.decimal(value);
+        return this.data.extend(w.written());
+    }
+}
+
+impl AppendFormatted for ByteString {
+    fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError> =>
+        Formatted.hex(mut this.data, value, minWidth, upper);
+
+    fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError> => Formatted.octal(mut this.data, value);
+
+    fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError> =>
+        Formatted.fixed(mut this.data, value, digits);
+
+    fn appendPadded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError> =>
+        Formatted.padded(mut this.data, text, width, align, fill);
+}
+
+impl AppendText for ByteString {
+    fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError> => this.data.appendChar(c);
+
+    fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError> => this.data.appendUtf8(bytes);
+}
+
+/// The parts of a byte string before and after a separator: what `s.splitOnce(sep)` finds.
+public struct ByteStringHalves<region r> {
+    public left: ByteStringView<r>;
+    public right: ByteStringView<r>;
+}
+
+/// The pieces of a byte string between separators, in order: `s.split(sep)`.
+public struct ByteStringSplit<region r> {
+    pieces: ByteSplit<r>;
+}
+
+impl<region r> Iterator<ByteStringView<r>> for ByteStringSplit<r> {
+    /// The next piece, or null after the last.
+    fn next(borrow mut this) -> ByteStringView<r>? {
+        let piece = this.pieces.next()?;
+        return ByteStringView.fromBytes(piece);
+    }
+}
+
+/// A piece of a byte string (`s.chunks()`): a run of valid UTF-8, then the bytes of one maximal subpart of an
+/// ill-formed sequence after it, empty only in the last chunk. A printer writes `valid` and escapes `invalid`.
+public struct Utf8Chunk<region r> {
+    public valid: StringView<r>;
+    public invalid: Slice<r, u8>;
+}
+
+/// The chunks of a byte string, in order: `s.chunks()`. `next()` gives each, then null.
+public struct Utf8Chunks<region r> {
+    data: Slice<r, u8>;
+    position: usize; // where the next chunk starts
+}
+
+impl<region r> Iterator<Utf8Chunk<r>> for Utf8Chunks<r> {
+    /// The next chunk, or null after the last.
+    fn next(borrow mut this) -> Utf8Chunk<r>? {
+        let data = this.data;
+        let start = this.position;
+        if (start >= data.length) {
+            return null;
+        }
+        var i = start;
+        while (i < data.length) {
+            let n = Utf8Sequence.validLength(data, i);
+            if (n == 0) {
+                break;
+            }
+            i += n;
+        }
+        // Every sequence from start to i is well-formed, so the view is always there.
+        let valid = StringView.fromUtf8(data[start..i])!;
+        if (i == data.length) {
+            this.position = i;
+            return Utf8Chunk { valid: valid, invalid: data[i..i] };
+        }
+        let bad = Utf8Sequence.maximalSubpart(data, i);
+        this.position = i + bad;
+        return Utf8Chunk { valid: valid, invalid: data[i..i + bad] };
+    }
+}
+
+/// UTF-8 sequences, by the Unicode Standard's Table 3-7.
+struct Utf8Sequence {
+    /// The second byte's least and greatest values after the first byte `b`; the later bytes are 0x80 to 0xBF.
+    fn secondLow(b: u8) -> u8 => if (b == 0xE0) 0xA0 else if (b == 0xF0) 0x90 else 0x80;
+
+    fn secondHigh(b: u8) -> u8 => if (b == 0xED) 0x9F else if (b == 0xF4) 0x8F else 0xBF;
+
+    /// How many bytes a sequence that starts with `b` has; 0 if no well-formed sequence starts with it.
+    fn sizeOf(b: u8) -> usize {
+        if (b < 0x80) {
+            return 1;
+        }
+        if (b >= 0xC2 && b <= 0xDF) {
+            return 2;
+        }
+        if (b >= 0xE0 && b <= 0xEF) {
+            return 3;
+        }
+        if (b >= 0xF0 && b <= 0xF4) {
+            return 4;
+        }
+        return 0;
+    }
+
+    /// How many of the bytes of the sequence at `at` (0 < at's size) are as Table 3-7 allows, from the first.
+    fn matched(s: Slice<u8>, at: usize) -> usize {
+        let first = s[at];
+        let size = Utf8Sequence.sizeOf(first);
+        if (size == 0) {
+            return 0;
+        }
+        var k: usize = 1;
+        while (k < size) {
+            if (at + k >= s.length) {
+                return k;
+            }
+            let b = s[at + k];
+            let low: u8 = if (k == 1) Utf8Sequence.secondLow(first) else 0x80;
+            let high: u8 = if (k == 1) Utf8Sequence.secondHigh(first) else 0xBF;
+            if (b < low || b > high) {
+                return k;
+            }
+            k += 1;
+        }
+        return k;
+    }
+
+    /// The length of the well-formed sequence at `at`, or 0 if the bytes there are not one.
+    fn validLength(s: Slice<u8>, at: usize) -> usize {
+        let size = Utf8Sequence.sizeOf(s[at]);
+        if (size == 0) {
+            return 0;
+        }
+        return if (Utf8Sequence.matched(s, at) == size) size else 0;
+    }
+
+    /// The length of the maximal subpart at `at`, where no well-formed sequence starts: the longest prefix of a
+    /// well-formed sequence there, or 1 if the first byte begins none.
+    fn maximalSubpart(s: Slice<u8>, at: usize) -> usize {
+        let k = Utf8Sequence.matched(s, at);
+        return if (k == 0) 1 else k;
+    }
+}
+
+/// The bytewise order of two byte strings.
+struct ByteScanOrder {
+    fn compare(a: Slice<u8>, b: Slice<u8>) -> i32 {
+        let n = if (a.length < b.length) a.length else b.length;
+        for (k in 0..n) {
+            if (a[k] != b[k]) {
+                return if (a[k] < b[k]) -1 else 1;
+            }
+        }
+        return if (a.length < b.length) -1 else if (a.length > b.length) 1 else 0;
+    }
+}

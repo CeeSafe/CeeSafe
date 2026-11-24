@@ -127,6 +127,10 @@ jobs:
         if: always()
         shell: bash
         run: python tools/secrets_check.py --compiler seed/ceesafec.exe
+      - name: Local notifications (ADR 0243)
+        if: always()
+        shell: bash
+        run: python tools/notify_check.py --compiler seed/ceesafec.exe
       - name: Printing a PDF (ADR 0178)
         if: always()
         shell: bash

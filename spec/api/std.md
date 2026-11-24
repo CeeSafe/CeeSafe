@@ -87,6 +87,8 @@
 - [struct UdpReceived](#struct-udpreceived)
 - [struct UdpMessage](#struct-udpmessage)
 - [struct AsyncDns](#struct-asyncdns)
+- [enum NotificationError](#enum-notificationerror)
+- [struct Notifications](#struct-notifications)
 - [interface OrderKey](#interface-orderkey)
 - [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
@@ -3832,6 +3834,69 @@ to its thread. Errors are `AsyncError.Io`: `HostNotFound` (no such name, or no a
 reserved `.invalid` ones).
 Safety: the runtime copies the name during the start; the lookup's record is the runtime's, ended once by
 `DnsLookup`'s drop, so no path leaves it or ends it twice.
+
+## enum NotificationError
+
+```ceesafe
+public enum NotificationError {
+    Unsupported,
+    InvalidInput,
+    Denied,
+    Failed,
+}
+```
+
+Why a notification call failed.
+
+## struct Notifications
+
+```ceesafe
+public struct Notifications
+```
+
+The system's notifications (ADR 0243): each blocks until the system has it, and may be called from any thread but
+the window's, whose run loop the system's answers need.
+
+An `id` is 1 to 64 ASCII letters, digits, `.`, `-`, `_` and `:`; a `title` at most 256 bytes and a `body` at most
+4,096 bytes, neither with a zero byte.
+
+```
+Notifications.requestPermission()?;                    // once, before the first
+Notifications.show("chat:42", "Bob", "Are you there?")?;
+Notifications.clear("chat:42")?;                       // read now
+```
+
+Android: one channel named after the app, high importance; the app declares `POST_NOTIFICATIONS`. iOS, and a
+bundled macOS app: `UNUserNotificationCenter`; nothing is shown while the app is in the foreground. A tap opens the
+app. `CEESAFE_NOTIFICATIONS_DUMP=<file>` appends the calls to the file instead, natively on every system, for
+tests. Under `ceesafec run --interp` every call is `Unsupported`.
+
+### Notifications.requestPermission
+
+```ceesafe
+public fn requestPermission() -> Result<void, NotificationError>
+```
+
+Asks the user, once, whether the app may notify: `Ok` when it may, `Denied` when not.
+Safety: the runtime call takes no memory of the program's.
+
+### Notifications.show
+
+```ceesafe
+public fn show(id: StringView, title: StringView, body: StringView) -> Result<void, NotificationError>
+```
+
+Shows a notification, replacing the one shown with the same `id`.
+Safety: the runtime reads the views during the call only.
+
+### Notifications.clear
+
+```ceesafe
+public fn clear(id: StringView) -> Result<void, NotificationError>
+```
+
+Removes the notification `id`; `Ok` when there is none.
+Safety: the runtime reads the view during the call only.
 
 ## interface OrderKey
 

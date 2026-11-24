@@ -1802,6 +1802,15 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_secrets_remove")) {
         return "PsPs:i";
     }
+    if (sameText(name, "ceesafe_notify_permission")) {
+        return ":i"; // ADR 0243
+    }
+    if (sameText(name, "ceesafe_notify_show")) {
+        return "PsPsPs:i";
+    }
+    if (sameText(name, "ceesafe_notify_clear")) {
+        return "Ps:i";
+    }
     if (sameText(name, "ceesafe_window_wait_any")) {
         return "u:-";
     }
@@ -2251,6 +2260,12 @@ fn callC(
         // The secret store (ADR 0242): the interpreter has no system store, so every call is SecretError.Unsupported
         // (the runtime's -2), CEESAFE_SECRETS_DIR or not.
         return Ok(hostResult(-2));
+    }
+    if (sameText(n0, "ceesafe_notify_permission") || sameText(n0, "ceesafe_notify_show") ||
+        sameText(n0, "ceesafe_notify_clear")) {
+        // Local notifications (ADR 0243): the interpreter has no system to show them, so every call is
+        // NotificationError.Unsupported (the runtime's -2), CEESAFE_NOTIFICATIONS_DUMP or not.
+        return Ok(valueOf(0xFFFFFFFE, 4));
     }
     if (sameText(n0, "ceesafe_secrets_write") || sameText(n0, "ceesafe_secrets_remove")) {
         return Ok(valueOf(0xFFFFFFFE, 4)); // -2 as an i32

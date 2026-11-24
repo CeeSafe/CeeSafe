@@ -4406,6 +4406,24 @@ Diagnostics: none new.
 - **Testing.** `CEESAFE_SECRETS_DIR=<folder>` keeps the values natively as plain files `<folder>/<app>/<name>`
   instead, on every system; never for a real app's secrets.
 
+### 26.22 Local notifications (ADR 0243)
+- **`Notifications.requestPermission()`** (lib/std): `Result<void, NotificationError>`, asks the user once whether
+  the app may notify; `Ok` when it may (already, or now), `Denied` when not. **`Notifications.show(id, title,
+  body)`**: shows a notification at once, replacing the one shown with the same `id`; a tap opens the app.
+  **`Notifications.clear(id)`**: removes it; `Ok` when there is none.
+- **Names and sizes.** `id` is 1 to 64 ASCII letters, digits, `.`, `-`, `_` and `:`; `title` at most 256 bytes and
+  `body` at most 4,096, neither with a zero byte. Any other is `InvalidInput`, before the system is asked.
+- **`NotificationError`**: `Unsupported`, `InvalidInput`, `Denied` (refused, or turned off by the user), `Failed`.
+- **Every call blocks** until the system has it, and may be made from any thread but the window's; each has the
+  `sleep` effect.
+- **Where.** Android (a program with an activity): one channel named after the app, high importance, the app's icon;
+  the app declares `POST_NOTIFICATIONS`, which Android 13 and later ask the user for. iOS, and macOS in a bundled app:
+  `UNUserNotificationCenter`, the default sound; nothing is shown while the app is in the foreground. Windows, Linux,
+  FreeBSD, CosmoOS, a command-line program on macOS and `ceesafec run --interp`: `Unsupported`.
+- **Testing.** `CEESAFE_NOTIFICATIONS_DUMP=<file>` appends `permission`, `show ID<TAB>TITLE<TAB>BODY` and `clear ID`
+  lines to the file instead (a tab, newline and backslash in a text written `\t`, `\n`, `\\`), natively on every
+  system, and every call is then `Ok`.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package tests for system libraries in the manifest (ADR 0047), on a copy of tests/packages in a temporary directory:
+r"""Package tests for system libraries in the manifest (ADR 0047), on a copy of tests/packages in a temporary directory:
 
 1. native-links: a C static library is built here (cc and ar, or cl and lib on Windows) into a directory named by
    $CEESAFE_TEST_LIBDIR; `wrap` links it, with its header from `include-dirs`, `mid` uses `wrap`, `app` uses `mid`.
@@ -654,7 +654,8 @@ def interface_records(compiler, work, problems):
     os.chmod(unusable, 0o755)
     if compared < 50:
         problems.append(f"records: only {compared} packages compared")
-    if os.path.isdir(os.path.join(unusable, "cache")):
+    # Permissions do not bind the superuser, so as root the home is writable and this check says nothing.
+    if getattr(os, "geteuid", lambda: 1)() != 0 and os.path.isdir(os.path.join(unusable, "cache")):
         problems.append("records: a cache was made in a home that is not writable")
     fixture = os.path.join(oracle, "interface-records")
     cache = os.path.join(home, "cache", "records")

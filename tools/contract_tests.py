@@ -105,7 +105,7 @@ def main():
                         help="the release's stage 0, ceesafec 0.94.5 (bootstrap/reference.md), for the release chain "
                              "step; default: $CEESAFE_RELEASE_STAGE0, else ~/.cache/ceesafe/stage0/ceesafec")
     args = parser.parse_args()
-    stage0 = os.path.expanduser(args.release_stage0 or "~/.cache/ceesafe/stage0/ceesafec")
+    stage0 = os.path.abspath(os.path.expanduser(args.release_stage0 or "~/.cache/ceesafe/stage0/ceesafec"))
     cee = os.path.abspath(os.path.expanduser(args.ceesafec))
     corpus = os.path.join(ROOT, "tests", "reference", "tests", "corpus")
     support = sorted(glob.glob(os.path.join(ROOT, "src", "support", "*.cee")))

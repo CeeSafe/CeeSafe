@@ -2408,6 +2408,41 @@ lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after i
 
 Diagnostics: none new.
 
+### 22.4 `ByteString` and `ByteStringView<region r>`: text of any bytes (ADR 0231)
+
+lib/core's `ByteString` (owned, a move type over a `Vector<u8>`) and `ByteStringView<region r>` (a Copy view over a
+`Slice<r, u8>`, valid for `r` as a `StringView<r>` is) hold text whose bytes need not be UTF-8: C's `char *`, a
+file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked for. Their fields are private (N0296).
+- **Making one.** `ByteStringView.fromText(text)` (`text: StringView`, so a literal or a lent `String`) and
+  `ByteStringView.fromBytes(bytes)` view the bytes in place; `ByteString.fromBytes(v)` takes a `Vector<u8>` and
+  `b.intoBytes()` gives it back, neither copying; `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
+  `copyOf(bytes)`, `b.clone()` and `v.toByteString()` make a new one (the last four copy). `b.view()` and `b.bytes()`
+  are loans of `b`. A string literal is not a `ByteStringView` (N0205): `fromText` makes one.
+- **UTF-8.** `toUtf8()` is the text as a `StringView`, with no copy, when the bytes are UTF-8 (Table 3-7, as
+  `StringView.fromUtf8` checks), else `null`; `isUtf8()`. `toUtf8Lossy()` (`Result<String, AllocError>`) and
+  `v.appendLossyTo(mut s)` replace each maximal subpart of an ill-formed sequence by one U+FFFD (the Unicode
+  Standard's §3.9 practice, the WHATWG decoder's and Python's `decode('utf-8', 'replace')`): the longest prefix of a
+  well-formed sequence where none is, or the one byte that begins none. `v.chunks()` is an iterator (§16.4) of
+  `Utf8Chunk<r>`s, each a `valid: StringView<r>` run then an `invalid: Slice<r, u8>` maximal subpart, empty only in
+  the last chunk; empty bytes give none.
+- **Bytes.** `length()`, `isEmpty()`, `byteAt(i)`, `slice(start, end)`, `sliceFrom(start)`, `sliceTo(end)` (panics
+  out of range, as slicing does; a slice may cut a sequence), and on a view the searches of §16.6 with `Slice<u8>`
+  needles: `indexOf`, `lastIndexOf`, `indexOfByte`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`,
+  `trim`, `trimStart`, `trimEnd`, `splitOnce` (`ByteStringHalves<r>?`) and `split` (`ByteStringSplit<r>`, an
+  iterator of views).
+- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes. `v.equals(w)` compares views of
+  two regions, `v.compare(w)` orders bytewise (negative, zero, positive; a prefix first). `ByteString` implements
+  lib/std's `HashKey` and `OrderKey`; a view, a scoped type, keys no map (N0274).
+- **Appending** to a `ByteString`, each `Result<…, AllocError>`, growing at most once and unchanged on failure:
+  `append(text: StringView)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n: i64)`,
+  `appendUnsigned(n: u64)`, and lib/core's `AppendFormatted` (`appendHex`, `appendOctal`, `appendFixed`,
+  `appendPadded`) and `AppendText` (`appendChar`, `appendUtf8`, which append only a scalar value or UTF-8);
+  `clear()`, `truncate(n)`, `capacity()`.
+- **Output.** `Console.writeBytes(b.bytes())` writes the bytes as they are, and `v.writeTo(mut w)` into a
+  `TextWriter`. `Console.write` prints text only: a byte string there is N0207, whose message names `writeBytes`.
+
+Diagnostics: none new (N0205, N0207, N0270, N0274, N0296).
+
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
 ### 23.1 `Vector<T, A>`

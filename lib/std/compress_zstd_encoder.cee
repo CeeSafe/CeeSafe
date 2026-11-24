@@ -1,0 +1,1811 @@
+// Compression (ADR 0196 phase 4): Zstandard's encoder (RFC 8878), in pure CeeSafe. Input is cut into blocks of at
+// most 128 KiB. A match finder turns each block into sequences (a literal length, an offset and a match length), with
+// one of libzstd's strategies by level: `fast` (one hash table) at levels 1 and 2, `dfast` (a table of 8-byte hashes
+// and one of short ones) at 3 and 4, and hash chains searched greedily (5), lazily (6 and 7) or lazily two positions
+// ahead (8 and 9), with libzstd's parameters for each level (its `clevels.h`). A block is then written as a literals
+// section (raw, RLE, or Huffman-coded in one or four streams) and a sequences section (each field coded with the
+// predefined FSE table, an RLE one or a table described in the block, whichever is cheaper), or raw or RLE if that is
+// smaller. Repeat offsets are used where a sequence's offset is one of the three the decoder holds.
+
+fn zencBlockMax() -> usize => 131072;
+/// The most sequences a block of `size` bytes can hold: every match is at least 4 bytes long.
+@effects()
+fn zencSequenceMax(size: usize) -> usize => size / 4 + 1;
+/// Literals fewer than this are written raw (libzstd's ZSTD_minLiteralsToCompress without a previous table).
+fn zencMinLiterals() -> usize => 64;
+/// The largest input `Zstd.compress` matches in place, with positions held in 32 bits; above it, the stream's
+/// window does the work.
+fn zencInPlaceMax() -> usize => 2147483648;
+
+/// The code (RFC 8878 §3.1.1.3.2.1) of each literal length below 64, and of each match length less 3 below 128.
+static ZENC_LL_CODE: [u8; 64] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 20, 20, 21, 21, 21,
+    21, 22, 22, 22, 22, 22, 22, 22, 22, 23, 23, 23, 23, 23, 23, 23, 23, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
+    24, 24, 24, 24,
+];
+static ZENC_ML_CODE: [u8; 128] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+    31, 32, 32, 33, 33, 34, 34, 35, 35, 36, 36, 36, 36, 37, 37, 37, 37, 38, 38, 38, 38, 38, 38, 38, 38, 39, 39, 39, 39,
+    39, 39, 39, 39, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 41, 41, 41, 41, 41, 41, 41, 41, 41,
+    41, 41, 41, 41, 41, 41, 41, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+    42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
+];
+
+/// libzstd's parameters (`clevels.h`) for levels 1 to 9, six per level: the window's log, the chain's (for `dfast`
+/// the short table's), the hash table's, the search's, the shortest match, and the strategy (1 fast, 2 dfast, 3
+/// greedy, 4 lazy, 5 lazy2; its level 9 for 16 KiB, btlazy2, is taken as lazy2). Four tables: for inputs above
+/// 256 KiB or of unknown size, up to 256 KiB, up to 128 KiB, up to 16 KiB.
+static ZENC_LEVELS: [u8; 216] = [
+    19, 13, 14, 1, 7, 1, 20, 15, 16, 1, 6, 1, 21, 16, 17, 1, 5, 2, 21, 18, 18, 1, 5, 2, 21, 18, 19, 3, 5, 3, 21, 18, 19,
+    3, 5, 4, 21, 19, 20, 4, 5, 4, 21, 19, 20, 4, 5, 5, 22, 20, 21, 4, 5, 5, //
+    18, 13, 14, 1, 6, 1, 18, 14, 14, 1, 5, 2, 18, 16, 16, 1, 4, 2, 18, 16, 17, 3, 5, 3, 18, 17, 18, 5, 5, 3, 18, 18, 19,
+    3, 5, 4, 18, 18, 19, 4, 4, 4, 18, 18, 19, 4, 4, 5, 18, 18, 19, 5, 4, 5, //
+    17, 12, 13, 1, 6, 1, 17, 13, 15, 1, 5, 1, 17, 15, 16, 2, 5, 2, 17, 17, 17, 2, 4, 2, 17, 16, 17, 3, 4, 3, 17, 16, 17,
+    3, 4, 4, 17, 16, 17, 3, 4, 5, 17, 16, 17, 4, 4, 5, 17, 16, 17, 5, 4, 5, //
+    14, 14, 15, 1, 5, 1, 14, 14, 15, 1, 4, 1, 14, 14, 15, 2, 4, 2, 14, 14, 14, 4, 4, 3, 14, 14, 14, 3, 4, 4, 14, 14, 14,
+    4, 4, 5, 14, 14, 14, 6, 4, 5, 14, 14, 14, 8, 4, 5, 14, 15, 14, 5, 4, 5,
+];
+
+@effects()
+fn zencMin(a: usize, b: usize) -> usize => if (a < b) a else b;
+
+/// A literal length's code.
+@effects()
+fn zencLlCode(ll: u32) -> u32 => if (ll < 64) ZENC_LL_CODE[ll as usize] as u32 else zstdHighBit(ll) + 19;
+
+/// A match length's code, from the length less 3.
+@effects()
+fn zencMlCode(base: u32) -> u32 => if (base < 128) ZENC_ML_CODE[base as usize] as u32 else zstdHighBit(base) + 36;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Parameters.
+
+/// What a level's match finder uses.
+struct ZencParams {
+    windowLog: u32;
+    chainLog: u32;
+    hashLog: u32;
+    searchLog: u32;
+    minMatch: u32;
+    strategy: u32;
+}
+
+/// The level zstd's level 0 stands for (libzstd's ZSTD_CLEVEL_DEFAULT), and levels above 9 are 9.
+@effects()
+fn zencLevel(level: u32) -> u32 => if (level == 0) 3 else if (level > 9) 9 else level;
+
+/// The parameters of `level` (1 to 9) for an input of `size` bytes, or of unknown size when `known` is false: libzstd's
+/// table for that size, then each log cut to what the size can use (ZSTD_adjustCParams), the window at least 1 KiB.
+@effects()
+fn zencParams(level: u32, size: u64, known: bool) -> ZencParams {
+    var table: usize = 0;
+    if (known) {
+        if (size <= 262144) { table += 1; }
+        if (size <= 131072) { table += 1; }
+        if (size <= 16384) { table += 1; }
+    }
+    let at = table * 54 + ((level - 1) as usize) * 6;
+    var p = ZencParams {
+        windowLog: ZENC_LEVELS[at] as u32,
+        chainLog: ZENC_LEVELS[at + 1] as u32,
+        hashLog: ZENC_LEVELS[at + 2] as u32,
+        searchLog: ZENC_LEVELS[at + 3] as u32,
+        minMatch: ZENC_LEVELS[at + 4] as u32,
+        strategy: ZENC_LEVELS[at + 5] as u32,
+    };
+    if (known && size < (1u64 << 30)) {
+        let srcLog = if (size < 64) 6u32 else zstdHighBit(truncate<u32>(size - 1)) + 1;
+        if (p.windowLog > srcLog) { p.windowLog = srcLog; }
+    }
+    if (p.hashLog > p.windowLog + 1) { p.hashLog = p.windowLog + 1; }
+    if (p.chainLog > p.windowLog) { p.chainLog = p.windowLog; }
+    if (p.windowLog < 10) { p.windowLog = 10; }
+    return p;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Bits written forward, least significant first: Huffman and FSE streams are written last symbol first, so a decoder
+// reading backward from the end mark meets the first symbol first.
+
+struct ZencBits {
+    acc: u64;
+    count: u32; // below 32 between calls
+}
+
+/// Appends the low `n` bits of `value` (n at most 32).
+@effects(alloc)
+fn zencPut(w: borrow mut ZencBits, out: borrow mut Vector<u8>, value: u64, n: u32) -> Result<void, AllocError> {
+    w.acc |= (value & ((1u64 << n) - 1)) << w.count;
+    w.count += n;
+    if (w.count >= 32) {
+        out.pushLE(truncate<u32>(w.acc))?;
+        w.acc >>= 32;
+        w.count -= 32;
+    }
+    return Ok();
+}
+
+/// Ends a stream: the end mark, a 1 bit, then the last bytes.
+@effects(alloc)
+fn zencClose(w: borrow mut ZencBits, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    zencPut(w, out, 1, 1)?;
+    while (w.count > 0) {
+        out.push(truncate<u8>(w.acc))?;
+        w.acc >>= 8;
+        w.count = if (w.count > 8) w.count - 8 else 0;
+    }
+    w.acc = 0;
+    return Ok();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// FSE encoding (RFC 8878 §4.1), as libzstd's FSE_buildCTable and FSE_encodeSymbol: a state is a value in
+// [2^log, 2^(log+1)), and coding a symbol writes the state's low bits and moves to the next state for that symbol.
+
+/// An FSE encoding table of up to 2^9 states and 64 symbols; a log of 0 is an RLE table, which writes no bits.
+struct ZencFse {
+    log: u32;
+    states: [u16; 512];
+    delta: [u32; 64]; // (bits << 16) - the least state that writes that many, wrapping
+    find: [i32; 64];  // where the symbol's states begin in `states`, less its count
+}
+
+@effects()
+fn zencFseEmpty() -> ZencFse => ZencFse { log: 0, states: [0u16; 512], delta: [0u32; 64], find: [0i32; 64] };
+
+/// Builds the table of normalized counts `norm` (-1 a probability below 1) with 2^log states: the symbols spread as
+/// the decoder spreads them (RFC 8878 §4.1.1), and each symbol's transform.
+@effects()
+fn zencFseBuild(t: borrow mut ZencFse, norm: Slice<i16>, log: u32) {
+    t.log = log;
+    let size = 1usize << log;
+    let mask = size - 1;
+    let step = (size >> 1) + (size >> 3) + 3;
+    var cumul = [0u32; 65];
+    var symbols = [0u8; 512];
+    var high = size - 1;
+    for (u in 0..norm.length) {
+        if (norm[u] == -1) {
+            cumul[u + 1] = cumul[u] + 1;
+            symbols[high] = truncate<u8>(u);
+            high -= 1;
+        } else {
+            cumul[u + 1] = cumul[u] + truncate<u32>(norm[u]);
+        }
+    }
+    var pos: usize = 0;
+    for (s in 0..norm.length) {
+        var k: i16 = 0;
+        while (k < norm[s]) {
+            symbols[pos] = truncate<u8>(s);
+            pos = (pos + step) & mask;
+            while (pos > high) {
+                pos = (pos + step) & mask;
+            }
+            k += 1;
+        }
+    }
+    for (u in 0..size) {
+        let s = symbols[u] as usize;
+        t.states[cumul[s] as usize] = truncate<u16>(size + u);
+        cumul[s] += 1;
+    }
+    var total: i32 = 0;
+    let sz = truncate<u32>(size);
+    for (s in 0..norm.length) {
+        let c = norm[s];
+        if (c == 0) {
+            t.delta[s] = ((log + 1) << 16) - sz;
+            t.find[s] = 0;
+        } else if (c == -1 || c == 1) {
+            t.delta[s] = (log << 16) - sz;
+            t.find[s] = total - 1;
+            total += 1;
+        } else {
+            let cc = truncate<u32>(c);
+            let maxBits = log - zstdHighBit(cc - 1);
+            t.delta[s] = (maxBits << 16) - (cc << maxBits);
+            t.find[s] = total - (c as i32);
+            total += c as i32;
+        }
+    }
+}
+
+/// The first state, for the last symbol coded (libzstd's FSE_initCState2): the symbol's state that, decoded, reads the
+/// most bits.
+@effects()
+fn zencFseInit(t: borrow ZencFse, s: usize) -> u32 {
+    if (t.log == 0) { return 0; }
+    let d = t.delta[s];
+    let nb = (d + 32768) >> 16;
+    let v = (nb << 16) - d;
+    return t.states[truncate<usize>(((v >> nb) as i64) + (t.find[s] as i64))] as u32;
+}
+
+/// Codes `s` from state `st`.
+@effects(alloc)
+fn zencFseEncode(
+    t: borrow ZencFse,
+    st: borrow mut u32,
+    s: usize,
+    w: borrow mut ZencBits,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    if (t.log == 0) { return Ok(); }
+    let nb = st.wrappingAdd(t.delta[s]) >> 16;
+    zencPut(w, out, st as u64, nb)?;
+    st = t.states[truncate<usize>(((st >> nb) as i64) + (t.find[s] as i64))] as u32;
+    return Ok();
+}
+
+/// Writes the state, for the decoder to begin with.
+@effects(alloc)
+fn zencFseFlush(
+    t: borrow ZencFse,
+    st: u32,
+    w: borrow mut ZencBits,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    if (t.log == 0) { return Ok(); }
+    return zencPut(w, out, st as u64, t.log);
+}
+
+/// The log of an FSE table for `n` symbols up to `maxSymbol`, at most `maxLog` (libzstd's FSE_optimalTableLog, with
+/// `minus` 2 for FSE and 1 for Huffman): small inputs get small tables, but every symbol gets room.
+@effects()
+fn zencFseLog(maxLog: u32, n: usize, maxSymbol: u32, minus: u32) -> u32 {
+    let hb = zstdHighBit(truncate<u32>(n - 1));
+    var log = maxLog;
+    if (hb >= minus && hb - minus < log) { log = hb - minus; }
+    let fromSize = zstdHighBit(truncate<u32>(n)) + 1;
+    let fromSymbols = zstdHighBit(if (maxSymbol == 0) 1u32 else maxSymbol) + 2;
+    let least = if (fromSize < fromSymbols) fromSize else fromSymbols;
+    if (least > log) { log = least; }
+    if (log < 5) { log = 5; }
+    if (log > 12) { log = 12; }
+    return log;
+}
+
+/// Normalizes `count` (summing to `total`) to 2^log: each count in proportion, rounded, at least 1, then the largest
+/// given or taken what the rounding left.
+@effects()
+fn zencNormalize(count: Slice<u32>, total: usize, log: u32, norm: SliceMut<i16>) {
+    let size = 1u64 << log;
+    let t = total as u64;
+    var sum: u64 = 0;
+    var largest: usize = 0;
+    var largestCount: u32 = 0;
+    for (s in 0..count.length) {
+        let c = count[s];
+        if (c == 0) {
+            norm[s] = 0;
+            continue;
+        }
+        var p = ((c as u64) * size + t / 2) / t;
+        if (p == 0) { p = 1; }
+        norm[s] = truncate<i16>(p);
+        sum += p;
+        if (c > largestCount) {
+            largestCount = c;
+            largest = s;
+        }
+    }
+    if (sum < size) {
+        norm[largest] += truncate<i16>(size - sum);
+        return;
+    }
+    while (sum > size) {
+        var at: usize = 0;
+        var most: i16 = 0;
+        for (s in 0..count.length) {
+            if (norm[s] > most) {
+                most = norm[s];
+                at = s;
+            }
+        }
+        norm[at] -= 1;
+        sum -= 1;
+    }
+}
+
+/// log2(x) in 256ths, for x from 1 to 2^16.
+@effects()
+fn zencLog256(x: u32) -> u64 {
+    let hb = zstdHighBit(x);
+    var m: u64 = (x as u64) << (16 - hb);
+    var r: u64 = (hb as u64) * 256;
+    var bit: u64 = 128;
+    while (bit > 0) {
+        m = (m * m) >> 16;
+        if (m >= 131072) {
+            m >>= 1;
+            r += bit;
+        }
+        bit >>= 1;
+    }
+    return r;
+}
+
+/// The cost in 256ths of a bit of coding `count` with a table of `norm` at `log`; null if a symbol has no state.
+@effects()
+fn zencFseCost(count: Slice<u32>, norm: Slice<i16>, log: u32) -> u64? {
+    var bits: u64 = 0;
+    for (s in 0..count.length) {
+        if (count[s] == 0) { continue; }
+        if (s >= norm.length || norm[s] == 0) { return null; }
+        let p = if (norm[s] == -1) 1u32 else truncate<u32>(norm[s]);
+        bits += (count[s] as u64) * ((log as u64) * 256 - zencLog256(p));
+    }
+    return bits;
+}
+
+/// Writes an FSE table description (RFC 8878 §4.1.1, as libzstd's FSE_writeNCount) of `norm`, which ends at the last
+/// symbol of a nonzero count.
+@effects(alloc)
+fn zencWriteCounts(norm: Slice<i16>, log: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let size = truncate<i32>(1u32 << log);
+    var remaining: i32 = size + 1;
+    var threshold: i32 = size;
+    var nbBits: u32 = log + 1;
+    var symbol: usize = 0;
+    var previous0 = false;
+    var bits: u64 = (log - 5) as u64;
+    var count: u32 = 4;
+    while (symbol < norm.length && remaining > 1) {
+        if (previous0) {
+            var start = symbol;
+            while (symbol < norm.length && norm[symbol] == 0) {
+                symbol += 1;
+            }
+            if (symbol == norm.length) { break; }
+            while (symbol >= start + 24) {
+                start += 24;
+                bits += 0xFFFFu64 << count;
+                out.pushLE(truncate<u16>(bits))?;
+                bits >>= 16;
+            }
+            while (symbol >= start + 3) {
+                start += 3;
+                bits += 3u64 << count;
+                count += 2;
+            }
+            bits += ((symbol - start) as u64) << count;
+            count += 2;
+            if (count > 16) {
+                out.pushLE(truncate<u16>(bits))?;
+                bits >>= 16;
+                count -= 16;
+            }
+        }
+        var c = norm[symbol] as i32;
+        symbol += 1;
+        let max = 2 * threshold - 1 - remaining;
+        remaining -= if (c < 0) -c else c;
+        c += 1;
+        if (c >= threshold) { c += max; }
+        bits += (truncate<u32>(c) as u64) << count;
+        count += nbBits;
+        if (c < max) { count -= 1; }
+        previous0 = c == 1;
+        while (remaining < threshold) {
+            nbBits -= 1;
+            threshold = threshold / 2;
+        }
+        if (count > 16) {
+            out.pushLE(truncate<u16>(bits))?;
+            bits >>= 16;
+            count -= 16;
+        }
+    }
+    var k: u32 = 0;
+    while (k < count) {
+        out.push(truncate<u8>(bits))?;
+        bits >>= 8;
+        k += 8;
+    }
+    return Ok();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Huffman (RFC 8878 §4.2).
+
+/// A literals section's header (RFC 8878 §3.1.1.3.1.1) for raw (0) or RLE (1) literals.
+@effects(alloc)
+fn zencLiteralsHeader(kind: u32, n: usize, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let size = truncate<u32>(n);
+    if (n < 32) {
+        out.push(truncate<u8>(kind | (size << 3)))?;
+    } else if (n < 4096) {
+        out.pushLE(truncate<u16>(kind | 4 | (size << 4)))?;
+    } else {
+        let v = kind | 12 | (size << 4);
+        out.pushLE(truncate<u16>(v))?;
+        out.push(truncate<u8>(v >> 16))?;
+    }
+    return Ok();
+}
+
+/// Writes a Huffman tree description of the weights of symbols 0 to n - 1 (the last symbol's is implied) into `out`,
+/// which is empty: compressed with FSE (two interleaved states) or 4 bits each, whichever is shorter; false if
+/// neither can describe them.
+@effects(alloc)
+fn zencTree(weights: Slice<u8>, out: borrow mut Vector<u8>) -> Result<bool, AllocError> {
+    let n = weights.length;
+    var fse: usize = 0;
+    if (n >= 2) {
+        var hist = [0u32; 13];
+        var maxW: usize = 0;
+        for (w in weights) {
+            hist[w as usize] += 1;
+            if (w as usize > maxW) { maxW = w as usize; }
+        }
+        var top: u32 = 0;
+        for (k in 0..maxW + 1) {
+            if (hist[k] > top) { top = hist[k]; }
+        }
+        if (top as usize != n && top > 1) {
+            let log = zencFseLog(6, n, truncate<u32>(maxW), 2);
+            var norm = [0i16; 13];
+            zencNormalize(hist[0..maxW + 1], n, log, mut norm[0..maxW + 1]);
+            out.push(0)?;
+            zencWriteCounts(norm[0..maxW + 1], log, out)?;
+            var t = zencFseEmpty();
+            zencFseBuild(mut t, norm[0..maxW + 1], log);
+            var w = ZencBits { acc: 0, count: 0 };
+            // Symbol k is coded with the first state if k is even, else the second; the last two begin them.
+            var s1: u32 = 0;
+            var s2: u32 = 0;
+            if ((n - 1) % 2 == 0) {
+                s1 = zencFseInit(t, weights[n - 1] as usize);
+                s2 = zencFseInit(t, weights[n - 2] as usize);
+            } else {
+                s2 = zencFseInit(t, weights[n - 1] as usize);
+                s1 = zencFseInit(t, weights[n - 2] as usize);
+            }
+            var k = n - 2;
+            while (k > 0) {
+                k -= 1;
+                if (k % 2 == 0) {
+                    zencFseEncode(t, mut s1, weights[k] as usize, mut w, out)?;
+                } else {
+                    zencFseEncode(t, mut s2, weights[k] as usize, mut w, out)?;
+                }
+            }
+            zencFseFlush(t, s2, mut w, out)?;
+            zencFseFlush(t, s1, mut w, out)?;
+            zencClose(mut w, out)?;
+            fse = out.length - 1;
+            if (fse < 128) {
+                out[0] = truncate<u8>(fse);
+            } else {
+                fse = 0;
+            }
+        }
+    }
+    let direct = if (n <= 128) 1 + (n + 1) / 2 else 0;
+    if (fse != 0 && (direct == 0 || fse + 1 <= direct)) {
+        return Ok(true);
+    }
+    out.truncate(0);
+    if (direct == 0) { return Ok(false); }
+    out.push(truncate<u8>(127 + n))?;
+    var k: usize = 0;
+    while (k < n) {
+        let hi = weights[k];
+        let lo = if (k + 1 < n) weights[k + 1] else 0u8;
+        out.push((hi << 4) | lo)?;
+        k += 2;
+    }
+    return Ok(true);
+}
+
+/// Writes `lits`, a Huffman stream of `size` bytes, last symbol first; `table` holds each symbol's code above its
+/// length's 8 bits. Four symbols at a time (44 bits at most) between writes of a word, whose whole bytes are kept.
+@effects(alloc)
+fn zencHuffmanStream(
+    lits: Slice<u8>,
+    table: Slice<u32>,
+    size: usize,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    let at = out.length;
+    out.resize(at + size + 8, 0)?;
+    var pos = at;
+    var acc: u64 = 0;
+    var count: u32 = 0;
+    var i = lits.length;
+    while (i >= 4) {
+        let e1 = table[lits[i - 1] as usize];
+        let e2 = table[lits[i - 2] as usize];
+        let e3 = table[lits[i - 3] as usize];
+        let e4 = table[lits[i - 4] as usize];
+        acc |= ((e1 >> 8) as u64) << count;
+        count += e1 & 255;
+        acc |= ((e2 >> 8) as u64) << count;
+        count += e2 & 255;
+        acc |= ((e3 >> 8) as u64) << count;
+        count += e3 & 255;
+        acc |= ((e4 >> 8) as u64) << count;
+        count += e4 & 255;
+        out.writeLE(pos, acc);
+        let bytes = count >> 3;
+        pos += bytes as usize;
+        acc = if (bytes == 0) acc else acc >> (bytes * 8);
+        count &= 7;
+        i -= 4;
+    }
+    while (i > 0) {
+        i -= 1;
+        let e = table[lits[i] as usize];
+        acc |= ((e >> 8) as u64) << count;
+        count += e & 255;
+    }
+    acc |= 1u64 << count;
+    count += 1;
+    out.writeLE(pos, acc);
+    pos += ((count + 7) >> 3) as usize;
+    out.truncate(pos);
+    return Ok();
+}
+
+/// Counts the bytes of `lits` into `hist`, in four tables at once so that repeated bytes do not wait on each other.
+@effects()
+fn zencHistogram(lits: Slice<u8>, hist: borrow mut [u32; 256]) {
+    var h1 = [0u32; 256];
+    var h2 = [0u32; 256];
+    var h3 = [0u32; 256];
+    var h4 = [0u32; 256];
+    var i: usize = 0;
+    while (lits.length - i >= 8) {
+        let v = lits.readLE<u64>(i);
+        h1[truncate<usize>(v & 255)] += 1;
+        h2[truncate<usize>((v >> 8) & 255)] += 1;
+        h3[truncate<usize>((v >> 16) & 255)] += 1;
+        h4[truncate<usize>((v >> 24) & 255)] += 1;
+        h1[truncate<usize>((v >> 32) & 255)] += 1;
+        h2[truncate<usize>((v >> 40) & 255)] += 1;
+        h3[truncate<usize>((v >> 48) & 255)] += 1;
+        h4[truncate<usize>(v >> 56)] += 1;
+        i += 8;
+    }
+    while (i < lits.length) {
+        h1[lits[i] as usize] += 1;
+        i += 1;
+    }
+    for (s in 0..256) {
+        hist[s] = h1[s] + h2[s] + h3[s] + h4[s];
+    }
+}
+
+/// The bits of `lits` in the code of `table`.
+@effects()
+fn zencHuffmanBits(lits: Slice<u8>, table: Slice<u32>) -> usize {
+    var bits: usize = 0;
+    for (b in lits) {
+        bits += (table[b as usize] & 255) as usize;
+    }
+    return bits;
+}
+
+/// Writes the literals section of `lits` (RFC 8878 §3.1.1.3.1): RLE if every byte is the same, Huffman-coded if that
+/// saves more than libzstd's least gain, else raw. `tmp` is scratch.
+@effects(alloc)
+fn zencLiterals(lits: Slice<u8>, tmp: borrow mut Vector<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let n = lits.length;
+    if (n == 0) { return zencLiteralsHeader(0, 0, out); }
+    var hist = [0u32; 256];
+    zencHistogram(lits, mut hist);
+    var maxSym: usize = 0;
+    var top: u32 = 0;
+    for (s in 0..256) {
+        if (hist[s] != 0) {
+            maxSym = s;
+            if (hist[s] > top) { top = hist[s]; }
+        }
+    }
+    if (top as usize == n && n > 1) {
+        zencLiteralsHeader(1, n, out)?;
+        out.push(lits[0])?;
+        return Ok();
+    }
+    if (n < zencMinLiterals() || top as usize == n) { return zencRawLiterals(lits, out); }
+    let log = zencFseLog(11, n, truncate<u32>(maxSym), 1);
+    var lengths = [0u8; 256];
+    huffmanLengths(hist[0..maxSym + 1], log, mut lengths[0..maxSym + 1]);
+    var maxBits: u32 = 0;
+    for (s in 0..maxSym + 1) {
+        if (lengths[s] as u32 > maxBits) { maxBits = lengths[s] as u32; }
+    }
+    var weights = [0u8; 256];
+    for (s in 0..maxSym + 1) {
+        if (lengths[s] != 0) { weights[s] = truncate<u8>(maxBits + 1 - lengths[s] as u32); }
+    }
+    // Codes as the decoder's table gives them: by weight, the lowest first, then by symbol.
+    var codes = [0u16; 256];
+    var pos: u32 = 0;
+    for (w in 1..maxBits + 1) {
+        for (s in 0..maxSym + 1) {
+            if (weights[s] as u32 == w) {
+                codes[s] = truncate<u16>(pos >> (w - 1));
+                pos += 1u32 << (w - 1);
+            }
+        }
+    }
+    var table = [0u32; 256];
+    for (s in 0..maxSym + 1) {
+        table[s] = ((codes[s] as u32) << 8) | lengths[s] as u32;
+    }
+    tmp.truncate(0);
+    if (!zencTree(weights[0..maxSym], tmp)?) { return zencRawLiterals(lits, out); }
+    let four = n >= 256;
+    var sizes = [0usize; 4];
+    var total = tmp.length;
+    let segment = (n + 3) / 4;
+    if (four) {
+        for (k in 0..4usize) {
+            let from = zencMin(k * segment, n);
+            let to = if (k == 3) n else zencMin((k + 1) * segment, n);
+            sizes[k] = zencHuffmanBits(lits[from..to], table[..]) / 8 + 1;
+            total += sizes[k];
+        }
+        total += 6;
+        if (sizes[0] > 65535 || sizes[1] > 65535 || sizes[2] > 65535) { return zencRawLiterals(lits, out); }
+    } else {
+        sizes[0] = zencHuffmanBits(lits, table[..]) / 8 + 1;
+        total += sizes[0];
+    }
+    if (total + (n >> 6) + 2 >= n) { return zencRawLiterals(lits, out); }
+    let regen = n as u64;
+    let comp = total as u64;
+    if (n < 1024) {
+        let sf: u64 = if (four) 1 else 0;
+        let v = 2 | (sf << 2) | (regen << 4) | (comp << 14);
+        out.pushLE(truncate<u16>(v))?;
+        out.push(truncate<u8>(v >> 16))?;
+    } else if (n < 16384) {
+        out.pushLE(truncate<u32>(2 | (2u64 << 2) | (regen << 4) | (comp << 18)))?;
+    } else {
+        let v = 2 | (3u64 << 2) | (regen << 4) | (comp << 22);
+        out.pushLE(truncate<u32>(v))?;
+        out.push(truncate<u8>(v >> 32))?;
+    }
+    out.extend(tmp.view())?;
+    if (four) {
+        out.pushLE(truncate<u16>(sizes[0]))?;
+        out.pushLE(truncate<u16>(sizes[1]))?;
+        out.pushLE(truncate<u16>(sizes[2]))?;
+        for (k in 0..4usize) {
+            let from = zencMin(k * segment, n);
+            let to = if (k == 3) n else zencMin((k + 1) * segment, n);
+            zencHuffmanStream(lits[from..to], table[..], sizes[k], out)?;
+        }
+    } else {
+        zencHuffmanStream(lits, table[..], sizes[0], out)?;
+    }
+    return Ok();
+}
+
+@effects(alloc)
+fn zencRawLiterals(lits: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    zencLiteralsHeader(0, lits.length, out)?;
+    out.extend(lits)?;
+    return Ok();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Sequences.
+
+/// A block's sequences as the match finder found them: literal length, offset (a distance back) and match length.
+struct ZencSequences {
+    ll: Vector<u32>;
+    off: Vector<u32>;
+    ml: Vector<u32>;
+    n: usize;
+
+    /// Room for the sequences of a block of up to `block` bytes.
+    @effects(alloc)
+    fn create(block: usize) -> Result<ZencSequences, AllocError> {
+        var ll = Vector<u32>.create();
+        ll.resize(zencSequenceMax(block), 0)?;
+        var off = Vector<u32>.create();
+        off.resize(zencSequenceMax(block), 0)?;
+        var ml = Vector<u32>.create();
+        ml.resize(zencSequenceMax(block), 0)?;
+        return Ok(ZencSequences { ll: ll, off: off, ml: ml, n: 0 });
+    }
+
+    @effects()
+    fn store(borrow mut this, ll: usize, off: usize, ml: usize) {
+        let k = this.n;
+        this.ll[k] = truncate<u32>(ll);
+        this.off[k] = truncate<u32>(off);
+        this.ml[k] = truncate<u32>(ml);
+        this.n = k + 1;
+    }
+}
+
+/// What a block is coded with, kept from block to block: the decoder's repeat offsets, scratch and tables.
+struct ZencCoder {
+    reps: [u32; 3];
+    lits: Vector<u8>;
+    llCode: Vector<u8>;
+    mlCode: Vector<u8>;
+    ofCode: Vector<u8>;
+    ofBase: Vector<u32>;
+    tmp: Vector<u8>;
+    llTable: ZencFse;
+    mlTable: ZencFse;
+    ofTable: ZencFse;
+
+    /// Room for a block of up to `block` bytes.
+    @effects(alloc)
+    fn create(block: usize) -> Result<ZencCoder, AllocError> {
+        var lits = Vector<u8>.create();
+        lits.resize(block + 16, 0)?;
+        var llCode = Vector<u8>.create();
+        llCode.resize(zencSequenceMax(block), 0)?;
+        var mlCode = Vector<u8>.create();
+        mlCode.resize(zencSequenceMax(block), 0)?;
+        var ofCode = Vector<u8>.create();
+        ofCode.resize(zencSequenceMax(block), 0)?;
+        var ofBase = Vector<u32>.create();
+        ofBase.resize(zencSequenceMax(block), 0)?;
+        var tmp = Vector<u8>.create();
+        tmp.reserve(256)?;
+        return Ok(ZencCoder {
+            reps: [1u32, 4, 8],
+            lits: lits,
+            llCode: llCode,
+            mlCode: mlCode,
+            ofCode: ofCode,
+            ofBase: ofBase,
+            tmp: tmp,
+            llTable: zencFseEmpty(),
+            mlTable: zencFseEmpty(),
+            ofTable: zencFseEmpty(),
+        });
+    }
+}
+
+/// The Offset_Value of a sequence of literal length `ll` and offset `off` (RFC 8878 §3.1.1.5): a repeat code (1 to
+/// 3) where one fits, else the offset plus 3; `reps` becomes what the decoder's will be after it.
+@effects()
+fn zencOffBase(off: u32, ll: u32, reps: borrow mut [u32; 3]) -> u32 {
+    let r0 = reps[0];
+    let r1 = reps[1];
+    let r2 = reps[2];
+    if (ll > 0) {
+        if (off == r0) { return 1; }
+        if (off == r1) {
+            reps[0] = r1;
+            reps[1] = r0;
+            return 2;
+        }
+        if (off == r2) {
+            reps[0] = r2;
+            reps[1] = r0;
+            reps[2] = r1;
+            return 3;
+        }
+    } else {
+        if (off == r1) {
+            reps[0] = r1;
+            reps[1] = r0;
+            return 1;
+        }
+        if (off == r2) {
+            reps[0] = r2;
+            reps[1] = r0;
+            reps[2] = r1;
+            return 2;
+        }
+        if (r0 > 1 && off == r0 - 1) {
+            reps[0] = off;
+            reps[1] = r0;
+            reps[2] = r1;
+            return 3;
+        }
+    }
+    reps[0] = off;
+    reps[1] = r0;
+    reps[2] = r1;
+    return off + 3;
+}
+
+/// Chooses how a sequence field is coded and builds its table into `t`: RLE if one symbol is used, else the predefined
+/// table or one described in the block (written to `out`), whichever costs fewer bits. The mode (RFC 8878
+/// §3.1.1.3.2.1: 0 predefined, 1 RLE, 2 compressed).
+@effects(alloc)
+fn zencChoose(
+    count: Slice<u32>,
+    n: usize,
+    defaults: Slice<i16>,
+    defaultLog: u32,
+    maxLog: u32,
+    t: borrow mut ZencFse,
+    tmp: borrow mut Vector<u8>,
+    out: borrow mut Vector<u8>,
+) -> Result<u32, AllocError> {
+    var maxSym: usize = 0;
+    var top: u32 = 0;
+    var topSym: usize = 0;
+    for (s in 0..count.length) {
+        if (count[s] != 0) {
+            maxSym = s;
+            if (count[s] > top) {
+                top = count[s];
+                topSym = s;
+            }
+        }
+    }
+    if (top as usize == n) {
+        out.push(truncate<u8>(topSym))?;
+        t.log = 0;
+        t.states[0] = 0;
+        t.delta[topSym] = 0;
+        t.find[topSym] = 0;
+        return Ok(1);
+    }
+    let used = count[0..maxSym + 1];
+    let predefined = zencFseCost(used, defaults, defaultLog);
+    let log = zencFseLog(maxLog, n, truncate<u32>(maxSym), 2);
+    var norm = [0i16; 64];
+    zencNormalize(used, n, log, mut norm[0..maxSym + 1]);
+    tmp.truncate(0);
+    zencWriteCounts(norm[0..maxSym + 1], log, tmp)?;
+    let described = (tmp.length as u64) * 2048 + (zencFseCost(used, norm[0..maxSym + 1], log) ?? 0);
+    match (predefined) {
+        Some(p) => {
+            if (p <= described) {
+                zencFseBuild(t, defaults, defaultLog);
+                return Ok(0);
+            }
+        }
+        null => {}
+    }
+    zencFseBuild(t, norm[0..maxSym + 1], log);
+    out.extend(tmp.view())?;
+    return Ok(2);
+}
+
+/// Writes the sequences section of `seqs` (RFC 8878 §3.1.1.3.2): the count, the modes, the tables, then the bit
+/// stream, read backward: the last sequence's states and values come first in it.
+@effects(alloc)
+fn zencSequencesSection(
+    c: borrow mut ZencCoder,
+    seqs: borrow ZencSequences,
+    reps: borrow mut [u32; 3],
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    let n = seqs.n;
+    if (n < 128) {
+        out.push(truncate<u8>(n))?;
+    } else if (n < 0x7F00) {
+        out.push(truncate<u8>((n >> 8) + 128))?;
+        out.push(truncate<u8>(n))?;
+    } else {
+        out.push(255)?;
+        out.pushLE(truncate<u16>(n - 0x7F00))?;
+    }
+    if (n == 0) { return Ok(); }
+    var llCount = [0u32; 36];
+    var mlCount = [0u32; 53];
+    var ofCount = [0u32; 32];
+    for (k in 0..n) {
+        let ll = seqs.ll[k];
+        let ob = zencOffBase(seqs.off[k], ll, reps);
+        let lc = zencLlCode(ll);
+        let mc = zencMlCode(seqs.ml[k] - 3);
+        let oc = zstdHighBit(ob);
+        c.ofBase[k] = ob;
+        c.llCode[k] = truncate<u8>(lc);
+        c.mlCode[k] = truncate<u8>(mc);
+        c.ofCode[k] = truncate<u8>(oc);
+        llCount[lc as usize] += 1;
+        mlCount[mc as usize] += 1;
+        ofCount[oc as usize] += 1;
+    }
+    let modesAt = out.length;
+    out.push(0)?;
+    let llMode = zencChoose(llCount[..], n, ZSTD_LL_DEFAULT[..], 6, 9, mut c.llTable, mut c.tmp, out)?;
+    let ofMode = zencChoose(ofCount[..], n, ZSTD_OF_DEFAULT[..], 5, 8, mut c.ofTable, mut c.tmp, out)?;
+    let mlMode = zencChoose(mlCount[..], n, ZSTD_ML_DEFAULT[..], 6, 9, mut c.mlTable, mut c.tmp, out)?;
+    out[modesAt] = truncate<u8>((llMode << 6) | (ofMode << 4) | (mlMode << 2));
+    return zencSequenceStream(c, seqs, out);
+}
+
+/// The sequences' bit stream, read backward: the last sequence's states and values first. The bits are gathered in a
+/// word written whole after each part (a sequence's states, its two lengths, its offset), its whole bytes kept.
+@effects(alloc)
+fn zencSequenceStream(
+    c: borrow ZencCoder,
+    seqs: borrow ZencSequences,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    let n = seqs.n;
+    let at = out.length;
+    out.resize(at + n * 12 + 24, 0)?;
+    var pos = at;
+    var acc: u64 = 0;
+    var count: u32 = 0;
+    let last = n - 1;
+    var sll = zencFseInit(c.llTable, c.llCode[last] as usize);
+    var sof = zencFseInit(c.ofTable, c.ofCode[last] as usize);
+    var sml = zencFseInit(c.mlTable, c.mlCode[last] as usize);
+    var k = n;
+    var first = true;
+    while (k > 0) {
+        k -= 1;
+        let lc = c.llCode[k] as usize;
+        let mc = c.mlCode[k] as usize;
+        let oc = c.ofCode[k] as u32;
+        if (!first) {
+            let d1 = c.ofTable.delta[oc as usize];
+            let n1 = sof.wrappingAdd(d1) >> 16;
+            acc |= ((sof as u64) & ((1u64 << n1) - 1)) << count;
+            count += n1;
+            sof = c.ofTable.states[truncate<usize>(((sof >> n1) as i64) + (c.ofTable.find[oc as usize] as i64))] as u32;
+            let d2 = c.mlTable.delta[mc];
+            let n2 = sml.wrappingAdd(d2) >> 16;
+            acc |= ((sml as u64) & ((1u64 << n2) - 1)) << count;
+            count += n2;
+            sml = c.mlTable.states[truncate<usize>(((sml >> n2) as i64) + (c.mlTable.find[mc] as i64))] as u32;
+            let d3 = c.llTable.delta[lc];
+            let n3 = sll.wrappingAdd(d3) >> 16;
+            acc |= ((sll as u64) & ((1u64 << n3) - 1)) << count;
+            count += n3;
+            sll = c.llTable.states[truncate<usize>(((sll >> n3) as i64) + (c.llTable.find[lc] as i64))] as u32;
+            out.writeLE(pos, acc);
+            let b = count >> 3;
+            pos += b as usize;
+            acc = if (b == 0) acc else acc >> (b * 8);
+            count &= 7;
+        }
+        first = false;
+        let lb = ZSTD_LL_BITS[lc] as u32;
+        acc |= ((seqs.ll[k] as u64) & ((1u64 << lb) - 1)) << count;
+        count += lb;
+        let mb = ZSTD_ML_BITS[mc] as u32;
+        acc |= (((seqs.ml[k] - 3) as u64) & ((1u64 << mb) - 1)) << count;
+        count += mb;
+        out.writeLE(pos, acc);
+        var b = count >> 3;
+        pos += b as usize;
+        acc = if (b == 0) acc else acc >> (b * 8);
+        count &= 7;
+        acc |= ((c.ofBase[k] as u64) & ((1u64 << oc) - 1)) << count;
+        count += oc;
+        out.writeLE(pos, acc);
+        b = count >> 3;
+        pos += b as usize;
+        acc = if (b == 0) acc else acc >> (b * 8);
+        count &= 7;
+    }
+    acc |= ((sml as u64) & ((1u64 << c.mlTable.log) - 1)) << count;
+    count += c.mlTable.log;
+    acc |= ((sof as u64) & ((1u64 << c.ofTable.log) - 1)) << count;
+    count += c.ofTable.log;
+    acc |= ((sll as u64) & ((1u64 << c.llTable.log) - 1)) << count;
+    count += c.llTable.log;
+    acc |= 1u64 << count;
+    count += 1;
+    out.writeLE(pos, acc);
+    pos += ((count + 7) >> 3) as usize;
+    out.truncate(pos);
+    return Ok();
+}
+
+/// Appends a block header: whether it is the last, its type (0 raw, 1 RLE, 2 compressed) and its size.
+@effects(alloc)
+fn zencBlockHeader(last: bool, kind: u32, size: usize, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let v = (if (last) 1u32 else 0) | (kind << 1) | (truncate<u32>(size) << 3);
+    out.pushLE(truncate<u16>(v))?;
+    out.push(truncate<u8>(v >> 16))?;
+    return Ok();
+}
+
+/// Writes the block `d[start..end]` (at most 128 KiB, not empty), whose sequences are `seqs`: RLE if every byte is
+/// the same, compressed if that saves libzstd's least gain, else raw. The repeat offsets change only if it is
+/// compressed, as the decoder's do.
+@effects(alloc)
+fn zencBlock(
+    c: borrow mut ZencCoder,
+    seqs: borrow ZencSequences,
+    d: Slice<u8>,
+    start: usize,
+    end: usize,
+    last: bool,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    let size = end - start;
+    let first = d[start];
+    var same = true;
+    let word = (first as u64) * 0x0101010101010101;
+    var at = start;
+    while (end - at >= 8) {
+        if (d.readLE<u64>(at) != word) {
+            same = false;
+            break;
+        }
+        at += 8;
+    }
+    while (same && at < end) {
+        if (d[at] != first) { same = false; }
+        at += 1;
+    }
+    if (same && size > 1) {
+        zencBlockHeader(last, 1, size, out)?;
+        out.push(first)?;
+        return Ok();
+    }
+    let mark = out.length;
+    out.push(0)?;
+    out.push(0)?;
+    out.push(0)?;
+    var nl: usize = 0;
+    var pos = start;
+    for (k in 0..seqs.n) {
+        let ll = seqs.ll[k] as usize;
+        if (ll <= 16 && d.length - pos >= 16) {
+            c.lits.writeLE(nl, d.readLE<u64>(pos));
+            c.lits.writeLE(nl + 8, d.readLE<u64>(pos + 8));
+        } else {
+            c.lits[nl..nl + ll].copyFrom(d[pos..pos + ll]);
+        }
+        nl += ll;
+        pos += ll + seqs.ml[k] as usize;
+    }
+    let rest = end - pos;
+    c.lits[nl..nl + rest].copyFrom(d[pos..end]);
+    nl += rest;
+    zencLiterals(c.lits[0..nl], mut c.tmp, out)?;
+    var reps = c.reps;
+    zencSequencesSection(c, seqs, mut reps, out)?;
+    let csize = out.length - mark - 3;
+    if (csize + (size >> 6) + 2 >= size) {
+        out.truncate(mark);
+        zencBlockHeader(last, 0, size, out)?;
+        out.extend(d[start..end])?;
+        return Ok();
+    }
+    let v = (if (last) 1u32 else 0) | (2u32 << 1) | (truncate<u32>(csize) << 3);
+    out[mark] = truncate<u8>(v);
+    out[mark + 1] = truncate<u8>(v >> 8);
+    out[mark + 2] = truncate<u8>(v >> 16);
+    c.reps = reps;
+    return Ok();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Match finders.
+
+/// The multiplier of a hash of `mls` (4 to 8) bytes (libzstd's primes).
+@effects()
+fn zencPrime(mls: u32) -> u64 =>
+    if (mls == 4) 2654435761
+        else if (mls == 5) 889523592379
+        else if (mls == 6) 227718039650203
+        else if (mls == 7) 58295818150454627
+        else 0xCF1BBCDCB7A56463;
+
+/// A hash of the `mls` (4 to 8) bytes at the low end of `v`, in `log` bits (libzstd's ZSTD_hashPtr). The hot loops
+/// write it out, `((v << (64 - 8 * mls)) * prime) >> (64 - log)`, which for 4 bytes is libzstd's 32-bit hash.
+@effects()
+fn zencHash(v: u64, mls: u32, log: u32) -> usize {
+    if (mls == 4) { return (truncate<u32>(v).wrappingMul(2654435761) >> (32 - log)) as usize; }
+    let prime: u64 =
+        if (mls == 5) 889523592379
+            else if (mls == 6) 227718039650203
+            else if (mls == 7) 58295818150454627
+            else 0xCF1BBCDCB7A56463;
+    return truncate<usize>((v << (64 - 8 * mls)).wrappingMul(prime) >> (64 - log));
+}
+
+/// How many bytes at `ip` and `m` (before it) agree, up to `end`.
+@effects()
+fn zencCount(d: Slice<u8>, ip: usize, m: usize, end: usize) -> usize {
+    var l: usize = 0;
+    while (end - ip - l >= 8) {
+        let x = d.readLE<u64>(ip + l) ^ d.readLE<u64>(m + l);
+        if (x != 0) { return l + (x.trailingZeros() >> 3) as usize; }
+        l += 8;
+    }
+    while (ip + l < end && d[ip + l] == d[m + l]) {
+        l += 1;
+    }
+    return l;
+}
+
+/// The match finder and its tables, kept across the blocks of a frame. Positions are indexes into the data it is
+/// given; a table's entry is a position (0 if none was put there, which every use checks).
+struct ZencMatcher {
+    p: ZencParams;
+    window: usize;
+    hash: Vector<u32>;  // fast: the table; dfast: the 8-byte one; chains: the heads
+    chain: Vector<u32>; // dfast: the short table; chains: each position's previous of its hash
+    next: usize;        // chains: the first position not inserted
+    rep1: usize;        // the finder's repeat offsets, hints the coder checks
+    rep2: usize;
+    found: usize; // the offset of the last chain search's match
+    low: usize;   // the block's lowest position a match may begin at
+
+    @effects(alloc)
+    fn create(p: ZencParams) -> Result<ZencMatcher, AllocError> {
+        var hash = Vector<u32>.create();
+        hash.resize(1usize << p.hashLog, 0)?;
+        var chain = Vector<u32>.create();
+        if (p.strategy >= 2) { chain.resize(1usize << p.chainLog, 0)?; }
+        return Ok(ZencMatcher {
+            p: p,
+            window: 1usize << p.windowLog,
+            hash: hash,
+            chain: chain,
+            next: 0,
+            rep1: 1,
+            rep2: 4,
+            found: 0,
+            low: 0,
+        });
+    }
+
+    /// Forgets every position, for a new frame.
+    @effects()
+    fn reset(borrow mut this) {
+        this.hash.viewMut().fill(0);
+        this.chain.viewMut().fill(0);
+        this.next = 0;
+    }
+
+    /// Positions move `shift` back, the data having moved.
+    @effects()
+    fn shift(borrow mut this, shift: usize) {
+        let s = truncate<u32>(shift);
+        for (k in 0..this.hash.length) {
+            let v = this.hash[k];
+            this.hash[k] = if (v > s) v - s else 0;
+        }
+        for (k in 0..this.chain.length) {
+            let v = this.chain[k];
+            this.chain[k] = if (v > s) v - s else 0;
+        }
+        this.next = if (this.next > shift) this.next - shift else 0;
+    }
+
+    /// Finds the sequences of `d[start..end]`, whose history is `d[..start]`, into `seqs`. As libzstd's block
+    /// compressors: matches reach back no further than the window from the block's end (`low`), the frame's first
+    /// position is skipped, and repeat offsets that reach further are set aside for the block and given back after.
+    @effects()
+    fn parse(borrow mut this, d: Slice<u8>, start: usize, end: usize, seqs: borrow mut ZencSequences) {
+        seqs.n = 0;
+        if (end - start < 16) { return; }
+        let low = if (end > this.window) end - this.window else 0;
+        this.low = low;
+        let first = if (start == low) start + 1 else start;
+        let maxRep = first - low;
+        var saved1: usize = 0;
+        var saved2: usize = 0;
+        if (this.rep2 > maxRep) {
+            saved2 = this.rep2;
+            this.rep2 = 0;
+        }
+        if (this.rep1 > maxRep) {
+            saved1 = this.rep1;
+            this.rep1 = 0;
+        }
+        // After a long stretch the chains were not updated over (repeat matches, or a long match), only its last
+        // positions are linked (libzstd's "limited update after a very long match").
+        if (start > this.next + 384) { this.next = start - zencMin(192, start - this.next - 384); }
+        match (this.p.strategy) {
+            1 => { this.fast(d, first, start, end, seqs); }
+            2 => { this.doubleFast(d, first, start, end, seqs); }
+            3 => { this.lazy(d, first, start, end, seqs, 0); }
+            4 => { this.lazy(d, first, start, end, seqs, 1); }
+            _ => { this.lazy(d, first, start, end, seqs, 2); }
+        }
+        if (saved1 != 0 && this.rep1 != 0) { saved2 = saved1; }
+        if (this.rep1 == 0) { this.rep1 = saved1; }
+        if (this.rep2 == 0) { this.rep2 = saved2; }
+    }
+
+    /// libzstd's `fast` (ZSTD_compressBlock_fast_noDict_generic): positions taken in pairs, each probing one hash
+    /// table, the repeat offset tried two bytes ahead, and the step between pairs growing by one every 128 bytes
+    /// that find nothing.
+    @effects()
+    fn fast(borrow mut this, d: Slice<u8>, first: usize, start: usize, end: usize, seqs: borrow mut ZencSequences) {
+        let ilimit = end - 8;
+        let hlog = this.p.hashLog;
+        let mls = if (this.p.minMatch < 4) 4u32 else if (this.p.minMatch > 7) 7u32 else this.p.minMatch;
+        let low = this.low;
+        let sl = 64 - 8 * mls;
+        let pr = zencPrime(mls);
+        let sr = 64 - hlog;
+        let table = this.hash.viewMut();
+        var ip0 = first;
+        var anchor = start;
+        var o1 = this.rep1;
+        var o2 = this.rep2;
+        while (true) {
+            var step: usize = 2;
+            var nextStep = ip0 + 128;
+            var ip1 = ip0 + 1;
+            var ip2 = ip0 + step;
+            var ip3 = ip2 + 1;
+            if (ip3 >= ilimit) { break; }
+            var h0 = truncate<usize>((d.readLE<u64>(ip0) << sl).wrappingMul(pr) >> sr);
+            var h1 = truncate<usize>((d.readLE<u64>(ip1) << sl).wrappingMul(pr) >> sr);
+            var idx = table[h0] as usize;
+            var cur0 = ip0;
+            var found: u32 = 0; // 1: the repeat offset, 2: the table's
+            var m0: usize = 0;
+            var ml: usize = 0;
+            while (true) {
+                cur0 = ip0;
+                table[h0] = truncate<u32>(ip0);
+                if (o1 > 0 && d.readLE<u32>(ip2) == d.readLE<u32>(ip2 - o1)) {
+                    ip0 = ip2;
+                    m0 = ip0 - o1;
+                    ml = if (m0 > low && d[ip0 - 1] == d[m0 - 1]) 1 else 0;
+                    ip0 -= ml;
+                    m0 -= ml;
+                    ml += 4;
+                    table[h1] = truncate<u32>(ip1);
+                    found = 1;
+                    break;
+                }
+                if (idx >= low && idx < ip0 && d.readLE<u32>(idx) == d.readLE<u32>(ip0)) {
+                    table[h1] = truncate<u32>(ip1);
+                    found = 2;
+                    break;
+                }
+                idx = table[h1] as usize;
+                h0 = h1;
+                h1 = truncate<usize>((d.readLE<u64>(ip2) << sl).wrappingMul(pr) >> sr);
+                ip0 = ip1;
+                ip1 = ip2;
+                ip2 = ip3;
+                cur0 = ip0;
+                table[h0] = truncate<u32>(ip0);
+                if (idx >= low && idx < ip0 && d.readLE<u32>(idx) == d.readLE<u32>(ip0)) {
+                    if (step <= 4) { table[h1] = truncate<u32>(ip1); }
+                    found = 2;
+                    break;
+                }
+                idx = table[h1] as usize;
+                h0 = h1;
+                h1 = truncate<usize>((d.readLE<u64>(ip2) << sl).wrappingMul(pr) >> sr);
+                ip0 = ip1;
+                ip1 = ip2;
+                ip2 = ip0 + step;
+                ip3 = ip1 + step;
+                if (ip2 >= nextStep) {
+                    step += 1;
+                    nextStep += 128;
+                }
+                if (ip3 >= ilimit) { break; }
+            }
+            if (found == 0) { break; }
+            if (found == 2) {
+                m0 = idx;
+                o2 = o1;
+                o1 = ip0 - m0;
+                ml = 4;
+                while (ip0 > anchor && m0 > low && d[ip0 - 1] == d[m0 - 1]) {
+                    ip0 -= 1;
+                    m0 -= 1;
+                    ml += 1;
+                }
+            }
+            ml += zencCount(d, ip0 + ml, m0 + ml, end);
+            seqs.store(ip0 - anchor, o1, ml);
+            ip0 += ml;
+            anchor = ip0;
+            if (ip0 <= ilimit) {
+                table[truncate<usize>((d.readLE<u64>(cur0 + 2) << sl).wrappingMul(pr) >> sr)] = truncate<u32>(cur0 + 2);
+                table[truncate<usize>((d.readLE<u64>(ip0 - 2) << sl).wrappingMul(pr) >> sr)] = truncate<u32>(ip0 - 2);
+                while (o2 > 0 && ip0 <= ilimit && d.readLE<u32>(ip0) == d.readLE<u32>(ip0 - o2)) {
+                    let rl = zencCount(d, ip0 + 4, ip0 + 4 - o2, end) + 4;
+                    let t = o1;
+                    o1 = o2;
+                    o2 = t;
+                    table[truncate<usize>((d.readLE<u64>(ip0) << sl).wrappingMul(pr) >> sr)] = truncate<u32>(ip0);
+                    seqs.store(0, o1, rl);
+                    ip0 += rl;
+                    anchor = ip0;
+                }
+            }
+        }
+        this.rep1 = o1;
+        this.rep2 = o2;
+    }
+
+    /// libzstd's `dfast`: a table of 8-byte hashes tried first, then one of short hashes, whose match is replaced
+    /// by an 8-byte one a byte ahead if there is one.
+    @effects()
+    fn doubleFast(
+        borrow mut this,
+        d: Slice<u8>,
+        first: usize,
+        start: usize,
+        end: usize,
+        seqs: borrow mut ZencSequences,
+    ) {
+        let ilimit = end - 8;
+        let hlog = this.p.hashLog;
+        let slog = this.p.chainLog;
+        let mls = if (this.p.minMatch < 4) 4u32 else if (this.p.minMatch > 7) 7u32 else this.p.minMatch;
+        let low = this.low;
+        let sl = 64 - 8 * mls;
+        let pr = zencPrime(mls);
+        let sr = 64 - slog;
+        let pl = zencPrime(8);
+        let srl = 64 - hlog;
+        let long = this.hash.viewMut();
+        let short = this.chain.viewMut();
+        var ip = first;
+        var anchor = start;
+        var o1 = this.rep1;
+        var o2 = this.rep2;
+        while (ip < ilimit) {
+            let cur = ip;
+            let v = d.readLE<u64>(ip);
+            let hl = truncate<usize>(v.wrappingMul(pl) >> srl);
+            let hs = truncate<usize>((v << sl).wrappingMul(pr) >> sr);
+            let candL = long[hl] as usize;
+            let candS = short[hs] as usize;
+            long[hl] = truncate<u32>(ip);
+            short[hs] = truncate<u32>(ip);
+            var ml: usize = 0;
+            if (o1 > 0 && d.readLE<u32>(ip + 1 - o1) == d.readLE<u32>(ip + 1)) {
+                ml = zencCount(d, ip + 5, ip + 5 - o1, end) + 4;
+                seqs.store(ip + 1 - anchor, o1, ml);
+                ip = ip + 1 + ml;
+            } else {
+                var p = ip;
+                var m: usize = 0;
+                if (candL >= low && candL < ip && d.readLE<u64>(candL) == v) {
+                    m = candL;
+                    ml = zencCount(d, ip + 8, m + 8, end) + 8;
+                } else if (candS >= low && candS < ip && d.readLE<u32>(candS) == truncate<u32>(v)) {
+                    let h3 = truncate<usize>(d.readLE<u64>(ip + 1).wrappingMul(pl) >> srl);
+                    let candL3 = long[h3] as usize;
+                    long[h3] = truncate<u32>(ip + 1);
+                    if (candL3 >= low && candL3 < ip + 1 && d.readLE<u64>(candL3) == d.readLE<u64>(ip + 1)) {
+                        p = ip + 1;
+                        m = candL3;
+                        ml = zencCount(d, p + 8, m + 8, end) + 8;
+                    } else {
+                        m = candS;
+                        ml = zencCount(d, ip + 4, m + 4, end) + 4;
+                    }
+                } else {
+                    ip += ((ip - anchor) >> 8) + 1;
+                    continue;
+                }
+                while (p > anchor && m > low && d[p - 1] == d[m - 1]) {
+                    p -= 1;
+                    m -= 1;
+                    ml += 1;
+                }
+                o2 = o1;
+                o1 = p - m;
+                seqs.store(p - anchor, o1, ml);
+                ip = p + ml;
+            }
+            anchor = ip;
+            if (ip <= ilimit) {
+                let at = cur + 2;
+                long[truncate<usize>(d.readLE<u64>(at).wrappingMul(pl) >> srl)] = truncate<u32>(at);
+                long[truncate<usize>(d.readLE<u64>(ip - 2).wrappingMul(pl) >> srl)] = truncate<u32>(ip - 2);
+                short[truncate<usize>((d.readLE<u64>(at) << sl).wrappingMul(pr) >> sr)] = truncate<u32>(at);
+                short[truncate<usize>((d.readLE<u64>(ip - 1) << sl).wrappingMul(pr) >> sr)] = truncate<u32>(ip - 1);
+                while (o2 > 0 && ip <= ilimit && d.readLE<u32>(ip) == d.readLE<u32>(ip - o2)) {
+                    let rl = zencCount(d, ip + 4, ip + 4 - o2, end) + 4;
+                    let t = o1;
+                    o1 = o2;
+                    o2 = t;
+                    let vv = d.readLE<u64>(ip);
+                    short[truncate<usize>((vv << sl).wrappingMul(pr) >> sr)] = truncate<u32>(ip);
+                    long[truncate<usize>(vv.wrappingMul(pl) >> srl)] = truncate<u32>(ip);
+                    seqs.store(0, o1, rl);
+                    ip += rl;
+                    anchor = ip;
+                }
+            }
+        }
+        this.rep1 = o1;
+        this.rep2 = o2;
+    }
+
+    /// Links every position from `next` to `target` (not included) into its hash's chain.
+    @effects()
+    fn insert(borrow mut this, d: Slice<u8>, target: usize, mls: u32) {
+        let hlog = this.p.hashLog;
+        let mask = (1usize << this.p.chainLog) - 1;
+        var idx = this.next;
+        while (idx < target) {
+            let h = zencHash(d.readLE<u64>(idx), mls, hlog);
+            this.chain[idx & mask] = this.hash[h];
+            this.hash[h] = truncate<u32>(idx);
+            idx += 1;
+        }
+        this.next = target;
+    }
+
+    /// The longest match at `ip` along its hash's chain (libzstd's ZSTD_HcFindBestMatch): its length, 3 if none is
+    /// longer, with its offset in `found`.
+    @effects()
+    fn search(borrow mut this, d: Slice<u8>, ip: usize, end: usize, mls: u32) -> usize {
+        this.insert(d, ip, mls);
+        let chainSize = 1usize << this.p.chainLog;
+        let mask = chainSize - 1;
+        let low = this.low;
+        let minChain = if (ip > chainSize) ip - chainSize else 0;
+        var attempts = 1u32 << this.p.searchLog;
+        var ml: usize = 3;
+        var m = this.hash[zencHash(d.readLE<u64>(ip), mls, this.p.hashLog)] as usize;
+        while (m >= low && m < ip && attempts > 0) {
+            if (d.readLE<u32>(m + ml - 3) == d.readLE<u32>(ip + ml - 3)) {
+                let l = zencCount(d, ip, m, end);
+                if (l > ml) {
+                    ml = l;
+                    this.found = ip - m;
+                    if (ip + l == end) { break; }
+                }
+            }
+            if (m <= minChain) { break; }
+            m = this.chain[m & mask] as usize;
+            attempts -= 1;
+        }
+        return ml;
+    }
+
+    /// libzstd's greedy (depth 0), lazy (1) and lazy2 (2) over hash chains: a match found is kept unless the next
+    /// position (and, at depth 2, the one after) has one that gains more.
+    @effects()
+    fn lazy(
+        borrow mut this,
+        d: Slice<u8>,
+        first: usize,
+        start: usize,
+        end: usize,
+        seqs: borrow mut ZencSequences,
+        depth: u32,
+    ) {
+        let ilimit = end - 8;
+        let mls = if (this.p.minMatch < 4) 4u32 else if (this.p.minMatch > 6) 6u32 else this.p.minMatch;
+        var ip = first;
+        var anchor = start;
+        var o1 = this.rep1;
+        var o2 = this.rep2;
+        while (ip < ilimit) {
+            var ml: usize = 0;
+            var ob: usize = 0; // 1: the repeat offset, else the offset plus 3
+            var st = ip + 1;
+            if (o1 > 0 && d.readLE<u32>(ip + 1 - o1) == d.readLE<u32>(ip + 1)) {
+                ml = zencCount(d, ip + 5, ip + 5 - o1, end) + 4;
+                ob = 1;
+            }
+            if (depth > 0 || ml == 0) {
+                let ml2 = this.search(d, ip, end, mls);
+                if (ml2 > ml) {
+                    ml = ml2;
+                    ob = this.found + 3;
+                    st = ip;
+                }
+                if (ml < 4) {
+                    ip += ((ip - anchor) >> 8) + 1;
+                    continue;
+                }
+                if (depth >= 1) {
+                    while (ip < ilimit) {
+                        ip += 1;
+                        if (o1 > 0 && d.readLE<u32>(ip) == d.readLE<u32>(ip - o1)) {
+                            let mlRep = zencCount(d, ip + 4, ip + 4 - o1, end) + 4;
+                            let gain2 = truncate<i64>(mlRep * 3);
+                            let gain1 = truncate<i64>(ml * 3) - zstdHighBit(truncate<u32>(ob)) as i64 + 1;
+                            if (gain2 > gain1) {
+                                ml = mlRep;
+                                ob = 1;
+                                st = ip;
+                            }
+                        }
+                        let mlNext = this.search(d, ip, end, mls);
+                        if (mlNext >= 4) {
+                            let ob2 = this.found + 3;
+                            let gain2 = truncate<i64>(mlNext * 4) - zstdHighBit(truncate<u32>(ob2)) as i64;
+                            let gain1 = truncate<i64>(ml * 4) - zstdHighBit(truncate<u32>(ob)) as i64 + 4;
+                            if (gain2 > gain1) {
+                                ml = mlNext;
+                                ob = ob2;
+                                st = ip;
+                                continue;
+                            }
+                        }
+                        if (depth == 2 && ip < ilimit) {
+                            ip += 1;
+                            if (o1 > 0 && d.readLE<u32>(ip) == d.readLE<u32>(ip - o1)) {
+                                let mlRep = zencCount(d, ip + 4, ip + 4 - o1, end) + 4;
+                                let gain2 = truncate<i64>(mlRep * 4);
+                                let gain1 = truncate<i64>(ml * 4) - zstdHighBit(truncate<u32>(ob)) as i64 + 1;
+                                if (gain2 > gain1) {
+                                    ml = mlRep;
+                                    ob = 1;
+                                    st = ip;
+                                }
+                            }
+                            let ml3 = this.search(d, ip, end, mls);
+                            if (ml3 >= 4) {
+                                let ob3 = this.found + 3;
+                                let gain2 = truncate<i64>(ml3 * 4) - zstdHighBit(truncate<u32>(ob3)) as i64;
+                                let gain1 = truncate<i64>(ml * 4) - zstdHighBit(truncate<u32>(ob)) as i64 + 7;
+                                if (gain2 > gain1) {
+                                    ml = ml3;
+                                    ob = ob3;
+                                    st = ip;
+                                    continue;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+                if (ob > 3) {
+                    let off = ob - 3;
+                    while (st > anchor && st > off && d[st - 1] == d[st - 1 - off]) {
+                        st -= 1;
+                        ml += 1;
+                    }
+                    o2 = o1;
+                    o1 = off;
+                }
+            }
+            seqs.store(st - anchor, o1, ml);
+            ip = st + ml;
+            anchor = ip;
+            while (ip <= ilimit && o2 > 0 && d.readLE<u32>(ip) == d.readLE<u32>(ip - o2)) {
+                let rl = zencCount(d, ip + 4, ip + 4 - o2, end) + 4;
+                let t = o1;
+                o1 = o2;
+                o2 = t;
+                seqs.store(0, o1, rl);
+                ip += rl;
+                anchor = ip;
+            }
+        }
+        this.rep1 = o1;
+        this.rep2 = o2;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Frames.
+
+/// Appends a frame header (RFC 8878 §3.1.1.1): a single segment states the content size and no window; otherwise
+/// the window is 2^windowLog and the size is stated if `hasSize`.
+@effects(alloc)
+fn zencFrameHeader(
+    windowLog: u32,
+    single: bool,
+    hasSize: bool,
+    size: u64,
+    checksum: bool,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    out.pushLE(0xFD2FB528u32)?;
+    var fcs: u32 = 0;
+    if (hasSize) {
+        if (size >= 0xFFFFFFFF) {
+            fcs = 3;
+        } else if (size >= 65536 + 256) {
+            fcs = 2;
+        } else if (size >= 256 || !single) {
+            fcs = 1;
+        }
+    }
+    let fhd = (fcs << 6) | (if (single) 32u32 else 0) | (if (checksum) 4u32 else 0);
+    out.push(truncate<u8>(fhd))?;
+    if (!single) { out.push(truncate<u8>((windowLog - 10) << 3))?; }
+    if (hasSize) {
+        if (fcs == 0) {
+            out.push(truncate<u8>(size))?;
+        } else if (fcs == 1) {
+            out.pushLE(truncate<u16>(size - 256))?;
+        } else if (fcs == 2) {
+            out.pushLE(truncate<u32>(size))?;
+        } else {
+            out.pushLE(size)?;
+        }
+    }
+    return Ok();
+}
+
+/// `Zstd.compress`: one frame, its content size stated and no checksum; matched in place up to 2 GiB.
+fn zencCompressAll(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let mark = out.length;
+    match (zencCompressOnto(input, level, out)) {
+        Ok() => { return Ok(); }
+        Err(e) => {
+            out.truncate(mark);
+            return Err(e);
+        }
+    }
+}
+
+fn zencCompressOnto(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let lv = zencLevel(level);
+    let n = input.length;
+    if (n > zencInPlaceMax()) {
+        var e = ZstdEncoder.start(lv, false, true, n as u64)?;
+        e.update(input, out)?;
+        return e.finish(out);
+    }
+    let p = zencParams(lv, n as u64, true);
+    let single = (n as u64) <= (1u64 << p.windowLog);
+    zencFrameHeader(p.windowLog, single, true, n as u64, false, out)?;
+    if (n == 0) { return zencBlockHeader(true, 0, 0, out); }
+    var m = ZencMatcher.create(p)?;
+    let block = zencMin(n, zencBlockMax());
+    var c = ZencCoder.create(block)?;
+    var seqs = ZencSequences.create(block)?;
+    var at: usize = 0;
+    while (at < n) {
+        let end = zencMin(at + zencBlockMax(), n);
+        m.rep1 = c.reps[0] as usize;
+        m.rep2 = c.reps[1] as usize;
+        m.parse(input, at, end, mut seqs);
+        zencBlock(mut c, seqs, input, at, end, end == n, out)?;
+        at = end;
+    }
+    return Ok();
+}
+
+/// A Zstandard encoder that streams (RFC 8878): `update` appends the blocks its input completes and keeps the rest,
+/// `flush` writes what it holds as blocks, so a decoder given the output so far decodes all of the input so far
+/// (libzstd's ZSTD_e_flush), and `finish` ends the frame with its last block and, if asked for, its checksum. After
+/// `finish` the next `update` begins a new frame. A frame states its window and not its content size.
+///
+/// Levels are libzstd's in meaning and parameters, 1 to 9 (its `clevels.h` for inputs of unknown size): 0 is its
+/// default, 3, and a level above 9 is 9. The window is 512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8 and 4 MiB at 9.
+/// `create` allocates the level's tables and a block's scratch, about 0.8 MiB at level 1, 1.5 MiB at 3 and 12.8 MiB at
+/// 9; the input is held in a buffer that grows as it comes, to twice the window. Nothing else is allocated but `out`.
+/// After an `AllocError` the frame being written cannot be finished: start a new encoder. The output is not libzstd's
+/// byte for byte, and any zstd decoder reads it.
+///
+/// Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with bytes an
+/// attacker chooses.
+public struct ZstdEncoder {
+    p: ZencParams;
+    checksum: bool;
+    hasSize: bool;
+    size: u64;
+    m: ZencMatcher;
+    c: ZencCoder;
+    seqs: ZencSequences;
+    buf: Vector<u8>; // the window's history, then the input not yet coded
+    filled: usize;
+    done: usize; // buf[..done] is coded
+    started: bool;
+    hash: Xxh64;
+
+    /// An encoder at `level` that ends each frame with its XXH64 checksum if `checksum`.
+    @effects(alloc)
+    public fn create(level: u32, checksum: bool) -> Result<ZstdEncoder, AllocError> =>
+        ZstdEncoder.start(zencLevel(level), checksum, false, 0);
+
+    @effects(alloc)
+    fn start(level: u32, checksum: bool, hasSize: bool, size: u64) -> Result<ZstdEncoder, AllocError> {
+        let p = zencParams(level, 0, false);
+        let buf = Vector<u8>.create();
+        return Ok(ZstdEncoder {
+            p: p,
+            checksum: checksum,
+            hasSize: hasSize,
+            size: size,
+            m: ZencMatcher.create(p)?,
+            c: ZencCoder.create(zencBlockMax())?,
+            seqs: ZencSequences.create(zencBlockMax())?,
+            buf: buf,
+            filled: 0,
+            done: 0,
+            started: false,
+            hash: Xxh64.create(0),
+        });
+    }
+
+    /// Encodes `input`, appending to `out` the blocks it completes.
+    @effects(alloc)
+    public fn update(borrow mut this, input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        this.grow(input.length)?;
+        this.begin(out)?;
+        if (this.checksum) { this.hash.update(input); }
+        var i: usize = 0;
+        while (i < input.length) {
+            if (this.filled == this.buf.length) { this.slide(); }
+            let c = zencMin(this.buf.length - this.filled, input.length - i);
+            this.buf[this.filled..this.filled + c].copyFrom(input[i..i + c]);
+            this.filled += c;
+            i += c;
+            while (this.filled - this.done > zencBlockMax()) {
+                this.block(this.done + zencBlockMax(), false, out)?;
+            }
+        }
+        return Ok();
+    }
+
+    /// Encodes everything given so far as blocks, so a decoder given the output so far decodes all of it.
+    @effects(alloc)
+    public fn flush(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        this.begin(out)?;
+        while (this.filled > this.done) {
+            this.block(zencMin(this.done + zencBlockMax(), this.filled), false, out)?;
+        }
+        return Ok();
+    }
+
+    /// Encodes the rest, ends the frame with its last block and checksum, and makes ready for a new frame.
+    @effects(alloc)
+    public fn finish(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        this.begin(out)?;
+        if (this.filled == this.done) {
+            zencBlockHeader(true, 0, 0, out)?;
+        }
+        while (this.filled > this.done) {
+            let end = zencMin(this.done + zencBlockMax(), this.filled);
+            this.block(end, end == this.filled, out)?;
+        }
+        if (this.checksum) { out.pushLE(truncate<u32>(this.hash.finish()))?; }
+        this.started = false;
+        this.filled = 0;
+        this.done = 0;
+        this.m.reset();
+        this.c.reps = [1u32, 4, 8];
+        this.hash = Xxh64.create(0);
+        return Ok();
+    }
+
+    @effects(alloc)
+    fn begin(borrow mut this, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        if (this.started) { return Ok(); }
+        this.started = true;
+        return zencFrameHeader(this.p.windowLog, false, this.hasSize, this.size, this.checksum, out);
+    }
+
+    /// Makes `buf` hold `more` bytes past what it holds, doubling, up to twice the window.
+    @effects(alloc)
+    fn grow(borrow mut this, more: usize) -> Result<void, AllocError> {
+        let most = 2usize << this.p.windowLog;
+        if (this.buf.length == most || this.buf.length - this.filled >= more) { return Ok(); }
+        var size = this.buf.length * 2;
+        if (size < this.filled + more) { size = this.filled + more; }
+        if (size < 65536) { size = 65536; }
+        if (size > most) { size = most; }
+        return this.buf.resize(size, 0);
+    }
+
+    /// Codes `buf[done..end]` as a block.
+    @effects(alloc)
+    fn block(borrow mut this, end: usize, last: bool, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        let start = this.done;
+        this.m.rep1 = this.c.reps[0] as usize;
+        this.m.rep2 = this.c.reps[1] as usize;
+        this.m.parse(this.buf[0..this.filled], start, end, mut this.seqs);
+        zencBlock(mut this.c, this.seqs, this.buf[0..this.filled], start, end, last, out)?;
+        this.done = end;
+        return Ok();
+    }
+
+    /// Moves the window's history and the input not yet coded to the start of `buf`, by a multiple of the chain's
+    /// size so the chain's entries stay where they are.
+    @effects()
+    fn slide(borrow mut this) {
+        let w = 1usize << this.p.windowLog;
+        if (this.done <= w) { return; }
+        let unit = 1usize << this.p.chainLog;
+        let shift = ((this.done - w) / unit) * unit;
+        if (shift == 0) { return; }
+        this.buf.copyWithin(shift, 0, this.filled - shift);
+        this.filled -= shift;
+        this.done -= shift;
+        this.m.shift(shift);
+    }
+}

@@ -7,7 +7,8 @@
 // time. Decoding is table-driven, as libzstd's: an FSE table entry holds its symbol's base value and extra bits, and a
 // Huffman table of up to 2^12 entries is indexed by the next bits. `Zstd.decompress` decodes into the caller's vector;
 // a `ZstdDecoder` decodes into a ring of the window and one block, allocated at `create`, and copies out to the
-// caller's slices. Skippable frames are skipped; dictionaries are not handled.
+// caller's slices. Skippable frames are skipped; dictionaries are not handled. The encoder is
+// compress_zstd_encoder.cee (phase 4).
 
 fn zstdMagic() -> u32 => 0xFD2FB528;
 /// The largest a block's content may be (RFC 8878 §3.1.1.2.4), or the window if that is smaller.
@@ -1234,9 +1235,9 @@ fn zstdOnto(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>, start: u
 }
 
 /// Zstandard's frame format (RFC 8878) in whole buffers: Parquet's `ZSTD` pages (PyIceberg's default, and Iceberg's
-/// since 1.4) and Avro's `zstandard` blocks. Decoding only: there is no encoder yet (ADR 0196, phase 4).
+/// since 1.4) and Avro's `zstandard` blocks. `ZstdDecoder` and `ZstdEncoder` stream.
 ///
-/// No input panics the decoder: every refusal is a `DecodeError`. Decoding is not constant time.
+/// No input panics the decoder: every refusal is a `DecodeError`. Neither direction is constant time.
 public struct Zstd {
     /// Decodes all of `input`, one or more frames in turn, onto the end of `out`, at most `limit` bytes in all.
     /// Skippable frames are skipped (an input of them alone decodes to nothing); an empty input, and bytes after the
@@ -1247,6 +1248,19 @@ public struct Zstd {
     /// produce, is `Malformed`; a wrong checksum is `ChecksumMismatch`. On an error, `out` is as it was.
     public fn decompress(input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> =>
         zstdAll(input, limit, out);
+
+    /// Compresses all of `input` as one frame onto the end of `out`, at `level`: libzstd's levels 1 to 9, in meaning
+    /// and parameters (its `clevels.h`, for the input's size); 0 is its default, 3, and a level above 9 is 9. The
+    /// frame states the content size and has no checksum (`ZstdEncoder` writes one). Its window is the input's size,
+    /// or the level's if that is smaller (512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8, 4 MiB at 9). Memory is the
+    /// level's tables, cut to the input's size, and a block's scratch: about 1.5 MiB for 1 MiB at level 3, 0.3 MiB for
+    /// 16 KiB; the input is read where it is. Any zstd decoder reads the frame; it is not libzstd's byte for byte. On
+    /// an error, `out` is as it was.
+    ///
+    /// Compression leaks the content through the length (CRIME, BREACH): do not compress a secret together with
+    /// bytes an attacker chooses.
+    public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> =>
+        zencCompressAll(input, level, out);
 }
 
 // ---------------------------------------------------------------------------------------------------------------

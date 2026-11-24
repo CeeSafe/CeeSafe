@@ -1858,6 +1858,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_notify_clear")) {
         return "Ps:i";
     }
+    if (sameText(name, "ceesafe_push_token")) {
+        return "Ps:l"; // ADR 0244
+    }
     if (sameText(name, "ceesafe_window_wait_any")) {
         return "u:-";
     }
@@ -2306,6 +2309,11 @@ fn callC(
     if (sameText(n0, "ceesafe_secrets_read")) {
         // The secret store (ADR 0242): the interpreter has no system store, so every call is SecretError.Unsupported
         // (the runtime's -2), CEESAFE_SECRETS_DIR or not.
+        return Ok(hostResult(-2));
+    }
+    if (sameText(n0, "ceesafe_push_token")) {
+        // Push tokens (ADR 0244): the interpreter has no push service, so PushError.Unsupported (-2),
+        // CEESAFE_PUSH_TOKEN or not.
         return Ok(hostResult(-2));
     }
     if (sameText(n0, "ceesafe_notify_permission") || sameText(n0, "ceesafe_notify_show") ||

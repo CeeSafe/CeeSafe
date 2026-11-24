@@ -1,0 +1,92 @@
+// Push tokens (ADR 0244; type-system.md §26.23): the token a server sends this device's push notifications to, from
+// the system's push service: Apple's APNs on iOS.
+
+extern "C" {
+    @effects(sleep)
+    fn ceesafe_push_token(out: *mut u8, capacity: u64) -> i64;
+}
+
+/// Why no push token came.
+public enum PushError {
+    /// This system has no push service CeeSafe registers with: Android (for now), macOS, Windows, Linux, FreeBSD,
+    /// CosmoOS, a program with no window, and `ceesafec run --interp`.
+    Unsupported,
+    /// The system refused: the app is not signed for push notifications (iOS's `aps-environment`), or the service
+    /// could not be reached.
+    Denied,
+    /// Anything else: no answer in time, an error of the system's.
+    Failed,
+}
+
+/// The push service a token is for.
+public enum PushService {
+    /// Apple's Push Notification service: a server sends to `api.push.apple.com`, or to the sandbox.
+    Apns,
+    /// Firebase Cloud Messaging.
+    Fcm,
+}
+
+/// This device's token, and where a server sends to it.
+public struct PushToken {
+    public service: PushService;
+    /// The token: for APNs the device token's bytes in hex.
+    public token: String;
+    /// For APNs: whether the build is a development one, whose pushes go to the sandbox (`api.sandbox.push.apple.com`).
+    public sandbox: bool;
+}
+
+/// The system's push service (ADR 0244).
+///
+/// ```
+/// let device = Push.register()?;          // once a run: the token may change
+/// // send device.token (and device.sandbox) to the app's server
+/// ```
+///
+/// iOS: the app registers with APNs (its signing must grant `aps-environment`: CeeUI's packer's `--push`) and the
+/// token comes from Apple; the user's permission to show notifications is `Notifications.requestPermission`'s.
+/// `CEESAFE_PUSH_TOKEN=<text>` is the token instead, natively on every system, for tests (`apns:HEX`,
+/// `apns-sandbox:HEX` or `fcm:TOKEN`). Under `ceesafec run --interp` it is `Unsupported`.
+public struct Push {
+    /// Registers with the system's push service and returns this device's token. It blocks until the service answers
+    /// (30 seconds at most) and may be called from any thread but the window's.
+    /// Safety: the runtime writes at most the buffer's length.
+    public fn register() -> Result<PushToken, PushError> {
+        var buffer = [0u8; 1024];
+        let length = unsafe { ceesafe_push_token(borrow mut buffer[0] as *mut u8, 1024) };
+        if (length < 0) {
+            return Err(match (length) {
+                -2 => PushError.Unsupported,
+                -5 => PushError.Denied,
+                _ => PushError.Failed,
+            });
+        }
+        let text = match (StringView.fromUtf8(buffer[0..truncate<usize>(length)])) {
+            Some(t) => t,
+            null => { return Err(PushError.Failed); }
+        };
+        var service = PushService.Apns;
+        var sandbox = false;
+        var at: usize = 0;
+        if (text.startsWith("apns-sandbox:")) {
+            sandbox = true;
+            at = 13;
+        } else if (text.startsWith("apns:")) {
+            at = 5;
+        } else if (text.startsWith("fcm:")) {
+            service = PushService.Fcm;
+            at = 4;
+        } else {
+            return Err(PushError.Failed);
+        }
+        let rest = text[at..];
+        if (rest.length == 0) {
+            return Err(PushError.Failed);
+        }
+        var token = String.create();
+        match (token.append(rest)) {
+            Ok() => {}
+            Err(_) => { return Err(PushError.Failed); }
+        }
+        return Ok(PushToken { service: service, token: token, sandbox: sandbox });
+    }
+}

@@ -3137,6 +3137,122 @@ static signed char cee_ios_did_finish(cee_id self, cee_sel cmd, cee_id applicati
     return 1;
 }
 
+/* ---- Push tokens on iOS (ADR 0244) ----
+   ceesafe_rt_push.c asks for the token (ceesafe_ios_push_token, weak there): UIApplication's
+   registerForRemoteNotifications on the main thread, and the app delegate's answer, waited for. The token is its
+   bytes in hex; the environment is the build's: a development build carries embedded.mobileprovision, whose
+   aps-environment says "development"; an App Store build carries none, and is production. */
+static pthread_mutex_t cee_ios_push_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cee_ios_push_done = PTHREAD_COND_INITIALIZER;
+static int cee_ios_push_state; /* 0 waiting, 1 a token, 2 refused */
+static char cee_ios_push_hex[512];
+
+static void cee_ios_push_answer(int state, const unsigned char *bytes, size_t length) {
+    pthread_mutex_lock(&cee_ios_push_lock);
+    cee_ios_push_hex[0] = 0;
+    if (state == 1 && length > 0 && length * 2 < sizeof cee_ios_push_hex) {
+        static const char digits[] = "0123456789abcdef";
+        for (size_t i = 0; i < length; i++) {
+            cee_ios_push_hex[2 * i] = digits[bytes[i] >> 4];
+            cee_ios_push_hex[2 * i + 1] = digits[bytes[i] & 15];
+        }
+        cee_ios_push_hex[2 * length] = 0;
+    } else {
+        state = 2;
+    }
+    cee_ios_push_state = state;
+    pthread_cond_broadcast(&cee_ios_push_done);
+    pthread_mutex_unlock(&cee_ios_push_lock);
+}
+
+static void cee_ios_push_registered(cee_id self, cee_sel cmd, cee_id application, cee_id token) {
+    (void)self;
+    (void)cmd;
+    (void)application;
+    const unsigned char *bytes = token != NULL ? (const unsigned char *)cee_ios_send(token, "bytes") : NULL;
+    size_t length = token != NULL ? (size_t)cee_ios_send_long(token, "length") : 0u;
+    cee_ios_push_answer(bytes != NULL ? 1 : 2, bytes, length);
+}
+
+static void cee_ios_push_failed(cee_id self, cee_sel cmd, cee_id application, cee_id error) {
+    (void)self;
+    (void)cmd;
+    (void)application;
+    (void)error;
+    cee_ios_push_answer(2, NULL, 0);
+}
+
+/* Whether this build's embedded.mobileprovision grants the development environment. */
+static int cee_ios_push_sandbox(void) {
+    cee_id bundle = cee_ios_send(cee_ios_cls("NSBundle"), "mainBundle");
+    cee_id path = bundle != NULL ? ((cee_id(*)(cee_id, cee_sel, cee_id, cee_id))cee_uikit.send)(
+                                       bundle, cee_ios_sel("pathForResource:ofType:"), cee_ios_string("embedded"),
+                                       cee_ios_string("mobileprovision"))
+                                 : NULL;
+    const char *file = path != NULL ? (const char *)cee_ios_send(path, "UTF8String") : NULL;
+    FILE *f = file != NULL ? fopen(file, "rb") : NULL;
+    if (f == NULL) {
+        return 0; /* none: an App Store build */
+    }
+    static char text[65536];
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[n] = 0;
+    /* The profile is a signed message whose content, the plist, is plain text inside it: zero bytes are skipped. */
+    for (size_t i = 0; i + 40 < n; i++) {
+        if (memcmp(text + i, "<key>aps-environment</key>", 26) == 0) {
+            for (size_t k = i + 26; k + 8 < n && k < i + 120; k++) {
+                if (memcmp(text + k, "<string>", 8) == 0) {
+                    return n - (k + 8) >= 11 && memcmp(text + k + 8, "development", 11) == 0;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* The device's push token: writes "apns-sandbox:HEX" or "apns:HEX" to `out` and returns its length, or -2 when this
+   is no windowed iOS app (Unsupported), -5 when the system refused (no aps-environment entitlement, no network to
+   Apple), -6 when no answer came within 30 seconds. Any thread but the main one. */
+int64_t ceesafe_ios_push_token(char *out, size_t capacity);
+
+int64_t ceesafe_ios_push_token(char *out, size_t capacity) {
+    if (cee_uikit.state != 1) {
+        return -2;
+    }
+    cee_id app = cee_ios_send(cee_ios_cls("UIApplication"), "sharedApplication");
+    if (app == NULL || pthread_main_np()) {
+        return -2;
+    }
+    pthread_mutex_lock(&cee_ios_push_lock);
+    cee_ios_push_state = 0;
+    pthread_mutex_unlock(&cee_ios_push_lock);
+    ((void (*)(cee_id, cee_sel, cee_sel, cee_id, signed char))cee_uikit.send)(
+        app, cee_ios_sel("performSelectorOnMainThread:withObject:waitUntilDone:"),
+        cee_ios_sel("registerForRemoteNotifications"), NULL, 0);
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += 30;
+    pthread_mutex_lock(&cee_ios_push_lock);
+    while (cee_ios_push_state == 0) {
+        if (pthread_cond_timedwait(&cee_ios_push_done, &cee_ios_push_lock, &until) != 0) {
+            break;
+        }
+    }
+    int state = cee_ios_push_state;
+    char hex[sizeof cee_ios_push_hex];
+    memcpy(hex, cee_ios_push_hex, sizeof hex);
+    pthread_mutex_unlock(&cee_ios_push_lock);
+    if (state == 0) {
+        return -6;
+    }
+    if (state != 1) {
+        return -5;
+    }
+    int written = snprintf(out, capacity, "%s:%s", cee_ios_push_sandbox() ? "apns-sandbox" : "apns", hex);
+    return written > 0 && (size_t)written < capacity ? (int64_t)written : -6;
+}
+
 void ceesafe_window_app_start(void) {
     static int started;
     if (started) {
@@ -3155,6 +3271,10 @@ void ceesafe_window_app_start(void) {
                              (cee_fn)cee_ios_memory_warning, "v@:@");
         cee_uikit.add_method(delegate, cee_ios_sel("application:configurationForConnectingSceneSession:options:"),
                              (cee_fn)cee_ios_configuration, "@@:@@@");
+        cee_uikit.add_method(delegate, cee_ios_sel("application:didRegisterForRemoteNotificationsWithDeviceToken:"),
+                             (cee_fn)cee_ios_push_registered, "v@:@@");
+        cee_uikit.add_method(delegate, cee_ios_sel("application:didFailToRegisterForRemoteNotificationsWithError:"),
+                             (cee_fn)cee_ios_push_failed, "v@:@@");
         void *app_protocol = cee_uikit.get_protocol != NULL ? cee_uikit.get_protocol("UIApplicationDelegate") : NULL;
         if (app_protocol != NULL && cee_uikit.add_protocol != NULL) {
             cee_uikit.add_protocol(delegate, app_protocol);

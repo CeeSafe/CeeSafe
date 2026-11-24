@@ -1480,10 +1480,10 @@ fn notCompiledResult(compiled: borrow Compiled) -> Result<ToolResult, McpFailure
     return toolResult(json, false);
 }
 
-/// The path the harness has in a tool's compilation (never a file: ADR 0220 §2.1).
+/// The path the harness has in a tool's compilation (never a file: ADR 0240 §2.1).
 fn mcpHarnessPath() -> StringView => "ceesafe-test/harness.cee";
 
-/// `ceesafe_test` (ADR 0220 §2.1): the root package's tests, in the order of their names, each run by a fresh sandboxed
+/// `ceesafe_test` (ADR 0240 §2.1): the root package's tests, in the order of their names, each run by a fresh sandboxed
 /// interpreter in this process with its own budget, from a harness made in memory; nothing is built, written or
 /// started. The result is `ceesafec test --format json`'s document, with the interpreter's `fault`.
 fn testTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
@@ -1627,7 +1627,7 @@ fn testTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Re
     return toolResult(json, false);
 }
 
-/// `ceesafe_doc` (ADR 0220 §2.2): the page `ceesafec doc` writes for the root package's public items, titled as it
+/// `ceesafe_doc` (ADR 0240 §2.2): the page `ceesafec doc` writes for the root package's public items, titled as it
 /// titles it (the package's name, or the first file's), or with `missing` its list of those without a doc comment.
 fn docTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
     let missing = match (optionalBool(doc, arguments, "missing")?) {

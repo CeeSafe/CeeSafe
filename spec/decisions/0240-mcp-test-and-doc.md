@@ -1,8 +1,10 @@
-# ADR 0220 — The MCP server's `ceesafe_test` and `ceesafe_doc`
+# ADR 0240 — The MCP server's `ceesafe_test` and `ceesafe_doc`
 
 - Status: **Accepted** by the owner, 2026-11-24 ("Go ahead. I'm with your recommendations."), §6's three questions as
   proposed; proposed the same day under the optimization and DX roadmap's Phase 1, item 2. **Implemented** the same
   day (§7), not released.
+- Number: written as ADR 0220 on branch `dx/roadmap-phase0` (its commits name it so); renumbered 0240 when the
+  branch was merged with `main`, which had given 0220 to another ADR.
 - Scope: tooling.md §6.3 (two tools), §10.2 (the outcomes, shared); `src/tooling/mcp_server.cee`,
   `src/host/test_runner.cee` (its harness, made in memory as well as on disk); `tools/mcp_test_check.py`;
   guide/for-agents.md and the agents template.

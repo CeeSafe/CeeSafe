@@ -31,7 +31,7 @@ fn compileInMemory(
     kernel: bool,
 ) -> Result<Compiled, AllocError> => compileInMemoryFrom(files, packages, freestanding, noFloat, kernel, "main");
 
-/// compileInMemory with the entry function named `entry`: `ceesafeTestMain` for a test harness (ADR 0220 §2.1).
+/// compileInMemory with the entry function named `entry`: `ceesafeTestMain` for a test harness (ADR 0240 §2.1).
 fn compileInMemoryFrom(
     files: borrow Vector<InputFile>,
     packages: Vector<PackageInfo>,

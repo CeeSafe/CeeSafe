@@ -41,7 +41,7 @@ SCALARS = {
     "_Bool": "bool", "bool": "bool", "void": "void",
     "char": "CChar", "signed char": "i8", "unsigned char": "u8",
     "short": "i16", "unsigned short": "u16", "int": "i32", "unsigned int": "u32",
-    "long": "CLong", "unsigned long": "CULong", "long long": "i64", "unsigned long long": "u64",  # ADR 0221
+    "long": "CLong", "unsigned long": "CULong", "long long": "i64", "unsigned long long": "u64",  # ADR 0241
     "float": "f32", "double": "f64",
 }
 NAMED = {
@@ -539,7 +539,7 @@ class Reading:
                 continue
             t = self.type_of(c)
             value = self.value_of(valued) if valued is not None else None
-            # C's long and unsigned long are constants of their own type too (ADR 0221).
+            # C's long and unsigned long are constants of their own type too (ADR 0241).
             if value is None or t is None or (t not in INTEGERS | {"CLong", "CULong"} and t not in self.enums):
                 self.notes[name] = "a macro that is not an integer constant or a string literal"
                 continue

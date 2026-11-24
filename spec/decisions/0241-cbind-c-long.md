@@ -1,8 +1,10 @@
-# ADR 0221 — `cbind` writes C's `long` and `unsigned long` as `CLong` and `CULong`
+# ADR 0241 — `cbind` writes C's `long` and `unsigned long` as `CLong` and `CULong`
 
 - Status: **Accepted** by the owner, 2026-11-24 ("Yes", to "a short ADR making `cbind` write `CLong` and `CULong`, so
   a zlib binding can be published that also works on Windows"). Raised by the optimization and DX roadmap's Phase 4,
   item 1: a binding to be published in the package index (`CeeSafe/CeeSafe-index`) must hold on every target.
+- Number: written as ADR 0221 on branch `dx/roadmap-phase0` (its commits name it so); renumbered 0241 when the
+  branch was merged with `main`, which had given 0221 to another ADR.
 - Scope: tooling.md §11.2's types; `src/tooling/cbind.cee` and its oracle `tools/cbind.py`; `tools/cbind_check.py`
   and its fixture; `tests/cbind/zlib`. No language change: `CLong` and `CULong` exist since ADR 0080 §3.5.
 

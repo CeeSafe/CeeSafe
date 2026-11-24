@@ -1,4 +1,4 @@
-// An upper bound after `x += 1` (optimisations.md §2.4, "An update in place", ADR 0218 §2.3): an old `x < u` gives
+// An upper bound after `x += 1` (optimisations.md §2.4, "An update in place", ADR 0238 §2.3): an old `x < u` gives
 // `x ≤ u`. The .bce snapshot lists each index check; the near misses must keep theirs.
 
 // The countdown's `digits[n]` is removed: `digits[n]` passed, so `n < 20`, and after `n += 1`, `n ≤ 20`. The fill's

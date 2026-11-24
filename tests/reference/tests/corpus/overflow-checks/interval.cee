@@ -1,4 +1,4 @@
-// The interval of a checked result (optimisations.md §2.4, ADR 0218): after `x = a * b`, a signed `+` or `-`, or a
+// The interval of a checked result (optimisations.md §2.4, ADR 0238): after `x = a * b`, a signed `+` or `-`, or a
 // negation, `x` lies between the operation's values at the corners of its operands' bounds. The .oce snapshot lists
 // each checked operation; the near misses must keep theirs.
 
@@ -59,7 +59,7 @@ fn negation(x: i32) -> i32 {
 
 const LIMIT: usize = 1000;
 
-// Removed: a loop's end of two constants has its exact value, 1001 (ADR 0218 §2.2), so `i * i` is at most 10⁶; the
+// Removed: a loop's end of two constants has its exact value, 1001 (ADR 0238 §2.2), so `i * i` is at most 10⁶; the
 // counter keeps its check.
 fn squaresBelow() -> usize {
     var count: usize = 0;

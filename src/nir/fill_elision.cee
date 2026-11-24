@@ -1,4 +1,4 @@
-// Fill elision (optimisations.md §7, ADR 0219): an array literal `a = [e; N]` that a counted loop overwrites in full
+// Fill elision (optimisations.md §7, ADR 0239): an array literal `a = [e; N]` that a counted loop overwrites in full
 // before anything reads it is not executed. It runs after temporary forwarding, on the NIR that is compiled and the NIR
 // that is interpreted; checks and `--dump-nir` see the NIR before it. The C writes nothing for an elided literal (the
 // array is declared, initialised, at the top of its function), and the interpreter marks `a`'s bytes uninitialised, so

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ceesafe_test and ceesafe_doc over the MCP server (ADR 0220; spec/tooling.md §6.3).
+"""ceesafe_test and ceesafe_doc over the MCP server (ADR 0240; spec/tooling.md §6.3).
 
 - ceesafe_test on tests/packages/test-command: each test's outcome is the `--interp` column of the package's
   expected.tsv (reviewed by hand, ADR 0049), except that `timed out` is `fault` (the interpreter's budget is steps, not
-  time, ADR 0220 §2.1), and the message holds the expected part; the counts add up; a `filter` runs only the tests
+  time, ADR 0240 §2.1), and the message holds the expected part; the counts add up; a `filter` runs only the tests
   whose names contain it, in the order of their names; a filter no name contains is a tool error.
 - ceesafe_test on `files`: a test that reads a file is a `fault` that names the sandbox's refusal, a passing one passes.
 - ceesafe_doc on `files`: the page has each public item's heading, and `missing` lists exactly the public items

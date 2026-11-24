@@ -168,7 +168,7 @@ struct NirProgram {
     /// The temporaries that temporary forwarding took out (optimisations.md §6, ADR 0162): (function << 32) | local,
     /// in order. They are still in their functions' `locals`, mentioned nowhere, and are declared nowhere in the C.
     forwarded: Vector<u64>;
-    /// The array literals fill elision took out (optimisations.md §7, ADR 0219), by statement: `a = [e; N]` that a
+    /// The array literals fill elision took out (optimisations.md §7, ADR 0239), by statement: `a = [e; N]` that a
     /// counted loop overwrites in full. The C writes nothing for one; the interpreter marks `a`'s bytes uninitialised.
     /// Empty when the pass did not run.
     elidedFills: Vector<bool>;

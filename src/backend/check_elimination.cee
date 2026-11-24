@@ -1213,7 +1213,7 @@ fn updateFacts(
     var down = false;
     var up = false;
     var strict = false;
-    var plusOne = false; // `x = x + 1`: an old `x < u` gives `x ≤ u` (ADR 0218 §2.3)
+    var plusOne = false; // `x = x + 1`: an old `x < u` gives `x ≤ u` (ADR 0238 §2.3)
     match (n.rvalues[r as usize]) {
         NirRvalue.Binary(op, left, right) => {
             let k = binaryIndex(op);
@@ -1272,7 +1272,7 @@ fn updateFacts(
     return Ok();
 }
 
-/// The interval of a checked result (ADR 0218): after `x = a * b`, a signed `a + b` or `a - b`, or `-a`, execution
+/// The interval of a checked result (ADR 0238): after `x = a * b`, a signed `a + b` or `a - b`, or `-a`, execution
 /// goes on only if the result was exact, so `x` lies between the operation's values at the corners of its operands'
 /// bounds (§3.2). That is recorded as constant bounds on `x`, each only where it is narrower than `x`'s type range.
 /// Unsigned `+` and `-` make a definition instead (§2.4).
@@ -1585,7 +1585,7 @@ fn newFacts(
                 TypeKind.Integer,
             )) {
                 // Constants: the exact result, if the operation does not panic (§2.4). Before the definition, which
-                // gives a sum only lower bounds: `2..LIMIT + 1` bounds its index by the exact 1001 (ADR 0218 §2.2).
+                // gives a sum only lower bounds: `2..LIMIT + 1` bounds its index by the exact 1001 (ADR 0238 §2.2).
                 let exact = exactArithmetic(k, wideOfIntValue(lc!), wideOfIntValue(rc!))?;
                 let range = integerRangeOf(c, xType);
                 match (exact) {

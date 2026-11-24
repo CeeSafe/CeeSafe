@@ -759,7 +759,7 @@ fn docTitleOf(first: Slice<u8>) -> Result<Vector<u8>, AllocError> {
 }
 
 /// What `doc` makes of its sources (DocGenerator.Collect and Render), for the command and the MCP server's
-/// `ceesafe_doc` (ADR 0220 §2.2): the diagnostics rendered as text and whether one is an error (then there is no page),
+/// `ceesafe_doc` (ADR 0240 §2.2): the diagnostics rendered as text and whether one is an error (then there is no page),
 /// and the page titled `title`, or with `missing` the lines of the public items without a doc comment and their number.
 /// `internalError` is a message when the formatter failed on a file that parsed.
 struct DocText {

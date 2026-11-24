@@ -1,7 +1,9 @@
-# ADR 0218 — The interval of a checked result, a constant sum's exact value, and an upper bound after `x += 1`
+# ADR 0238 — The interval of a checked result, a constant sum's exact value, and an upper bound after `x += 1`
 
-- Status: **Accepted** by the owner, 2026-11-24 ("I accept ADR 0218."); proposed 2026-11-23, under the owner's instruction ("Lets go ahead with those remaing in the
+- Status: **Accepted** by the owner, 2026-11-24 ("I accept ADR 0238."); proposed 2026-11-23, under the owner's instruction ("Lets go ahead with those remaing in the
   roadmap": the optimization and DX roadmap's Phase 2, items 1, 2 and 3); implemented, not released.
+- Number: written as ADR 0218 on branch `dx/roadmap-phase0` (its commits name it so); renumbered 0238 when the
+  branch was merged with `main`, which had given 0218 to another ADR.
 - Scope: optimisations.md §2.4 ("Where facts come from", "An update in place") and §3.2; ADR 0102; `src/backend/check_elimination.cee`
   (`intervalFacts`); tests/corpus/overflow-checks.
 

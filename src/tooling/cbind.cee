@@ -228,7 +228,7 @@ fn cbScalar(c: Slice<u8>) -> StringView? {
         return "u32";
     }
     if (sameText(c, "long")) {
-        return "CLong"; // the target's width (ADR 0221)
+        return "CLong"; // the target's width (ADR 0241)
     }
     if (sameText(c, "unsigned long")) {
         return "CULong";
@@ -1607,7 +1607,7 @@ fn cbDeclareConstants(r: borrow mut CbReading, macros: borrow Vector<Vector<u8>>
         var ok = false;
         match (spelt) {
             Some(s) => {
-                // C's long and unsigned long are constants of their own type too (ADR 0221).
+                // C's long and unsigned long are constants of their own type too (ADR 0241).
                 ok = value.found && (cbIsInteger(s.view()) || sameText(s.view(), "CLong") ||
                     sameText(s.view(), "CULong") || cbHasEnum(r, s.view()));
                 t = s;

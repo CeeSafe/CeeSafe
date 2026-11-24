@@ -1,9 +1,11 @@
-# ADR 0219 — Fill elision: an array literal that a counted loop overwrites in full is not written
+# ADR 0239 — Fill elision: an array literal that a counted loop overwrites in full is not written
 
 - Status: **Accepted** by the owner, 2026-11-24 ("I accept your recommendation. So yes to 1-3."), with §5's three
   questions taken as recommended; proposed the same day at the owner's instruction ("Go ahead and write ADR.", after
   the profiling of the benchmarks' slowest workloads against C, ROADMAP §10, 2026-11-24). Implemented (§6); not
   released.
+- Number: written as ADR 0219 on branch `dx/roadmap-phase0` (its commits name it so); renumbered 0239 when the
+  branch was merged with `main`, with the branch's other three, whose numbers `main` had given to other ADRs.
 - Scope: optimisations.md, a new §7; `src/nir/` (the analysis), `src/backend/` (the C), `src/interpreter/` (the
   oracle), `src/main.cee` (the switch); tests/corpus/emit-c and run-pass.
 

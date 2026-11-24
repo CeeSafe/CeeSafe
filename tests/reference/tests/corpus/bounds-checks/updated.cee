@@ -86,7 +86,7 @@ fn loweredBy(s: Slice<u32>, step: usize) -> u32 {
     return 0;
 }
 
-// Kept: a product is not an update that keeps a bound (with `i *= 1`, ADR 0218's interval of the result proves it).
+// Kept: a product is not an update that keeps a bound (with `i *= 1`, ADR 0238's interval of the result proves it).
 fn doubled(s: Slice<u32>) -> u32 {
     var i: usize = 1;
     if (i < s.length) {

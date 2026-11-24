@@ -1,4 +1,4 @@
-// Fill elision (optimisations.md §7, ADR 0219): an array literal that a counted loop overwrites in full is not
+// Fill elision (optimisations.md §7, ADR 0239): an array literal that a counted loop overwrites in full is not
 // written. Each function is one case; the snapshot shows which literals are left (run-pass/fill-elision.cee runs
 // them).
 

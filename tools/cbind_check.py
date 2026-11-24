@@ -58,7 +58,7 @@ DECLARED = [
     "const FX_ANON_A: i32 = 3;", "const FX_ANON_B: i32 = 4;",              # an enum with no name: its values
     '@ctype("fx_callback")', "struct fx_callback;",                        # a typedef of a function pointer
     "const FX_LIMIT: i32 = 22;", "const FX_MASK: u32 = 2147483648;", "const FX_NEGATIVE: i32 = -5;",
-    "const FX_LONG: CLong = 7;", "const FX_ULONG: CULong = 9;",            # C's long, of the target's width (ADR 0221)
+    "const FX_LONG: CLong = 7;", "const FX_ULONG: CULong = 9;",            # C's long, of the target's width (ADR 0241)
     "fn fx_span(from: CLong, count: CULong) -> CULong;",
     "const FX_NAME: *CChar;",                                              # a string literal
     "const FX_WIDTH: i32 = 32;",

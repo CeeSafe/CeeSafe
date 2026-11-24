@@ -443,7 +443,7 @@ fn runTest(
 }
 
 /// A test run's outcome from its status and what it wrote (ADR 0049 §3.3's outcomes, read from the harness protocol's
-/// lines on standard error), for `test` and the MCP server's `ceesafe_test` (ADR 0220 §2.1): `result.stdout` and
+/// lines on standard error), for `test` and the MCP server's `ceesafe_test` (ADR 0240 §2.1): `result.stdout` and
 /// `result.stderr` are the run's; `interp`, whether the interpreter ran it.
 fn classifyTestRun(result: borrow mut TestOutcome, status: i32, interp: bool) {
     let err = result.stderr.view();

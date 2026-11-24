@@ -13,7 +13,7 @@ fn main() -> i32 {
     unsafe {
         let picked = fx_pick(borrow mut box as *mut fx_box, box.notify, borrow fx_names[0] as **CChar);
         let sum = fx_add(box.origin.x, fx_origin.y) + type_(fx_count) + other_get(borrow thing as *other_thing);
-        // 22 + 2, + 3 + 1, + 4, + 5 (FX_GREEN), + 7, + 2, + 2 * 3, - 5, + (7 + 9) - 16 (ADR 0221's CLong and CULong)
+        // 22 + 2, + 3 + 1, + 4, + 5 (FX_GREEN), + 7, + 2, + 2 * 3, - 5, + (7 + 9) - 16 (ADR 0241's CLong and CULong)
         return sum + truncate<i32>(picked as u32) + (box.label[0] as i32) + (box.type_ as i32) +
             truncate<i32>(fx_twice(3)) +
             FX_NEGATIVE + truncate<i32>(fx_span(FX_LONG, FX_ULONG) as u64) - 16;

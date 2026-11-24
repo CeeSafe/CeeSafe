@@ -1252,6 +1252,7 @@ fn emitStructType(
             e.emit()?;
         }
     }
+    emitZeroHelper(e, c, t)?;
     if (c.types.isCLaidOut(t, 0)) {
         return e.line(""); // it holds C state: the C compiler lays it out (§33.1)
     }
@@ -1298,6 +1299,7 @@ fn emitComposite(
         e.d(truncate<u64>(info.arrayLength))?;
         e.t("]; };")?;
         e.emit()?;
+        emitZeroHelper(e, c, t)?;
     } else if (c.types.isPoolBox(t)) {
         e.t("struct ")?;
         e.b(name.view())?;

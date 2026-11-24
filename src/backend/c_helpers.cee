@@ -12,6 +12,146 @@ fn aggregateEnumNamed(e: borrow CEmitter, c: borrow Checker, name: Slice<u8>) ->
     };
 }
 
+/// The most aggregates a `{0}` may reach by brace elision (ADR 0247 §2.3). MSVC refuses an initializer that reaches
+/// 16 nested aggregates (C1054, measured with cl 19.44); the margin leaves room for other versions.
+fn zeroElisionLimit() -> u32 => 8;
+
+/// How deep `{0}` reaches into type `t` by brace elision (ZeroElisionDepth, ADR 0247 §2.3): the aggregates from `t`
+/// to its first scalar, through each first member, counted up to `cap`. An enum's or optional's first member is its
+/// tag, or a niche optional's pointer; an array is its struct and its C array; a type the runtime or a C header
+/// defines counts as two, which every one of the runtime's stays within.
+fn zeroElisionDepth(c: borrow Checker, t: u32, cap: u32) -> u32 {
+    var depth = 0u32;
+    var at = t;
+    while (depth < cap) {
+        if (c.types.info(at).enumDef != none()) {
+            return depth + 1;
+        }
+        if (c.types.is(at, TypeKind.Array)) {
+            depth += 2;
+            at = c.types.info(at).element;
+            continue;
+        }
+        if (c.types.is(at, TypeKind.Struct)) {
+            let s = c.types.info(at).structDef;
+            if (s == none() || isImportedStruct(c, at)) {
+                return depth + 2;
+            }
+            let fields = borrow c.types.structs[s as usize].fields;
+            if (fields.length == 0) {
+                return depth + 1;
+            }
+            depth += 1;
+            at = c.types.fields[fields[0] as usize].typ;
+            continue;
+        }
+        if (sameText(localZero(c, at).bytes(), "{0}")) {
+            return depth + 2;
+        }
+        return depth;
+    }
+    return depth;
+}
+
+/// Whether a zero value of `t` is its helper `ceeZ_<t>()` rather than `{0}` (ADR 0247 §2.3): `{0}` would reach more
+/// than zeroElisionLimit aggregates.
+fn zeroNeedsHelper(c: borrow Checker, t: u32) -> bool =>
+    sameText(localZero(c, t).bytes(), "{0}") && zeroElisionDepth(c, t, zeroElisionLimit() + 1) > zeroElisionLimit();
+
+/// The zero helper's name (ZeroHelperName): `ceeZ_<mangled t>`.
+fn appendZeroHelperName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
+    appendText(out, "ceeZ_")?;
+    return appendMangle(c, out, t);
+}
+
+/// The zero helper of a type whose `{0}` would reach too deep (ADR 0247 §2.3), after the type's definition: a value
+/// set by `memset`, which no initializer reaches into.
+fn emitZeroHelper(e: borrow mut CEmitter, c: borrow Checker, t: u32) -> Result<void, AllocError> {
+    if (!zeroNeedsHelper(c, t)) {
+        return Ok();
+    }
+    e.t("static inline CEE_UNUSED ")?;
+    appendCTypeName(c, mut e.buf, t)?;
+    e.t(" ")?;
+    appendZeroHelperName(c, mut e.buf, t)?;
+    e.t("(void) { ")?;
+    appendCTypeName(c, mut e.buf, t)?;
+    e.t(" r; ceesafe_mem_set(&r, 0, sizeof r); return r; }")?;
+    return e.emit();
+}
+
+/// A declaration's zero initializer for type `t` (ZeroInitializer, ADR 0247 §2.3): a scalar's zero, `{0}`, or the
+/// zero helper's call.
+fn appendZeroInitializer(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
+    let zero = localZero(c, t);
+    if (!sameText(zero.bytes(), "{0}")) {
+        return appendText(out, zero);
+    }
+    if (zeroNeedsHelper(c, t)) {
+        appendZeroHelperName(c, out, t)?;
+        return appendText(out, "()");
+    }
+    return appendText(out, "{0}");
+}
+
+/// A zero value of type `t` as an expression (ZeroValue, ADR 0247 §2.2): a scalar's zero, `((T){0})`, or the zero
+/// helper's call. A designated initializer gives a member that is zero this rather than leave it out: MSVC walks the
+/// whole type of a member left out or given a brace list.
+fn appendZeroValue(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
+    let zero = localZero(c, t);
+    if (!sameText(zero.bytes(), "{0}")) {
+        return appendText(out, zero);
+    }
+    if (zeroNeedsHelper(c, t)) {
+        appendZeroHelperName(c, out, t)?;
+        return appendText(out, "()");
+    }
+    appendText(out, "((")?;
+    appendCTypeName(c, out, t)?;
+    return appendText(out, "){0})");
+}
+
+/// A value of an enum's variant without a payload, `index` its tag (UnitValue, ADR 0247 §2.1). Tag 0 is `{0}`, which
+/// sets the tag alone. Another tag names the union's first member too, each of its fields given its zero value, so
+/// that the initializer leaves out no member for MSVC to walk: `((E){ .tag = 2, .u.v_A = { .f__0 = 0 } })`.
+fn appendUnitValue(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    t: u32,
+    name: Slice<u8>,
+    index: u32,
+) -> Result<void, AllocError> {
+    appendText(out, "((")?;
+    appendBytes(out, name)?;
+    if (index == 0) {
+        return appendText(out, "){0})");
+    }
+    appendText(out, "){ .tag = ")?;
+    appendDecimal(out, index as u64)?;
+    let definition = borrow c.types.enums[c.types.info(t).enumDef as usize];
+    for (v in definition.variants.view()) {
+        let payload = borrow c.types.variants[v as usize].payload;
+        if (payload.length == 0) {
+            continue;
+        }
+        appendText(out, ", .u.")?;
+        appendCVariantName(c, out, v)?;
+        appendText(out, " = { ")?;
+        for (k in 0..payload.length) {
+            if (k > 0) {
+                appendText(out, ", ")?;
+            }
+            out.push('.')?;
+            appendFieldName(c, out, payload[k])?;
+            appendText(out, " = ")?;
+            appendZeroValue(c, out, c.types.fields[payload[k] as usize].typ)?;
+        }
+        appendText(out, " }")?;
+        break;
+    }
+    return appendText(out, " })");
+}
+
 /// A value of a variant of the enum whose C name is `enumName`, with one payload field (Variant): by its constructor
 /// where UsesConstructor says so, otherwise a compound literal.
 fn appendVariantValue(
@@ -88,7 +228,7 @@ fn appendOptionValue(
     if (!hasPayload) {
         appendText(out, "((")?;
         appendBytes(out, name.view())?;
-        return appendText(out, "){ .tag = 0 })");
+        return appendText(out, "){0})"); // the tag alone: no member left out for MSVC to walk (ADR 0247)
     }
     return appendVariantValue(e, c, out, name.view(), "v_Some", 1, payload);
 }
@@ -103,7 +243,7 @@ fn appendAllocErrorResult(
     var error = Vector<u8>.create();
     appendText(mut error, "((")?;
     appendCTypeName(c, mut error, resultErrOf(c, result))?;
-    appendText(mut error, "){ .tag = 0 })")?;
+    appendText(mut error, "){0})")?;
     return appendVariantOf(e, c, out, result, "v_Err", 1, error.view());
 }
 
@@ -1339,7 +1479,7 @@ fn emitIoHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, Allo
         if (c.types.is(ok, TypeKind.Void)) {
             e.t("    return ((")?;
             e.b(name.view())?;
-            e.t("){ .tag = 0 });")?;
+            e.t("){0});")?;
         } else {
             var value = Vector<u8>.create();
             value.push('(')?;
@@ -1365,7 +1505,7 @@ fn emitIoHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, Allo
         e.line("    cee_str text;")?;
         e.t("    if (!ceesafe_arg(index, &text)) return ((")?;
         e.b(name.view())?;
-        e.t("){ .tag = 0 });")?;
+        e.t("){0});")?;
         e.emit()?;
         var some = Vector<u8>.create();
         appendVariantValue(e, c, mut some, name.view(), "v_Some", 1, "text".bytes())?;
@@ -1845,7 +1985,7 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.line("    s->len += text.len;")?;
             e.t("    return ((")?;
             e.b(result.view())?;
-            e.t("){ .tag = 0 });")?;
+            e.t("){0});")?;
             e.emit()?;
             e.line("}")?;
             e.line("")?;
@@ -1898,7 +2038,7 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.line("    v->len += 1u;")?;
             e.t("    return ((")?;
             e.b(result.view())?;
-            e.t("){ .tag = 0 });")?;
+            e.t("){0});")?;
             e.emit()?;
             e.line("}")?;
             e.line("")?;
@@ -2053,7 +2193,7 @@ fn emitVectorBulkHelpers(
     e.line("    }")?;
     e.t("    return ((")?;
     e.b(result)?;
-    e.t("){ .tag = 0 });")?;
+    e.t("){0});")?;
     e.emit()?;
     e.line("}")?;
     e.line("")?;
@@ -2105,7 +2245,7 @@ fn emitVectorBulkHelpers(
     e.line("        v->len = n;")?;
     e.t("        return ((")?;
     e.b(result)?;
-    e.t("){ .tag = 0 });")?;
+    e.t("){0});")?;
     e.emit()?;
     e.line("    }")?;
     // A vector with no buffer and a fill of zero bytes: the zeroed allocation, which for a large buffer is memory
@@ -2130,7 +2270,7 @@ fn emitVectorBulkHelpers(
     e.line("        v->len = n;")?;
     e.t("        return ((")?;
     e.b(result)?;
-    e.t("){ .tag = 0 });")?;
+    e.t("){0});")?;
     e.emit()?;
     e.line("    }")?;
     e.t("    ")?;

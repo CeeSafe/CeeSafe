@@ -38,7 +38,7 @@ static ceeO_i32 ceeF_half(CEE_UNUSED int32_t v_n_0) {
     t_1 = cee_rem_i32(v_n_0, ((int32_t)2), &ceeL_0);
     t_2 = (t_1 != ((int32_t)0));
     if (t_2) {
-        t_3 = ((ceeO_i32){ .tag = 0 });
+        t_3 = ((ceeO_i32){0});
         t_4 = t_3;
         return t_4;
     }
@@ -60,7 +60,7 @@ static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
     case ((uint32_t)1):
         break;
     default:
-        t_5 = ((ceeO_i32){ .tag = 0 });
+        t_5 = ((ceeO_i32){0});
         return t_5;
     }
     v_h_1 = t_3.u.v_Some.f__0;

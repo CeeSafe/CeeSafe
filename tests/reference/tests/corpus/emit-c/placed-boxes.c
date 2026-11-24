@@ -144,7 +144,7 @@ static ceeR_XS4PairS10SystemHeapE10AllocError ceeB_XS4PairS10SystemHeap(ceeT_Pai
     _Static_assert(_Alignof(ceeT_Pair) <= _Alignof(cee_max_align_t), "ceesafec: Box<Pair> needs over-aligned memory");
     ceeT_Pair *p = (ceeT_Pair *)ceesafe_alloc(sizeof(ceeT_Pair), CEE_ALLOC_SYSTEM);
     if (p == NULL) {
-        return ((ceeR_XS4PairS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_XS4PairS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *p = v;
     return ceeMk_ceeR_XS4PairS10SystemHeapE10AllocError_v_Ok(p);

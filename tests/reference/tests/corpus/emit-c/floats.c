@@ -48,7 +48,7 @@ static int32_t ceeF_convert(CEE_UNUSED double v_x_0, CEE_UNUSED int64_t v_n_1) {
     v_wide_3 = (double)v_n_1;
     v_saturated_4 = cee_sat_ftoi_u8((double)v_wide_3);
     { int16_t cee_r;
-      t_8 = cee_try_ftoi_i16((double)v_x_0, &cee_r) ? ((ceeO_i16){ .tag = 1, .u.v_Some = { .f__0 = cee_r } }) : ((ceeO_i16){ .tag = 0 }); }
+      t_8 = cee_try_ftoi_i16((double)v_x_0, &cee_r) ? ((ceeO_i16){ .tag = 1, .u.v_Some = { .f__0 = cee_r } }) : ((ceeO_i16){0}); }
     t_9 = (uint32_t)t_8.tag;
     switch (t_9) {
     case ((uint32_t)1):

@@ -170,25 +170,25 @@ static ceeR_vE10AllocError ceeVP_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, u
         cee_usize cap = v->cap;
         void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, 1u, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
         if (p == NULL) {
-            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         }
         v->ptr = (uint32_t *)p;
         v->cap = cap;
     }
     v->ptr[v->len] = x;
     v->len += 1u;
-    return ((ceeR_vE10AllocError){ .tag = 0 });
+    return ((ceeR_vE10AllocError){0});
 }
 
 static ceeR_vE10AllocError ceeVR_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t extra) {
     if (extra > v->cap - v->len) {
         cee_usize cap = v->cap;
         void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         v->ptr = (uint32_t *)p;
         v->cap = cap;
     }
-    return ((ceeR_vE10AllocError){ .tag = 0 });
+    return ((ceeR_vE10AllocError){0});
 }
 
 static ceeR_vE10AllocError ceeVE_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint32_t const *src, uint64_t n) {
@@ -206,16 +206,16 @@ static ceeR_vE10AllocError ceeVE_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, u
 static ceeR_vE10AllocError ceeVZ_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, uint64_t n, uint32_t fill) {
     if (n <= v->len) {
         v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
+        return ((ceeR_vE10AllocError){0});
     }
     if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {
         cee_usize cap = 0u;
         void *p = ceesafe_vec_zeroed(&cap, n, sizeof(uint32_t), CEE_ALLOC_SYSTEM);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         v->ptr = (uint32_t *)p;
         v->cap = cap;
         v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
+        return ((ceeR_vE10AllocError){0});
     }
     ceeR_vE10AllocError room = ceeVR_VUu32S10SystemHeap(v, n - v->len);
     if (room.tag != 0) return room;
@@ -231,7 +231,7 @@ static ceeR_vE10AllocError ceeVZ_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v, u
 }
 
 static ceeO_u32 ceeVO_VUu32S10SystemHeap(ceeV_Uu32S10SystemHeap *v) {
-    if (v->len == 0u) return ((ceeO_u32){ .tag = 0 });
+    if (v->len == 0u) return ((ceeO_u32){0});
     v->len -= 1u;
     return ((ceeO_u32){ .tag = 1, .u.v_Some = { .f__0 = v->ptr[v->len] } });
 }
@@ -248,25 +248,25 @@ static ceeR_vE10AllocError ceeVP_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, u
         cee_usize cap = v->cap;
         void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, 1u, sizeof(uint32_t), CEE_ALLOC_SECRET);
         if (p == NULL) {
-            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+            return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         }
         v->ptr = (uint32_t *)p;
         v->cap = cap;
     }
     v->ptr[v->len] = x;
     v->len += 1u;
-    return ((ceeR_vE10AllocError){ .tag = 0 });
+    return ((ceeR_vE10AllocError){0});
 }
 
 static ceeR_vE10AllocError ceeVR_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, uint64_t extra) {
     if (extra > v->cap - v->len) {
         cee_usize cap = v->cap;
         void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(uint32_t), CEE_ALLOC_SECRET);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         v->ptr = (uint32_t *)p;
         v->cap = cap;
     }
-    return ((ceeR_vE10AllocError){ .tag = 0 });
+    return ((ceeR_vE10AllocError){0});
 }
 
 static ceeR_vE10AllocError ceeVE_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, uint32_t const *src, uint64_t n) {
@@ -285,16 +285,16 @@ static ceeR_vE10AllocError ceeVZ_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, u
     if (n <= v->len) {
         ceesafe_wipe((uint8_t *)&v->ptr[n], (v->len - n) * (uint64_t)sizeof *v->ptr);
         v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
+        return ((ceeR_vE10AllocError){0});
     }
     if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {
         cee_usize cap = 0u;
         void *p = ceesafe_vec_zeroed(&cap, n, sizeof(uint32_t), CEE_ALLOC_SECRET);
-        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         v->ptr = (uint32_t *)p;
         v->cap = cap;
         v->len = n;
-        return ((ceeR_vE10AllocError){ .tag = 0 });
+        return ((ceeR_vE10AllocError){0});
     }
     ceeR_vE10AllocError room = ceeVR_VUu32S10SecretHeap(v, n - v->len);
     if (room.tag != 0) return room;
@@ -310,7 +310,7 @@ static ceeR_vE10AllocError ceeVZ_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v, u
 }
 
 static ceeO_u32 ceeVO_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *v) {
-    if (v->len == 0u) return ((ceeO_u32){ .tag = 0 });
+    if (v->len == 0u) return ((ceeO_u32){0});
     v->len -= 1u;
     uint32_t cee_x = v->ptr[v->len];
     ceesafe_wipe((uint8_t *)&v->ptr[v->len], (uint64_t)sizeof *v->ptr);

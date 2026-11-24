@@ -174,7 +174,7 @@ static ceeR_Hi32E10AllocError ceeKI_Ki32S10SystemHeap(ceeK_i32S10SystemHeap *map
     } else {
         void *p = map->len < UINT32_MAX - 1u ? ceesafe_vec_grow(map->ptr, map->len, &map->cap, 1u, sizeof(ceeKS_Ki32S10SystemHeap), CEE_ALLOC_SYSTEM) : NULL;
         if (p == NULL) {
-            return ((ceeR_Hi32E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+            return ((ceeR_Hi32E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         }
         map->ptr = (ceeKS_Ki32S10SystemHeap *)p;
         index = (uint32_t)map->len;
@@ -198,7 +198,7 @@ static ceeO_Qi32 ceeKM_Ki32S10SystemHeap(ceeK_i32S10SystemHeap *map, cee_handle 
 }
 
 static ceeO_i32 ceeKR_Ki32S10SystemHeap(ceeK_i32S10SystemHeap *map, cee_handle h) {
-    if (!ceeKV_Ki32S10SystemHeap(map, h)) return ((ceeO_i32){ .tag = 0 });
+    if (!ceeKV_Ki32S10SystemHeap(map, h)) return ((ceeO_i32){0});
     map->ptr[h.index].gen += 1u;
     map->count -= 1u;
     if (map->ptr[h.index].gen != UINT32_MAX - 1u) {
@@ -216,7 +216,7 @@ static ceeR_usizeE10AllocError ceeSVP_Wi32S10SystemHeap(ceeSV_i32S10SystemHeap *
     _Static_assert(_Alignof(int32_t) <= _Alignof(cee_max_align_t), "ceesafec: StableVector<i32> needs over-aligned memory");
     int32_t *slot = (int32_t *)ceesafe_svec_slot(v->chunks, v->len, sizeof(int32_t), CEE_ALLOC_SYSTEM);
     if (slot == NULL) {
-        return ((ceeR_usizeE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_usizeE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *slot = x;
     v->len += 1u;

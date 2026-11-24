@@ -94,7 +94,7 @@ static ceeR_S4PairE10AllocError ceeF_make(CEE_UNUSED int32_t v_n_0) {
     CEE_TEMP ceeR_S4PairE10AllocError t_8;
     t_1 = (v_n_0 < ((int32_t)0));
     if (t_1) {
-        t_2 = ((ceeE_AllocError){ .tag = 0 });
+        t_2 = ((ceeE_AllocError){0});
         t_3 = ((ceeR_S4PairE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = t_2 } });
         t_4 = t_3;
         return t_4;

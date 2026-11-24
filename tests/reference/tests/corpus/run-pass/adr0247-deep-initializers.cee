@@ -1,0 +1,244 @@
+// ADR 0247: values of types nested past MSVC's limit on initializers (C1054 at 16 nested aggregates, cl 19.44). The
+// null of an optional, an enum's variant without a payload, a struct literal and a zeroed local of such a type are
+// written so that no initializer reaches into the type: windows.yml builds this program with cl.
+
+// A chain of twenty structs, each holding the next after a scalar: an initializer that leaves `inner` out, or gives it
+// a brace list, makes MSVC walk all twenty.
+struct L1 { x: i32; inner: L2; }
+struct L2 { x: i32; inner: L3; }
+struct L3 { x: i32; inner: L4; }
+struct L4 { x: i32; inner: L5; }
+struct L5 { x: i32; inner: L6; }
+struct L6 { x: i32; inner: L7; }
+struct L7 { x: i32; inner: L8; }
+struct L8 { x: i32; inner: L9; }
+struct L9 { x: i32; inner: L10; }
+struct L10 { x: i32; inner: L11; }
+struct L11 { x: i32; inner: L12; }
+struct L12 { x: i32; inner: L13; }
+struct L13 { x: i32; inner: L14; }
+struct L14 { x: i32; inner: L15; }
+struct L15 { x: i32; inner: L16; }
+struct L16 { x: i32; inner: L17; }
+struct L17 { x: i32; inner: L18; }
+struct L18 { x: i32; inner: L19; }
+struct L19 { x: i32; inner: L20; }
+struct L20 { x: i32; }
+
+// A chain whose first members are structs: `{0}` reaches its scalar by brace elision through all eighteen.
+struct F1 { inner: F2; x: i32; }
+struct F2 { inner: F3; x: i32; }
+struct F3 { inner: F4; x: i32; }
+struct F4 { inner: F5; x: i32; }
+struct F5 { inner: F6; x: i32; }
+struct F6 { inner: F7; x: i32; }
+struct F7 { inner: F8; x: i32; }
+struct F8 { inner: F9; x: i32; }
+struct F9 { inner: F10; x: i32; }
+struct F10 { inner: F11; x: i32; }
+struct F11 { inner: F12; x: i32; }
+struct F12 { inner: F13; x: i32; }
+struct F13 { inner: F14; x: i32; }
+struct F14 { inner: F15; x: i32; }
+struct F15 { inner: F16; x: i32; }
+struct F16 { inner: F17; x: i32; }
+struct F17 { inner: F18; x: i32; }
+struct F18 { x: i32; }
+
+// The first variant with a payload is the union's first member, which a variant without one zeroes.
+enum Node {
+    Leaf(L1),
+    Empty,
+    Pair(i32, L1),
+    Front(F1),
+}
+
+struct Holder {
+    a: i32;
+    deep: L1?;
+    node: Node;
+    front: F1?;
+}
+
+fn chain(v: i32) -> L1 => L1 {
+    x: v,
+    inner: L2 {
+        x: v + 1,
+        inner: L3 {
+            x: 0,
+            inner: L4 {
+                x: 0,
+                inner: L5 {
+                    x: 0,
+                    inner: L6 {
+                        x: 0,
+                        inner: L7 {
+                            x: 0,
+                            inner: L8 {
+                                x: 0,
+                                inner: L9 {
+                                    x: 0,
+                                    inner: L10 {
+                                        x: 0,
+                                        inner: L11 {
+                                            x: 0,
+                                            inner: L12 {
+                                                x: 0,
+                                                inner: L13 {
+                                                    x: 0,
+                                                    inner: L14 {
+                                                        x: 0,
+                                                        inner: L15 {
+                                                            x: 0,
+                                                            inner: L16 {
+                                                                x: 0,
+                                                                inner: L17 {
+                                                                    x: 0,
+                                                                    inner: L18 {
+                                                                        x: 0,
+                                                                        inner: L19 { x: 0, inner: L20 { x: v + 19 } },
+                                                                    },
+                                                                },
+                                                            },
+                                                        },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+};
+
+fn front(v: i32) -> F1 => F1 {
+    inner: F2 {
+        inner: F3 {
+            inner: F4 {
+                inner: F5 {
+                    inner: F6 {
+                        inner: F7 {
+                            inner: F8 {
+                                inner: F9 {
+                                    inner: F10 {
+                                        inner: F11 {
+                                            inner: F12 {
+                                                inner: F13 {
+                                                    inner: F14 {
+                                                        inner: F15 {
+                                                            inner: F16 {
+                                                                inner: F17 { inner: F18 { x: v + 17 }, x: 0 },
+                                                                x: 0,
+                                                            },
+                                                            x: 0,
+                                                        },
+                                                        x: 0,
+                                                    },
+                                                    x: 0,
+                                                },
+                                                x: 0,
+                                            },
+                                            x: 0,
+                                        },
+                                        x: 0,
+                                    },
+                                    x: 0,
+                                },
+                                x: 0,
+                            },
+                            x: 0,
+                        },
+                        x: 0,
+                    },
+                    x: 0,
+                },
+                x: 0,
+            },
+            x: 0,
+        },
+        x: 0,
+    },
+    x: v,
+};
+
+fn find(v: i32) -> L1? => if (v > 0) Some(chain(v)) else null;
+
+fn findFront(v: i32) -> F1? => if (v > 0) Some(front(v)) else null;
+
+fn describe(n: borrow Node) -> i32 => match (n) {
+    Node.Leaf(l) => l.x,
+    Node.Empty => -1,
+    Node.Pair(a, l) => a + l.inner.x,
+    Node.Front(f) =>
+        f.x + f.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.x,
+};
+
+fn pick(v: i32) -> Node {
+    if (v == 0) {
+        return Node.Empty;
+    }
+    if (v == 1) {
+        return Node.Leaf(chain(10));
+    }
+    if (v == 2) {
+        return Node.Pair(5, chain(20));
+    }
+    return Node.Front(front(30));
+}
+
+fn main() {
+    let none = find(0);
+    let some = find(3);
+    Console.writeLine(none.isNull());
+    match (some) {
+        Some(l) => {
+            Console.writeLine(
+                l.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.x,
+            );
+        }
+        null => { Console.writeLine("none"); }
+    }
+    for (v in 0..4) {
+        let n = pick(v);
+        Console.writeLine(describe(borrow n));
+    }
+    let h = Holder { a: 7, deep: null, node: Node.Empty, front: null };
+    Console.writeLine(h.a);
+    Console.writeLine(h.deep.isNull());
+    Console.writeLine(describe(borrow h.node));
+    Console.writeLine(h.front.isNull());
+    // Written in part, so declared zeroed: the zero helper, since `{0}` would reach eighteen structs deep.
+    var f = front(1);
+    f.x = 40;
+    f.inner.x = 2;
+    Console.writeLine(f.x + f.inner.x);
+    var l = chain(4);
+    l.inner.x = 9;
+    Console.writeLine(l.x + l.inner.x);
+    let ff = findFront(0);
+    Console.writeLine(ff.isNull());
+    let fs = findFront(2);
+    Console.writeLine(fs.isSome());
+    let a: [L1; 2] = [chain(1), chain(2)];
+    Console.writeLine(a[1].inner.x);
+}
+// expect-stdout: true
+// expect-stdout: 22
+// expect-stdout: -1
+// expect-stdout: 10
+// expect-stdout: 26
+// expect-stdout: 77
+// expect-stdout: 7
+// expect-stdout: true
+// expect-stdout: -1
+// expect-stdout: true
+// expect-stdout: 42
+// expect-stdout: 13
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 3

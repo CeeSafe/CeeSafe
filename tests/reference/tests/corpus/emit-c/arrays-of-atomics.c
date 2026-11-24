@@ -59,7 +59,7 @@ static CEE_UNUSED ceeT_AtomicU64 ceeM_9AtomicU64_constant(uint64_t);
 static CEE_UNUSED uint64_t ceeM_9AtomicU64_load(const ceeT_AtomicU64 *);
 static CEE_UNUSED void ceeM_9AtomicU64_store(const ceeT_AtomicU64 *, uint64_t);
 static CEE_UNUSED uint64_t * ceeM_9AtomicU64_cell(const ceeT_AtomicU64 *);
-static CEE_UNUSED ceeT_AtomicU64 ceeCB_1564(const void *, uint64_t);
+static CEE_UNUSED ceeT_AtomicU64 ceeCB_1580(const void *, uint64_t);
 
 static ceeT_Key ceeF_build(void) {
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 t_0 = 0;
@@ -73,7 +73,7 @@ static ceeT_Key ceeF_build(void) {
     CEE_TEMP ceeA4_S9AtomicU64 t_9;
     CEE_TEMP ceeT_Key t_10;
     CEE_TEMP ceeT_Key t_11;
-    t_0 = ceeCB_1564;
+    t_0 = ceeCB_1580;
     t_1 = ((ceeCE_1580){ .f_0code = t_0 });
     t_2 = &t_1.f_0code;
     t_3 = t_2;
@@ -86,7 +86,7 @@ static ceeT_Key ceeF_build(void) {
             break;
         }
         t_8 = &(*t_3);
-        t_4.e[t_5] = ceeCB_1564(t_8, t_5);
+        t_4.e[t_5] = ceeCB_1580(t_8, t_5);
         t_5 = ((uint64_t)(t_5 + ((uint64_t)1)));
     }
     t_9 = t_4;
@@ -163,7 +163,7 @@ static uint64_t * ceeM_9AtomicU64_cell(CEE_UNUSED const ceeT_AtomicU64 * v_this_
     return t_4;
 }
 
-static ceeT_AtomicU64 ceeCB_1564(const void *cee_env, CEE_UNUSED uint64_t v_i_1) {
+static ceeT_AtomicU64 ceeCB_1580(const void *cee_env, CEE_UNUSED uint64_t v_i_1) {
     CEE_UNUSED ceeCE_1580 * v_env_0 = (ceeCE_1580 *)(uintptr_t)cee_env;
     CEE_TEMP uint64_t t_2 = 0;
     CEE_TEMP ceeT_AtomicU64 t_4;

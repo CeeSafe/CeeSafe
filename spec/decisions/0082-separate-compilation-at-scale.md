@@ -678,8 +678,22 @@ workload: `parsing` is 1.145 with LTO and 1.141 without, `numeric` 1.055 and `la
 unit, `ceesafe_instances.c` and the runtime: LTO has little to join. `parsing`'s gap is the same without LTO, so it
 comes from splitting; its cause was not measured.
 
-**Stage B's gate with gcc is not met**: 1.76× the one-file CPU, against 1.28× with clang (§9.3 measured clang only).
-Where gcc's extra time goes was not measured; it is open.
+**Stage B's gate with gcc seemed missed** at 1.76× the one-file CPU (1.28× with clang; §9.3 measured clang only).
+It is the machine, not the split: rq has 4 cores of 2 threads, and 8 compiles at once share each core, so each one's
+CPU seconds grow while the work does not. User CPU of the split build by `--jobs` (each includes ceesafec emitting the
+C), against one file's 207.4 s (gcc) and 186.0 s (clang):
+
+| `--jobs` | gcc: wall / user | clang: wall / user |
+|---|---|---|
+| 1 | 210.7 s / 204.3 s (0.99×) | 146.9 s / 141.6 s (0.76×) |
+| 4 | 81.4 s / 230.4 s (1.11×) | 63.0 s / 157.8 s (0.85×) |
+| 8 | 73.7 s / 365.2 s (1.76×) | 57.3 s / 238.5 s (1.28×) |
+
+So compiled one at a time the units cost no more CPU than one file, and with one job per core 1.11× and 0.85×, within
+the gate. What was looked at first, and ruled out: copies of `static` functions in the objects (0.6 MB of local
+function code in all the split objects with gcc, mostly drop glue) and the program's size (gcc's split executable has
+9% more text). gcc's `-ftime-report`, summed over units compiled 8 at once, put the extra in code generation and
+parsing alike, as sharing cores would.
 
 ### 10.3 Not done
 

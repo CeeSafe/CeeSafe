@@ -208,7 +208,7 @@ fn checkAmbiguousImports(c: borrow mut Checker, unit: u32, identifiers: Slice<u3
             continue;
         }
         for (p in providers.view()) {
-            if (p.symbol != symbol || p.packages.length < 2 || declaredIn(c, package, symbol) != 0 ||
+            if (p.symbol != symbol || p.packages.length < 2 || declaredForFile(c, package, file, symbol) ||
                 declaredIn(c, none(), symbol) != 0) {
                 continue;
             }
@@ -756,7 +756,7 @@ fn declarePackageNames(c: borrow mut Checker) -> Result<void, AllocError> {
                         let f = c.front.ast.at(functions, j);
                         let symbol = c.front.ast.idents[c.front.ast.functions[f as usize].name as usize].symbol;
                         let visibility = c.front.ast.functions[f as usize].visibility;
-                        declarePackageName(c, package, symbol, isPublicVisibility(visibility))?;
+                        declarePackageName(c, package, file, symbol, visibility)?;
                     }
                 }
                 // An impl declares no name: its methods belong to a type declared elsewhere. (An inherent impl taken
@@ -766,7 +766,7 @@ fn declarePackageNames(c: borrow mut Checker) -> Result<void, AllocError> {
                 _ => {
                     let entry = c.front.ast.items[item as usize];
                     let symbol = c.front.ast.idents[entry.name as usize].symbol;
-                    declarePackageName(c, package, symbol, isPublicVisibility(entry.visibility))?;
+                    declarePackageName(c, package, file, symbol, entry.visibility)?;
                 }
             }
         }
@@ -790,15 +790,49 @@ fn declarePackageNames(c: borrow mut Checker) -> Result<void, AllocError> {
     return Ok();
 }
 
-/// Declared.TryAdd: the first declaration of a name in a package, and whether it is public. The core scope is
-/// package none, kept apart by its own key.
-fn declarePackageName(c: borrow mut Checker, package: u32, symbol: u32, isPublic: bool) -> Result<void, AllocError> {
+/// Declared.TryAdd: a declaration of a name in a package (in `file`), with its visibility: the value is 1 for a
+/// public item, 0 for another item of the package, 2 while only files' private items have the name, which each file
+/// keeps apart (ADR 0230: a package's items and each file's private items have scopes of their own). The core scope
+/// is package none, kept apart by its own key, and has one scope.
+fn declarePackageName(
+    c: borrow mut Checker,
+    package: u32,
+    file: u32,
+    symbol: u32,
+    visibility: Visibility,
+) -> Result<void, AllocError> {
     let key = packageKey(if (package == none()) 0xFFFFFFFE else package, symbol);
-    if (c.packageDeclared.find(key) != null) {
+    let isPublic = isPublicVisibility(visibility);
+    let isPrivate = package != none() && isPrivateVisibility(visibility);
+    let known = c.packageDeclared.get(key);
+    if (isPrivate) {
+        c.fileDeclared.put(fileKey(file, symbol), Word { value: 1 })?;
+        if (known != null) {
+            return Ok();
+        }
+        c.packageDeclared.put(key, Word { value: 2 })?;
+        return c.declaredOrder.push(DeclaredEntry { package: package, symbol: symbol, isPublic: false });
+    }
+    let value: u64 = match (known) {
+        Some(w) => w.value,
+        null => 2,
+    };
+    if (value == 1 || (value == 0 && !isPublic)) {
         return Ok();
     }
     c.packageDeclared.put(key, Word { value: if (isPublic) 1 else 0 })?;
     return c.declaredOrder.push(DeclaredEntry { package: package, symbol: symbol, isPublic: isPublic });
+}
+
+/// Is `symbol` a name file `file` of package `package` declares or sees of its package: one of the package's items,
+/// or a private item of the file (ADR 0230)?
+fn declaredForFile(c: borrow Checker, package: u32, file: u32, symbol: u32) -> bool {
+    let key = packageKey(if (package == none()) 0xFFFFFFFE else package, symbol);
+    let shared = match (c.packageDeclared.get(key)) {
+        Some(w) => w.value != 2,
+        null => false,
+    };
+    return shared || c.fileDeclared.find(fileKey(file, symbol)) != null;
 }
 
 struct DeclaredEntry {
@@ -811,7 +845,7 @@ struct DeclaredEntry {
 fn declaredIn(c: borrow Checker, package: u32, symbol: u32) -> u32 {
     let key = packageKey(if (package == none()) 0xFFFFFFFE else package, symbol);
     return match (c.packageDeclared.get(key)) {
-        Some(w) => if (w.value == 1) 2u32 else 1u32,
+        Some(w) => if (w.value == 1) 2u32 else 1u32, // a private item is not public (2 in the map)
         null => 0u32,
     };
 }
@@ -837,18 +871,53 @@ fn isPublicEntity(c: borrow Checker, entity: Entity) -> bool {
 fn itemIsPublic(c: borrow Checker, item: u32) -> bool =>
     item != none() && isPublicVisibility(c.front.ast.items[item as usize].visibility);
 
-/// The item a name means in the current file (Item, §2): the package's own; for a dotted name `dep.X`, the
-/// dependency's item; then the file's imports; then lib/core's.
+/// The item a name means in the current file (Item, §2): the file's own private item (ADR 0230); the package's own;
+/// for a dotted name `dep.X`, the dependency's item; then the file's imports; then lib/core's. Last, a private item of
+/// another file of the package (or of the dependency), which the name cannot mean: it is found so that the use is
+/// N0296 (or N0312), saying whose it is, and not an unknown name (ADR 0109 §2.4).
 fn packageItem(c: borrow Checker, symbol: u32) -> Entity {
     let package = currentPackage(c);
     if (package == none()) {
         return foundEntity(c.coreItems, Word { value: symbol as u64 });
+    }
+    let ofFile = foundEntity(c.fileItems, fileKey(c.file, symbol));
+    match (ofFile) {
+        Entity.None => {}
+        _ => { return ofFile; }
     }
     let mine = foundEntity(c.packageItems, packageKey(package, symbol));
     match (mine) {
         Entity.None => {}
         _ => { return mine; }
     }
+    let found = visiblePackageItem(c, package, symbol);
+    match (found) {
+        Entity.None => {}
+        _ => { return found; }
+    }
+    if (c.builtins.find(Word { value: symbol as u64 }) != null) {
+        return Entity.None; // a built-in function of that name (`min`) is what the name means here (Checker.lookup)
+    }
+    return foundEntity(c.privateItems, packageKey(package, symbol));
+}
+
+/// Is `entity`, found by packageItem, one the current file may name: not another file's private item?
+fn isNameableHere(c: borrow Checker, entity: Entity) -> bool {
+    let file = privateFileOf(c, entity);
+    return file == none() || file == c.file;
+}
+
+/// Package `package`'s item `symbol`, or else its first private item of that name (ADR 0230).
+fn sharedOrPrivate(c: borrow Checker, package: u32, symbol: u32) -> Entity {
+    let found = foundEntity(c.packageItems, packageKey(package, symbol));
+    return match (found) {
+        Entity.None => foundEntity(c.privateItems, packageKey(package, symbol)),
+        _ => found,
+    };
+}
+
+/// packageItem after the file's and the package's own items: `dep.X`, the imports, lib/core.
+fn visiblePackageItem(c: borrow Checker, package: u32, symbol: u32) -> Entity {
     let text = c.name(symbol);
     var dot = none();
     for (k in 0..text.length) {
@@ -863,7 +932,7 @@ fn packageItem(c: borrow Checker, symbol: u32) -> Entity {
         }
         let rest = c.front.symbols.find(text[((dot as usize) + 1)..]);
         return match (rest) {
-            Some(s) => foundEntity(c.packageItems, packageKey(dependency, s.id)),
+            Some(s) => sharedOrPrivate(c, dependency, s.id),
             null => Entity.None,
         };
     }
@@ -871,7 +940,10 @@ fn packageItem(c: borrow Checker, symbol: u32) -> Entity {
         if (imported.file != c.file || (imported.item != none() && imported.item != symbol)) {
             continue;
         }
-        let found = foundEntity(c.packageItems, packageKey(imported.package, symbol));
+        let found = if (imported.item != none()) sharedOrPrivate(c, imported.package, symbol) else foundEntity(
+            c.packageItems,
+            packageKey(imported.package, symbol),
+        );
         let isNone = match (found) {
             Entity.None => true,
             _ => false,

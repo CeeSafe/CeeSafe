@@ -1,0 +1,35 @@
+// ADR 0230: each file's private items have a scope of their own, apart from the package's items; in one file,
+// two items of one name are still N0201, private or not, and in either order (§2.2). Two files that each declare a
+// private item of one name are tests/packages/file-private-names (tools/package_tests.py check 46).
+private fn helper() -> i32 => 1;
+
+fn helper() -> i32 => 2; // error[N0201]
+
+fn other() -> i32 => 3;
+
+private fn other() -> i32 => 4; // error[N0201]
+
+private struct Row {
+    v: i32;
+}
+
+private enum Row { // error[N0201]
+    A,
+}
+
+private const LIMIT: i32 = 1;
+
+private static LIMIT: i32 = 2; // error[N0201]
+
+interface Shape {
+    fn size(borrow this) -> i32;
+}
+
+private interface Shape { // error[N0201]
+    fn area(borrow this) -> i32;
+}
+
+fn main() {
+    let r = Row { v: helper() + other() + LIMIT };
+    Console.writeLine(r.v);
+}

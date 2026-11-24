@@ -1,0 +1,4 @@
+[package]
+name = "fileprivatenames"
+version = "0.1.0"
+kind = "executable"

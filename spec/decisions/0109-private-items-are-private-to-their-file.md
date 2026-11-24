@@ -177,3 +177,10 @@ test `private-items` has the case (a method and a static function of an enum in 
 Where two files each declare a `private` item of one name, the second declaration is N0201 (§2: one scope), and
 the uses of the name in that second file are not also reported as N0296: the file means its own item, and one error
 says so.
+
+## Addendum: each file's private names (ADR 0230)
+
+ADR 0230 (2026-11-24) takes the step §2.4 left for later: each file's private items are a scope of their own, so two
+files may each declare a private item of one name, and a private item hides a package item or a lib/core item of its
+name in its own file only. §2.4's two consequences ("two files may not each have a `private fn helper`"; a private
+item hides lib/core's in every file) no longer hold; the rest of this ADR stands.

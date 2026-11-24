@@ -63,7 +63,7 @@ fn declareBuiltinTypes(c: borrow mut Checker) -> Result<void, AllocError> {
 }
 
 /// N0201 for a struct or enum named like a built-in type (both reasons, in DeclareStruct's and DeclareEnum's order).
-fn checkTypeItemName(c: borrow mut Checker, ident: Ident) -> Result<bool, AllocError> {
+fn checkTypeItemName(c: borrow mut Checker, ident: Ident, isPrivate: bool) -> Result<bool, AllocError> {
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(ident.symbol))?;
     if (c.types.lookup(text.view()) != none()) {
@@ -74,7 +74,7 @@ fn checkTypeItemName(c: borrow mut Checker, ident: Ident) -> Result<bool, AllocE
         c.error(duplicateItem(), ident.start, ident.end, message)?;
         return Ok(false);
     }
-    if (isDeclared(c, ident.symbol)) {
+    if (isDeclaredAs(c, ident.symbol, isPrivate)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, text.view())?;
@@ -98,7 +98,7 @@ fn declareStruct(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     };
     checkRegionParameters(c, s.regionParameters, s.typeParameters)?;
     checkRegionBounds(c, s.regionParameters, false)?;
-    if (!checkTypeItemName(c, ident)?) {
+    if (!checkTypeItemName(c, ident, isPrivateVisibility(entry.visibility))?) {
         return Ok();
     }
     var name = Vector<u8>.create();
@@ -146,7 +146,7 @@ fn declareEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     };
     checkRegionParameters(c, regions, parameters)?;
     checkRegionBounds(c, regions, false)?;
-    if (!checkTypeItemName(c, ident)?) {
+    if (!checkTypeItemName(c, ident, isPrivateVisibility(entry.visibility))?) {
         return Ok();
     }
     var name = Vector<u8>.create();

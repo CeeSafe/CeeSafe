@@ -222,21 +222,23 @@ before a field, a method or a static function inside a struct. A private field c
 a struct literal only in the file that declares the struct.
 
 ::: tip Rule
-A `private` item, field or method can be used only in the file that declares it. Its name still belongs to the
-whole package: two files of a package cannot each declare a `private fn helper`.
+A `private` item, field or method can be used only in the file that declares it. A private item's name belongs to
+its file: two files of a package may each declare a `private fn helper`, and each calls its own.
 
 *Specification: `type-system.md` §2, §12.*
 :::
 
-A private item is hidden from the other files, and it is not removed from the package's one scope. The compiler
-finds `writeLabel` from any file and then refuses the use, which is why its message can name the file that owns
-the function. It is also why a second `writeLabel` in another file is the error `N0201` of the first mistake
-below, private or not.
+A private item is hidden from the other files, and each file's private items are a scope of their own beside the
+package's. When another file names `writeLabel` and has nothing else of that name, the compiler finds the private
+one and refuses the use, which is why its message can name the file that owns the function. A second `writeLabel`
+in another file is allowed if either one is private; two internal ones are the error `N0201` of the first mistake
+below. Inside its file a private item even hides a package item of the same name.
 
 ## Mistakes
 
 ::: warning Mistake: the same name in two files
-Two files of one package cannot both declare `printLine`, even in different directories. A file is not a scope.
+Two files of one package cannot both declare an internal `printLine`, even in different directories. A file is
+not a scope for its internal items; it is one for its `private` items.
 :::
 
 <span class="listing-caption"><strong>Listing 7-11</strong>, <code>scores/src/extra.cee</code>: A second <code>printLine</code>, added beside the files of Listings 7-4 to 7-6. The package does not compile.</span>
@@ -256,7 +258,7 @@ src/output/lines.cee:1:4: error[N0201]: 'printLine' is already defined
 ```
 
 The compiler reads the files in the order of their paths, so `src/extra.cee` comes first and the message points
-at the other one. Give one of the two functions another name.
+at the other one. Give one of the two functions another name, or make each `private` to its file.
 
 ::: warning Mistake: calling another file's private function
 A private function is a helper of its file. From another file of the package the name is found, and refused.
@@ -351,13 +353,14 @@ A directory is not a package: the whole tree under `src/` is one. A capital firs
 
 ::: details Coming from TypeScript or Python
 A file is not a module. Two files of a package do not `import` each other and do not `export` anything: they are
-already one scope. Top-level names must therefore be unique in the package.
+already one scope. Top-level names must therefore be unique in the package, except `private` ones, which each file
+keeps to itself.
 :::
 
 ::: details Coming from C
 There are no headers and no forward declarations. A function can be called from any file of the package, above or
-below where it is declared. `private fn` does the work of a `static` function in a `.c` file, with one difference:
-two files cannot each have a private function of the same name.
+below where it is declared. `private fn` does the work of a `static` function in a `.c` file: two files may each
+have a private function of the same name, and each calls its own.
 :::
 
 ## Summary
@@ -365,10 +368,10 @@ two files cannot each have a private function of the same name.
 - A package's source is every `.cee` file under `src/` (or the directories `sources` names).
 - All files of a package share one scope: no imports, no exports, no order.
 - Directories and file names under `src/` mean nothing to the compiler.
-- A name is declared once in a package (`N0201`).
+- A name is declared once in a package (`N0201`), except a `private` one, which is declared once in its file.
 - Without `public` an item, a field or a method is internal to its package; using it from another is `N0312`.
 - A `private` item, field or method belongs to the file that declares it; using it from another file is `N0296`.
-  Its name is still taken in the whole package.
+  Two files may each have a private item of one name, and each file means its own (ADR 0230).
 - A public item's signature may name only public types (`N0314`).
 
 Next: [Imports](./ch07-03-imports), on how a package names the public items of another.

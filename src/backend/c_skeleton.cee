@@ -394,6 +394,14 @@ fn appendStaticName(c: borrow Checker, out: borrow mut Vector<u8>, item: u32) ->
         return appendBytes(out, c.hir.textOf(symbol)); // C data's own symbol (ADR 0080 §3.2)
     }
     appendText(out, "ceeS_")?;
+    // A package's file may have a private static of a name another file's private static has (ADR 0230).
+    for (entry in c.statics.view()) {
+        if (entry.hir == item && entry.item != none() && entry.file != none() &&
+            !c.fileIsLibrary[entry.file as usize] &&
+            isPrivateVisibility(c.front.ast.items[entry.item as usize].visibility)) {
+            appendPrivateMark(out, entry.file)?;
+        }
+    }
     for (b in c.name(c.hir.statics[item as usize].name)) {
         out.push(if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) b else '_')?;
     }

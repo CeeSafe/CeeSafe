@@ -35,7 +35,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",
     200 => "Name not found (variable, function, or built-in member)",
     201 =>
-        "Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2); or an item given a reserved built-in name (`type-system.md` §2)",
+        "Item defined twice in one scope: the package's `public` and `internal` items, or one file's `private` items with the package's items of that file (two files may each have a private item of one name, ADR 0230; a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2); or an item given a reserved built-in name (`type-system.md` §2)",
     202 => "Parameter declared twice",
     203 => "Local redeclares a local or parameter in scope (no shadowing of locals)",
     204 => "Unknown type name",
@@ -159,7 +159,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     295 =>
         "An operation whose effect (`sleep`, `alloc`, `suspend`) the context forbids: in an `@context(atomic)` or `@context(irq)` function, in an async fn or async closure (`sleep`; type-system.md §40.1), while an `@context(atomic)` value (a spin-lock guard) is live (`sleep`, `suspend`), or beyond a CeeSafe function's `@effects` bound (type-system.md §32); a closure body beyond its type's effect list, or a named function with effects its expected function type's list lacks (§36.3)",
     296 =>
-        "A `private` field named outside the source file that declares its struct: read, assigned, borrowed or given in a literal (type-system.md §12); or, in another file of its package, a `private` function, struct, enum, interface, constant or static, or a `private` method, static function or associated constant (type-system.md §2, ADR 0109)",
+        "A `private` field named outside the source file that declares its struct: read, assigned, borrowed or given in a literal (type-system.md §12); or, in another file of its package, a `private` function, struct, enum, interface, constant or static that nothing else of that name visible in the file shadows (a file's own private item, the package's, an import's or lib/core's comes first, ADR 0230), or a `private` method, static function or associated constant (type-system.md §2, ADR 0109)",
     297 => "A float type, literal or `fromBits` in a build with `--no-float` (type-system.md §35.9)",
     298 =>
         "A function that cannot be a function value: an `extern` or `unsafe` function, one with region parameters or whose flows store one argument's loans through another (ADR 0131 §2.10), `main`, or an async fn other than as the argument of an `@effectsOf` parameter (type-system.md §36.1, §32.5)",

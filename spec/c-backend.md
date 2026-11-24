@@ -242,6 +242,16 @@ dependency's `geometry.Point`, and the lengths keep a package `geo_x`'s `P` apar
 header and in exports' prototypes, while its internal struct stays `ceeE_3geo_Shade`. Those names have one declaration
 in a program (N0201).
 
+**Private items** (ADR 0230): each file of a package may declare a `private` top-level item of a name another
+file's private item has (`type-system.md` §2), so a private item's C name carries its file's number in the build:
+`00<n>_` before the name, `ceeF_003_appendInteger`, `ceeT_004_Row`, `ceeM_004_3Row_value`, `ceeG_003_5twice1i64`,
+a mangled `S004_3Row`, `ceeD_004_3Row`, a private interface's `dyn` code `D004_5Shape`, `ceeS_003_TABLE`. Every
+private item has the mark, whether or not another has its name, so an item's C name does not depend on the other
+files. No other name starts with `00` where the mark goes: a dependency's begins with its package name's length,
+never `0`, and in a name written with its length with a single `0` then a length. The entry function and the
+names C itself gives (an extern function's C symbol, an `@export` name, a `@repr` type's C interface name) have no
+mark: those stay one namespace (N0201).
+
 Before M7d, top-level functions were `cee_<name>`. A function named `add_i32` then collided with
 the runtime's `cee_add_i32`, and the C failed to compile. The random program generator found this,
 and `run-pass/runtime-names.cee` keeps it fixed.

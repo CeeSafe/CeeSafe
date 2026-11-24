@@ -146,6 +146,8 @@ fn checkProgramWith(
         embeddedFiles: Vector<EmbeddedFile>.create(),
         noFloat: noFloat,
         packageItems: Map<Word, Entity>.create(),
+        fileItems: Map<Word, Entity>.create(),
+        privateItems: Map<Word, Entity>.create(),
         coreItems: Map<Word, Entity>.create(),
         builtins: Map<Word, u32>.create(),
         builtinNames: Vector<u32>.create(),
@@ -274,6 +276,7 @@ fn checkProgramWith(
         blockValueType: none(),
         blockValueResult: none(),
         packageDeclared: Map<Word, Word>.create(),
+        fileDeclared: Map<Word, Word>.create(),
         tryConversions: Map<Word, Word>.create(),
         packageSymbols: Map<Word, Word>.create(),
         uncheckedLibrary: Vector<bool>.create(),
@@ -540,8 +543,14 @@ fn isReservedName(c: borrow mut Checker, ident: u32) -> Result<bool, AllocError>
     return Ok(true);
 }
 
-/// Own.ContainsKey(name) || (not lib/core && _core.Items.ContainsKey(name)) (IsDeclared).
-fn isDeclared(c: borrow Checker, symbol: u32) -> bool {
+/// Is `symbol` taken in the current file for an item that is not private (IsDeclared)? See isDeclaredAs.
+fn isDeclared(c: borrow Checker, symbol: u32) -> bool => isDeclaredAs(c, symbol, false);
+
+/// Would an item named `symbol`, `private` or not, declared in the current file be a second one (N0201)? A
+/// package's items share one scope, and each file's private items have one of their own (ADR 0230): a private item
+/// meets the package's items of its own file and its file's private ones; any other meets the package's items and
+/// the current file's private ones. The entry function's name keeps one scope in a package, private or not.
+fn isDeclaredAs(c: borrow Checker, symbol: u32, isPrivate: bool) -> bool {
     let key = Word { value: symbol as u64 };
     if (isLibraryFile(c)) {
         return c.coreItems.find(key) != null;
@@ -549,13 +558,54 @@ fn isDeclared(c: borrow Checker, symbol: u32) -> bool {
     // A package's item may have a library item's name: it shadows it in the package, and the library's own code still
     // finds its own (packageItem looks in the package first; a library file only in the libraries). So a name added
     // to lib/core or lib/std is not a source change (ADR 0075 §5).
-    return c.packageItems.find(packageKey(currentPackage(c), symbol)) != null;
+    let package = currentPackage(c);
+    let shared = foundEntity(c.packageItems, packageKey(package, symbol));
+    let isShared = match (shared) {
+        Entity.None => false,
+        _ => true,
+    };
+    if (c.fileItems.find(fileKey(c.file, symbol)) != null) {
+        return true;
+    }
+    if (!isPrivate || isEntryName(c, symbol)) {
+        return isShared;
+    }
+    return isShared && entityFileOf(c, shared) == c.file;
 }
 
+/// The key of a file's private item in Checker.fileItems: the file and the name (ADR 0230).
+fn fileKey(file: u32, symbol: u32) -> Word => Word { value: ((file as u64) << 32) | (symbol as u64) };
+
+/// Is `symbol` the entry function's name (`main`, or the one `--entry` gives)?
+fn isEntryName(c: borrow Checker, symbol: u32) -> bool => sameBytes(c.name(symbol), c.entryName.view());
+
+/// The file an item was declared in, or none.
+fn entityFileOf(c: borrow Checker, entity: Entity) -> u32 {
+    match (entity) {
+        Entity.Function(f) => { return c.hir.functions[f as usize].file; }
+        Entity.GenericFunction(g) => { return c.genericFunctions[g as usize].file; }
+        Entity.Struct(s) => { return c.structs[s as usize].file; }
+        Entity.Enum(e) => { return c.enums[e as usize].file; }
+        Entity.Interface(i) => { return c.interfaces[i as usize].file; }
+        Entity.Constant(k) => { return c.constants[k as usize].file; }
+        Entity.Static(s) => { return c.statics[s as usize].file; }
+        _ => { return none(); }
+    }
+}
+
+/// Own: the item `symbol` of the current file's package, or of lib/core in a library file. A private item of a
+/// package's file is the file's (ADR 0230), and the first of each name is also kept for N0296 in the other files.
 fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, AllocError> {
     let key = Word { value: symbol as u64 };
     if (isLibraryFile(c)) {
         c.coreItems.put(key, entity)?;
+    } else if (privateFileOf(c, entity) != none() && !isEntryName(c, symbol)) {
+        let package = currentPackage(c);
+        c.fileItems.put(fileKey(c.file, symbol), entity)?;
+        if (c.privateItems.find(packageKey(package, symbol)) == null) {
+            c.privateItems.put(packageKey(package, symbol), entity)?;
+        }
+        c.packageSymbols.put(key, key)?;
     } else {
         c.packageItems.put(packageKey(currentPackage(c), symbol), entity)?;
         c.packageSymbols.put(key, key)?;
@@ -581,7 +631,7 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     if (isReservedName(c, entry.name)?) {
         return Ok();
     }
-    if (isDeclared(c, id.symbol)) {
+    if (isDeclaredAs(c, id.symbol, isPrivateVisibility(entry.visibility))) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, c.name(id.symbol))?;

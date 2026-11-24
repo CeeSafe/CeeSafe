@@ -246,7 +246,8 @@ uint32_t ceesafe_thread_cpu_count(void) {
     return online > 0 ? (uint32_t)online : 1u;
 #else
 #if defined(__linux__)
-    for (int cpus = 1024; cpus <= 65536; cpus *= 2) {
+    /* size_t, as CPU_ALLOC takes: an int there is -Wsign-conversion under gcc's -Werror (Linux). */
+    for (size_t cpus = 1024; cpus <= 65536; cpus *= 2) {
         cpu_set_t *set = CPU_ALLOC(cpus);
         if (set == NULL) {
             break;

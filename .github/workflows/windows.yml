@@ -99,6 +99,10 @@ jobs:
         if: always()
         shell: bash
         run: python tools/child_check.py --compiler seed/ceesafec.exe
+      - name: What a child receives from Process.run, capture and spawn (type-system.md §26.5)
+        if: always()
+        shell: bash
+        run: python tools/process_check.py --compiler seed/ceesafec.exe
       - name: Named shared memory (ADR 0172)
         if: always()
         shell: bash

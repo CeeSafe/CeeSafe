@@ -3,8 +3,8 @@
 - Status: **Accepted** by the owner, 2026-11-21 ("Accept all as recommended": every question as §5 or §6 recommends; release order: a patch first, then the next minor). Proposed the same day. Raised by CosmoStore's CEESAFE_GAPS G35 and G40
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`): its Iceberg table maintenance (CosmoStore ADR-0086) reads
   Avro and Parquet that other writers compressed, its compaction (ADR-0098) was designed around never
-  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`. Phase 2 implemented for 0.94.0: `Snappy`, both ways, and `Snappy.length`. Phase 3 implemented for 0.94.4: `Zstd.decompress`, `ZstdDecoder` and `Xxh64`.
-- Scope: `lib/std` (new `compress_deflate.cee`, `compress_snappy.cee`, `compress_zstd.cee`; `Adler32`
+  decompressing a page, and its inventory reports (ADR-0074) are gzip files of stored blocks. CosmoStore calls no C. Phase 1 implemented for 0.90.0: deflate, zlib and gzip both ways, `Inflater`, `Deflater`, `Adler32`. Phase 2 implemented for 0.94.0: `Snappy`, both ways, and `Snappy.length`. Phase 3 implemented for 0.94.4: `Zstd.decompress`, `ZstdDecoder` and `Xxh64`. Phase 4 implemented for 0.95.1: `Zstd.compress` and `ZstdEncoder`, at levels 1 to 9 (the owner's choice, "Decided for phase 4" below).
+- Scope: `lib/std` (new `compress_deflate.cee`, `compress_snappy.cee`, `compress_zstd.cee`, `compress_zstd_encoder.cee`; `Adler32`
   and `Xxh64` added to `checksums.cee`; `Crc32` is ADR 0194's, their tables by `tools/gen_checksums.py`), `spec/api/std.md`, the guide's
   built-in types page and the book's Appendix on lib/std, `tools/oracles/`, the corpus, a fuzzer under `tests/fuzz/`,
   `benchmarks/`. No language, checker, emitter, runtime or interpreter change.
@@ -88,8 +88,8 @@ public fn compress(input: Slice<u8>, level: u32, out: borrow mut Vector<u8>) -> 
   which reports how much it read.
 - **Levels:** deflate's 0 (stored blocks) to 9, as zlib's in meaning: 1 to 3 a single hash probe and greedy
   matching, 4 to 9 hash chains, lazy matching and longer searches; 6 is the default the documentation names.
-  Snappy has one level (the argument is ignored and documented so). Zstd 1 to 3 (phase 4). A level above the range is
-  its highest.
+  Snappy has one level (the argument is ignored and documented so). Zstd 1 to 9 (phase 4; "1 to 3" until the owner
+  chose 1 to 9, "Decided for phase 4"), 0 its default, 3. A level above the range is its highest.
 - **Snappy `length(input) -> usize?`** reads the preamble alone, so a reader can size a buffer or refuse early.
 
 ### 2.3 Streams
@@ -151,7 +151,8 @@ a table fallback. This ADR uses it, and phase 1 needs 0194's `Crc32` first.
    inventory), what httpserver and `web_ws` do by hand, and the base the others' tests reuse.
 2. **Snappy, both ways:** small, and Spark's default.
 3. **The zstd decoder,** with `Xxh64`: PyIceberg's and Iceberg's default, the largest gap for reading.
-4. **A zstd encoder at levels 1 to 3** (zstd's `fast` and `dfast` strategies), later: only re-encoding compaction
+4. **A zstd encoder at levels 1 to 9** (zstd's `fast`, `dfast`, `greedy`, `lazy` and `lazy2` strategies; 1 to 3, `fast`
+   and `dfast`, until "Decided for phase 4"), later: only re-encoding compaction
    needs it, and CosmoStore can write snappy or gzip pages until then (Question 4).
 
 ## 3. Consequences
@@ -233,7 +234,7 @@ its deflate about 3,400; zstd's educational decoder about 2,300. Days are an age
 | 1 | first minor after acceptance | `Adler32` (with 0194's `Crc32`); `Deflate`/`Zlib`/`Gzip`; `Inflater` (table-driven, streaming, `setWindow`); `Deflater` (levels 0 to 9, dynamic Huffman, length-limited codes, sync flush) | 2,200 to 2,800 | 1,200 | 5 to 7 |
 | 2 | next minor | `Snappy` encode and decode, `length` | 400 to 600 | 500 | 1 to 2 |
 | 3 | next minor | `Zstd.decompress`, `ZstdDecoder`, `Xxh64`: frames, literals (Huffman, 4 streams), FSE, sequences, repeat offsets | 2,000 to 2,600 | 1,200 | 6 to 9 |
-| 4 | later, on request | `Zstd.compress` levels 1 to 3, `ZstdEncoder`: match finders, FSE and Huffman encoders, block splitting | 2,500 to 3,500 | 700 | 8 to 12 |
+| 4 | later, on request | `Zstd.compress` levels 1 to 9 (1 to 3 as proposed), `ZstdEncoder`: match finders, FSE and Huffman encoders, block splitting | 2,500 to 3,500 | 700 | 8 to 12 |
 
 Each phase is its own branch (`impl/0196-n`), passes the contract suite, the corpus compiled and interpreted, and
 CosmoStore's suite with the new API, and is recorded in ROADMAP §10 with the commands and results. Phase 1 also
@@ -264,6 +265,25 @@ adds, in CosmoStore's repository, the change that drops its copies; CeeSafe.Web'
 7. **zstd's golden test files:** vendor them under BSD with zstd's notice (recommended), or only cases generated
    from libzstd?
    **Recommended:** vendor them; they hold the corner cases libzstd's own encoder never writes.
+
+## Decided for phase 4
+
+The owner chose, on 2026-11-24, for CosmoStore's M25 (its ADR-0115: "A: ZSTD written", levels "1 to 9", the release
+"Here, by release.md"), and then the four questions phase 4 left open, each as recommended:
+
+1. **Levels 1 to 9,** amending §2.2, §2.6 and §5's 1 to 3; a level above 9 is 9. **Level 0 is zstd's default, 3**, as
+   libzstd's `ZSTD_CLEVEL_DEFAULT`, so a table's level passes through as libzstd reads it.
+2. **`Zstd.compress` writes no content checksum,** as Parquet's and Avro's writers (libzstd's default), so §2.2's
+   signature stays; the stream takes the choice.
+3. **`ZstdEncoder` ships in phase 4, shaped as `Deflater`:** `create(level: u32, checksum: bool) -> Result<ZstdEncoder,
+   AllocError>`, `update(borrow mut this, input, out: borrow mut Vector<u8>)`, `flush` (writes what it holds as
+   blocks, so a reader decodes all given so far: libzstd's `ZSTD_e_flush`) and `finish` (ends the frame; the next
+   `update` begins another). No stated (pledged) content size for now.
+4. **Windows as libzstd's `clevels.h` for each level,** capped by the input's size in the whole-buffer call. The
+   question as put named 4 MiB at levels 8 and 9; `clevels.h` has 2 MiB (a log of 21) at level 8 and 4 MiB at 9, and
+   that is what is built (As built).
+
+Speed stays reported, not a gate (Question 6).
 
 ## As built (0.90.0, phase 1)
 
@@ -389,3 +409,58 @@ adds, in CosmoStore's repository, the change that drops its copies; CeeSafe.Web'
     whole buffer. There is no zstd encoder for round trips and no second decoder, unlike deflate's and snappy's.
     985,216 inputs in 10 minutes under ASan and UBSan on the M1, none failing. A panic it found while being written
     (a literals header of 5 bytes read as 8) was fixed before the first commit.
+
+## As built (0.95.1, phase 4)
+
+- **`Zstd.compress`** and **`ZstdEncoder`** are `lib/std/compress_zstd_encoder.cee`, 1,811 lines (below §5's 2,500 to
+  3,500, in part because `huffmanLengths` is deflate's encoder's and the code tables are the decoder's).
+- **Levels:** libzstd's `clevels.h` for levels 1 to 9, by the input's size as libzstd chooses (four tables: above
+  256 KiB, up to 256, 128 and 16 KiB), and each log cut to what the size can use, as `ZSTD_adjustCParams`; a stream,
+  of unknown size, has the first table. The strategies by name: `fast` and `dfast` as libzstd 1.5.7's loops
+  (`fast` taking positions in pairs, with its step growing every 128 bytes that find nothing), `greedy`, `lazy` and
+  `lazy2` over hash chains (libzstd's `ZSTD_HcFindBestMatch` and its gains for a later match, and its "limited update
+  after a very long match" at a block's start). Level 9 for 16 KiB, libzstd's `btlazy2`, is `lazy2`. Windows as
+  decided: 512 KiB at level 1, 1 MiB at 2, 2 MiB at 3 to 8 (a log of 21 at level 8, as `clevels.h` has it, not the
+  4 MiB the question as put named), 4 MiB at 9.
+- **Blocks:** 128 KiB, the last shorter; RLE when every byte is the same; else compressed when that saves more than
+  libzstd's least gain (`srcSize / 64 + 2`), else raw. Literals: raw below 64 or when Huffman does not save that gain,
+  RLE, else Huffman in one stream below 256 literals and four above, the code limited to 11 bits (libzstd's table log
+  rule), its weights described with FSE (two states, a log of at most 6) or 4 bits each, whichever is shorter.
+  Sequences: each field's table predefined, RLE, or described in the block, whichever costs fewer bits by an estimate
+  in 256ths of a bit; repeat offsets wherever an offset is one of the decoder's three. There are no repeated tables
+  (Huffman's treeless literals, FSE's repeat mode) and no block splitting inside 128 KiB, which libzstd 1.5.7 does: the
+  sizes did not need them.
+- **Memory:** `Zstd.compress` reads its input where it is (up to 2 GiB; above, as a stream that states the size), and
+  allocates the level's tables cut to the input's size and a block's scratch, about 1.5 MiB for 1 MiB at level 3.
+  `ZstdEncoder.create` allocates the level's tables and a block's scratch, 0.8 MiB at level 1 to 12.8 MiB at 9; its
+  buffer of history grows as input comes, to twice the window, and slides by a multiple of the chain's size. After an
+  `AllocError` a stream's frame cannot be finished.
+- **Behaviour §2 did not say:**
+  - the empty input is libzstd's frame byte for byte (a single segment of size 0, an empty raw last block);
+  - `finish` with nothing held writes an empty raw last block; `flush` with nothing held writes nothing;
+  - RLE blocks of exactly 128 KiB are written: libzstd's stream reads them. Phase 3 recorded that it refuses them,
+    but that was `tools/oracles/zstd_model.py`'s reading of the stream, which stopped when the last call filled its
+    128 KiB of output exactly; fixed here, codec_check's libzstd differences from the model went from 183 to the 4 of
+    the model's STRICTER refusals.
+- **Sizes** against libzstd 1.5.7 at the same level, over codec_check's inputs (the six shapes at 28 sizes up to
+  1 MiB and two Parquet-like pages): 1.0001, 1.0006, 1.0029, 1.0027, 0.9998, 1.0000, 0.9993, 0.9994 and 0.9996 at
+  levels 1 to 9; the Parquet-like pages 1.0000 to 1.0001; benchmarks/codecs' 32 MiB inputs 0.997 to 1.018.
+- **Measured** (M1, best of 3, MB/s; `guide/performance.md`; load average 5 to 7): 292 to 296 at level 1 (46 to 61% of
+  libzstd's; §4.4's target of 300 just missed), 220 to 331 at 3, 75 to 87 at 6, 27 to 46 at 9 (38 to 68%: libzstd's
+  row-based match finder against a chain walked an entry at a time). Question 6: reported, not a gate.
+- **lib/std's size:** `ceesafec check` of a hello world took 0.148 s against 0.127 s before (the M1, the mean of 40),
+  about 17% more for 1,811 lines: phase 1's finding, larger again.
+- **Tests:**
+  - `run-pass/zstd-encode.cee`: round trips of five shapes at every level and streamed, whole and in steps, the frame
+    headers as decided, the empty frame, levels 0 and 22, a flush and two frames; compiled and interpreted (about
+    11 s interpreted);
+  - `check-fail/adr0196-zstd-api.cee` and `-effects.cee`: the encoder's arguments and effects;
+  - `tools/codec_check.py` (the "codecs" step): 4,080 of lib/std's frames (the six shapes at 28 sizes and two pages, at
+    levels 0 to 9, 12 and 22, whole and streamed with flushes, with and without the checksum), each read back by lib/std,
+    by libzstd's stream and one call, and by the model up to 140,000 bytes, its header as decided; 0 problems. The
+    allocation sweep covers `Zstd.compress` and `ZstdEncoder` at levels 1, 3, 5 and 9: 376 of 376 failure points;
+  - `tests/fuzz/zstd`: round trips of random and structured data (copies from up to 2 MiB back, inputs up to 1.3 MB)
+    at levels 0 to 12, whole and streamed in random pieces with random flushes, sometimes two frames, read by both of
+    lib/std's decoders; the encoder's frames join the mutated seeds. Under ASan and UBSan on the M1: 6.5 million
+    inputs and 25,228 round trips in 15 minutes, and 4.4 million and 17,351 in 10 minutes on the final code, none
+    failing, nothing leaked.

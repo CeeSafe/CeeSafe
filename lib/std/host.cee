@@ -915,7 +915,16 @@ public struct HostServices {
         let inPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "in"))?;
         let outPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "out"))?;
         let errPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "err"))?;
-        HostServices.writeInput(inPath.view(), input)?;
+        // The input file is closed (dropped at the end of this block) before the child is started. On Windows an
+        // open that does not share with writers fails while a handle that writes the file is open: while this file
+        // stayed open, `Process.capture` failed so for every program (ADR 0245).
+        {
+            var file = File.create(inPath.view())?;
+            match (input) {
+                Some(bytes) => { file.write(bytes)?; }
+                null => {}
+            }
+        }
         var texts = Vector<HostServicesText>.create();
         HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
         for (argument in arguments) {
@@ -943,18 +952,6 @@ public struct HostServices {
                 stderr: HostServices.readAll(errPath.view())?,
             },
         );
-    }
-
-    /// Writes the child's input to the file at `path`, and closes it (the file is dropped on return) before the child
-    /// is started. On Windows an open that does not share with writers fails while a handle that writes the file is
-    /// open: while this file stayed open, `Process.capture` failed so for every program.
-    fn writeInput(path: StringView, input: Slice<u8>?) -> Result<void, IoError> {
-        var file = File.create(path)?;
-        match (input) {
-            Some(bytes) => { file.write(bytes)?; }
-            null => {}
-        }
-        return Ok();
     }
 
     /// Removes the three files and the directory, ignoring what is not there.

@@ -494,7 +494,9 @@ fn timerIrq(ctx: borrow mut IrqContext) -> void {
 ## 5. Packages and visibility (M10, ADR 0013)
 
 - A *package* is a directory with `ceesafe.toml`; its sources are the `.cee` files under `src/` (`tooling.md` §4).
-- All files of a package share one scope. Another package's `public` items are named with that package's name,
+- All files of a package share one scope for its `public` and `internal` items; each file's `private` items are a
+  scope of that file, so two files may each have a private item of one name (`type-system.md` §2, ADR 0230).
+  Another package's `public` items are named with that package's name,
   `geometry.Point`, or brought into a file's scope with `import geometry;` or `import geometry.Point;`
   (`type-system.md` §2).
 - `public` (visible to other packages), `internal` (default: visible within the package), `private` (visible within

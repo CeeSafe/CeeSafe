@@ -82,9 +82,16 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   block's (ADR 0064 §1); and a field (§12). Naming it in another file of the package is N0296, wherever the name is written:
   called, used as a value, in a type, a bound, an `impl` header, a struct literal or a pattern. The item is found
   and then refused, so the message says which file it is private to, and the check goes on with the item.
-  - The package still has one scope. A private item's name is taken in the whole package: a second item of that
-    name in another file is N0201, and where the name is that of a `lib/core` item it hides the library's in every
-    file of the package, where using it is N0296.
+  - **Each file's private items have a scope of their own (ADR 0230).** The package's `public` and `internal` items
+    share one scope; a file's `private` top-level items are a scope of that file, so two files may each declare a
+    private item of one name, and each means its own. A name in a file means, in this order: a local, parameter or
+    type parameter; the file's own private item; the package's item; `dep.X` and the file's imports; lib/core's item
+    and a built-in function; else another file's private item of the package, which is found and refused (N0296).
+    So a private item may have the name of a package item of another file, or of a lib/core item, and hides it in
+    its own file only. In one file two items of one name are N0201, private or not. The entry function (`main`)
+    keeps one scope in the package, private or not; C names that C defines (`extern "C"` functions, `@export`,
+    `@repr` types) stay one namespace (§28.2). An `impl` names its interface and type, and `impl T { … }` its
+    target, as its file means them.
   - Only naming is confined. A value whose type is a private struct or enum may reach another file through a
     function that is not private, and be held, passed on and inferred there; its fields and methods keep their own
     visibility. A generic function's body is checked as its own file's code in every instance, whichever file asks

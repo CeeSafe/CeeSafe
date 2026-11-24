@@ -32,6 +32,7 @@ it, and its `///` doc comment, which is Markdown.
 ```sh
 ceesafec doc -o api.md --title "geometry"
 ceesafec doc --missing             # list the public items without a doc comment; exit 1 if any
+ceesafec doc ByteString.fromString # the library reference's entry for a name: a type, Type.member, or a member
 ```
 
 <!-- ceesafe: skip -->

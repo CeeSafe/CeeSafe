@@ -12,6 +12,9 @@
    under `run --interp`, print the same and exit the same for every k up to its attempts and one past them, and
    ceesafec itself never panics, in `check` and `build` too; with CEESAFE_ALLOC_REPORT=1 the first report under
    `run --interp` is the program's, the one its build prints.
+5. `ceesafec doc NAME` (§1.5): a type, a member and a bare member name print their entries of the embedded reference
+   with status 0; an unknown name prints `no entry` and a suggestion on standard error with status 1; a `.cee` name
+   that is not there is still a file that cannot be read (status 2).
 
 usage: python3 tools/cli_check.py --compiler out/ceesafec
 """
@@ -245,6 +248,26 @@ def allocation_variables(compiler, work, problems):
     return attempts
 
 
+def doc_names(compiler, work, problems):
+    """5. `ceesafec doc NAME`: the embedded reference's entries (ADR 0236 §2.5)."""
+    cases = [
+        # (name, status, a line its standard output must have, text its standard error must have)
+        ("ByteString", 0, "<!-- spec/api/core.md: ## struct ByteString -->", ""),
+        ("ByteString.fromString", 0, "public fn fromString(text: String) -> ByteString", ""),
+        ("StringBytes.intoBytes", 0, "public fn intoBytes(s: String) -> Vector<u8>", ""),
+        ("intoString", 0, "public fn intoString(this) -> Result<String, ByteString>", ""),
+        ("ByteString.fromStrng", 1, None, "no entry for 'ByteString.fromStrng'; did you mean 'ByteString.fromString'"),
+        ("missing.cee", 2, None, "cannot read 'missing.cee'"),
+    ]
+    for name, status, out, err in cases:
+        p = run([compiler, "doc", name], work)
+        lines = p.stdout.split("\n")
+        if p.returncode != status or (out is not None and out not in lines) or (out is None and p.stdout) or \
+                err not in p.stderr:
+            problems.append(f"doc {name}: status {p.returncode} (not {status}), {p.stdout[:200]!r} {p.stderr[:200]!r}")
+    return len(cases)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
@@ -259,9 +282,10 @@ def main():
         os.makedirs(matrix)
         rows = option_table(compiler, matrix, spec, problems)
         attempts = allocation_variables(compiler, work, problems)
+        names = doc_names(compiler, work, problems)
     print(f"cli_check: {cases} commands with nothing to work on, {options} options against the help texts, "
-          f"{rows} against tooling.md §12.1, {attempts} failed attempts built and interpreted; "
-          f"{len(problems)} problems")
+          f"{rows} against tooling.md §12.1, {attempts} failed attempts built and interpreted, "
+          f"{names} doc names; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

@@ -19,6 +19,7 @@
   (tools/isolated_check.py, ADR 0175), the bound on running without waiting (tools/bound_check.py, ADR 0186),
   slices, natively and under the sanitizers (tools/slice_check.py, ADR 0189),
   Bluetooth printers (tools/bluetooth_check.py, ADR 0177), the secret store (tools/secrets_check.py, ADR 0242),
+  local notifications (tools/notify_check.py, ADR 0243),
   printing a PDF
   (tools/print_check.py, ADR 0178), C's allocations (tools/foreign_alloc_check.py), task frame
   stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
@@ -207,6 +208,7 @@ def main():
                                   "--cflag=-g", "--cflag=-fsanitize=thread"]),
             ("bluetooth", py + [f"{HERE}/bluetooth_check.py", "--compiler", cee]),  # ADR 0177
             ("secrets", py + [f"{HERE}/secrets_check.py", "--compiler", cee]),  # ADR 0242
+            ("notifications", py + [f"{HERE}/notify_check.py", "--compiler", cee]),  # ADR 0243
             ("print", py + [f"{HERE}/print_check.py", "--compiler", cee]),  # ADR 0178
             ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),

@@ -220,6 +220,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_secrets_")) {
             out.push(runtimeFile(13, "")?)?; // the system's secret store (type-system.md §26.21, ADR 0242)
         }
+        if (containsBytes(mainText.view(), "ceesafe_notify_")) {
+            out.push(runtimeFile(14, "")?)?; // local notifications (type-system.md §26.22, ADR 0243)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

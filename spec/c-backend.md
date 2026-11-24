@@ -46,8 +46,8 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   (type-system.md §35.7; M11 G7b), and one that calls a float method of libm's (`exp`, `sin`, `pow` …;
   type-system.md §35.8, ADR 0218) `ceesafe_rt_math.c`, whose functions call the C library's math functions and are
   linked with `-lm` (except on Windows). One that uses Bluetooth gets `ceesafe_rt_bluetooth.c` (ADR 0177), and one
-  that uses the secret store `ceesafe_rt_secrets.c` (type-system.md §26.21, ADR 0242), which loads its system
-  libraries itself, so the link names none. Freestanding programs get `ceesafe/rt.h` and `ceesafe_rt_core.c` compiled with `CEE_FREESTANDING`
+  that uses the secret store `ceesafe_rt_secrets.c` (type-system.md §26.21, ADR 0242), and one that notifies
+  `ceesafe_rt_notify.c` (§26.22, ADR 0243); both load their system libraries themselves, so the link names none. Freestanding programs get `ceesafe/rt.h` and `ceesafe_rt_core.c` compiled with `CEE_FREESTANDING`
   (a `#define` at its top), which leaves out everything that needs a platform service; the
   environment defines `ceesafe_panic`. Freestanding builds add `-ffreestanding -fno-stack-protector
   -fno-asynchronous-unwind-tables -fno-unwind-tables` (the stack protector's `__stack_chk_*` symbols
@@ -57,7 +57,7 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   each with the flags above: the generated code (`<program>_main.o`, or with `--split` one per unit and
   `<program>_ceesafe_instances.o`), every runtime file the program needs, chosen as for an executable
   (`ceesafe_rt_core.o`, `ceesafe_rt_hosted.o`, `ceesafe_rt_io.o`, and `ceesafe_rt_float.o`, `ceesafe_rt_thread.o`,
-  `ceesafe_rt_async.o`, `ceesafe_rt_window.o`, `ceesafe_rt_bluetooth.o`, `ceesafe_rt_secrets.o`, `ceesafe_rt_math.o`
+  `ceesafe_rt_async.o`, `ceesafe_rt_window.o`, `ceesafe_rt_bluetooth.o`, `ceesafe_rt_secrets.o`, `ceesafe_rt_notify.o`, `ceesafe_rt_math.o`
   when its calls appear; the host then links libm,
   `-lm`), and a package's separately compiled C files
   (`<program>_ceesafe_package_<k>.o`); tooling.md §8.3 gives the names. Headers are not members: they are written

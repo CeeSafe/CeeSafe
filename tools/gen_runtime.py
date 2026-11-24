@@ -30,6 +30,7 @@ FILES = (
     ("ceesafe/android.h", "include/ceesafe/android.h"),
     ("ceesafe_rt_math.c", "hosted/ceesafe_rt_math.c"),
     ("ceesafe_rt_secrets.c", "hosted/ceesafe_rt_secrets.c"),
+    ("ceesafe_rt_notify.c", "hosted/ceesafe_rt_notify.c"),
 )
 
 

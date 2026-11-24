@@ -195,6 +195,15 @@ impl HashKey<String> for String {
     fn sameAs(borrow this, other: borrow String) -> bool => this.view() == other.view();
 }
 
+impl HashKey<ByteString> for ByteString {
+    /// The bytes, as a `String`'s and a `Vector<u8>`'s are hashed (ADR 0231).
+    fn hash(borrow this, h: borrow mut Hasher) {
+        h.bytes(this.bytes());
+        h.u64(0xFF);
+    }
+    fn sameAs(borrow this, other: borrow ByteString) -> bool => this.view() == other.view();
+}
+
 impl HashKey<Vector<u8>> for Vector<u8> {
     fn hash(borrow this, h: borrow mut Hasher) {
         h.bytes(this.view());

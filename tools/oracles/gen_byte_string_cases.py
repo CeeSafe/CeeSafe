@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Writes tests/reference/tests/corpus/run-pass/byte-string-utf8.cee: lib/core's ByteStringView (ADR 0231) against
+Python's UTF-8 decoder as the oracle.
+
+Python's `bytes.decode('utf-8', 'replace')` replaces each maximal subpart of an ill-formed sequence by one U+FFFD (the
+Unicode Standard's §3.9, which the WHATWG Encoding Standard's decoder follows too), and an error handler registered
+with `codecs.register_error` is called once per subpart with its start and end: those are `chunks()`'s invalid parts.
+
+For each fixed case (Table 3-7's edges, the Standard's own examples, truncated and overlong sequences, surrogates)
+the program prints one line: `valid` or `invalid` (`isUtf8()`, and the strict decoder), the lossy text's bytes in
+hex, and each chunk as `valid+invalid` byte counts. Then 3,000 seeded strings, mostly UTF-8 with stray and truncated
+bytes, give one summary line: how many are valid, the lossy texts' total length and FNV-1a of their bytes, the FNV-1a
+of the chunk lengths, and the signs of `compare` between neighbours (bytewise, as Python orders `bytes`).
+
+usage: python3 tools/oracles/gen_byte_string_cases.py   (formats with $CEESAFEC, default out/ceesafec)
+"""
+
+import codecs
+import os
+import subprocess
+
+ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+MASK = (1 << 64) - 1
+RANDOM_CASES = 3000
+
+CASES = [
+    "", "61", "616263", "ff", "80", "bf", "c0", "c1", "c080", "c1bf", "c2", "c27f", "c280", "dfbf", "e0", "e080",
+    "e08080", "e09fbf", "e0a080", "e0a0", "efbfbf", "ed9fbf", "eda080", "edbfbf", "eda0", "ee8080", "f0", "f08080",
+    "f0808080", "f08fbfbf", "f0908080", "f09080", "f4", "f48fbfbf", "f4908080", "f5", "f58080", "f8888080", "fe",
+    "ff", "feff", "c328", "e282", "e282ac", "61e28262", "f09f98", "f09f9880", "f09f988061", "e1a0c0", "e0a0c0",
+    # The Unicode Standard's §3.9 examples (Tables 3-8 to 3-11).
+    "61f18080e180c2628063" + "80bf64", "c0af e080 bff08080af".replace(" ", ""), "eda080edbfbf", "f4919293ff4180bf42",
+    "e180e2f09192f1bf41",
+    # SQLite's cases: an unpaired surrogate decoded from JSON, and CAST(x'ff' AS TEXT).
+    "eda080", "ff", "22eda08022",
+]
+
+
+def chunks(data):
+    """The (valid, invalid) byte counts of `data`'s chunks, from the decoder's error positions."""
+    spans = []
+
+    def record(error):
+        spans.append((error.start, error.end))
+        return ("�", error.end)
+
+    codecs.register_error("byte-string-oracle", record)
+    data.decode("utf-8", "byte-string-oracle")
+    out = []
+    at = 0
+    for start, end in spans:
+        out.append((start - at, end - start))
+        at = end
+    if at < len(data):
+        out.append((len(data) - at, 0))
+    return out
+
+
+def is_utf8(data):
+    try:
+        data.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def lossy(data):
+    return data.decode("utf-8", "replace").encode("utf-8")
+
+
+def line(data):
+    hex_text = lossy(data).hex() or "-"
+    pieces = ",".join(f"{v}+{i}" for v, i in chunks(data)) or "-"
+    return f"{'valid' if is_utf8(data) else 'invalid'} {hex_text} {pieces}"
+
+
+class Seeded:
+    def __init__(self, seed):
+        self.state = seed
+
+    def next(self):
+        self.state = (self.state * 6364136223846793005 + 1442695040888963407) & MASK
+        return self.state >> 33
+
+
+def random_text(r):
+    out = bytearray()
+    for _ in range(r.next() % 12):
+        x = r.next()
+        kind = x % 8
+        if kind < 3:
+            out.append(0x61 + (x >> 3) % 26)
+        elif kind == 3:
+            out += b"\xc3\xa9"
+        elif kind == 4:
+            out += b"\xe2\x82\xac"
+        elif kind == 5:
+            out += b"\xf0\x9f\x98\x80"
+        elif kind == 6:
+            out.append((x >> 3) & 0xFF)
+        else:
+            out.append((x >> 3) & 0xFF)
+            out.append((x >> 11) & 0xFF)
+    return bytes(out)
+
+
+def fnv(h, byte):
+    return ((h ^ byte) * 0x100000001B3) & MASK
+
+
+def summary():
+    r = Seeded(2311)
+    valid = 0
+    total = 0
+    text_hash = 0xCBF29CE484222325
+    chunk_hash = 0xCBF29CE484222325
+    before = after = same = 0
+    previous = b""
+    for _ in range(RANDOM_CASES):
+        data = random_text(r)
+        if is_utf8(data):
+            valid += 1
+        out = lossy(data)
+        total += len(out)
+        for b in out:
+            text_hash = fnv(text_hash, b)
+        for v, i in chunks(data):
+            chunk_hash = fnv(fnv(chunk_hash, v & 0xFF), i)
+        if previous < data:
+            before += 1
+        elif previous > data:
+            after += 1
+        else:
+            same += 1
+        previous = data
+    return (f"random {RANDOM_CASES}: valid {valid}, lossy bytes {total}, text {text_hash}, chunks {chunk_hash}, "
+            f"order {before} {same} {after}")
+
+
+def main():
+    expected = [line(bytes.fromhex(h)) for h in CASES]
+    expected.append(summary())
+    calls = "\n".join(f'    case("{h}");' for h in CASES)
+    source = f"""// GENERATED by tools/oracles/gen_byte_string_cases.py: edit that, not this file.
+// lib/core's ByteStringView (ADR 0231) against Python's UTF-8 decoder: for each case, `isUtf8()`, the bytes of
+// `toUtf8Lossy()` in hex (one U+FFFD per maximal subpart, as `bytes.decode('utf-8', 'replace')`), and each of
+// `chunks()` as valid+invalid byte counts (the decoder's error spans); then {RANDOM_CASES} seeded strings, mostly UTF-8 with
+// stray and truncated bytes, summarised, with the signs of `compare` between neighbours (Python's `bytes` order).
+
+fn hexValue(c: u8) -> u8 => if (c >= 'a') c - 'a' + 10 else c - '0';
+
+fn decode(hex: StringView) -> Vector<u8> {{
+    var out = Vector<u8>.create();
+    let b = hex.bytes();
+    var i: usize = 0;
+    while (i + 1 < b.length) {{
+        out.push(hexValue(b[i]) * 16 + hexValue(b[i + 1]))!;
+        i += 2;
+    }}
+    return out;
+}}
+
+fn case(hex: StringView) {{
+    let raw = decode(hex);
+    let v = ByteStringView.fromBytes(raw.view());
+    var line = String.create();
+    line.append(if (v.isUtf8()) "valid " else "invalid ")!;
+    if (v.toUtf8().isSome() != v.isUtf8()) {{
+        line.append("(toUtf8 disagrees) ")!;
+    }}
+    let lossy = v.toUtf8Lossy()!;
+    if (lossy.length == 0) {{
+        line.append("-")!;
+    }}
+    for (b in lossy.bytes()) {{
+        line.appendHex(b as u64, 2, false)!;
+    }}
+    line.append(" ")!;
+    var first = true;
+    for (chunk in v.chunks()) {{
+        if (!first) {{
+            line.append(",")!;
+        }}
+        first = false;
+        line.appendNumber(chunk.valid.length)!;
+        line.append("+")!;
+        line.appendNumber(chunk.invalid.length)!;
+    }}
+    if (first) {{
+        line.append("-")!;
+    }}
+    Console.writeLine(line.view());
+}}
+
+fn next(state: borrow mut u64) -> u64 {{
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 33;
+}}
+
+fn randomText(state: borrow mut u64) -> ByteString {{
+    var out = ByteString.create();
+    let pieces = next(mut state) % 12;
+    for (k in 0..pieces) {{
+        let x = next(mut state);
+        let kind = x % 8;
+        if (kind < 3) {{
+            out.appendByte(truncate<u8>(0x61 + (x >> 3) % 26))!;
+        }} else if (kind == 3) {{
+            out.append("é")!;
+        }} else if (kind == 4) {{
+            out.append("€")!;
+        }} else if (kind == 5) {{
+            out.append("😀")!;
+        }} else if (kind == 6) {{
+            out.appendByte(truncate<u8>(x >> 3))!;
+        }} else {{
+            out.appendByte(truncate<u8>(x >> 3))!;
+            out.appendByte(truncate<u8>(x >> 11))!;
+        }}
+    }}
+    return out;
+}}
+
+fn fnv(h: u64, b: u8) -> u64 => (h ^ (b as u64)).wrappingMul(0x100000001B3);
+
+fn random() {{
+    var state: u64 = 2311;
+    var valid: u64 = 0;
+    var total: u64 = 0;
+    var textHash: u64 = 0xCBF29CE484222325;
+    var chunkHash: u64 = 0xCBF29CE484222325;
+    var before: u64 = 0;
+    var same: u64 = 0;
+    var after: u64 = 0;
+    var previous = ByteString.create();
+    for (k in 0..{RANDOM_CASES}u64) {{
+        let text = randomText(mut state);
+        let v = text.view();
+        if (v.isUtf8()) {{
+            valid += 1;
+        }}
+        let lossy = v.toUtf8Lossy()!;
+        total += lossy.length as u64;
+        for (b in lossy.bytes()) {{
+            textHash = fnv(textHash, b);
+        }}
+        for (chunk in v.chunks()) {{
+            chunkHash = fnv(fnv(chunkHash, truncate<u8>(chunk.valid.length)), truncate<u8>(chunk.invalid.length));
+        }}
+        let order = previous.view().compare(v);
+        if (order < 0) {{
+            before += 1;
+        }} else if (order > 0) {{
+            after += 1;
+        }} else {{
+            same += 1;
+        }}
+        if ((order == 0) != (previous == text)) {{
+            Console.writeLine("== disagrees with compare");
+        }}
+        previous = text;
+    }}
+    Console.write("random {RANDOM_CASES}: valid ");
+    Console.write(valid);
+    Console.write(", lossy bytes ");
+    Console.write(total);
+    Console.write(", text ");
+    Console.write(textHash);
+    Console.write(", chunks ");
+    Console.write(chunkHash);
+    Console.write(", order ");
+    Console.write(before);
+    Console.write(" ");
+    Console.write(same);
+    Console.write(" ");
+    Console.writeLine(after);
+}}
+
+fn main() {{
+{calls}
+    random();
+}}
+"""
+    source += "".join(f"// expect-stdout: {e}\n" for e in expected)
+    path = os.path.join(ROOT, "tests", "reference", "tests", "corpus", "run-pass", "byte-string-utf8.cee")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(source)
+    ceesafec = os.environ.get("CEESAFEC", os.path.join(ROOT, "out", "ceesafec"))
+    subprocess.run([ceesafec, "fmt", path], check=True)
+    print(f"gen_byte_string_cases: wrote {path} ({len(expected)} lines)")
+
+
+if __name__ == "__main__":
+    main()

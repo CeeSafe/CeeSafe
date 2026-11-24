@@ -243,6 +243,54 @@ x = -7
 hi
 ```
 
+### Text that may not be UTF-8: `ByteString` and `ByteStringView`
+
+Text from C, a file name, or a database's TEXT column may hold bytes that are not UTF-8, which a `String` cannot.
+lib/core's `ByteString` (owned) and `ByteStringView` (borrowed, a region parameter in a struct as a `StringView`)
+keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-system.md §22.4):
+
+| Member | Type |
+|---|---|
+| `ByteStringView.fromText(text)`, `ByteStringView.fromBytes(bytes)` | a view of the bytes, no copy |
+| `ByteString.create()`, `ByteString.fromBytes(v)`, `b.intoBytes()` | a byte string; the `Vector<u8>` taken or given back, no copy |
+| `ByteString.fromText(text)`, `ByteString.copyOf(bytes)`, `b.clone()`, `v.toByteString()` | `Result<ByteString, AllocError>`, a copy |
+| `b.view()`, `b.bytes()`, `length()`, `isEmpty()`, `byteAt(i)`, `slice(lo, hi)`, `sliceFrom(lo)`, `sliceTo(hi)` | a `ByteStringView`; `Slice<u8>`; … |
+| `toUtf8()`, `isUtf8()` | `StringView?`, a view when the bytes are UTF-8; `bool` |
+| `toUtf8Lossy()`, `v.appendLossyTo(mut s)` | a `String` with U+FFFD for each maximal subpart of a bad sequence, as browsers and Python decode |
+| `v.chunks()` | the `Utf8Chunk`s: each a `valid` `StringView` then an `invalid` `Slice<u8>`, for printing with escapes |
+| `==`, `v.equals(w)`, `v.compare(w)` | the bytes compared; bytewise order. A `ByteString` is a `HashMap` and `OrderedMap` key |
+| `v.indexOf(bytes)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, … | as a `StringView`'s, with `Slice<u8>` needles |
+| `b.append(text)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n)`, `appendUnsigned(n)`, `appendHex`, `appendChar`, … | `Result<…, AllocError>`, as a `String`'s |
+
+`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`.
+
+```ceesafe
+fn main() {
+    var b = ByteString.create();
+    b.append("id=")!;
+    b.appendNumber(7)!;
+    b.appendByte(0xFF)!;
+    Console.writeLine(b.length());
+    Console.writeLine(b.toUtf8().isNull());
+    Console.writeLine(b.toUtf8Lossy()!.view());
+    for (chunk in b.view().chunks()) {
+        Console.write(chunk.valid);
+        Console.write(" then ");
+        Console.writeLine(chunk.invalid.length);
+    }
+    let name = ByteStringView.fromText("id=7");
+    Console.writeLine(b.view().startsWith(name.bytes()));
+}
+```
+
+```text
+5
+true
+id=7�
+id=7 then 1
+true
+```
+
 ## `Vector`, arrays and slices
 
 | Member | Type |

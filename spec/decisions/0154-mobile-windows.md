@@ -82,7 +82,14 @@
   run after `ceesafe_shutdown`, and not `exit()`, whose static destructors Android's own threads still use: bionic
   aborts on both (a destroyed mutex). Standard output and error go to logcat (tag `ceesafe`), and the pipe is
   drained first, so the program's last lines are kept.
-- **Not yet**: the clipboard (a Java service), a title, a cursor, menus, file dialogs, text input.
+- **Not yet**: a title, a cursor, menus, file dialogs. (Text input came with ADR 0157. The clipboard came on
+  2026-11-25, amended below, §2.3a.)
+- **The clipboard (§2.3a, amended 2026-11-25)**, asked for by Marivil's CeeUI port, whose text fields' Copy and Paste
+  did nothing on the owner's Moto: `ClipboardManager`'s primary clip, as plain text, through the runtime's Java class
+  `org.ceesafe.window.Clip` (the embedded dex), called from the program's thread attached to the VM.
+  `setClipboardText` puts a plain-text clip; `clipboardText` reads the first item's text (`coerceToText`). Android 10
+  and later give the clipboard only to the app in front (or the keyboard): a program reads it while its window has
+  the focus, as an edit menu's Paste does.
 
 ### 2.4 Native handles
 

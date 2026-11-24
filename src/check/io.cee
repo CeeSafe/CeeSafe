@@ -177,6 +177,9 @@ fn checkResourceMethod(
         !c.freestanding) {
         return checkFileMetadata(c, "FileLocks", member, arguments, resource, targetSpan, span); // ADR 0220
     }
+    if (isFile && sameText(text, "mapShared") && !c.freestanding) {
+        return checkFileMetadata(c, "SharedMapping", member, arguments, resource, targetSpan, span); // ADR 0232
+    }
     var function = none();
     var arity: u32 = 0;
     var mutable = true;
@@ -314,8 +317,9 @@ fn checkResourceMethod(
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }
 
-/// `f.modified()` and `f.kind()` (ADR 0078 §3), `f.lock(…)`, `f.tryLock(…)` and `f.unlock(…)` (ADR 0220): lib/std's
-/// function of that name in `owner` (FileMetadata, FileLocks), called with `f` borrowed and the call's arguments.
+/// `f.modified()` and `f.kind()` (ADR 0078 §3), `f.lock(…)`, `f.tryLock(…)` and `f.unlock(…)` (ADR 0220),
+/// `f.mapShared(…)` (ADR 0232): lib/std's function of that name in `owner` (FileMetadata, FileLocks, SharedMapping),
+/// called with `f` borrowed and the call's arguments.
 fn checkFileMetadata(
     c: borrow mut Checker,
     owner: StringView,

@@ -11,7 +11,8 @@
   tests (tools/package_tests.py), the native DNS checks (tools/dns_check.py), a file over 4 GiB sent
   (tools/sendfile_check.py), UDP's ECN, segments and cancellation (tools/udp_check.py), the wall clock (tools/clock_check.py), random bytes
   (tools/random_check.py), a dialogue on standard input (tools/console_input_check.py, ADR 0106), file locks against
-  other processes and SQLite (tools/file_lock_check.py, ADR 0220), terminals (tools/terminal_check.py, ADR 0221), a server
+  other processes and SQLite (tools/file_lock_check.py, ADR 0220), shared mappings of a file against Python's mmap
+  and SQLite's -shm (tools/file_map_check.py, ADR 0232), terminals (tools/terminal_check.py, ADR 0221), a server
   stopped by SIGINT and SIGTERM (tools/signal_check.py, ADR 0125 and 0126), child processes (tools/child_check.py,
   ADR 0169), allocation budgets (tools/budget_check.py, ADR 0170), named shared memory
   (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
@@ -187,6 +188,7 @@ def main():
             ("codecs", py + [f"{HERE}/codec_check.py", "--compiler", cee, "--fuzz-seconds", "60"]),
             ("console input", py + [f"{HERE}/console_input_check.py", "--compiler", cee]),
             ("file locks", py + [f"{HERE}/file_lock_check.py", "--compiler", cee]),  # ADR 0220
+            ("file maps", py + [f"{HERE}/file_map_check.py", "--compiler", cee]),  # ADR 0232
             ("terminals", py + [f"{HERE}/terminal_check.py", "--compiler", cee]),  # ADR 0221
             ("signals", py + [f"{HERE}/signal_check.py", "--compiler", cee]),
             ("children", py + [f"{HERE}/child_check.py", "--compiler", cee]),  # ADR 0169

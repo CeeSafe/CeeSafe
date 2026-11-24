@@ -51,6 +51,16 @@ struct InterpRuntime {
     signalChannel: u64;              // ADR 0125: the handle of the subscription's channel, or 0
     locks: Vector<InterpLock>;       // ADR 0220: the program's file locks, among its own Files
     lockWaits: Vector<InterpLock>;   // ADR 0220: the request a thread waiting in `lock` makes, by its index
+    mappings: Vector<InterpMapping>; // ADR 0232: a mapping's number is its index + 1
+}
+
+/// A shared mapping of a file (ADR 0232 §2.5): the file's path and the region. Every access is a positional read or
+/// write of the file, so the program's mappings, threads and reads of the file see one memory.
+struct InterpMapping {
+    path: String;
+    offset: u64;
+    length: u64;
+    live: bool;
 }
 
 /// A file lock (ADR 0220 §2.4): bytes `start` to `end - 1` of the file a descriptor names, held by that descriptor
@@ -98,6 +108,7 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     signalChannel: 0,
     locks: Vector<InterpLock>.create(),
     lockWaits: Vector<InterpLock>.create(),
+    mappings: Vector<InterpMapping>.create(),
 };
 
 /// ceesafe_init's argv (ADR 0088 §2.2): copied, as the native runtime copies it.
@@ -1375,6 +1386,10 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_host_is_terminal")) {
         return "u:l"; // ADR 0221 §2.3
     }
+    match (mappingShape(name)) {
+        Some(shape) => { return shape; } // ADR 0232
+        null => {}
+    }
     if (sameText(name, "ceesafe_thread_sleep")) {
         return "s:-"; // ADR 0222 §2.1
     }
@@ -2277,6 +2292,9 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_host_file_lock")) {
         return Ok(Some(fileLock(it, c, n, arguments)?));
+    }
+    if (mappingShape(n0).isSome()) {
+        return mappingService(it, n0, arguments); // ADR 0232
     }
     if (sameText(n0, "ceesafe_chan_wait_until")) {
         // recvTimeout (ADR 0222 §2.4): until the channel changes or the virtual clock reaches the deadline.
@@ -5212,4 +5230,233 @@ fn fileLock(
     }
     setLocks(it, fd, start, end, Some(kind == 2));
     return Ok(hostResult(0));
+}
+
+// ---- Shared mappings of a file (ADR 0232 §2.5) ----
+
+/// The shape of a runtime function of lib/std's SharedMapping, or null for another name.
+fn mappingShape(name: Slice<u8>) -> StringView? {
+    if (sameText(name, "ceesafe_host_map_file")) {
+        return "PssP:l";
+    }
+    if (sameText(name, "ceesafe_host_map_unmap")) {
+        return "sss:-";
+    }
+    if (sameText(name, "ceesafe_host_map_sync")) {
+        return "ss:l";
+    }
+    if (sameText(name, "ceesafe_host_map_read") || sameText(name, "ceesafe_host_map_write")) {
+        return "ssPs:-";
+    }
+    if (sameText(name, "ceesafe_host_map_load32")) {
+        return "ssi:u";
+    }
+    if (sameText(name, "ceesafe_host_map_store32")) {
+        return "ssui:-";
+    }
+    if (sameText(name, "ceesafe_host_map_cas32")) {
+        return "ssuui:u";
+    }
+    if (sameText(name, "ceesafe_host_map_add32")) {
+        return "ssui:u";
+    }
+    if (sameText(name, "ceesafe_host_map_load64")) {
+        return "ssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_store64")) {
+        return "sssi:-";
+    }
+    if (sameText(name, "ceesafe_host_map_cas64")) {
+        return "ssssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_add64")) {
+        return "sssi:s";
+    }
+    if (sameText(name, "ceesafe_host_map_fence")) {
+        return ":-";
+    }
+    return null;
+}
+
+/// lib/std's SharedMapping (ADR 0232 §2.5), modelled by the file itself: a mapping is its file's path and region,
+/// and every copy and atomic a positional read or write of the file at the region's offset. The program's threads
+/// run one at a time, so a compare-exchange is atomic among them; another process sees the bytes but not that.
+fn mappingService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_host_map_fence")) {
+        return Ok(null); // the model's accesses are already in order
+    }
+    if (sameText(name, "ceesafe_host_map_file")) {
+        return Ok(Some(mapFile(it, arguments)?));
+    }
+    let number = arguments[0].bits(0, 8)?;
+    if (number == 0 || number > (it.runtime.mappings.length as u64) ||
+        !it.runtime.mappings[(number - 1) as usize].live) {
+        return Err(fault("a shared mapping that is not mapped"));
+    }
+    let k = (number - 1) as usize;
+    if (sameText(name, "ceesafe_host_map_unmap")) {
+        it.runtime.mappings[k].live = false;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_sync")) {
+        return Ok(Some(hostResult(0))); // done once each write returned: the interpreter has no crash to survive
+    }
+    var path = String.create();
+    path.append(it.runtime.mappings[k].path.view())!;
+    let at = it.runtime.mappings[k].offset + arguments[1].bits(0, 8)?;
+    if (sameText(name, "ceesafe_host_map_read")) {
+        let into = arguments[2].bits(0, 8)?;
+        let count = arguments[3].bits(0, 8)?;
+        var done: u64 = 0;
+        while (done < count) {
+            var chunk = [0u8; 4096];
+            let step = if (count - done > 4096) 4096 else count - done;
+            mappedRead(path.view(), at + done, mut chunk[0..step as usize])?;
+            for (i in 0..step) {
+                it.memory.storeBits(into + done + i, chunk[i as usize] as u64, 1)?;
+            }
+            done += step;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_write")) {
+        let from = arguments[2].bits(0, 8)?;
+        let count = arguments[3].bits(0, 8)?;
+        var bytes = Vector<u8>.create();
+        for (i in 0..count) {
+            bytes.push(truncate<u8>(it.memory.loadBits(from + i, 1)?))!;
+        }
+        mappedWrite(path.view(), at, bytes.view())?;
+        return Ok(null);
+    }
+    let width: u64 = if (name[name.length - 2] == '3') 4 else 8;
+    let old = mappedInteger(path.view(), at, width)?;
+    if (sameText(name, "ceesafe_host_map_load32") || sameText(name, "ceesafe_host_map_load64")) {
+        return Ok(valueOf(old, width as usize));
+    }
+    let value = arguments[2].bits(0, width as usize)?;
+    if (sameText(name, "ceesafe_host_map_store32") || sameText(name, "ceesafe_host_map_store64")) {
+        mappedStore(path.view(), at, value, width)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_host_map_add32") || sameText(name, "ceesafe_host_map_add64")) {
+        let sum = old.wrappingAdd(value);
+        mappedStore(path.view(), at, if (width == 4) sum & 0xFFFFFFFF else sum, width)?;
+        return Ok(valueOf(old, width as usize));
+    }
+    // compare-exchange: arguments[2] expected, arguments[3] desired
+    if (old == value) {
+        mappedStore(path.view(), at, arguments[3].bits(0, width as usize)?, width)?;
+    }
+    return Ok(valueOf(old, width as usize));
+}
+
+/// ceesafe_host_map_file's model: the File must be one the program opened for reading and writing; the file is
+/// extended to cover the region, never shortened; out[0] and out[1] are the mapping's number, out[2] its length.
+fn mapFile(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
+    requireHostIo(it)?;
+    let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+    let offset = arguments[1].bits(0, 8)?;
+    let length = arguments[2].bits(0, 8)?;
+    let out = arguments[3].bits(0, 8)?;
+    var path = String.create();
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            match (borrow it.runtime.handles[k]) {
+                // An appending file is write-only, as a File.open or File.create one is one-way: EBADF, as mmap's
+                // EACCES is reported natively.
+                HostHandle.PathFile(p, position) => {
+                    if (position != appendPosition()) {
+                        path.append(p.view())!;
+                    }
+                }
+                _ => {}
+            }
+        }
+        null => {}
+    }
+    if (path.view().length == 0) {
+        return Ok(hostFailure(9)); // EBADF, 9 on every host
+    }
+    if (length == 0 || offset > 0x7FFFFFFFFFFFFFFF || length > 0x7FFFFFFFFFFFFFFF - offset) {
+        return Ok(hostFailure(errnoInvalid())); // lib/std checks first; the runtime's own check
+    }
+    let end = offset + length;
+    var file = match (File.openReadWrite(path.view())) {
+        Ok(f) => f,
+        Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+    };
+    let size = match (file.length()) {
+        Ok(s) => s,
+        Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+    };
+    if (size < end) {
+        let zero = [0u8; 1];
+        match (file.writeAt(zero[..], end - 1)) {
+            Ok() => {}
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        }
+    }
+    it.runtime.mappings.push(InterpMapping { path: path, offset: offset, length: length, live: true })!;
+    let number = it.runtime.mappings.length as u64;
+    it.memory.storeBits(out, number, 8)?;
+    it.memory.storeBits(out + 8, number, 8)?;
+    it.memory.storeBits(out + 16, length, 8)?;
+    it.memory.storeBits(out + 24, 0, 8)?;
+    return Ok(hostResult(0));
+}
+
+/// The bytes at `at` of the mapped file at `path`. A file shortened under the mapping faults, as the native SIGBUS
+/// ends the program (ADR 0232 §2.3).
+fn mappedRead(path: StringView, at: u64, into: SliceMut<u8>) -> Result<void, Stop> {
+    var file = match (File.openReadWrite(path)) {
+        Ok(f) => f,
+        Err(_) => { return Err(fault("a shared mapping's file cannot be opened again by its path")); }
+    };
+    var done: usize = 0;
+    while (done < into.length) {
+        match (file.readAt(mut into[done..into.length], at + done as u64)) {
+            Ok(0) => { return Err(fault("a shared mapping's file was shortened under it (SIGBUS natively)")); }
+            Ok(got) => { done += got; }
+            Err(_) => { return Err(fault("a shared mapping's file could not be read")); }
+        }
+    }
+    return Ok();
+}
+
+fn mappedWrite(path: StringView, at: u64, bytes: Slice<u8>) -> Result<void, Stop> {
+    var file = match (File.openReadWrite(path)) {
+        Ok(f) => f,
+        Err(_) => { return Err(fault("a shared mapping's file cannot be opened again by its path")); }
+    };
+    let size = match (file.length()) {
+        Ok(s) => s,
+        Err(_) => { return Err(fault("a shared mapping's file could not be read")); }
+    };
+    if (size < at + bytes.length as u64) {
+        return Err(fault("a shared mapping's file was shortened under it (SIGBUS natively)"));
+    }
+    return match (file.writeAt(bytes, at)) {
+        Ok() => Ok(),
+        Err(_) => Err(fault("a shared mapping's file could not be written")),
+    };
+}
+
+/// The little-endian integer of `width` bytes at `at` of the mapped file.
+fn mappedInteger(path: StringView, at: u64, width: u64) -> Result<u64, Stop> {
+    var bytes = [0u8; 8];
+    mappedRead(path, at, mut bytes[0..width as usize])?;
+    var value: u64 = 0;
+    for (i in 0..width as usize) {
+        value |= (bytes[i] as u64) << (8 * i as u64);
+    }
+    return Ok(value);
+}
+
+fn mappedStore(path: StringView, at: u64, value: u64, width: u64) -> Result<void, Stop> {
+    var bytes = [0u8; 8];
+    for (i in 0..width as usize) {
+        bytes[i] = truncate<u8>(value >> (8 * i as u64));
+    }
+    return mappedWrite(path, at, bytes[0..width as usize]);
 }

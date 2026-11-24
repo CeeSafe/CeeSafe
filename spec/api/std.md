@@ -71,6 +71,7 @@
 - [struct Random](#struct-random)
 - [struct IsolationReport](#struct-isolationreport)
 - [struct Isolation](#struct-isolation)
+- [struct SharedMapping](#struct-sharedmapping)
 - [enum SocketAddress](#enum-socketaddress)
 - [interface SocketEndpoint](#interface-socketendpoint)
 - [struct SocketAddresses](#struct-socketaddresses)
@@ -3202,6 +3203,190 @@ Has each crash of `set`'s isolated children put in `crashes` from now, without w
 fit is counted (`set.missedCrashes()`). The set keeps a handle of the channel until it ends. False if there
 is no memory for it.
 Safety: the runtime takes a count of the channel, which it gives back when the set ends.
+
+## struct SharedMapping
+
+```ceesafe
+@noncopy
+public struct SharedMapping {
+    drop { … }
+}
+```
+
+A region of a file mapped shared (ADR 0232): what one mapping writes, every other mapping of those bytes sees,
+in this process and in others, and so does a read of the file. SQLite's wal-index (`<database>-shm`) is one.
+
+```
+let shm = File.openOrCreate("db-shm")?;
+let region = shm.mapShared(0, 32768)?;          // SharedMapping.mapShared(shm, 0, 32768)
+var header = [0u8; 48];
+region.readAt(0, mut header[..]);              // a copy out
+SharedMapping.fence();
+let _ = region.compareExchange32(100, 0, 1, Ordering.AcquireRelease);
+```
+
+Another process may write the memory at any moment, so it is never a slice: bytes are copied out and in, and
+integers are read and written as atomics, between processes too. An access out of the mapping's bounds, or an
+atomic not aligned to its size in the file, panics. The value is Send and Share; dropping it unmaps the region
+(the `File` may be dropped before). A program that needs more of the file maps another region, as SQLite maps
+32 KiB at a time. Natively, a file shortened by someone else while it is mapped ends the program by `SIGBUS` at
+the next access to a page past the new end (§2.3 of the ADR). Hosted, on Linux, macOS, the BSDs, Android and
+Windows; under `ceesafec run --interp` it is modelled by reads and writes of the file, whose atomics are not
+atomic against another process.
+
+### SharedMapping.mapShared
+
+```ceesafe
+public fn mapShared(file: borrow File, offset: u64, length: usize) -> Result<SharedMapping, IoError>
+```
+
+`f.mapShared(offset, length)`: maps bytes `offset` to `offset + length - 1` of `file`, shared, for reading and
+writing; a shorter file is first extended with zero bytes (never shortened). `InvalidInput` for `length` 0 or a
+range that ends past 2^63 - 1; `BadDescriptor` for a file not open for reading and writing.
+Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
+
+### SharedMapping.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### SharedMapping.offset
+
+```ceesafe
+public fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### SharedMapping.readAt
+
+```ceesafe
+public fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+it. Panics if the bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### SharedMapping.writeAt
+
+```ceesafe
+public fn writeAt(borrow this, at: usize, bytes: Slice<u8>)
+```
+
+Copies `bytes` to byte `at` of the region. Panics if they do not all fit inside it.
+Safety: as readAt; the runtime reads `bytes` only.
+
+### SharedMapping.load32
+
+```ceesafe
+public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+inside the region or `offset() + at` is not a multiple of 4.
+Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+
+### SharedMapping.store32
+
+```ceesafe
+public fn store32(borrow this, at: usize, value: u32, order: StoreOrdering)
+```
+
+Stores `value` at byte `at` atomically with `order` (AtomicU32.storeWith). Panics as load32.
+Safety: as load32.
+
+### SharedMapping.compareExchange32
+
+```ceesafe
+public fn compareExchange32(
+    borrow this,
+    at: usize,
+    expected: u32,
+    desired: u32,
+    order: Ordering,
+) -> Result<u32, u32>
+```
+
+Ok(the old value) if the u32 at byte `at` was `expected` and is now `desired`; else Err(the value it has),
+atomically between processes, with `order` (AtomicU32.compareExchangeWith). Panics as load32.
+Safety: as load32.
+
+### SharedMapping.fetchAdd32
+
+```ceesafe
+public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32
+```
+
+Adds `value` to the u32 at byte `at`, wrapping, atomically with `order`; the value before. Panics as load32.
+Safety: as load32.
+
+### SharedMapping.load64
+
+```ceesafe
+public fn load64(borrow this, at: usize, order: LoadOrdering) -> u64
+```
+
+The u64 at byte `at`, as load32 (AtomicU64.loadWith). Panics if its eight bytes are not inside the region or
+`offset() + at` is not a multiple of 8.
+Safety: as load32.
+
+### SharedMapping.store64
+
+```ceesafe
+public fn store64(borrow this, at: usize, value: u64, order: StoreOrdering)
+```
+
+Stores the u64 `value` at byte `at`, as store32. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.compareExchange64
+
+```ceesafe
+public fn compareExchange64(
+    borrow this,
+    at: usize,
+    expected: u64,
+    desired: u64,
+    order: Ordering,
+) -> Result<u64, u64>
+```
+
+compareExchange32 for the u64 at byte `at`. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.fetchAdd64
+
+```ceesafe
+public fn fetchAdd64(borrow this, at: usize, value: u64, order: Ordering) -> u64
+```
+
+fetchAdd32 for the u64 at byte `at`. Panics as load64.
+Safety: as load32.
+
+### SharedMapping.fence
+
+```ceesafe
+public fn fence()
+```
+
+A sequentially consistent fence (SQLite's unixShmBarrier): every copy and atomic before it is ordered before
+every one after it.
+Safety: the runtime only orders memory.
+
+### SharedMapping.sync
+
+```ceesafe
+public fn sync(borrow this) -> Result<void, IoError>
+```
+
+Writes the region's changed pages to the file and waits for them (`msync`); on Windows `FlushViewOfFile`, after
+which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
+Safety: the runtime is given what it mapped.
 
 ## enum SocketAddress
 

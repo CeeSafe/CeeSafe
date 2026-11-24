@@ -1,0 +1,16 @@
+// A copy past a shared mapping's end panics (ADR 0232 §2.1), as a slice index out of range does: the mapping is
+// never handed out as a slice, so the library checks the bounds.
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/m")!;
+    let f = File.createReadWrite(path.view())!;
+    let m = f.mapShared(0, 16)!;
+    var bytes = [0u8; 8];
+    m.readAt(8, mut bytes[..]);
+    Console.writeLine("inside");
+    m.readAt(9, mut bytes[..]); // expect-library-panic: SharedMapping.readAt: the bytes are past the mapping's end
+    Console.writeLine("after");
+}
+// expect-stdout: inside

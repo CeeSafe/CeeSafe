@@ -13,7 +13,7 @@ static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_1, 7u, 35u };
 
 typedef struct ceeT_AtomicU64 ceeT_AtomicU64;
 typedef struct ceeT_Key ceeT_Key;
-typedef struct ceeCE_1580 ceeCE_1580;
+typedef struct ceeCE_1651 ceeCE_1651;
 typedef struct ceeA4_S9AtomicU64 ceeA4_S9AtomicU64;
 typedef ceeT_AtomicU64 (*ceeCK_Q1usizeS9AtomicU64)(const void *, uint64_t);
 
@@ -35,12 +35,12 @@ _Static_assert(sizeof(ceeT_Key) == 32, "ceesafec layout: sizeof(Key)");
 _Static_assert(_Alignof(ceeT_Key) == 8, "ceesafec layout: alignof(Key)");
 _Static_assert(offsetof(ceeT_Key, f_cells) == 0, "ceesafec layout: Key.cells");
 
-struct ceeCE_1580 {
+struct ceeCE_1651 {
     ceeCK_Q1usizeS9AtomicU64 f_0code;
 };
-_Static_assert(sizeof(ceeCE_1580) == 8, "ceesafec layout: sizeof({closure environment 1 in build})");
-_Static_assert(_Alignof(ceeCE_1580) == 8, "ceesafec layout: alignof({closure environment 1 in build})");
-_Static_assert(offsetof(ceeCE_1580, f_0code) == 0, "ceesafec layout: {closure environment 1 in build}.0code");
+_Static_assert(sizeof(ceeCE_1651) == 8, "ceesafec layout: sizeof({closure environment 1 in build})");
+_Static_assert(_Alignof(ceeCE_1651) == 8, "ceesafec layout: alignof({closure environment 1 in build})");
+_Static_assert(offsetof(ceeCE_1651, f_0code) == 0, "ceesafec layout: {closure environment 1 in build}.0code");
 
 uint64_t ceesafe_atomic_load_u64(uint64_t *);
 static CEE_UNUSED uint64_t ceeC_ceesafe_atomic_load_u64(uint64_t * a0) {
@@ -59,11 +59,11 @@ static CEE_UNUSED ceeT_AtomicU64 ceeM_9AtomicU64_constant(uint64_t);
 static CEE_UNUSED uint64_t ceeM_9AtomicU64_load(const ceeT_AtomicU64 *);
 static CEE_UNUSED void ceeM_9AtomicU64_store(const ceeT_AtomicU64 *, uint64_t);
 static CEE_UNUSED uint64_t * ceeM_9AtomicU64_cell(const ceeT_AtomicU64 *);
-static CEE_UNUSED ceeT_AtomicU64 ceeCB_1580(const void *, uint64_t);
+static CEE_UNUSED ceeT_AtomicU64 ceeCB_1651(const void *, uint64_t);
 
 static ceeT_Key ceeF_build(void) {
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 t_0 = 0;
-    CEE_TEMP ceeCE_1580 t_1 = {0};
+    CEE_TEMP ceeCE_1651 t_1 = {0};
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 * t_2 = NULL;
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 * t_3 = NULL;
     CEE_TEMP ceeA4_S9AtomicU64 t_4 = {0};
@@ -73,8 +73,8 @@ static ceeT_Key ceeF_build(void) {
     CEE_TEMP ceeA4_S9AtomicU64 t_9;
     CEE_TEMP ceeT_Key t_10;
     CEE_TEMP ceeT_Key t_11;
-    t_0 = ceeCB_1580;
-    t_1 = ((ceeCE_1580){ .f_0code = t_0 });
+    t_0 = ceeCB_1651;
+    t_1 = ((ceeCE_1651){ .f_0code = t_0 });
     t_2 = &t_1.f_0code;
     t_3 = t_2;
     t_4 = (ceeA4_S9AtomicU64){0};
@@ -86,7 +86,7 @@ static ceeT_Key ceeF_build(void) {
             break;
         }
         t_8 = &(*t_3);
-        t_4.e[t_5] = ceeCB_1580(t_8, t_5);
+        t_4.e[t_5] = ceeCB_1651(t_8, t_5);
         t_5 = ((uint64_t)(t_5 + ((uint64_t)1)));
     }
     t_9 = t_4;
@@ -163,8 +163,8 @@ static uint64_t * ceeM_9AtomicU64_cell(CEE_UNUSED const ceeT_AtomicU64 * v_this_
     return t_4;
 }
 
-static ceeT_AtomicU64 ceeCB_1580(const void *cee_env, CEE_UNUSED uint64_t v_i_1) {
-    CEE_UNUSED ceeCE_1580 * v_env_0 = (ceeCE_1580 *)(uintptr_t)cee_env;
+static ceeT_AtomicU64 ceeCB_1651(const void *cee_env, CEE_UNUSED uint64_t v_i_1) {
+    CEE_UNUSED ceeCE_1651 * v_env_0 = (ceeCE_1651 *)(uintptr_t)cee_env;
     CEE_TEMP uint64_t t_2 = 0;
     CEE_TEMP ceeT_AtomicU64 t_4;
     t_2 = v_i_1;

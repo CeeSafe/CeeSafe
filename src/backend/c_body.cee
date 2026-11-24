@@ -810,6 +810,9 @@ fn emitStatement(
             }
             match (n.rvalues[r as usize]) {
                 NirRvalue.ArrayRepeat(_) => {
+                    if (isElidedFill(n, s)) {
+                        return Ok(); // overwritten in full by the loop that follows (optimisations.md §7)
+                    }
                     let place = appendPlaceIn(e, c, n, sources, f, target)?;
                     return emitConstruction(e, c, n, sources, f, r, place.view(), "    ");
                 }

@@ -1357,7 +1357,7 @@ for it.
 | `--lib-main` | build, test | build, with `--emit lib` | test: nothing. Without `--emit lib` it is a usage error in both |
 | `--library-diagnostics` | parse, check, build, run, fix, test | check, build, run, fix, test | internal (§12.2). parse: nothing |
 | `--line-directives`, `-g` | build, test | build, test | |
-| `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-oce`, `--no-placement`, `--no-temporary-forwarding` | build, run, test | build, run, test | |
+| `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-fill-elision`, `--no-oce`, `--no-placement`, `--no-temporary-forwarding` | build, run, test | build, run, test | |
 | `--offline` | parse, check, build, run, fix, test | all six, in a package | `fetch` and `index-check` have their own |
 | `--package`, `--record`, `--whole-program` | check | check | |
 | `--polls`, `--no-polls` | build, test | build, test (§4.1, ADR 0190): polls on or off for one build, over the root manifest's `polls` | Both, `--no-polls` with a `--cflag` that defines `CEE_POLLS`, and `--polls` with `--profile freestanding` (or in a freestanding package) are usage errors |

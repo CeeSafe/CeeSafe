@@ -413,3 +413,50 @@ function's task frame fewer fields.
 - **`tests/corpus/emit-c/temporary-forwarding.c`** is a reviewed snapshot: a forwarded call result, a chain, an
   `if` value, a `return`, and each rule as a case that is not forwarded.
 
+## 7. Fill elision (ADR 0219)
+
+### 7.1 What changes
+An array literal is not written when the loop after it overwrites every element before anything reads one. An
+assignment `a = [e; N]` is elided when all of these hold:
+
+1. **The literal**: `a` is a local of type `[T; N]` with `N ≥ 1`, assigned whole (no projection), and `T` needs no
+   drop (§16.2 of type-system.md already refuses a repeat of such a `T`, N0259).
+2. **The way to the loop**: from the assignment, the rest of its block, then through each `goto` the next block from
+   its start, through blocks entered only by the way, up to a block entered twice, the loop's header. No statement
+   on it mentions `a`, but `x = Length(a)`, which is the constant `N`.
+3. **The loop counts from 0 to `N`**: the header holds `c = Less(t, n)` alone and ends in `branch c ? body : exit`; on
+   the way `t` is assigned 0, and `n` is `N` (a constant, or a local assigned the constant `N` or `Length(a)`). The
+   loop is the blocks reached from `body` without passing the header: none is the exit or on the way, none returns or
+   ends the process, and exactly one, the latch, goes back to the header, by a `goto`. In the loop `t` is assigned
+   only by `t = Add(t, 1)` in the latch and read only by whole copies, and `n` is not mentioned.
+4. **One store each iteration, at the index**: one statement of the loop mentions `a`, once: `a[x] = v`, where `x` is
+   `t` or a chain of whole copies of it, each assigned once in the loop, in the store's block or the body's first
+   block, before the store and the increment. The store's block is on every way from `body` to the latch, and the
+   store comes before the increment.
+5. **Unconditional code**: no block on the way or in the loop is compiled under a condition (`cfg`, ADR 0080) or
+   belongs to a `debugAssert` (ADR 0087 §2.5), which a build may leave out.
+
+Then iteration `k` stores `a[k]` for every `k` below `N`, and nothing reads `a` before the loop ends.
+
+### 7.2 What a program can observe
+Nothing: no element of the literal is read. A panic during the loop ends the process, or, in a task of an isolated
+unit (type-system.md §40.10), the unit, whose frames are never resumed or read; while the loop runs its store needs
+`a` exclusively, so nothing else can reach `a`. Output, exit status, panics, drop order and allocation counts are
+unchanged. In C the array is declared, initialised, at the top of its function, so an elided literal leaves what it
+held, never indeterminate memory.
+
+### 7.3 Switch and diagnostics
+- On by default. `ceesafec build --no-fill-elision` and `ceesafec run --no-fill-elision` write every literal
+  (`CBuildOptions.fillElision`).
+- It runs on the NIR that is compiled and the NIR that is interpreted, after temporary forwarding (§6)
+  (`elideFills`, src/nir/fill_elision.cee; `NirProgram.elidedFills`). Checks, diagnostics and `--dump-nir` see the
+  NIR before it.
+
+### 7.4 How it is checked
+- **The interpreter** marks an elided literal's bytes uninitialised instead of writing them, so reading an element
+  before its store is a fault ("use of uninitialised memory", exit status 70) on every program it runs.
+- **The run corpus** runs it natively and interpreted, and the fault sweep takes `--no-fill-elision` among its
+  switches.
+- **`tests/corpus/emit-c/fill-elision.c`** is a reviewed snapshot: the fill, the fill in an outer loop, the loop to
+  `a.length`, and near misses that keep their literal (a loop to `N − 1`, a store at `j + 1`, a store under an `if`,
+  a read of `a` in the loop, a `break`). `run-pass/fill-elision.cee` runs the same cases.

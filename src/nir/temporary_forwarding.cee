@@ -59,64 +59,74 @@ fn forwardCountRvalue(n: borrow NirProgram, r: u32, counts: borrow mut Vector<u3
     }
 }
 
+/// Every mention of a local in one statement, but a StorageDead: `counts[local]`.
+fn forwardCountStatement(n: borrow NirProgram, statement: u32, counts: borrow mut Vector<u32>) {
+    match (n.statements[statement as usize]) {
+        NirStatement.StorageDead(_) => {}
+        NirStatement.Drop(place, flag) => {
+            forwardCountPlace(n, place, mut counts);
+            if (flag != none()) {
+                counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+            }
+        }
+        NirStatement.Assign(target, r) => {
+            forwardCountPlace(n, target, mut counts);
+            forwardCountRvalue(n, r, mut counts);
+        }
+        NirStatement.BoundsCheck(a, b) => {
+            forwardCountOperand(n, a, mut counts);
+            forwardCountOperand(n, b, mut counts);
+        }
+        NirStatement.RangeCheck(low, high, length, text) => {
+            forwardCountOperand(n, low, mut counts);
+            forwardCountOperand(n, high, mut counts);
+            forwardCountOperand(n, length, mut counts);
+            if (text != none()) {
+                forwardCountPlace(n, text, mut counts);
+            }
+        }
+        NirStatement.LengthCheck(a, b) => {
+            forwardCountOperand(n, a, mut counts);
+            forwardCountOperand(n, b, mut counts);
+        }
+        NirStatement.Unpack(source, _, targets) => {
+            forwardCountPlace(n, source, mut counts);
+            for (k in 0..targets.count) {
+                let target = n.at(targets, k);
+                if (target != none()) {
+                    counts[target as usize] = counts[target as usize].wrappingAdd(1);
+                }
+            }
+        }
+        NirStatement.BoxFree(place, flag) => {
+            forwardCountPlace(n, place, mut counts);
+            if (flag != none()) {
+                counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
+            }
+        }
+        NirStatement.Eval(r) => { forwardCountRvalue(n, r, mut counts); }
+    }
+}
+
+/// Every mention of a local in one terminator: `counts[local]`.
+fn forwardCountTerminator(n: borrow NirProgram, terminator: u32, counts: borrow mut Vector<u32>) {
+    match (n.terminators[terminator as usize]) {
+        NirTerminator.Branch(condition, _, _) => { forwardCountOperand(n, condition, mut counts); }
+        NirTerminator.Switch(value, _, _) => { forwardCountOperand(n, value, mut counts); }
+        NirTerminator.Return(value) => { forwardCountOperand(n, value, mut counts); }
+        NirTerminator.Exit(code) => { forwardCountOperand(n, code, mut counts); }
+        _ => {}
+    }
+}
+
 /// Every mention of a local in a function, but its StorageDeads: `counts[local]`.
 fn forwardCountFunction(n: borrow NirProgram, function: borrow NirFunction, counts: borrow mut Vector<u32>) {
     for (block in function.blocks.view()) {
         for (statement in block.statements.view()) {
-            match (n.statements[statement as usize]) {
-                NirStatement.StorageDead(_) => {}
-                NirStatement.Drop(place, flag) => {
-                    forwardCountPlace(n, place, mut counts);
-                    if (flag != none()) {
-                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
-                    }
-                }
-                NirStatement.Assign(target, r) => {
-                    forwardCountPlace(n, target, mut counts);
-                    forwardCountRvalue(n, r, mut counts);
-                }
-                NirStatement.BoundsCheck(a, b) => {
-                    forwardCountOperand(n, a, mut counts);
-                    forwardCountOperand(n, b, mut counts);
-                }
-                NirStatement.RangeCheck(low, high, length, text) => {
-                    forwardCountOperand(n, low, mut counts);
-                    forwardCountOperand(n, high, mut counts);
-                    forwardCountOperand(n, length, mut counts);
-                    if (text != none()) {
-                        forwardCountPlace(n, text, mut counts);
-                    }
-                }
-                NirStatement.LengthCheck(a, b) => {
-                    forwardCountOperand(n, a, mut counts);
-                    forwardCountOperand(n, b, mut counts);
-                }
-                NirStatement.Unpack(source, _, targets) => {
-                    forwardCountPlace(n, source, mut counts);
-                    for (k in 0..targets.count) {
-                        let target = n.at(targets, k);
-                        if (target != none()) {
-                            counts[target as usize] = counts[target as usize].wrappingAdd(1);
-                        }
-                    }
-                }
-                NirStatement.BoxFree(place, flag) => {
-                    forwardCountPlace(n, place, mut counts);
-                    if (flag != none()) {
-                        counts[flag as usize] = counts[flag as usize].wrappingAdd(1);
-                    }
-                }
-                NirStatement.Eval(r) => { forwardCountRvalue(n, r, mut counts); }
-            }
+            forwardCountStatement(n, statement, mut counts);
         }
         if (block.terminator != none()) {
-            match (n.terminators[block.terminator as usize]) {
-                NirTerminator.Branch(condition, _, _) => { forwardCountOperand(n, condition, mut counts); }
-                NirTerminator.Switch(value, _, _) => { forwardCountOperand(n, value, mut counts); }
-                NirTerminator.Return(value) => { forwardCountOperand(n, value, mut counts); }
-                NirTerminator.Exit(code) => { forwardCountOperand(n, code, mut counts); }
-                _ => {}
-            }
+            forwardCountTerminator(n, block.terminator, mut counts);
         }
     }
 }

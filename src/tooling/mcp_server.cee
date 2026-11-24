@@ -1323,6 +1323,7 @@ fn generateCompiled(
         exportsHeader: copyBytes("ceesafe_exports.h".bytes())!,
         closureSpecialisation: true,
         temporaryForwarding: true,
+        fillElision: true,
         placement: true,
         bce: true,
         oce: true,

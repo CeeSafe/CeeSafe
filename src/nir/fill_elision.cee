@@ -1,0 +1,548 @@
+// Fill elision (optimisations.md §7, ADR 0219): an array literal `a = [e; N]` that a counted loop overwrites in full
+// before anything reads it is not executed. It runs after temporary forwarding, on the NIR that is compiled and the NIR
+// that is interpreted; checks and `--dump-nir` see the NIR before it. The C writes nothing for an elided literal (the
+// array is declared, initialised, at the top of its function), and the interpreter marks `a`'s bytes uninitialised, so
+// a read of an element before its store is a fault there (exit status 70).
+
+/// A function's blocks, as fill elision reads them.
+struct FillGraph {
+    indexOf: Vector<u32>;      // a block's index by its id
+    predecessors: Vector<u32>; // by index: how many block successor lists name it
+    conditional: Vector<bool>; // by index: compiled under a condition (`cfg`, ADR 0080) or in a debugAssert (ADR 0087)
+}
+
+fn fillGraph(n: borrow NirProgram, f: u32) -> Result<FillGraph, AllocError> {
+    let function = borrow n.functions[f as usize];
+    var graph = FillGraph {
+        indexOf: Vector<u32>.create(),
+        predecessors: Vector<u32>.create(),
+        conditional: Vector<bool>.create(),
+    };
+    for (b in 0..function.blocks.length) {
+        let id = function.blocks[b].id;
+        while (graph.indexOf.length <= (id as usize)) {
+            graph.indexOf.push(none())?;
+        }
+        graph.indexOf[id as usize] = truncate<u32>(b);
+        graph.predecessors.push(0)?;
+        var conditional = function.blocks[b].cfg.length > 0 || function.blocks[b].branchCfg.length > 0;
+        for (a in n.debugAsserts.view()) {
+            if (a.function == f && id >= a.firstBlock && id < a.endBlock) {
+                conditional = true;
+            }
+        }
+        graph.conditional.push(conditional)?;
+    }
+    for (b in 0..function.blocks.length) {
+        for (id in function.blocks[b].successors.view()) {
+            let k = fillIndex(graph, id);
+            if (k != none()) {
+                graph.predecessors[k as usize] += 1;
+            }
+        }
+    }
+    return Ok(graph);
+}
+
+/// A block's index by its id, or none.
+fn fillIndex(graph: borrow FillGraph, id: u32) -> u32 =>
+    if ((id as usize) < graph.indexOf.length) graph.indexOf[id as usize] else none();
+
+/// How many times statement `s` mentions `local` (StorageDead is no mention). `counts` is a scratch count by local
+/// that only grows: the difference made by `s` is the answer.
+fn fillMentions(n: borrow NirProgram, s: u32, local: u32, counts: borrow mut Vector<u32>) -> u32 {
+    let before = counts[local as usize];
+    forwardCountStatement(n, s, mut counts);
+    return counts[local as usize].wrappingSub(before);
+}
+
+/// The whole local an rvalue `Use` copies, or none.
+fn fillCopied(n: borrow NirProgram, r: u32) -> u32 => match (n.rvalues[r as usize]) {
+    NirRvalue.Use(o) => forwardOperandLocal(n, o),
+    _ => none(),
+};
+
+/// The value of a constant operand that is not negative; null otherwise.
+fn fillConstant(n: borrow NirProgram, o: u32) -> u64? {
+    if (o == none()) {
+        return null;
+    }
+    return match (n.operands[o as usize]) {
+        NirOperand.Const(v) => if (v.negative) null else Some(v.magnitude),
+        _ => null,
+    };
+}
+
+/// The constants known of whole locals on the way to the loop: (local, value) pairs.
+struct FillKnown {
+    locals: Vector<u32>;
+    values: Vector<u64>;
+}
+
+fn fillForget(known: borrow mut FillKnown, local: u32) {
+    var k: usize = 0;
+    while (k < known.locals.length) {
+        if (known.locals[k] == local) {
+            known.locals[k] = none();
+        }
+        k += 1;
+    }
+}
+
+fn fillLearn(known: borrow mut FillKnown, local: u32, value: u64) -> Result<void, AllocError> {
+    fillForget(mut known, local);
+    known.locals.push(local)?;
+    return known.values.push(value);
+}
+
+fn fillValueOf(known: borrow FillKnown, local: u32) -> u64? {
+    var k = known.locals.length;
+    while (k > 0) {
+        k -= 1;
+        if (known.locals[k] == local) {
+            return Some(known.values[k]);
+        }
+    }
+    return null;
+}
+
+/// The local a statement assigns as a whole or in part, or an Unpack's targets: whether it writes `local`.
+fn fillWrites(n: borrow NirProgram, s: u32, local: u32) -> bool {
+    return match (n.statements[s as usize]) {
+        NirStatement.Assign(target, _) => n.places[target as usize].local == local,
+        NirStatement.Unpack(_, _, targets) => {
+            var found = false;
+            for (k in 0..targets.count) {
+                if (n.at(targets, k) == local) {
+                    found = true;
+                }
+            }
+            found
+        }
+        _ => false,
+    };
+}
+
+/// Whether the literal assigned by statement `s` (position `at` of block `b`) of function `f` may be elided (§7.1).
+fn fillElidable(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    graph: borrow FillGraph,
+    b: u32,
+    at: usize,
+    s: u32,
+    counts: borrow mut Vector<u32>,
+) -> Result<bool, AllocError> {
+    let function = borrow n.functions[f as usize];
+    // Rule 1: a whole local of array type [T; N], N ≥ 1, T needing no drop; the rvalue an operand repeated.
+    var a = none();
+    match (n.statements[s as usize]) {
+        NirStatement.Assign(target, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.ArrayRepeat(_) => { a = forwardWholeLocal(n, target); }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    if (a == none() || graph.conditional[b as usize]) {
+        return Ok(false);
+    }
+    let arrayType = function.locals[a as usize].typ;
+    if (!c.types.is(arrayType, TypeKind.Array) || c.types.needsDrop(arrayType)) {
+        return Ok(false);
+    }
+    let length = c.types.info(arrayType).arrayLength;
+    if (length < 1) {
+        return Ok(false);
+    }
+    let count = truncate<u64>(length); // at least 1
+    // Rule 2: the straight way to the loop's header, through blocks entered only by it, mentioning `a` nowhere but in
+    // `Length(a)`, learning the constants assigned to whole locals.
+    var known = FillKnown { locals: Vector<u32>.create(), values: Vector<u64>.create() };
+    var way = Vector<u32>.create();
+    way.push(b)?;
+    var block = b;
+    var position = at + 1;
+    var header = none();
+    loop {
+        let statements = borrow function.blocks[block as usize].statements;
+        while (position < statements.length) {
+            let st = statements[position];
+            position += 1;
+            match (n.statements[st as usize]) {
+                NirStatement.StorageDead(local) => {
+                    if (local == a) {
+                        return Ok(false);
+                    }
+                    fillForget(mut known, local);
+                    continue;
+                }
+                NirStatement.Assign(target, r) => {
+                    let x = forwardWholeLocal(n, target);
+                    if (x != none() && x != a) {
+                        var value: u64? = null;
+                        match (n.rvalues[r as usize]) {
+                            NirRvalue.Use(o) => { value = fillConstant(n, o); }
+                            NirRvalue.Length(place) => {
+                                // `a.length` of an array is the constant N, not a read of its elements (§5 question 3).
+                                if (forwardWholeLocal(n, place) == a) {
+                                    value = Some(count);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if (value != null) {
+                            fillLearn(mut known, x, value!)?;
+                            continue;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if (fillMentions(n, st, a, mut counts) > 0) {
+                return Ok(false);
+            }
+            for (k in 0..known.locals.length) {
+                if (known.locals[k] != none() && fillWrites(n, st, known.locals[k])) {
+                    known.locals[k] = none();
+                }
+            }
+        }
+        let terminator = function.blocks[block as usize].terminator;
+        if (terminator == none()) {
+            return Ok(false);
+        }
+        var next = none();
+        match (n.terminators[terminator as usize]) {
+            NirTerminator.Goto(id) => { next = fillIndex(graph, id); }
+            _ => {}
+        }
+        if (next == none() || graph.conditional[next as usize] || way.length > function.blocks.length) {
+            return Ok(false);
+        }
+        if (graph.predecessors[next as usize] >= 2) {
+            header = next;
+            break;
+        }
+        way.push(next)?;
+        block = next;
+        position = 0;
+    }
+    // Rule 3, the header: `c = Less(t, n)` alone, then `branch c ? body : exit`, with t = 0 and n = N on the way.
+    let headerBlock = borrow function.blocks[header as usize];
+    if (headerBlock.statements.length != 1 || headerBlock.terminator == none() ||
+        graph.predecessors[header as usize] != 2) {
+        return Ok(false);
+    }
+    var t = none();
+    var condition = none();
+    var bound = none(); // the bound's local, or none for a constant bound
+    match (n.statements[headerBlock.statements[0] as usize]) {
+        NirStatement.Assign(target, r) => {
+            condition = forwardWholeLocal(n, target);
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Binary(op, left, right) => {
+                    if (binaryIndex(op) == 4) {
+                        t = forwardOperandLocal(n, left);
+                        let constant = fillConstant(n, right);
+                        if (constant != null) {
+                            if (constant! != count) {
+                                return Ok(false);
+                            }
+                        } else {
+                            bound = forwardOperandLocal(n, right);
+                            if (bound == none() || (fillValueOf(known, bound) ?? count + 1) != count) {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    if (t == none() || condition == none() || t == a || (fillValueOf(known, t) ?? 1) != 0) {
+        return Ok(false);
+    }
+    var body = none();
+    var exit = none();
+    match (n.terminators[headerBlock.terminator as usize]) {
+        NirTerminator.Branch(o, then, otherwise) => {
+            if (forwardOperandLocal(n, o) != condition) {
+                return Ok(false);
+            }
+            body = fillIndex(graph, then);
+            exit = fillIndex(graph, otherwise);
+        }
+        _ => {}
+    }
+    if (body == none() || exit == none() || body == header) {
+        return Ok(false);
+    }
+    // The loop: the blocks reached from the body without passing the header. None is the exit, on the way, or
+    // conditional; none returns or exits the process; exactly one (the latch) goes back to the header, by a goto.
+    var inLoop = Vector<bool>.create();
+    for (k in 0..function.blocks.length) {
+        inLoop.push(false)?;
+    }
+    var work = Vector<u32>.create();
+    work.push(body)?;
+    inLoop[body as usize] = true;
+    var latch = none();
+    while (work.length > 0) {
+        let k = work.pop()!;
+        if (k == exit || graph.conditional[k as usize]) {
+            return Ok(false);
+        }
+        for (w in way.view()) {
+            if (w == k) {
+                return Ok(false);
+            }
+        }
+        let term = function.blocks[k as usize].terminator;
+        if (term == none()) {
+            return Ok(false);
+        }
+        match (n.terminators[term as usize]) {
+            NirTerminator.Return(_) => { return Ok(false); }
+            NirTerminator.Exit(_) => { return Ok(false); }
+            _ => {}
+        }
+        for (id in function.blocks[k as usize].successors.view()) {
+            let next = fillIndex(graph, id);
+            if (next == none()) {
+                return Ok(false);
+            }
+            if (next == header) {
+                let isGoto = match (n.terminators[term as usize]) {
+                    NirTerminator.Goto(_) => true,
+                    _ => false,
+                };
+                if (latch != none() || !isGoto) {
+                    return Ok(false);
+                }
+                latch = k;
+            } else if (!inLoop[next as usize]) {
+                inLoop[next as usize] = true;
+                work.push(next)?;
+            }
+        }
+    }
+    if (latch == none()) {
+        return Ok(false);
+    }
+    // Rule 4: in the loop, one statement mentions `a`, the store `a[x] = v`; `t` is assigned only by `t = Add(t, 1)` in
+    // the latch, and read only by whole copies; the bound's local is not mentioned.
+    var store = none();
+    var storeBlock = none();
+    var increment = none();
+    for (k in 0..function.blocks.length) {
+        if (!inLoop[k]) {
+            continue;
+        }
+        for (u in function.blocks[k].statements.view()) {
+            let mentions = fillMentions(n, u, a, mut counts);
+            if (mentions > 0) {
+                if (store != none() || mentions != 1) {
+                    return Ok(false);
+                }
+                store = u;
+                storeBlock = truncate<u32>(k);
+            }
+            if (bound != none() && fillMentions(n, u, bound, mut counts) > 0) {
+                return Ok(false);
+            }
+            let tMentions = fillMentions(n, u, t, mut counts);
+            if (tMentions > 0) {
+                var allowed = false;
+                match (n.statements[u as usize]) {
+                    NirStatement.Assign(target, r) => {
+                        let x = forwardWholeLocal(n, target);
+                        if (x == t) {
+                            // The increment: `t = Add(t, 1)`, in the latch.
+                            match (n.rvalues[r as usize]) {
+                                NirRvalue.Binary(op, left, right) => {
+                                    if (binaryIndex(op) == 13 && forwardOperandLocal(n, left) == t &&
+                                        (fillConstant(n, right) ?? 0) == 1 && tMentions == 2 && k == (latch as usize) &&
+                                        increment == none()) {
+                                        allowed = true;
+                                        increment = u;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else if (x != none() && fillCopied(n, r) == t && tMentions == 1) {
+                            allowed = true; // a copy of t's value of this iteration
+                        }
+                    }
+                    _ => {}
+                }
+                if (!allowed) {
+                    return Ok(false);
+                }
+            } else if (fillWrites(n, u, t)) {
+                return Ok(false);
+            }
+        }
+    }
+    if (store == none() || increment == none()) {
+        return Ok(false);
+    }
+    var x = none();
+    match (n.statements[store as usize]) {
+        NirStatement.Assign(target, _) => {
+            let p = n.places[target as usize];
+            if (p.local == a && p.projections.count == 1) {
+                let projection = n.projections[p.projections.start as usize];
+                match (projection.kind) {
+                    ProjectionKind.Index => { x = forwardOperandLocal(n, projection.index); }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    if (x == none()) {
+        return Ok(false);
+    }
+    // `x` is t's value of this iteration: t itself, or a chain of whole copies, each made once in the loop, in the
+    // store's block before the store or in the body's first block, before t is incremented.
+    var hops: u32 = 0;
+    while (x != t) {
+        hops += 1;
+        if (hops > 8) {
+            return Ok(false);
+        }
+        var definition = none();
+        var definitionBlock = none();
+        var writes: u32 = 0;
+        for (k in 0..function.blocks.length) {
+            if (!inLoop[k]) {
+                continue;
+            }
+            for (u in function.blocks[k].statements.view()) {
+                if (fillWrites(n, u, x)) {
+                    writes += 1;
+                    definition = u;
+                    definitionBlock = truncate<u32>(k);
+                }
+            }
+        }
+        if (writes != 1 || (definitionBlock != storeBlock && definitionBlock != body)) {
+            return Ok(false);
+        }
+        if (!fillBefore(function, definitionBlock, definition, store, storeBlock) ||
+            !fillBefore(function, definitionBlock, definition, increment, latch)) {
+            return Ok(false);
+        }
+        let source = match (n.statements[definition as usize]) {
+            NirStatement.Assign(_, r) => fillCopied(n, r),
+            _ => none(),
+        };
+        if (source == none()) {
+            return Ok(false);
+        }
+        x = source;
+    }
+    if (!fillBefore(function, storeBlock, store, increment, latch)) {
+        return Ok(false);
+    }
+    // The store's block is on every way from the body to the latch.
+    if (storeBlock != body) {
+        var seen = Vector<bool>.create();
+        for (k in 0..function.blocks.length) {
+            seen.push(false)?;
+        }
+        var stack = Vector<u32>.create();
+        stack.push(body)?;
+        seen[body as usize] = true;
+        while (stack.length > 0) {
+            let k = stack.pop()!;
+            if (k == latch) {
+                return Ok(false);
+            }
+            for (id in function.blocks[k as usize].successors.view()) {
+                let next = fillIndex(graph, id);
+                if (next != none() && next != storeBlock && next != header && inLoop[next as usize] &&
+                    !seen[next as usize]) {
+                    seen[next as usize] = true;
+                    stack.push(next)?;
+                }
+            }
+        }
+    }
+    return Ok(true);
+}
+
+/// Whether statement `first` of block `firstBlock` runs before statement `second` of block `secondBlock` in an
+/// iteration: in another block (the ways of the loop leave a block once, at its terminator, and §7.1's other checks
+/// place the two), or earlier in the same block.
+fn fillBefore(function: borrow NirFunction, firstBlock: u32, first: u32, second: u32, secondBlock: u32) -> bool {
+    if (firstBlock != secondBlock) {
+        return true;
+    }
+    for (s in function.blocks[firstBlock as usize].statements.view()) {
+        if (s == first) {
+            return true;
+        }
+        if (s == second) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/// Elides the literals of every function that §7.1 proves overwritten; how many.
+fn elideFills(c: borrow Checker, n: borrow mut NirProgram) -> Result<u32, AllocError> {
+    var elided = Vector<bool>.create();
+    for (k in 0..n.statements.length) {
+        elided.push(false)?;
+    }
+    var total: u32 = 0;
+    for (f in 0..n.functions.length) {
+        let function = borrow n.functions[f];
+        var candidates = false;
+        for (block in function.blocks.view()) {
+            for (s in block.statements.view()) {
+                match (n.statements[s as usize]) {
+                    NirStatement.Assign(_, r) => {
+                        match (n.rvalues[r as usize]) {
+                            NirRvalue.ArrayRepeat(_) => { candidates = true; }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if (!candidates) {
+            continue;
+        }
+        let graph = fillGraph(n, truncate<u32>(f))?;
+        var counts = Vector<u32>.create();
+        for (k in 0..function.locals.length) {
+            counts.push(0)?;
+        }
+        for (b in 0..function.blocks.length) {
+            let statements = borrow function.blocks[b].statements;
+            for (at in 0..statements.length) {
+                let s = statements[at];
+                if (fillElidable(c, n, truncate<u32>(f), graph, truncate<u32>(b), at, s, mut counts)?) {
+                    elided[s as usize] = true;
+                    total += 1;
+                }
+            }
+        }
+    }
+    if (total > 0) {
+        n.elidedFills = elided;
+    }
+    return Ok(total);
+}
+
+/// Whether statement `s` is an elided literal (§7).
+fn isElidedFill(n: borrow NirProgram, s: u32) -> bool =>
+    (s as usize) < n.elidedFills.length && n.elidedFills[s as usize];

@@ -258,6 +258,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
+        "  --no-fill-elision  (build, run) write every array literal, even one a loop overwrites (optimisations.md §7)\n",
+    )?;
+    appendText(
+        out,
         "  --split           (build) write the C as ceesafe_program.h, c/<package>/<path>.c per CeeSafe file and\n",
     )?;
     appendText(out, "                    ceesafe_instances.c, so it compiles in parallel (c-backend.md §2.4)\n")?;
@@ -323,6 +327,7 @@ struct Options {
     dumpNir: bool;               // --dump-nir (build)
     closureSpecialisation: bool; // on unless --no-closure-specialisation (optimisations.md §5)
     temporaryForwarding: bool;   // on unless --no-temporary-forwarding (optimisations.md §6)
+    fillElision: bool;           // on unless --no-fill-elision (optimisations.md §7)
     explainClosureCalls: bool;   // --explain-closure-calls
     placement: bool;             // on unless --no-placement (memory-model.md §5)
     explainAllocations: bool;    // --explain-allocations
@@ -529,6 +534,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.closureSpecialisation = false;
         } else if ((options.building || options.running) && arg == "--no-temporary-forwarding") {
             options.temporaryForwarding = false;
+        } else if ((options.building || options.running) && arg == "--no-fill-elision") {
+            options.fillElision = false;
         } else if (options.building && arg == "--explain-closure-calls") {
             options.explainClosureCalls = true;
         } else if ((options.building || options.running) && arg == "--no-placement") {
@@ -995,6 +1002,7 @@ fn parseCommand() -> i32 {
         dumpNir: false,
         closureSpecialisation: true,
         temporaryForwarding: true,
+        fillElision: true,
         explainClosureCalls: false,
         placement: true,
         explainAllocations: false,
@@ -1276,6 +1284,7 @@ fn interpretChecked(
         exportsHeader: copyBytes(options.exportsHeader.view())!,
         closureSpecialisation: options.closureSpecialisation,
         temporaryForwarding: options.temporaryForwarding,
+        fillElision: options.fillElision,
         placement: options.placement,
         bce: options.bce,
         oce: options.oce,
@@ -1379,6 +1388,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     dumpNir: false,
     closureSpecialisation: true,
     temporaryForwarding: true,
+    fillElision: true,
     explainClosureCalls: false,
     placement: true,
     explainAllocations: false,
@@ -1730,6 +1740,7 @@ fn compileFiles(
             exportsHeader: copyBytes(options.exportsHeader.view())!,
             closureSpecialisation: options.closureSpecialisation,
             temporaryForwarding: options.temporaryForwarding,
+            fillElision: options.fillElision,
             placement: options.placement,
             bce: options.bce,
             oce: options.oce,

@@ -1846,6 +1846,13 @@ fn execute(
 ) -> Result<void, Stop> {
     match (n.statements[s as usize]) {
         NirStatement.Assign(target, r) => {
+            if (isElidedFill(n, s)) {
+                // Not written (optimisations.md §7): its bytes are uninitialised, so reading an element before the
+                // loop stores it is a fault, the oracle of the proof.
+                let addr = address(it, c, n, frame, target, true)?;
+                let size = typeSize(c, n.rvalueTypes[r as usize])?;
+                return it.memory.uninitialise(addr, size);
+            }
             match (n.rvalues[r as usize]) {
                 NirRvalue.Builtin(b, arguments) => {
                     if (b == bfScratchEnter()) {

@@ -1,0 +1,100 @@
+// Fill elision (optimisations.md §7, ADR 0219): an array literal that a counted loop overwrites in full is not
+// written. Each function is one case; the snapshot shows which literals are left (run-pass/fill-elision.cee runs
+// them).
+
+// Elided: the fill.
+fn filled(k: u64) -> u64 {
+    var a = [0u64; 8];
+    for (j in 0..8usize) {
+        a[j] = k + j as u64;
+    }
+    var sum: u64 = 0;
+    for (j in 0..8usize) {
+        sum += a[j];
+    }
+    return sum;
+}
+
+// Elided: the fill in an outer loop, each round.
+fn rounds() -> u64 {
+    var total: u64 = 0;
+    for (i in 0..5u64) {
+        var a = [0u64; 4];
+        for (j in 0..4usize) {
+            a[j] = i * 10 + j as u64;
+        }
+        total += a[0] + a[3];
+    }
+    return total;
+}
+
+// Elided: the loop to `a.length`, the same constant.
+fn toLength() -> u32 {
+    var a = [7u32; 6];
+    for (j in 0..a.length) {
+        a[j] = truncate<u32>(j * j);
+    }
+    return a[5];
+}
+
+// Kept: the loop stops before the last element, which stays 9.
+fn short() -> u64 {
+    var a = [9u64; 8];
+    for (j in 0..7usize) {
+        a[j] = 1;
+    }
+    return a[7];
+}
+
+// Kept: the store is one further on, so `a[0]` keeps the literal's 5.
+fn shifted() -> u64 {
+    var a = [5u64; 8];
+    for (j in 0..7usize) {
+        a[j + 1] = 2;
+    }
+    return a[0];
+}
+
+// Kept: the store is not on every iteration.
+fn everyOther() -> u64 {
+    var a = [3u64; 8];
+    for (j in 0..8usize) {
+        if (j % 2 == 0) {
+            a[j] = 4;
+        }
+    }
+    return a[1];
+}
+
+// Kept: the loop reads `a`.
+fn accumulated() -> u64 {
+    var a = [1u64; 4];
+    for (j in 0..4usize) {
+        a[j] = a[j] + 10;
+    }
+    return a[2];
+}
+
+// Kept: a `break` leaves the loop early.
+fn broken() -> u64 {
+    var a = [6u64; 8];
+    for (j in 0..8usize) {
+        if (j == 3) {
+            break;
+        }
+        a[j] = 0;
+    }
+    return a[5];
+}
+
+fn main() {
+    Console.writeLine(filled(3));
+    Console.writeLine(rounds());
+    Console.writeLine(toLength());
+    Console.writeLine(short());
+    Console.writeLine(shifted());
+    Console.writeLine(everyOther());
+    Console.writeLine(accumulated());
+    Console.writeLine(broken());
+}
+

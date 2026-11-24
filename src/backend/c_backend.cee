@@ -41,6 +41,7 @@ struct CBuildOptions {
     exportsHeader: Vector<u8>;
     closureSpecialisation: bool; // optimisations.md §5 (off: --no-closure-specialisation)
     temporaryForwarding: bool;   // optimisations.md §6 (off: --no-temporary-forwarding)
+    fillElision: bool;           // optimisations.md §7 (off: --no-fill-elision)
     placement: bool;             // memory-model.md §5 (off: --no-placement)
     bce: bool;                   // optimisations.md §2 (off: --no-bce)
     oce: bool;                   // optimisations.md §3 (off: --no-oce)
@@ -90,6 +91,10 @@ fn generateC(
     if (o.temporaryForwarding) {
         // A value is not copied through a temporary it only passes through (optimisations.md §6).
         let forwarded = forwardTemporaries(n)?;
+    }
+    if (o.fillElision) {
+        // An array literal that a counted loop overwrites in full is not written (optimisations.md §7).
+        let elided = elideFills(c, n)?;
     }
     // Twice: the location constants come before the code that uses them, and only emitting the code finds them.
     var trial = CEmitter.create(true);

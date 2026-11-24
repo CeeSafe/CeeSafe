@@ -371,6 +371,12 @@ TABLES.append(table(
         ("`String.from(text: StringView) -> Result<String, AllocError>`",
          "A new string that owns a copy of `text`.", OOM),
         ("`t.clone() -> Result<String, AllocError>`", "A second string with a copy of the text of a string.", OOM),
+        ("`t.intoBytes() -> Vector<u8>`",
+         "The bytes of a string as a vector, which takes its buffer (ADR 0236). The string is moved; nothing is copied.",
+         NO, []),
+        ("`String.fromUtf8(bytes: Vector<u8>) -> Result<String, Vector<u8>>`",
+         "A string that takes a vector's buffer when its bytes are UTF-8 (ADR 0236). Nothing is copied.",
+         "`Err` with the vector, unchanged, when the bytes are not valid UTF-8", []),
         ("`t.append(text: StringView) -> Result<void, AllocError>`",
          "Adds `text` at the end of a string.", OOM + "; the string is unchanged"),
         ("`t.appendNumber(n) -> Result<void, AllocError>`",
@@ -465,6 +471,9 @@ TABLES.append(table(
          "An empty byte string with room for `n` bytes.", OOM, []),
         ("`ByteString.fromBytes(bytes: Vector<u8>) -> ByteString`, `b.intoBytes() -> Vector<u8>`",
          "A byte string made of a vector's bytes, and the vector given back. Nothing is copied.", NO, []),
+        ("`ByteString.fromString(text: String) -> ByteString`, `b.intoString() -> Result<String, ByteString>`",
+         "A byte string that takes a string's bytes, and the string given back (ADR 0236). Nothing is copied.",
+         "`Err` with the byte string, unchanged, from `intoString` when the bytes are not valid UTF-8", []),
         ("`ByteString.copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError>`, "
          "`ByteString.fromText(text: StringView) -> Result<ByteString, AllocError>`, "
          "`b.clone() -> Result<ByteString, AllocError>`",

@@ -208,6 +208,8 @@ A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the r
 | `String.withCapacity(n: usize) -> Result<String, AllocError>` | An empty string with room for `n` bytes. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
 | `String.from(text: StringView) -> Result<String, AllocError>` | A new string that owns a copy of `text`. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
 | `t.clone() -> Result<String, AllocError>` | A second string with a copy of the text of a string. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
+| `t.intoBytes() -> Vector<u8>` | The bytes of a string as a vector, which takes its buffer (ADR 0236). The string is moved; nothing is copied. | No | – |
+| `String.fromUtf8(bytes: Vector<u8>) -> Result<String, Vector<u8>>` | A string that takes a vector's buffer when its bytes are UTF-8 (ADR 0236). Nothing is copied. | `Err` with the vector, unchanged, when the bytes are not valid UTF-8 | – |
 | `t.append(text: StringView) -> Result<void, AllocError>` | Adds `text` at the end of a string. | `Err(AllocError.OutOfMemory)` when the allocation fails; the string is unchanged | [8.2](./ch08-02-strings) |
 | `t.appendNumber(n) -> Result<void, AllocError>` | Adds an integer or a float at the end of a string, written in decimal as `Console.write` prints it. | `Err(AllocError.OutOfMemory)` when the allocation fails; the string is unchanged | [8.2](./ch08-02-strings) |
 | `t.appendHex(value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>` | Adds `value` in hexadecimal at the end of a string, with zeros before it up to `minWidth` digits, in capitals when `upper`, and no `0x`. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
@@ -252,6 +254,7 @@ A `ByteString` owns text of any bytes on the heap and can grow (ADR 0231). It is
 | `ByteString.create() -> ByteString` | An empty byte string. It allocates nothing. | No | – |
 | `ByteString.withCapacity(n: usize) -> Result<ByteString, AllocError>` | An empty byte string with room for `n` bytes. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
 | `ByteString.fromBytes(bytes: Vector<u8>) -> ByteString`, `b.intoBytes() -> Vector<u8>` | A byte string made of a vector's bytes, and the vector given back. Nothing is copied. | No | – |
+| `ByteString.fromString(text: String) -> ByteString`, `b.intoString() -> Result<String, ByteString>` | A byte string that takes a string's bytes, and the string given back (ADR 0236). Nothing is copied. | `Err` with the byte string, unchanged, from `intoString` when the bytes are not valid UTF-8 | – |
 | `ByteString.copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError>`, `ByteString.fromText(text: StringView) -> Result<ByteString, AllocError>`, `b.clone() -> Result<ByteString, AllocError>` | A new byte string with a copy of the bytes of a slice, a text or a byte string. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
 | `b.view() -> ByteStringView`, `b.bytes() -> Slice<u8>` | The bytes as a view that borrows the byte string, or as a slice. | No | – |
 | `b.length() -> usize`, `b.capacity() -> usize`, `b.isEmpty() -> bool` | The number of bytes, the room before it must grow, and whether there are none. | No | – |

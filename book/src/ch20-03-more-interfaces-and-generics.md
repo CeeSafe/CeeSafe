@@ -474,15 +474,17 @@ fn main() {
 ```
 
 ```text
-main.cee:10:11: error[N0267]: 'show' is ambiguous: both 'Printer' and 'Screen' declare it
+main.cee:10:11: error[N0267]: 'show' is ambiguous: both 'Printer' and 'Screen' declare it; name the interface: 'Printer.show(value, …)' (type-system.md §21.4)
    |
 10 |     thing.show();
    |           ^^^^
 ```
 
-There is no syntax that names the interface at the call. Give the methods different names. A type could not
-implement both interfaces in any case: an interface's methods are ordinary methods of the type, and a type has
-one method of each name.
+Name the interface at the call: `Printer.show(thing)` and `Screen.show(thing)`. The value the method is called on
+comes first, written as an argument to `this` is (`mut thing` for a `borrow mut this` method). A type may
+implement both interfaces, each with its own `show`; on the type itself, `x.show()` is then the same error, and
+the same form names the one meant, while a call through `T: Printer` alone or a `dyn Screen` needs nothing
+(type-system.md §21.4).
 
 ::: details Coming from Rust
 - Const parameters are const generics, limited to `bool`, integers and fieldless enums, with no `{ N + 1 }`.
@@ -491,7 +493,8 @@ one method of each name.
 - Supertraits are written the same way. `Copy` may be one; `Sized`, `Send` and `Sync` are not.
 - There are no `where` clauses, no blanket impl over a bare `T` (`impl<T: Shape> Named for T`): a generic impl's
   target is a generic struct or enum. There is no `impl Trait` in argument or result position.
-- There is no `<T as Trait>::method` to choose between two bounds.
+- `Trait::method(x)` is written `Interface.method(x)`; there is no `<T as Trait>::method`, so a static function
+  that two of a type's interfaces declare is called through a bound.
 :::
 
 ::: details Coming from C#, Java, TypeScript or Go

@@ -14,6 +14,7 @@ fn cellOfLoans() -> u32 => 351;
 struct EnvPair {
     symbol: u32;
     typ: u32;
+    parameter: u32; // the type parameter's syntax (Ast.typeParameters), whose bounds an instance's calls follow (ADR 0229)
 }
 
 /// A generic function (GenericFunctionEntry): checked once with opaque type parameters, instantiated on use.
@@ -144,7 +145,7 @@ fn declareTypeParametersAs(
             c.error(duplicateItem(), ident.start, ident.end, message)?;
         }
         let typ = c.types.createTypeParameter(text.view())?;
-        env.push(EnvPair { symbol: ident.symbol, typ: typ })?;
+        env.push(EnvPair { symbol: ident.symbol, typ: typ, parameter: c.front.ast.at(syntax, k) })?;
         parameters.push(typ)?;
         if (p.valueType != none()) {
             declareConstParameter(c, p, typ, env.view())?; // ADR 0083 §2.2
@@ -239,7 +240,13 @@ fn zipEnvironment(
 ) -> Result<void, AllocError> {
     for (k in 0..typeParameters.count) {
         let p = c.front.ast.typeParameters[c.front.ast.at(typeParameters, k) as usize];
-        out.push(EnvPair { symbol: c.front.ast.idents[p.name as usize].symbol, typ: arguments[k as usize] })?;
+        out.push(
+            EnvPair {
+                symbol: c.front.ast.idents[p.name as usize].symbol,
+                typ: arguments[k as usize],
+                parameter: c.front.ast.at(typeParameters, k),
+            },
+        )?;
     }
     return Ok();
 }

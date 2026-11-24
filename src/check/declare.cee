@@ -210,6 +210,8 @@ fn checkProgramWith(
         implementations: Vector<Implementation>.create(),
         implTemplates: Vector<ImplTemplate>.create(),
         implMethods: Vector<ImplMethod>.create(),
+        boundCalls: Vector<BoundCall>.create(),
+        sharedNames: 0,
         boundMethods: Vector<BoundMethod>.create(),
         implConstants: Vector<ImplConstant>.create(),
         implTypes: Vector<ImplType>.create(),

@@ -351,7 +351,14 @@ fn checkStaticCall(
     var function = findStructFunction(c, definition, memberIdent.symbol);
     var fromImpl = false;
     if (function == none()) {
-        function = implMethodFor(c, typ, memberIdent.symbol); // an impl's static function (ADR 0086 §2.3)
+        // An impl's static function (ADR 0086 §2.3), of one interface or chosen among several (ADR 0229 §2.2).
+        var reported = false;
+        let memberAt = Span { start: memberIdent.start, end: memberIdent.end };
+        function = chooseStaticFunction(c, typ, memberIdent.symbol, memberAt, mut reported)?;
+        if (reported) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
         fromImpl = function != none();
     }
     if (function == none() && reportUnmetImplBounds(
@@ -426,13 +433,25 @@ fn checkMethodCall(
     member: u32,
     arguments: Range,
     span: Span,
+) -> Result<u32, AllocError> => checkMethodCallVia(c, target, member, arguments, span, plainCall());
+
+/// A method call, or with `via` the qualified call `I.m(x, …)` (ADR 0229 §2.3), whose receiver is `target`: the method
+/// is then `I`'s (or a supertrait's) for the receiver's type, and no built-in method of the type is looked for.
+fn checkMethodCallVia(
+    c: borrow mut Checker,
+    target: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+    via: QualifiedCall,
 ) -> Result<u32, AllocError> {
     let targetSpan = c.front.ast.exprSpans[target as usize];
     let memberIdent = c.front.ast.idents[member as usize];
+    let general = via.owning == none(); // a plain method call: the type's built-in methods first
     match (c.front.ast.exprs[target as usize]) {
         ExprNode.Slice(sliced, low, high) => {
             let name = c.name(memberIdent.symbol);
-            if (isSliceMethodName(name)) {
+            if (general && isSliceMethodName(name)) {
                 // `a[lo..hi].copyFrom(s)`: the receiver is `borrow mut a[lo..hi]` (§16.5), or `borrow a[lo..hi]` for a
                 // method that only reads (§36.4).
                 let mutable = !(sameText(
@@ -453,10 +472,10 @@ fn checkMethodCall(
     }
     let read = autoDeref(c, receiver)?;
     let readType = c.typeOf(read);
-    if (c.types.is(readType, TypeKind.RawPointer)) {
+    if (general && c.types.is(readType, TypeKind.RawPointer)) {
         return checkPointerMethod(c, member, arguments, read, span);
     }
-    if (c.types.is(readType, TypeKind.FunctionPointer)) {
+    if (general && c.types.is(readType, TypeKind.FunctionPointer)) {
         if (!sameText(c.name(memberIdent.symbol), "isNull") || arguments.count != 0) {
             var message = Vector<u8>.create();
             appendQuotedType(mut message, c, readType)?;
@@ -471,7 +490,7 @@ fn checkMethodCall(
         return c.expr(HirExpr.BuiltinCall(bfPtrIsNull(), list), boolType, span.start, span.end);
     }
     let holder = c.types.info(readType).structDef;
-    if (holder != none()) {
+    if (general && holder != none()) {
         // A function value or closure stored in a field (§36.1, §36.2), unless a method has the name.
         let field = findField(c, holder, memberIdent.symbol);
         if (field != none()) {
@@ -501,7 +520,7 @@ fn checkMethodCall(
             }
         }
     }
-    if (c.types.isUnsized(readType)) {
+    if (general && c.types.isUnsized(readType)) {
         match (c.hir.exprs[read as usize]) {
             HirExpr.Deref(reference) => {
                 let sliceType = c.typeOf(reference);
@@ -513,7 +532,7 @@ fn checkMethodCall(
             _ => {}
         }
     }
-    if (c.types.is(readType, TypeKind.Array) && !c.types.isUnsized(readType)) {
+    if (general && c.types.is(readType, TypeKind.Array) && !c.types.isUnsized(readType)) {
         // An array's methods are its slice's (ADR 0075 §2.10): `a.m(…)` is `a[..].m(…)`, borrowed mutably for the
         // methods that write or move elements.
         let name = c.name(memberIdent.symbol);
@@ -537,24 +556,26 @@ fn checkMethodCall(
         let s = c.spanOf(vector);
         vector = c.expr(HirExpr.Deref(vector), c.types.info(t).pointee, s.start, s.end)?;
     }
-    if (c.types.is(c.typeOf(vector), TypeKind.Thread)) {
+    if (general && c.types.is(c.typeOf(vector), TypeKind.Thread)) {
         return checkThreadMethod(c, member, arguments, vector, span);
     }
     // A Vector's or String's own methods, unless the name is an impl's (ADR 0052 §3.3): impl methods on them are reached
-    // by the general lookup below.
-    let implOnVector = c.types.is(c.typeOf(vector), TypeKind.Vector) &&
+    // by the general lookup below, and so is every method a qualified call names.
+    let implOnVector = !general || (c.types.is(c.typeOf(vector), TypeKind.Vector) &&
         vectorMethodArity(c.types.isString(c.typeOf(vector)), c.name(memberIdent.symbol)) < 0 &&
-        implMethodFor(c, c.typeOf(vector), memberIdent.symbol) != none();
+        implMethodFor(c, c.typeOf(vector), memberIdent.symbol) != none());
     if (c.types.is(c.typeOf(vector), TypeKind.Vector) && !implOnVector) {
         return checkVectorMethod(c, member, arguments, vector, targetSpan, span);
     }
-    if (c.types.is(c.typeOf(vector), TypeKind.SlotMap) || c.types.is(c.typeOf(vector), TypeKind.StableVector)) {
+    if (general &&
+        (c.types.is(c.typeOf(vector), TypeKind.SlotMap) || c.types.is(c.typeOf(vector), TypeKind.StableVector))) {
         return checkContainerMethod(c, member, arguments, vector, targetSpan, span);
     }
-    if (c.types.is(c.typeOf(vector), TypeKind.Resource)) {
+    if (general && c.types.is(c.typeOf(vector), TypeKind.Resource)) {
         return checkResourceMethod(c, member, arguments, vector, targetSpan, span);
     }
-    if (c.typeOf(vector) == c.ioErrorType && sameText(c.name(memberIdent.symbol), "message") && arguments.count == 0) {
+    if (general && c.typeOf(vector) == c.ioErrorType && sameText(c.name(memberIdent.symbol), "message") &&
+        arguments.count == 0) {
         return checkIoErrorMessage(c, receiver, span); // static text for the variant (§26.2)
     }
     let receiverType = c.typeOf(receiver);
@@ -573,20 +594,20 @@ fn checkMethodCall(
     let ownType = c.typeOf(receiver);
     let ownPointee = c.types.info(ownType).pointee;
     let regionCandidate = if (ownPointee != none()) ownPointee else ownType;
-    if (regionIndex(c.types.info(regionCandidate).region) == 4) {
+    if (general && regionIndex(c.types.info(regionCandidate).region) == 4) {
         return checkPoolTake(c, member, arguments, receiver, regionCandidate, targetSpan, span);
     }
-    if (c.types.is(regionCandidate, TypeKind.Region)) {
+    if (general && c.types.is(regionCandidate, TypeKind.Region)) {
         return checkArenaMethod(c, member, arguments, receiver, targetSpan, span);
     }
-    if (c.types.is(regionCandidate, TypeKind.Integer)) {
+    if (general && c.types.is(regionCandidate, TypeKind.Integer)) {
         let function = integerMethod(c.name(memberIdent.symbol));
         if (function != none()) {
             let number = autoDeref(c, receiver)?;
             return checkIntegerMethod(c, member, arguments, number, function, span);
         }
     }
-    if (c.types.is(regionCandidate, TypeKind.Float)) {
+    if (general && c.types.is(regionCandidate, TypeKind.Float)) {
         let function = floatMethod(c.name(memberIdent.symbol));
         if (function != none()) {
             let number = autoDeref(c, receiver)?;
@@ -598,7 +619,7 @@ fn checkMethodCall(
         currentType,
         TypeKind.Reference,
     )) c.types.info(currentType).pointee else currentType;
-    if (isTaskSet(c, structType) &&
+    if (general && isTaskSet(c, structType) &&
         (sameText(c.name(memberIdent.symbol), "spawn") || sameText(c.name(memberIdent.symbol), "trySpawn") ||
             sameText(c.name(memberIdent.symbol), "spawnSend") ||
             sameText(c.name(memberIdent.symbol), "spawnIsolated") ||
@@ -616,6 +637,20 @@ fn checkMethodCall(
     }
     // Own methods, impl methods, or a type parameter's bound methods (§21).
     let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+    if (!general) {
+        // `I.m(x, …)` (ADR 0229 §2.3): `I`'s method for the receiver's type, with the receiver written as the
+        // argument to `this` is.
+        let named = qualifiedMethod(c, structType, via, member, currentType)?;
+        if (named == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return passReceiver(c, named, receiver, currentType, structType, target, member, arguments, span);
+    }
+    if (reportAmbiguousCall(c, structType, target, member, arguments, span)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     var function = findMethod(c, structType, memberIdent.symbol, memberSpan)?;
     if (function == none()) {
         // A method of an impl whose parameters the interface's arguments choose (ADR 0165 §2.3).
@@ -673,7 +708,24 @@ fn checkMethodCall(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    // The receiver is passed as `this` by value, by shared borrow, or by mutable borrow (§13.2).
+    return passReceiver(c, function, receiver, currentType, structType, target, member, arguments, span);
+}
+
+/// The call of method `function` on `receiver` (of type `currentType`, a `structType` or a reference to one): the
+/// receiver is passed as `this` by value, by shared borrow, or by mutable borrow (§13.2), then the arguments.
+fn passReceiver(
+    c: borrow mut Checker,
+    function: u32,
+    receiver: u32,
+    currentType: u32,
+    structType: u32,
+    target: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let targetSpan = c.front.ast.exprSpans[target as usize];
+    let memberIdent = c.front.ast.idents[member as usize];
     let syntax = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
     var argument: u32 = 0;
     match (syntax.receiver) {

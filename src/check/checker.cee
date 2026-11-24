@@ -168,6 +168,8 @@ struct Checker {
     implementations: Vector<Implementation>;
     implTemplates: Vector<ImplTemplate>; // generic impls (ADR 0054)
     implMethods: Vector<ImplMethod>;
+    boundCalls: Vector<BoundCall>; // ADR 0229 §2.2
+    sharedNames: u32;              // impl methods whose name another interface gives their type too (ADR 0229)
     boundMethods: Vector<BoundMethod>;
     implConstants: Vector<ImplConstant>;                   // ADR 0086 §2.4
     implTypes: Vector<ImplType>;                           // ADR 0086 §2.5

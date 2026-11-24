@@ -395,7 +395,9 @@ fn declareEnumMethods(c: borrow mut Checker, index: u32) -> Result<void, AllocEr
             entry.environment,
             false,
         )? else declareFunctionIn(c, m.function, entry.typ, entry.environment)?;
-        c.implMethods.push(ImplMethod { typ: entry.typ, name: id.symbol, function: function })?;
+        c.implMethods.push(
+            ImplMethod { typ: entry.typ, name: id.symbol, function: function, interfaceEntry: none() },
+        )?;
     }
     c.setFile(savedFile);
     return Ok();

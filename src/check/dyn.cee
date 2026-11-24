@@ -355,7 +355,9 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
         dynMembers(c, bound, mut members)?; // in slot order, supertraits' after (ADR 0086 §2.6)
         var functions = Vector<u32>.create();
         for (m in members.view()) {
-            functions.push(implMethodFor(c, implementation, m.name))?;
+            // The type's method for the slot's interface: another may give it one of the same name (ADR 0229).
+            let slotInterface = c.types.bounds[m.bound as usize].interfaceEntry;
+            functions.push(implMethodIn(c, implementation, m.name, slotInterface))?;
         }
         let list = c.hir.list(functions.view())?;
         c.dynTables.push(DynTable { implementation: implementation, dynType: dynType, methods: list })?;

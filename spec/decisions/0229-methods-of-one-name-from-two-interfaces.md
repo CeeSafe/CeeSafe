@@ -146,6 +146,13 @@ the method itself (§3, overloading): the fix only writes what the call must say
   `m` (`qualifiedMethod`); `passReceiver` is the receiver passing both share.
 - `HirFunction.implInterface` and `sharedName` (src/hir/hir.cee); `appendCFunctionName` (src/backend/c_names.cee)
   writes `ceeMI_` / `ceeMGI_` names for them (`sharedImplInterface`, `appendInterfaceId`).
+- The two ways an instance chooses were tried apart: a trial build with the recorded calls switched off (not
+  committed) ran the generic struct, the generic impls and the one-bound functions of the tests by the environment
+  alone, and failed the defaults (N0222: no environment names `Self`, hence the default's own interface above) and
+  `both<S: PageSource, K: PageSink>` with `S = K` (which only the recorded call can tell apart). In the tests here
+  each generic version is checked before its instances (the order of `--dump-hir`, also with an instance named in a
+  struct's field and in a function's signature before the generic struct is declared), so the recorded call answers
+  first; no order in which it could not was found.
 - Not done: `I.m(x)` for an impl whose parameters the interface's arguments choose (ADR 0165) finds the method
   only once the impl is made for the type (a bound, a `dyn` or a plain call made it), and is N0268 before.
 

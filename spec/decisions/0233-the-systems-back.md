@@ -60,4 +60,11 @@
 
 ## 5. Evidence
 
-Recorded in ROADMAP §10 when the work is merged.
+Released in 0.95.3 (the owner: "Release CeeSafe 0.95.2 once the contracts pass"; 0.95.2 had been taken meanwhile by
+ADRs 0229 to 0232, so this is the next patch, rebased onto that release). ROADMAP §10's row has the runs.
+
+- macOS arm64: `tools/window_check.py`, 68 checks, 0 problems, the Back check native and interpreted. The contract
+  suite on the rebased branch: every step ok, two skipped as Linux-only. `emit-c/arrays-of-atomics.c`'s closure id
+  1748 is 1750 (lib/std's two new functions; a reviewed edit, the id only).
+- Motorola, Android, with Marivil's CeeUI port built by this change: Back on Settings returns to the chats, Back on
+  the chats leaves the app. Back while the soft keyboard shows (§2.3) was not tried.

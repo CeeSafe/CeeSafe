@@ -383,7 +383,14 @@ fn warnLargeFrames(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, 
         appendText(mut message, "this function's large values add up to ")?;
         appendDecimal(mut message, frame.total / 1024)?;
         appendText(mut message, " KiB of stack (the largest: ")?;
-        appendLargeLocal(c, mut message, n.functions[f as usize], frame.locals[0], frame.locals[0] == frame.returned, true)?;
+        appendLargeLocal(
+            c,
+            mut message,
+            n.functions[f as usize],
+            frame.locals[0],
+            frame.locals[0] == frame.returned,
+            true,
+        )?;
         appendText(
             mut message,
             "): a main thread's stack is 1 MiB on iOS and Windows, and a thread's is smaller on some systems; keep a large value behind a pointer or in an allocator's memory ('--explain-frames' lists them; ADR 0163)",
@@ -428,7 +435,14 @@ fn explainLargeFrames(
             if (k > 0) {
                 appendText(out, "; ")?;
             }
-            appendLargeLocal(c, out, n.functions[f as usize], frame.locals[k], frame.locals[k] == frame.returned, false)?;
+            appendLargeLocal(
+                c,
+                out,
+                n.functions[f as usize],
+                frame.locals[k],
+                frame.locals[k] == frame.returned,
+                false,
+            )?;
         }
         out.push('\n')?;
     }

@@ -405,6 +405,90 @@ TABLES.append(table(
     ],
 ))
 
+BYTES = "[ByteStringView](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-bytestringview)"
+TABLES.append(table(
+    "`ByteStringView`",
+    "A `ByteStringView` borrows text that may hold any bytes, UTF-8 or not, and converts to UTF-8 only when asked "
+    "(ADR 0231). It is Copy, and needs a region parameter in a struct as a `StringView` does. In the rows, `v` is a "
+    "`ByteStringView`; lengths and indexes count bytes. A `ByteString` has the members of this table through "
+    "`b.view()`. The searches take `Slice<u8>` needles and are documented with " + BYTES + ".",
+    [],
+    [
+        ("`ByteStringView.fromText(text: StringView) -> ByteStringView`, "
+         "`ByteStringView.fromBytes(bytes: Slice<u8>) -> ByteStringView`",
+         "A view of the bytes of a text, or of a slice. Nothing is copied.", NO, []),
+        ("`v.bytes() -> Slice<u8>`, `v.length() -> usize`, `v.isEmpty() -> bool`",
+         "The bytes as a slice, their number, and whether there are none.", NO, []),
+        ("`v.byteAt(i: usize) -> u8`", "Byte `i`.", INDEX + " when `i` is not below the length", []),
+        ("`v.slice(lo: usize, hi: usize) -> ByteStringView`, `v.sliceFrom(lo: usize) -> ByteStringView`, "
+         "`v.sliceTo(hi: usize) -> ByteStringView`",
+         "A view of part of the bytes. A bound may fall inside a UTF-8 sequence.",
+         "Panics `slice range out of bounds` for a bad range", []),
+        ("`v.toUtf8() -> StringView?`, `v.isUtf8() -> bool`",
+         "The bytes as a `StringView` with no copy when they are UTF-8; whether they are.",
+         "`null` when the bytes are not valid UTF-8", []),
+        ("`v.toUtf8Lossy() -> Result<String, AllocError>`, "
+         "`v.appendLossyTo(out: borrow mut String) -> Result<void, AllocError>`",
+         "The text with one U+FFFD for each maximal subpart of an ill-formed sequence, as browsers and Python "
+         "decode, in a new string or at the end of `out`.", OOM, []),
+        ("`v.chunks() -> Utf8Chunks`",
+         "An iterator over `Utf8Chunk`s: each a `valid` `StringView` and the `invalid` `Slice<u8>` after it, to print "
+         "the bytes with escapes.", NO, []),
+        ("`v.equals(other: ByteStringView) -> bool`, `v.compare(other: ByteStringView) -> i32`, `v == w`",
+         "Whether two byte strings have the same bytes; their bytewise order.", NO, []),
+        ("`v.indexOf(needle: Slice<u8>) -> usize?`, `v.lastIndexOf(needle: Slice<u8>) -> usize?`, "
+         "`v.indexOfByte(b: u8) -> usize?`",
+         "The index where `needle`, or the byte `b`, first or last occurs.", "`null` when it does not occur", []),
+        ("`v.contains(needle: Slice<u8>) -> bool`, `v.startsWith(prefix: Slice<u8>) -> bool`, "
+         "`v.endsWith(suffix: Slice<u8>) -> bool`, `v.equalsIgnoreAsciiCase(other: Slice<u8>) -> bool`",
+         "As a `StringView`'s, on bytes.", NO, []),
+        ("`v.trim() -> ByteStringView`, `v.trimStart() -> ByteStringView`, `v.trimEnd() -> ByteStringView`",
+         "The bytes without the ASCII whitespace at both ends, at the start, or at the end.", NO, []),
+        ("`v.splitOnce(separator: Slice<u8>) -> ByteStringHalves?`, `v.split(separator: Slice<u8>) -> ByteStringSplit`",
+         "The bytes before and after the first `separator`; an iterator over the pieces between separators.",
+         "`null` from `splitOnce` when `separator` does not occur", []),
+        ("`v.toByteString() -> Result<ByteString, AllocError>`", "A `ByteString` that owns a copy of the bytes.",
+         OOM, []),
+        ("`v.writeTo(w: borrow mut TextWriter)`", "Writes the bytes as they are into a `TextWriter`.", NO, []),
+    ],
+))
+
+TABLES.append(table(
+    "`ByteString`",
+    "A `ByteString` owns text of any bytes on the heap and can grow (ADR 0231). It is a move type, and a `HashMap` and "
+    "`OrderedMap` key. In the rows, `b` is a `ByteString`; it has the `ByteStringView` table's members through "
+    "`b.view()`. Print one with `Console.writeBytes(b.bytes())`: `Console.write` takes text only.",
+    [],
+    [
+        ("`ByteString.create() -> ByteString`", "An empty byte string. It allocates nothing.", NO, []),
+        ("`ByteString.withCapacity(n: usize) -> Result<ByteString, AllocError>`",
+         "An empty byte string with room for `n` bytes.", OOM, []),
+        ("`ByteString.fromBytes(bytes: Vector<u8>) -> ByteString`, `b.intoBytes() -> Vector<u8>`",
+         "A byte string made of a vector's bytes, and the vector given back. Nothing is copied.", NO, []),
+        ("`ByteString.copyOf(bytes: Slice<u8>) -> Result<ByteString, AllocError>`, "
+         "`ByteString.fromText(text: StringView) -> Result<ByteString, AllocError>`, "
+         "`b.clone() -> Result<ByteString, AllocError>`",
+         "A new byte string with a copy of the bytes of a slice, a text or a byte string.", OOM, []),
+        ("`b.view() -> ByteStringView`, `b.bytes() -> Slice<u8>`",
+         "The bytes as a view that borrows the byte string, or as a slice.", NO, []),
+        ("`b.length() -> usize`, `b.capacity() -> usize`, `b.isEmpty() -> bool`",
+         "The number of bytes, the room before it must grow, and whether there are none.", NO, []),
+        ("`b.clear()`, `b.truncate(length: usize)`",
+         "Removes every byte, or keeps the first `length`. The capacity stays.", NO, []),
+        ("`b.toUtf8() -> StringView?`, `b.toUtf8Lossy() -> Result<String, AllocError>`",
+         "As the view's: the text when the bytes are UTF-8, or the text with U+FFFD for bad sequences.",
+         "`null` from `toUtf8` when the bytes are not UTF-8; " + OOM + " from `toUtf8Lossy`", []),
+        ("`b.append(text: StringView) -> Result<void, AllocError>`, "
+         "`b.appendBytes(bytes: Slice<u8>) -> Result<void, AllocError>`, "
+         "`b.appendByte(byte: u8) -> Result<void, AllocError>`",
+         "Adds a text, bytes, or one byte at the end.", OOM + "; the byte string is unchanged", []),
+        ("`b.appendNumber(value: i64) -> Result<void, AllocError>`, "
+         "`b.appendUnsigned(value: u64) -> Result<void, AllocError>`",
+         "Adds an integer at the end, in decimal. A `ByteString` also has `AppendFormatted`'s and `AppendText`'s "
+         "methods, as a `String` does.", OOM, []),
+    ],
+))
+
 TABLES.append(table(
     "Optionals: `T?`",
     "A `T?` is either `null` or `Some(value)`. In the rows, `o` is an optional of type `T?`.",

@@ -3565,7 +3565,9 @@ Diagnostics: none new.
   - `Character(u32)`: a letter, as lowercase, a digit, or the unshifted character of a punctuation key, on the
     layout in use;
   - `Function(u8)`: F1 to F12;
-  - `Other(u32)`: the system's code for any other key.
+  - `Other(u32)`: the system's code for any other key;
+  - `Back` (ADR 0233): the system's Back, Android's button or gesture, only while the program wants it
+    (`setBackWanted`, below).
 - **Size and drawing.** `w.size()` is `WindowSize { width, height }` in points, and `w.scale()` is pixels per point
   as an `f32`, such as 2.0 on a Retina display.
   - **`w.present(pixels: Slice<u32>, width, height)`** is `Result<void, WindowError>`. It shows a `width × height`
@@ -3617,8 +3619,8 @@ Diagnostics: none new.
     shortcut: MenuShortcut?)` adds an enabled, unchecked item to the last one, and `m.addSeparator()` a line; each is
     `Result<void, AllocError>`, copies its title, and on an error leaves `m` as it was. `m.setEnabled(id, bool)` and
     `m.setChecked(id, bool)` change every item with that id, and allocate nothing. Ids are the program's choice.
-  - **`MenuShortcut { key: WindowKey, modifiers: WindowModifiers }`.** An `Other` key, a `Function` outside 1 to 12,
-    and a `Character` that is not a printable scalar show no shortcut.
+  - **`MenuShortcut { key: WindowKey, modifiers: WindowModifiers }`.** An `Other` key, `Back`, a `Function` outside 1
+    to 12, and a `Character` that is not a printable scalar show no shortcut.
   - **`w.setMenu(menu: borrow Menu)`** is `Result<void, WindowError>`. It shows the menus as the window's, replacing
     those it showed, and an empty `Menu` removes them. The window keeps a copy, so a change to `menu` shows when it is
     set again. It is `Unsupported` on X11, and for a menu with an item or separator before its first `addMenu` or with
@@ -3708,6 +3710,13 @@ Diagnostics: none new.
     version 5 (`XdndAware`). The files are the source's `text/uri-list`, whose `file:` URIs of this host are
     percent-decoded; the window converts it while the drag hovers, so a drag shows in `dragOver` only once the source
     answered, and again at the drop. A list larger than one X11 request (an `INCR` transfer) gives no files.
+- **Back** (ADR 0233). **`w.setBackWanted(on: bool) -> bool`** (`borrow mut`) says whether the program wants the
+  system's Back, and returns whether the window has one: true on Android and for a scripted window, false elsewhere,
+  where it changes nothing. Wanted, Back is a `Key(WindowKey.Back, down, repeat, …)` event, its press and its
+  release, and the system does nothing with it; not wanted, the default, it is the system's, which ends the window
+  (`Closed`; on Android the activity finishes). A program wants Back while it has somewhere to go back to (a page it
+  opened, a dialog) and lets it go at its first page, as Android's apps do, so Back leaves the app there. While the
+  soft keyboard shows, the input method takes Back first and hides it.
 - **Touches** (ADR 0155). On a touch screen each finger can be followed, for gestures that the program recognizes
   itself:
   - **`w.setTouches(on: bool) -> bool`** (`borrow mut`) turns touches on or off and returns whether the system gives
@@ -3999,7 +4008,7 @@ Diagnostics: none new.
 - **Effects.** `open`, `openWith`, `openStyled`, `minimize`, `toggleMaximized`, `present`, `presentChanged`, `waitFrame`, `waitEvent`, `waitAny` and `setTitle` may
   sleep (`@effects(sleep)`). `setTextInput`, `setClipboardText`, `clipboardText`, `setMenu` and the `FileDialog`
   functions may sleep and allocate. `Menu`'s `addMenu`, `addItem` and `addSeparator`, and `nextDrop` and `setAccessNodes`, allocate.
-  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
+  `nextEvent`, `nextMenuChoice`, `dragOver`, `setTouches`, `setBackWanted`, `nextTouch`, `size`, `scale`, `safeArea`, `keyboardInset`, `setTextInputKind`, `setReturnKey`, `nextAppEvent`, `takeAccessAction`, `accessActive`, `announce`, `nativeHandle`, `setCursor`, `setTextInputArea`,
   `programTitleBar`, `setTitleBar`, `maximized`, `composition`, `compositionCaret`, `waker`, `WindowWaker.wake` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
@@ -4066,7 +4075,8 @@ Diagnostics: none new.
     - `down:B,X,Y` and `up:B,X,Y`, with B 0 to 2 for primary, secondary and middle;
     - `click:X,Y`: a primary down on FRAME and its up on FRAME+1;
     - `wheel:DX,DY`;
-    - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`;
+    - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`; NAME `back` is the system's Back (ADR 0233),
+      which, when the program does not want it as the item is delivered, is `Closed` (its release nothing);
     - `type:TEXT`: one `Text` per character;
     - `resize:W,H`, `focus:0|1` and `close`;
     - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale;
@@ -4094,7 +4104,7 @@ Diagnostics: none new.
       while touches are off; numbered by the runtime while they are on). Its time is its frame's at 60 frames a
       second.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
-    `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
+    `pageup`, `pagedown`, `space`, `back` (ADR 0233), `f1`…`f12`, or one character.
   - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
     `ceesafe-window W H`, then the W×H pixels as RGBA bytes.
   - **Waiting.** `waitFrame` returns at once. `waitEvent` returns at once while the script still holds events (they

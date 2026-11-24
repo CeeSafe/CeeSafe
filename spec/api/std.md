@@ -4556,6 +4556,7 @@ public enum WindowKey {
     Character(u32),
     Function(u8),
     Other(u32),
+    Back,
 }
 ```
 
@@ -5290,6 +5291,19 @@ Turns touches on or off (ADR 0155); whether the system gives this window touches
 for a scripted window, false elsewhere, where nothing changes. On, every finger is queued for `nextTouch` and no
 finger is the pointer any more (a finger that was, lifts it); off, the default, the first finger down is the
 pointer, as ADR 0154 has it, and every finger down when they are turned off is `Cancelled`.
+Safety: the runtime reads the flag.
+
+### Window.setBackWanted
+
+```ceesafe
+public fn setBackWanted(borrow mut this, on: bool) -> bool
+```
+
+Whether the program wants the system's Back (ADR 0233), and whether this window has one: true on Android and for
+a scripted window, false elsewhere, where nothing changes. Wanted, Back is a `Key(WindowKey.Back, …)` event and
+the system does nothing with it; not wanted, the default, it is the system's, which ends the window (`Closed`).
+A program wants it while it has somewhere to go back to (an open page, a dialog) and lets it go at its first
+page, so Back leaves the app there, as Android's apps do. While the soft keyboard shows, Back hides it first.
 Safety: the runtime reads the flag.
 
 ### Window.nextTouch

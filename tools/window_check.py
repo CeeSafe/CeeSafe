@@ -109,6 +109,7 @@ fn key(k: WindowKey) {
         WindowKey.Character(c) => { Console.write("char:"); Console.write(c); }
         WindowKey.Function(n) => { Console.write("f"); Console.write(n); }
         WindowKey.Other(c) => { Console.write("other:"); Console.write(c); }
+        WindowKey.Back => { Console.write("back"); }
     }
 }
 
@@ -1365,6 +1366,62 @@ fn main() -> i32 {
 # Touches (ADR 0155): with "trace", the script's fingers frame by frame, touches turned on before frame 2 and off
 # before frame 6; with "full", 300 moves of one finger and then 200 taps at once; with "wait", a touch ending a wait
 # alone; with "real", a real window's answer to setTouches.
+BACK = r"""
+fn say(text: StringView) {
+    Console.writeLine(text);
+    Console.flush();
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check back", 8, 8)) {
+        Ok(w) => w,
+        Err(_) => {
+            say("open failed");
+            return 1;
+        }
+    };
+    say(if (window.setBackWanted(true)) "has back" else "no back");
+    var pixels = Vector<u32>.create();
+    for (i in 0..64) {
+        pixels.push(0)!;
+    }
+    for (frame in 0u32..6) {
+        if (frame == 2) {
+            let _ = window.setBackWanted(false);
+            say("back let go");
+        }
+        let _ = window.present(pixels.view(), 8, 8);
+        loop {
+            match (window.nextEvent()) {
+                Some(e) => {
+                    match (e) {
+                        WindowEvent.Closed => {
+                            say("closed");
+                            return 0;
+                        }
+                        WindowEvent.Key(k, down, _, _) => {
+                            match (k) {
+                                WindowKey.Back => { say(if (down) "back 1" else "back 0"); }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                null => { break; }
+            }
+        }
+    }
+    say("not closed");
+    return 0;
+}
+"""
+
+# ADR 0233: Back, wanted, is a key's press and release; let go, the system's Back ends the window (Closed). Frame 0's
+# items are delivered as the window opens, before the program can want Back: the first is on frame 1.
+BACK_SCRIPT = "1:key:back;4:key:back"
+BACK_EXPECTED = ["has back", "back 1", "back 0", "back let go", "closed"]
+
 TOUCH = r"""
 fn say(text: StringView) {
     Console.writeLine(text);
@@ -3799,6 +3856,20 @@ def main():
         ]
         for what, command, name, want, status in touch_cases:
             r = run(command, {"CEESAFE_WINDOW_SCRIPT": touch_scripts[name]}, work)
+            got = r.stdout.splitlines()
+            if r.returncode != status or got != want:
+                problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +
+                                "\n  ".join(got) + "\n" + r.stderr)
+
+        back_source, back = build(compiler, BACK, work, "window_check_back")
+        back_script = os.path.join(work, "back.txt")
+        with open(back_script, "w", encoding="utf-8") as f:
+            f.write(BACK_SCRIPT)
+        for what, command, want, status in (
+            ("Back, wanted and let go", [back], BACK_EXPECTED, 0),
+            ("Back in the interpreter", [compiler, "run", "--interp", back_source], ["open failed"], 1),
+        ):
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": back_script}, work)
             got = r.stdout.splitlines()
             if r.returncode != status or got != want:
                 problems.append(f"{what}: expected\n  " + "\n  ".join(want) + f"\ngot (status {r.returncode})\n  " +

@@ -143,6 +143,7 @@ no argument 1000
 | `File.createReadWrite(path)` | `Result<File, IoError>` for reading and writing, created if missing, emptied if present (ADR 0221) |
 | `IoError.BadDescriptor` | "Bad file descriptor" (`EBADF`): reading a file opened only for writing (`File.create`), or writing one opened only for reading |
 | `f.lock(FileLock.Exclusive, start, length)`, `f.tryLock(…)`, `f.unlock(start, length)` | advisory locks on bytes of the file, which other programs (SQLite among them) see; `tryLock` is `Result<bool, IoError>`, `false` when another holds a conflicting lock (ADR 0220) |
+| `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -189,6 +190,42 @@ fn main() {
 
 ```text
 true
+```
+
+A shared mapping is memory that other processes may write at any moment, so it is never a slice: bytes are copied
+out and in, and integers are atomics, which are atomic between processes too. An access outside the region, or an
+atomic not aligned to its size in the file, panics. To reach more of the file, map another region; regions of the
+same bytes are one memory.
+
+```ceesafe
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/index")!;
+    {
+        let f = File.createReadWrite(path.view())!;
+        let a = f.mapShared(0, 4096)!;
+        let b = f.mapShared(0, 64)!;
+        a.writeAt(8, "header".bytes());
+        let _ = a.compareExchange32(0, 0, 41, Ordering.AcquireRelease);
+        let _ = b.fetchAdd32(0, 1, Ordering.AcquireRelease);
+        SharedMapping.fence();
+        var copy = [0u8; 6];
+        b.readAt(8, mut copy[..]);
+        Console.writeLine(StringView.fromUtf8(copy[..])!);
+        Console.writeLine(a.load32(0, LoadOrdering.Acquire));
+        Console.writeLine(f.length()!);
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+```
+
+```text
+header
+42
+4096
 ```
 
 ## `StringView` and `String`

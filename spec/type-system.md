@@ -3175,6 +3175,8 @@ ADR 0221's.
   - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
     `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4). It does not check
     the `File`'s access mode.
+- **Shared mappings** (ADR 0232; lib/std's `SharedMapping`, hosted; `borrow this`): `f.mapShared(offset: u64,
+  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20).
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
   read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
@@ -4167,6 +4169,41 @@ Diagnostics: none new.
 - **Where** (ADR 0177 §5, step by step): Android, macOS and Windows, both transports; iOS, Low Energy
   (`pairedPrinters` and a Classic link are `Unsupported`). Linux, FreeBSD, CosmoOS and `ceesafec run --interp`:
   `Unsupported`. Until a system's step is done, its calls are `Unsupported` too.
+
+### 26.20 Shared mappings of a file (ADR 0232)
+- **`f.mapShared(offset: u64, length: usize)`** (lib/std's `SharedMapping.mapShared(f, offset, length)`; `f`
+  borrowed for the call): `Result<SharedMapping, IoError>`, bytes `offset` to `offset + length - 1` of the file
+  mapped shared. What one mapping writes, every mapping of those bytes sees, in this process and in others, and so
+  do the file's reads and writes. `offset` need not be aligned. `length` 0, or a range that ends past 2^63 - 1, is
+  `InvalidInput`; a file not open for reading and writing (`openReadWrite`, `openOrCreate`, `createNew`,
+  `createReadWrite`) is `BadDescriptor`.
+- **The file covers the region first**: a shorter file is extended with zero bytes (POSIX: one byte written at the
+  region's last byte, which never shortens a file another process grew; Windows: the mapping object's size), and
+  never shortened.
+- **The value** is a move type that needs drop, Send and Share; it does not borrow the `File`, which may be dropped
+  first. Dropping it unmaps the region. A program that needs more of the file maps another region (SQLite maps its
+  `-shm` 32 KiB at a time); regions may overlap.
+- **Access is by copies and atomics, never a slice** (another process may write the bytes at any moment, §25):
+  `m.readAt(at: usize, into: SliceMut<u8>)` and `m.writeAt(at, bytes: Slice<u8>)` copy (a copy taken while another
+  process writes may mix old and new bytes); `m.load32(at, LoadOrdering)`, `m.store32(at, value, StoreOrdering)`,
+  `m.compareExchange32(at, expected, desired, Ordering) -> Result<u32, u32>`, `m.fetchAdd32(at, value, Ordering)`,
+  and `load64`, `store64`, `compareExchange64`, `fetchAdd64`, are `AtomicU32`'s and `AtomicU64`'s `…With`
+  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order.
+  `SharedMapping.fence()` is a sequentially consistent fence. `m.sync()` writes the region's changed pages to the
+  file and waits (`msync`; `FlushViewOfFile` on Windows). `m.length()` and `m.offset()` describe the region.
+- **A copy whose bytes are not all inside the region panics**, and so does an atomic whose bytes are not, or whose
+  file offset (`offset() + at`) is not a multiple of its size.
+- **A file shortened under a mapping** by another party (another process, or the program's own `f.setLength`):
+  natively an access to a page wholly past the new end ends the program by `SIGBUS`, the system's default; the
+  access does not complete, so nothing wrong is read or written (ADR 0232 §2.3). Windows refuses to shorten a mapped
+  file.
+- `mapShared` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
+- **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
+  Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a
+  positional read or write of the file, so the program's mappings and threads see one memory and other processes see
+  its bytes, but an interpreted atomic is not atomic against another process; integers are little-endian; a file
+  shortened under the mapping, or removed or renamed while mapped, is a fault at the next access; `--sandbox`
+  refuses it.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 

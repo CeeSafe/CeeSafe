@@ -90,7 +90,9 @@ GCC only. What differs:
 - **I/O** (`ceesafe_rt_io.c`, under `_WIN32`):
   - program arguments work as elsewhere;
   - files use the C runtime's `_open`, `_read`, `_write`, `_close` and `_unlink` in binary mode;
-  - `Process.run` uses `_spawnvp(_P_WAIT, …)`;
+  - `Process.run` uses `CreateProcessW` with this process's standard handles, and waits; its command line, as
+    `Process.capture`'s and `Process.spawn`'s, quotes each argument for `CommandLineToArgvW`, and a batch file is
+    refused (type-system.md §26.5). In 0.95.6 and earlier it used `_wspawnvp(_P_WAIT, …)`, which does not quote;
   - **TCP** (L1 A4a) is Winsock 2, started once (`InitOnceExecuteOnce`). A socket's descriptor is an id from
     `CEE_SOCKET_BASE` (`0x40000000`) in a table of `SOCKET`s under a slim reader-writer lock, so lib/std's `i32`
     descriptors never hold a truncated handle; `ceesafe_fd_read`, `_write` and `_drop` send an id to `recv`, `send`
@@ -100,7 +102,9 @@ GCC only. What differs:
 - **Test.** The Windows checks (`tools/host_c_check.py`, and the run corpus under `--cc cl`) cover three things:
   - every run-pass and run-fail program builds with MSVC and gives the corpus expectations;
   - `nwc` reads files and standard input;
-  - a program runs `cmd /c exit 7` with `Process.run`, and sees a missing program fail.
+  - a program runs `cmd /c exit 7` with `Process.run`, and sees a missing program fail;
+  - `tools/process_check.py` (windows.yml): what a child receives from `Process.run`, `capture` and `spawn`, awkward
+    arguments and the input included, against the list Python passes, and batch files refused.
 
   **A workaround for MSVC's optimiser:** ceesafec builds with `/O2 /Oi-`. At plain `/O2`, MSVC 19.44 to 19.51 (for
   ARM64 and x64) miscompile a loop that stores through the pointer of a slice copy, followed by a `memmove` into the

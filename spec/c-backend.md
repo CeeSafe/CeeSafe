@@ -92,7 +92,7 @@ GCC only. What differs:
   - files use the C runtime's `_open`, `_read`, `_write`, `_close` and `_unlink` in binary mode;
   - `Process.run` uses `CreateProcessW` with this process's standard handles, and waits; its command line, as
     `Process.capture`'s and `Process.spawn`'s, quotes each argument for `CommandLineToArgvW`, and a batch file is
-    refused (type-system.md §26.5). In 0.95.6 and earlier it used `_wspawnvp(_P_WAIT, …)`, which does not quote;
+    refused (type-system.md §26.5). Before 0.95.8 (ADR 0245) it used `_wspawnvp(_P_WAIT, …)`, which does not quote;
   - **TCP** (L1 A4a) is Winsock 2, started once (`InitOnceExecuteOnce`). A socket's descriptor is an id from
     `CEE_SOCKET_BASE` (`0x40000000`) in a table of `SOCKET`s under a slim reader-writer lock, so lib/std's `i32`
     descriptors never hold a truncated handle; `ceesafe_fd_read`, `_write` and `_drop` send an id to `recv`, `send`

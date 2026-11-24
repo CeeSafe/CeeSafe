@@ -1227,7 +1227,7 @@ fn appendBatchText(text: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result<void
 /// batch file in a fresh temporary directory runs the program with its output redirected to files, Process.run runs
 /// the batch file through cmd.exe, and the files are read back.
 /// It began because Process.capture failed on Windows (it kept its input file open for writing while the runtime
-/// opened it to read; fixed after 0.95.6, docs/p8-plan.md). It stays, for two things Process.capture cannot do: the
+/// opened it to read; fixed in 0.95.8, ADR 0245, docs/p8-plan.md). It stays, for two things Process.capture cannot do: the
 /// compiler must run in the environment vcvarsall.bat leaves, in the same cmd.exe, and lib/std cannot set a child's
 /// environment (§26.9), which `set` lines here do.
 fn runThroughBatch(

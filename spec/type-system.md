@@ -3403,8 +3403,8 @@ ADR 0221's.
     any case, also before a `:` (a drive or an alternate stream) and with the dots and spaces Windows drops from the
     end of a name, is therefore `InvalidInput`, before anything is started. A program that means to run a batch file
     runs `cmd.exe` itself, and quotes the line for cmd.exe itself.
-  - In 0.95.6 and earlier, `Process.run` passed its arguments to `_wspawnvp`, which joins them without quoting:
-    an argument with a space reached the child as two.
+  - Before 0.95.8 (ADR 0245), `Process.run` passed its arguments to `_wspawnvp`, which joins them without
+    quoting: an argument with a space reached the child as two.
 
 ### 26.6 Runtime (Profile A and hosted)
 Implemented in `runtime/hosted/ceesafe_rt_io.c` over the C library's `open`, `read`, `write`,
@@ -3431,9 +3431,9 @@ Diagnostics: none new.
   - CosmoOS: `spawnvp`'s handle mapping (its `spawn.h`).
   - Windows: `CreateProcessW`, with the command line of §26.5 (a batch file is refused). The input file is written
     and closed before the child is started, and is opened for the child to read, shared with readers and writers;
-    the output files are created for the child, shared with readers. In 0.95.6 and earlier lib/std kept the input file open
-    for writing while the runtime opened it to read without sharing with writers, which Windows refuses: every
-    `capture` failed there.
+    the output files are created for the child, shared with readers. Before 0.95.8 (ADR 0245) lib/std kept the
+    input file open for writing while the runtime opened it to read without sharing with writers, which Windows
+    refuses: every `capture` failed there.
 - **Errors.** As for `Process.run`: a program that cannot be started is `NotFound` and the like, and a failed
   allocation is `OutOfMemory`. A mistake in the call's arguments is reported against `HostServices.capture`, lib/std's
   function behind it.

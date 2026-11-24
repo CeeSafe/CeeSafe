@@ -14,8 +14,8 @@ The arguments reach the program in hex, so they need no quoting on the way in, a
 script made: every argument must arrive as one, unchanged, and the input byte for byte. On Windows a `.bat` or
 `.cmd` program must be refused (`InvalidInput`) by all three, under each spelling Windows reads as one, before
 anything runs (BatBadBut, CVE-2024-24576), and `cmd.exe /d /c "exit 3"` still runs. Everywhere a missing program is
-`NotFound`. Until 0.95.6 every `capture` failed on Windows, and `run` split an argument with a space in two
-(CEESAFE_FINDINGS 45 and 46 of the SQLite port).
+`NotFound`. Before 0.95.8 every `capture` failed on Windows, and `run` split an argument with a space in two
+(ADR 0245; CEESAFE_FINDINGS 45 and 46 of the SQLite port).
 
 usage: python3 tools/process_check.py --compiler out/ceesafec [--write DIR]
 """

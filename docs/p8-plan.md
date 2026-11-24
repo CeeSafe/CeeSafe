@@ -62,7 +62,7 @@ packages, which ceesafec does not read (Decision 0003).
 - No way to set a child process's environment: git runs as `env GIT_TERMINAL_PROMPT=0 git …` (POSIX).
 - No rename: a finished git checkout is moved into place by `mv` (POSIX).
 - `Process.capture` failed on Windows (`InvalidInput`): `captureIn` kept the input file open for writing while
-  `ceesafe_host_spawn` reopened it with `FILE_SHARE_READ`, which Windows refuses. Fixed after 0.95.6 (the file is
+  `ceesafe_host_spawn` reopened it with `FILE_SHARE_READ`, which Windows refuses. Fixed in 0.95.8 (ADR 0245; the file is
   closed first and opened sharing with writers; type-system.md §26.7). On Windows ceesafec still runs every tool through
   a batch file that redirects its output to files, run by `Process.run` (`runThroughBatch`, `src/host/toolchain.cee`):
   the compiler must run in the environment `vcvarsall.bat` leaves, in the same cmd.exe, and the first gap above (no

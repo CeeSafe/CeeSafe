@@ -3253,6 +3253,258 @@ int64_t ceesafe_ios_push_token(char *out, size_t capacity) {
     return written > 0 && (size_t)written < capacity ? (int64_t)written : -6;
 }
 
+/* ---- A notification service extension on iOS (ADR 0246) ----
+   A windowed program whose bundle is an .appex is an extension: its start defines CeeSafeNotificationService (a
+   UNNotificationServiceExtension, the extension's principal class in its Info.plist), runs the program's main on a
+   thread of its own, and gives the main thread to NSExtensionMain. Each push iOS hands the class is queued for the
+   program (ceesafe_ios_push_extension_next) and shown with what the program gives (..._deliver), or as it came when
+   iOS's time runs out (serviceExtensionTimeWillExpire). A content handler is a block, kept with _Block_copy. */
+#define CEE_IOS_PUSH_QUEUE 8
+
+struct cee_ios_push_request {
+    uint64_t id;
+    cee_id request; /* retained */
+    void *handler;  /* the content handler, _Block_copy'd */
+    char *record;   /* title NUL body NUL the payload's JSON */
+    size_t record_length;
+    int taken;
+};
+
+struct cee_ios_handler_block {
+    void *isa;
+    int flags, reserved;
+    void (*invoke)(void *, cee_id);
+};
+
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t ready;
+    struct cee_ios_push_request queue[CEE_IOS_PUSH_QUEUE];
+    size_t count;
+    uint64_t next_id;
+    int extension; /* 1 in an extension */
+    void *(*block_copy)(const void *);
+    void (*block_release)(const void *);
+} cee_ios_ext = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, {{0}}, 0, 1, 0, NULL, NULL};
+
+/* A malloc'd copy of an NSString's UTF-8 (empty for nil), its length in `*length`. */
+static char *cee_ios_ext_text(cee_id string, size_t *length) {
+    const char *utf8 = string != NULL ? cee_ios_send_cstr(string, "UTF8String") : NULL;
+    size_t n = utf8 != NULL ? strlen(utf8) : 0u;
+    char *copy = (char *)malloc(n + 1u);
+    if (copy != NULL) {
+        if (n > 0) {
+            memcpy(copy, utf8, n);
+        }
+        copy[n] = 0;
+    }
+    *length = n;
+    return copy;
+}
+
+/* Shows `content` through the request's handler, and lets the request go. Called with the lock held. */
+static void cee_ios_ext_finish(size_t index, cee_id content) {
+    struct cee_ios_push_request *r = &cee_ios_ext.queue[index];
+    struct cee_ios_handler_block *handler = (struct cee_ios_handler_block *)r->handler;
+    if (handler != NULL) {
+        handler->invoke(handler, content);
+        cee_ios_ext.block_release(handler);
+    }
+    cee_ios_send_v(r->request, "release");
+    free(r->record);
+    for (size_t k = index + 1; k < cee_ios_ext.count; k++) {
+        cee_ios_ext.queue[k - 1] = cee_ios_ext.queue[k];
+    }
+    cee_ios_ext.count--;
+}
+
+static void cee_ios_ext_receive(cee_id self, cee_sel cmd, cee_id request, void *handler) {
+    (void)self;
+    (void)cmd;
+    void *pool = cee_uikit.pool_push();
+    cee_id content = cee_ios_send(request, "content");
+    size_t title_length = 0, body_length = 0, json_length = 0;
+    char *title = cee_ios_ext_text(content != NULL ? cee_ios_send(content, "title") : NULL, &title_length);
+    char *body = cee_ios_ext_text(content != NULL ? cee_ios_send(content, "body") : NULL, &body_length);
+    cee_id info = content != NULL ? cee_ios_send(content, "userInfo") : NULL;
+    cee_id data = info != NULL ? ((cee_id(*)(cee_id, cee_sel, cee_id, unsigned long, void *))cee_uikit.send)(
+                                     cee_ios_cls("NSJSONSerialization"), cee_ios_sel("dataWithJSONObject:options:error:"),
+                                     info, 0ul, NULL)
+                               : NULL;
+    const char *json = data != NULL ? (const char *)cee_ios_send(data, "bytes") : NULL;
+    json_length = data != NULL ? (size_t)cee_ios_send_long(data, "length") : 0u;
+    char *record = (char *)malloc(title_length + body_length + json_length + 3u);
+    pthread_mutex_lock(&cee_ios_ext.lock);
+    if (record != NULL && title != NULL && body != NULL && cee_ios_ext.count < CEE_IOS_PUSH_QUEUE &&
+        cee_ios_ext.block_copy != NULL) {
+        size_t at = 0;
+        memcpy(record + at, title, title_length);
+        at += title_length;
+        record[at++] = 0;
+        memcpy(record + at, body, body_length);
+        at += body_length;
+        record[at++] = 0;
+        if (json_length > 0) {
+            memcpy(record + at, json, json_length);
+        }
+        at += json_length;
+        record[at] = 0;
+        struct cee_ios_push_request *r = &cee_ios_ext.queue[cee_ios_ext.count++];
+        r->id = cee_ios_ext.next_id++;
+        r->request = cee_ios_send(request, "retain");
+        r->handler = cee_ios_ext.block_copy(handler);
+        r->record = record;
+        r->record_length = at;
+        r->taken = 0;
+        record = NULL;
+        pthread_cond_broadcast(&cee_ios_ext.ready);
+    } else if (handler != NULL) {
+        /* No room, or no memory: the push is shown as it came. */
+        ((struct cee_ios_handler_block *)handler)->invoke(handler, content);
+    }
+    pthread_mutex_unlock(&cee_ios_ext.lock);
+    free(record);
+    free(title);
+    free(body);
+    cee_uikit.pool_pop(pool);
+}
+
+static void cee_ios_ext_expire(cee_id self, cee_sel cmd) {
+    (void)self;
+    (void)cmd;
+    void *pool = cee_uikit.pool_push();
+    pthread_mutex_lock(&cee_ios_ext.lock);
+    while (cee_ios_ext.count > 0) {
+        cee_ios_ext_finish(0, cee_ios_send(cee_ios_ext.queue[0].request, "content"));
+    }
+    pthread_mutex_unlock(&cee_ios_ext.lock);
+    cee_uikit.pool_pop(pool);
+}
+
+/* The next push not yet taken, within `milliseconds`: its record into `out` (at most `capacity`), its id in `*id`, and
+   the record's length; 0 when none came; -2 outside an extension; -6 when the record does not fit. */
+int64_t ceesafe_ios_push_extension_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id);
+
+int64_t ceesafe_ios_push_extension_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id) {
+    if (!cee_ios_ext.extension) {
+        return -2;
+    }
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += (time_t)(milliseconds / 1000u);
+    until.tv_nsec += (long)(milliseconds % 1000u) * 1000000L;
+    if (until.tv_nsec >= 1000000000L) {
+        until.tv_sec += 1;
+        until.tv_nsec -= 1000000000L;
+    }
+    pthread_mutex_lock(&cee_ios_ext.lock);
+    int64_t result = 0;
+    for (;;) {
+        size_t k = 0;
+        while (k < cee_ios_ext.count && cee_ios_ext.queue[k].taken) {
+            k++;
+        }
+        if (k < cee_ios_ext.count) {
+            struct cee_ios_push_request *r = &cee_ios_ext.queue[k];
+            if (r->record_length > capacity) {
+                result = -6;
+            } else {
+                memcpy(out, r->record, r->record_length);
+                r->taken = 1;
+                *id = r->id;
+                result = (int64_t)r->record_length;
+            }
+            break;
+        }
+        if (pthread_cond_timedwait(&cee_ios_ext.ready, &cee_ios_ext.lock, &until) != 0) {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&cee_ios_ext.lock);
+    return result;
+}
+
+/* Shows the push `id` with `title` (kept as it came when empty) and `body`: 0, or -1 when it is no longer waiting (its
+   time ran out). */
+int32_t ceesafe_ios_push_extension_deliver(uint64_t id, const uint8_t *title, uint64_t title_length,
+                                           const uint8_t *body, uint64_t body_length);
+
+int32_t ceesafe_ios_push_extension_deliver(uint64_t id, const uint8_t *title, uint64_t title_length,
+                                           const uint8_t *body, uint64_t body_length) {
+    void *pool = cee_uikit.pool_push();
+    pthread_mutex_lock(&cee_ios_ext.lock);
+    int32_t result = -1;
+    for (size_t k = 0; k < cee_ios_ext.count; k++) {
+        if (cee_ios_ext.queue[k].id != id) {
+            continue;
+        }
+        cee_id content = cee_ios_send(cee_ios_send(cee_ios_ext.queue[k].request, "content"), "mutableCopy");
+        if (content != NULL) {
+            char text[4352];
+            if (title_length > 0 && title_length < sizeof text) {
+                memcpy(text, title, (size_t)title_length);
+                text[title_length] = 0;
+                cee_ios_send_v_id(content, "setTitle:", cee_ios_string(text));
+            }
+            if (body_length < sizeof text) {
+                memcpy(text, body, (size_t)body_length);
+                text[body_length] = 0;
+                cee_ios_send_v_id(content, "setBody:", cee_ios_string(text));
+            }
+        }
+        cee_ios_ext_finish(k, content != NULL ? content : cee_ios_send(cee_ios_ext.queue[k].request, "content"));
+        if (content != NULL) {
+            cee_ios_send_v(content, "release");
+        }
+        result = 0;
+        break;
+    }
+    pthread_mutex_unlock(&cee_ios_ext.lock);
+    cee_uikit.pool_pop(pool);
+    return result;
+}
+
+static void *cee_ios_ext_program(void *argument) {
+    (void)argument;
+    exit(main(*_NSGetArgc(), *_NSGetArgv()));
+}
+
+/* Whether this process is an app extension: its bundle is an .appex. */
+static int cee_ios_is_extension(void) {
+    cee_id bundle = cee_ios_send(cee_ios_cls("NSBundle"), "mainBundle");
+    const char *path = bundle != NULL ? cee_ios_send_cstr(cee_ios_send(bundle, "bundlePath"), "UTF8String") : NULL;
+    size_t n = path != NULL ? strlen(path) : 0u;
+    return n > 6 && strcmp(path + n - 6, ".appex") == 0;
+}
+
+/* An extension's start: the principal class, the program's thread, and NSExtensionMain (which does not return). */
+static void cee_ios_extension_main(void) {
+    (void)dlopen("/System/Library/Frameworks/UserNotifications.framework/UserNotifications", RTLD_NOW | RTLD_GLOBAL);
+    cee_ios_ext.block_copy = (void *(*)(const void *))dlsym(RTLD_DEFAULT, "_Block_copy");
+    cee_ios_ext.block_release = (void (*)(const void *))dlsym(RTLD_DEFAULT, "_Block_release");
+    int (*extension_main)(int, char **) = (int (*)(int, char **))dlsym(RTLD_DEFAULT, "NSExtensionMain");
+    cee_id base = cee_ios_cls("UNNotificationServiceExtension");
+    cee_id service = base != NULL ? cee_uikit.allocate_class(base, "CeeSafeNotificationService", 0) : NULL;
+    if (service == NULL || extension_main == NULL || cee_ios_ext.block_copy == NULL) {
+        return; /* not an extension CeeSafe can serve: main runs as a program with no window */
+    }
+    cee_uikit.add_method(service, cee_ios_sel("didReceiveNotificationRequest:withContentHandler:"),
+                         (cee_fn)cee_ios_ext_receive, "v@:@@?");
+    cee_uikit.add_method(service, cee_ios_sel("serviceExtensionTimeWillExpire"), (cee_fn)cee_ios_ext_expire, "v@:");
+    cee_uikit.register_class(service);
+    cee_ios_ext.extension = 1;
+    pthread_t program;
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, 8u * 1024u * 1024u);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&program, &attributes, cee_ios_ext_program, NULL) != 0) {
+        cee_ios_ext.extension = 0;
+        return;
+    }
+    exit(extension_main(*_NSGetArgc(), *_NSGetArgv()));
+}
+
 void ceesafe_window_app_start(void) {
     static int started;
     if (started) {
@@ -3261,6 +3513,10 @@ void ceesafe_window_app_start(void) {
     started = 1;
     if (!cee_uikit_load()) {
         return; /* no UIKit: the program runs, and Window.open is NoDisplay */
+    }
+    if (cee_ios_is_extension()) {
+        cee_ios_extension_main(); /* returns only when it cannot serve: main then runs as it is */
+        return;
     }
     cee_id delegate = cee_uikit.allocate_class(cee_ios_cls("UIResponder"), "CeeSafeAppDelegate", 0);
     if (delegate != NULL) {

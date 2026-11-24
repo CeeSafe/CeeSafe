@@ -4366,6 +4366,9 @@ Diagnostics: none new.
   `ceesafe.secrets.<app>`), in the app's no-backup folder. Windows: DPAPI for the current user, in
   `%LOCALAPPDATA%\<app>\secrets`. Linux, FreeBSD, CosmoOS and `ceesafec run --interp`: `Unsupported`. A value never
   leaves the device it was written on.
+- **In a group** (ADR 0246): `Secrets.readIn(group, app, name)`, `writeIn` and `removeIn` keep the secret in the
+  keychain group `group` (an App Group, or a team-prefixed keychain group) an app shares with its extensions, on
+  Apple's systems; elsewhere the group changes nothing. A call without a group names the app's own group only.
 - **Testing.** `CEESAFE_SECRETS_DIR=<folder>` keeps the values natively as plain files `<folder>/<app>/<name>`
   instead, on every system; never for a real app's secrets.
 
@@ -4400,6 +4403,15 @@ Diagnostics: none new.
   FreeBSD, CosmoOS, a program with no window and `ceesafec run --interp`: `Unsupported`.
 - **Testing.** `CEESAFE_PUSH_TOKEN=<text>` is the token instead, natively on every system: `apns:HEX`,
   `apns-sandbox:HEX` or `fcm:TOKEN`.
+- **A notification service extension** (ADR 0246): a windowed program built into an iOS app's `PlugIns/<name>.appex`
+  runs its `main` on a thread of its own while the extension lives; `NotificationExtension.next(milliseconds)` is
+  `Result<PushRequest?, PushError>`, the next push (`title`, `body`, `payload`: its `userInfo` as JSON) or null in
+  the time; `NotificationExtension.deliver(request, title, body)` shows it so (an empty title keeps the push's); one
+  not delivered in iOS's time is shown as it came. Elsewhere `Unsupported`. `CEESAFE_PUSH_REQUEST=<file>` (title,
+  body, payload on three lines) is one push instead, on every system, a delivery appended to
+  `CEESAFE_NOTIFICATIONS_DUMP` as `deliver TITLE<TAB>BODY`.
+- **`AppGroup.folder(group)`**: `String?`, an App Group's folder on Apple's systems, which an app and its extensions
+  share; null where there is none.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 

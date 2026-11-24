@@ -45,7 +45,8 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   calls). A hosted program that prints a float also gets `ceesafe_rt_float.c`, the float formatter and its table
   (type-system.md §35.7; M11 G7b), and one that calls a float method of libm's (`exp`, `sin`, `pow` …;
   type-system.md §35.8, ADR 0218) `ceesafe_rt_math.c`, whose functions call the C library's math functions and are
-  linked with `-lm` (except on Windows). One that uses Bluetooth gets `ceesafe_rt_bluetooth.c` (ADR 0177), and one
+  linked with `-lm` (except on Windows, where they call ucrtbase.dll's, resolved at the first call, whatever the C
+  compiler: ADR 0248). One that uses Bluetooth gets `ceesafe_rt_bluetooth.c` (ADR 0177), and one
   that uses the secret store `ceesafe_rt_secrets.c` (type-system.md §26.21, ADR 0242), which loads its system
   libraries itself, so the link names none. Freestanding programs get `ceesafe/rt.h` and `ceesafe_rt_core.c` compiled with `CEE_FREESTANDING`
   (a `#define` at its top), which leaves out everything that needs a platform service; the

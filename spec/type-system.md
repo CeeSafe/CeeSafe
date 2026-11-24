@@ -5656,18 +5656,27 @@ and a zero result keeps `x`'s sign.
   libm's and may differ from one platform to another: `fma`, `remainder`, `truncatingRemainder`, `scaleB` and `logB`
   are exact, and the others are as accurate as the platform makes them (correctly rounded or within an ulp or two on
   those named).
+- **Which libm (ADR 0248).** The system's, on the machine the program runs on, whatever C compiler built it: on
+  Linux, macOS, FreeBSD, Android and iOS the system libm the program links; on Windows the system's C runtime,
+  ucrtbase.dll, for every compiler (`cl`, which would otherwise copy its SDK's static UCRT into the program, clang,
+  and MinGW-w64 gcc of either flavour), loaded from System32 at the first call; where it cannot be loaded (Windows 7
+  or 8.1 without the UCRT update), the C library the program was linked with. So two builds of a program on one
+  machine agree bit for bit, and agree with the system's own dynamically linked programs (Python's `math` …).
+  Results may differ between systems and between versions of one system; a statically linked program of another
+  language (sqlite.org's `sqlite3.exe`) carries its own copy and may differ in the last bit.
 - **frexp.** `x.logB()` is `x`'s exponent as a float (`-Infinity` for a zero, `Infinity` for an infinity, NaN for
   NaN) and `x.scaleB(n)` scales by a power of two, so for a finite non-zero `x`,
   `x.scaleB(-truncate<i32>(x.logB()))` is the significand in [1, 2). C's `frexp` returns two values, which CeeSafe has
   no type for (ADR 0216).
 - **In C** each is a call of `ceesafe_math_<C name>_f64`/`_f32` in `ceesafe_rt_math.c`, a runtime file of its own that
-  calls the libm function and nothing more. Being a separate translation unit, it never sees a constant operand, so
+  calls the libm function and nothing more (on Windows through the pointer it resolved in ucrtbase.dll). Being a separate translation unit, it never sees a constant operand, so
   no C compiler evaluates a call at compile time or rewrites it (gcc folds `exp(2.0)` with MPFR; clang turns
   `pow(2.0, y)` into `exp2(y)`), and the result is the libm's at run time. A program links the file only if it calls
   one of them, and the link then adds `-lm`, except on Windows (tooling.md §8.3). With `--emit lib` the host links
   libm (c-backend.md §1).
-- **In the interpreter** each calls the same libm function, from ceesafec (`src/interpreter/math.cee`), so a program
-  prints the same under `run --interp` as its build does on the same machine.
+- **In the interpreter** each calls the same runtime function, from ceesafec (`src/interpreter/math.cee`), so a
+  program prints the same under `run --interp` as its build does on the same machine, whichever compiler built
+  ceesafec.
 - **Hosted only.** With `--profile freestanding` a call of one is N0293: CosmoOS has no libm. `trunc`, `round`,
   `roundEven` and `copySign`, like the methods above them, are in every profile.
 

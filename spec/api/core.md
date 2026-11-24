@@ -56,6 +56,9 @@
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
 - [struct SliceCopying](#struct-slicecopying)
+- [struct VectorDrain](#struct-vectordrain)
+- [struct VectorDrainFailing](#struct-vectordrainfailing)
+- [struct VectorDrainSecret](#struct-vectordrainsecret)
 - [struct VectorEditing](#struct-vectorediting)
 - [struct VectorCopying](#struct-vectorcopying)
 - [struct VectorParts](#struct-vectorparts)
@@ -2985,6 +2988,19 @@ past a depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. A s
 left as it is, and one strictly descending run is reversed. Allocates nothing; the shorter side is sorted
 first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
 
+### SliceAlgorithms.sortStableBy
+
+```ceesafe
+@effectsOf(cmp)
+public fn sortStableBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
+```
+
+Orders `s` as `sortBy` does, and keeps the elements that `cmp` finds equal in the order they had: a stable
+sort (ADR 0225). Allocates nothing: insertion sort of blocks of 20 elements, then the blocks merged in place,
+pairwise and bottom up, by SymMerge (Kim and Kutzner, 2004), which rotates where a merge sort would copy to a
+buffer. O(n log n) calls of `cmp` and O(n log² n) swaps, so it is slower than `sortBy` on long slices. An
+inconsistent `cmp` leaves some permutation of `s`.
+
 ### SliceAlgorithms.forEach
 
 ```ceesafe
@@ -3053,6 +3069,89 @@ public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize)
 
 Copies the `count` elements from index `from` to index `to`, as C's `memmove`: the two ranges may overlap, and
 the elements end as the source was before the copy. Panics, copying nothing, if either range passes the end.
+
+## struct VectorDrain
+
+```ceesafe
+public struct VectorDrain<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` (ADR 0224, type-system.md §23.1): the elements of a vector moved out one at a time, first to last, as
+an iterator, `for (x in v.drain())`, while the vector is borrowed exclusively. The vector is left empty with its
+capacity: elements that were not taken are destroyed with the iterator, first to last. `drain` reverses the
+elements once, by swaps, `next` pops the last, and the drop reverses what is left back, so draining n elements is
+O(n) and allocates nothing. `VectorDrainFailing` and
+`VectorDrainSecret` are the same for a vector of `FailingAllocator` and of `SecretHeap`, whose `pop` wipes the slot.
+
+### VectorDrain.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T>) -> VectorDrain<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrain.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
+
+## struct VectorDrainFailing
+
+```ceesafe
+public struct VectorDrainFailing<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` for a vector of `FailingAllocator`: as VectorDrain.
+
+### VectorDrainFailing.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T, FailingAllocator>) -> VectorDrainFailing<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrainFailing.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
+
+## struct VectorDrainSecret
+
+```ceesafe
+public struct VectorDrainSecret<region r, T> {
+    drop { … }
+}
+```
+
+`v.drain()` for a vector of `SecretHeap`: as VectorDrain; each slot is wiped as its element leaves.
+
+### VectorDrainSecret.drain
+
+```ceesafe
+public fn drain(v: borrow mut(r) Vector<T, SecretHeap>) -> VectorDrainSecret<r, T>
+```
+
+`v.drain()`: an iterator over the elements of `v`, in order.
+
+### VectorDrainSecret.next
+
+```ceesafe
+public fn next(borrow mut this) -> T?
+```
+
+The next element, moved out of the vector; null once all have been taken.
 
 ## struct VectorEditing
 

@@ -164,6 +164,41 @@ A vector can be passed where a `Slice<T>` is expected (it lends its elements), a
 `v.view()` and `v.viewMut()` give the slices explicitly. Other members: `capacity`, `clear()`, `truncate(n)`,
 `swap(i, j)`, and `Vector<T>.withCapacity(n)`.
 
+`v.drain()` moves the elements out in order, for a loop that consumes them; the vector stays borrowed until the
+loop ends, and is then empty, with its capacity, ready to be filled again. A loop that leaves early destroys the
+elements it did not take. `v.sortBy(cmp)` sorts in place and `v.sortStableBy(cmp)` sorts keeping equal elements in
+the order they had (it is slower: use it when that order matters).
+
+```ceesafe
+struct Job {
+    priority: i32;
+    id: u32;
+}
+
+fn main() {
+    var jobs = Vector<Job>.create();
+    jobs.push(Job { priority: 2, id: 1 })!;
+    jobs.push(Job { priority: 1, id: 2 })!;
+    jobs.push(Job { priority: 2, id: 3 })!;
+    jobs.sortStableBy((a, b) => a.priority - b.priority);
+    var done = Vector<Job>.create();
+    for (job in jobs.drain()) {
+        Console.writeLine(job.id);
+        done.push(job)!;
+    }
+    Console.writeLine(jobs.length);
+    Console.writeLine(done.length);
+}
+```
+
+```text
+2
+1
+3
+0
+3
+```
+
 `v.clone()` makes a second vector with a copy of the elements, which must be Copy. It allocates, so it returns a
 `Result`, and afterwards the two vectors have nothing to do with each other.
 

@@ -169,6 +169,30 @@ fn main() {
 1000
 ```
 
+An owner that is the only one left may change the value without a lock: `a.getMut()` lends it exclusively when no
+other owner exists, and is null otherwise. Once the threads that had clones are joined, the value is the program's
+alone again.
+
+```ceesafe
+fn main() {
+    var totals = Arc<Vector<u64>>.create(Vector<u64>.create())!;
+    let reader = totals.clone();
+    Console.writeLine(totals.getMut().isNull()); // `reader` is another owner
+    let worker = Thread.spawn(move () => reader.get().length)!;
+    let _ = worker.join(); // the thread's owner went with it
+    match (totals.getMut()) {
+        Some(values) => { values.push(42)!; }
+        null => {}
+    }
+    Console.writeLine(totals.get().length);
+}
+```
+
+```text
+true
+1
+```
+
 `lock` waits until the lock is free. `tryLock` never waits: it returns the guard, or null if a thread holds the lock
 (the calling thread included). A guard unlocks where it is destroyed: at the end of its block, or earlier where it is
 moved away, as by `let _ = guard;`.

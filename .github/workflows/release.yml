@@ -173,7 +173,7 @@ jobs:
           cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
       - name: Generation 1 from the seed (cc)
         if: ${{ !matrix.msvc }}
-        run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1
+        run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1 -lm -lpthread
       - name: Generation 2, built by generation 1
         run: |
           gen1=./gen1; [ -f gen1.exe ] && gen1=./gen1.exe

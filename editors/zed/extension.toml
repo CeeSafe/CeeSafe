@@ -1,6 +1,6 @@
 id = "ceesafe"
 name = "CeeSafe"
-version = "0.95.6"
+version = "0.95.7"
 schema_version = 1
 authors = ["The CeeSafe authors"]
 description = "The CeeSafe language: syntax highlighting, and diagnostics, hover, go to definition, outline, formatting and quick fixes from ceesafec lsp."
@@ -10,7 +10,7 @@ repository = "https://github.com/CeeSafe/CeeSafe"
 # release's: the release workflow's zed job checks that it has not changed since (docs/release.md).
 [grammars.ceesafe]
 repository = "https://github.com/CeeSafe/CeeSafe"
-rev = "143dab5e3aa4b9ed3b06571e6859a67a9665bc68"
+rev = "2c1ca68dcc9a3117e3c12bccbded5d3223d3632b"
 path = "editors/tree-sitter-ceesafe"
 
 [language_servers.ceesafec]

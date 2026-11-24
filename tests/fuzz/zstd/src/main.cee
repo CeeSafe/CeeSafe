@@ -14,8 +14,13 @@
 //  3. a ZstdDecoder fed the input in steps of random sizes, into slices of random sizes, with a window limit of
 //     2^17, gives the same verdict and the same bytes as `Zstd.decompress`, except that it may refuse as TooLarge a
 //     frame whose window is above its limit.
-// zstd has no encoder here yet (ADR 0196 phase 4), so there are no round trips. A broken invariant prints the input in
-// hex and exits 1.
+//  4. round trips (phase 4): random and structured data (runs, and copies of earlier bytes from up to 2 MiB back,
+//     some of it over 1 MiB long), compressed at a random level from 0 to 12 by `Zstd.compress` and by a
+//     `ZstdEncoder` fed in pieces of random sizes, flushed at random, with or without its checksum, sometimes as two
+//     frames, decode to the data by `Zstd.decompress` and by a ZstdDecoder in steps; a whole frame is at most the
+//     data's size, plus 1/256 of it and 64 bytes. The encoder's frames join the seeds that are mutated.
+// There is no second decoder (snappy's and deflate's fuzzers have one). A broken invariant prints the input in hex
+// and exits 1.
 
 /// xorshift64*.
 struct Rng {
@@ -187,9 +192,23 @@ fn mutate(rng: borrow mut Rng, from: Slice<u8>, out: borrow mut Vector<u8>) {
     }
 }
 
-/// Decodes in steps of random sizes into slices of random sizes.
-fn steps(rng: borrow mut Rng, input: Slice<u8>, limit: usize, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
-    var d = ZstdDecoder.create(limit as u64, 1 << 17)?;
+/// Decodes in steps of random sizes into slices of random sizes, with a window limit of 2^17.
+fn steps(
+    rng: borrow mut Rng,
+    input: Slice<u8>,
+    limit: usize,
+    out: borrow mut Vector<u8>,
+) -> Result<void, DecodeError> =>
+    stepsWithin(rng, input, limit, 1 << 17, out);
+
+fn stepsWithin(
+    rng: borrow mut Rng,
+    input: Slice<u8>,
+    limit: usize,
+    windowLimit: usize,
+    out: borrow mut Vector<u8>,
+) -> Result<void, DecodeError> {
+    var d = ZstdDecoder.create(limit as u64, windowLimit)?;
     var buffer = [0u8; 4096];
     var at: usize = 0;
     let most = if (rng.below(2) == 0) 16usize else 4096usize;
@@ -224,6 +243,90 @@ fn check(rng: borrow mut Rng, input: Slice<u8>) {
     }
     if (rb == 2 && largestWindow(input) > (1 << 17)) { return; }
     fail("the decoder in steps gives another verdict", input);
+}
+
+/// Random bytes, runs, and copies of earlier bytes from up to 2 MiB back: data an encoder finds matches in, across
+/// blocks and windows.
+fn structured(rng: borrow mut Rng, out: borrow mut Vector<u8>) {
+    let pick = rng.below(64);
+    let n = if (pick == 0) rng.below(1300000) else if (pick < 8) rng.below(300000) else rng.below(3000);
+    let alphabet = 2 + rng.below(255);
+    let far = if (rng.below(2) == 0) 2000000usize else 70000usize;
+    while (out.length < n) {
+        let kind = rng.below(5);
+        if (kind == 0 || out.length < 4) {
+            for (k in 0..1 + rng.below(30)) {
+                out.push(truncate<u8>(rng.below(alphabet)))!;
+            }
+        } else if (kind == 1) {
+            let b = truncate<u8>(rng.below(alphabet));
+            for (k in 0..1 + rng.below(400)) {
+                out.push(b)!;
+            }
+        } else {
+            let back = 1 + rng.below(if (out.length < far) out.length else far);
+            let length = 3 + rng.below(if (kind == 4) 3000 else 300);
+            for (k in 0..length) {
+                let b = out[out.length - back];
+                out.push(b)!;
+            }
+        }
+    }
+    out.truncate(n);
+}
+
+fn succeeded(r: Result<void, DecodeError>) -> bool => match (r) {
+    Ok() => true,
+    Err(_) => false,
+};
+
+/// Invariant 4: data compressed whole and streamed decodes to itself; returns one of the frames.
+fn roundTrip(rng: borrow mut Rng, frame: borrow mut Vector<u8>) {
+    var data = Vector<u8>.create();
+    structured(rng, mut data);
+    let n = data.length;
+    let level = truncate<u32>(rng.below(13));
+    Zstd.compress(data.view(), level, frame)!;
+    if (frame.length > n + n / 256 + 64) { fail("a frame above the bound", data.view()); }
+    var back = Vector<u8>.create();
+    if (!succeeded(Zstd.decompress(frame.view(), n, mut back)) || back.view() != data.view()) {
+        fail("a round trip", data.view());
+    }
+    var again = Vector<u8>.create();
+    if (!succeeded(stepsWithin(rng, frame.view(), n, 1 << 23, mut again)) || again.view() != data.view()) {
+        fail("a round trip, decoded in steps", data.view());
+    }
+    var e = ZstdEncoder.create(level, rng.below(2) == 0)!;
+    var streamed = Vector<u8>.create();
+    let cut = if (rng.below(4) == 0) rng.below(n + 1) else n + 1;
+    let most = if (rng.below(2) == 0) 64usize else 200000usize;
+    var at: usize = 0;
+    while (at < n) {
+        let size = 1 + rng.below(most);
+        let end = if (n - at < size) n else at + size;
+        if (at < cut && end >= cut) {
+            e.update(data[at..cut], mut streamed)!;
+            e.finish(mut streamed)!;
+            e.update(data[cut..end], mut streamed)!;
+        } else {
+            e.update(data[at..end], mut streamed)!;
+        }
+        at = end;
+        if (rng.below(8) == 0) { e.flush(mut streamed)!; }
+    }
+    e.finish(mut streamed)!;
+    var third = Vector<u8>.create();
+    if (!succeeded(Zstd.decompress(streamed.view(), n, mut third)) || third.view() != data.view()) {
+        fail("a streamed round trip", data.view());
+    }
+    var fourth = Vector<u8>.create();
+    if (!succeeded(stepsWithin(rng, streamed.view(), n, 1 << 23, mut fourth)) || fourth.view() != data.view()) {
+        fail("a streamed round trip, decoded in steps", data.view());
+    }
+    if (rng.below(2) == 0) {
+        frame.truncate(0);
+        frame.extend(streamed.view())!;
+    }
 }
 
 fn main() {
@@ -587,8 +690,15 @@ fn main() {
         Zstd.decompress(seeds[k].view(), 1 << 20, mut out)!;
         if (Crc32.of(out.view()) != crcs[k]) { fail("a seed decodes to other bytes", seeds[k].view()); }
     }
+    let fixed = seeds.length;
+    for (k in 0..10) {
+        var out = Vector<u8>.create();
+        roundTrip(mut rng, mut out);
+        seeds.push(out)!;
+    }
     let start = Clock.monotonicNanos();
     var inputs: u64 = 0;
+    var trips: u64 = 10;
     while (Clock.monotonicNanos() - start < seconds * 1000000000) {
         for (k in 0..64) {
             let pick = rng.below(seeds.length);
@@ -597,10 +707,21 @@ fn main() {
             check(mut rng, mutant.view());
             inputs += 1;
         }
+        if (rng.below(4) == 0) {
+            var out = Vector<u8>.create();
+            roundTrip(mut rng, mut out);
+            trips += 1;
+            if (out.length < 200000) {
+                let at = fixed + rng.below(seeds.length - fixed);
+                seeds[at] = out;
+            }
+        }
     }
     Console.write("fuzz_zstd: ");
     Console.write(inputs);
-    Console.write(" inputs, seed ");
+    Console.write(" inputs, ");
+    Console.write(trips);
+    Console.write(" round trips, seed ");
     Console.write(seed);
     Console.write(", ");
     Console.write(seconds);

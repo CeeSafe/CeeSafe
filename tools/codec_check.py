@@ -30,9 +30,16 @@ and snappy.cee are short. Here, compiled only:
    together; without libzstd, the frames of the corpus program run-pass/zstd.cee. Each is decoded whole and in steps
    (a ZstdDecoder, its window limit the frame's), with limits at, below and above the length; an unchanged frame must
    give its input, and every prefix of a few frames and mutants of them all get tools/oracles/zstd_model.py's verdict,
-   which libzstd is compared with on every one (it must agree, but for the model's three STRICTER refusals and RLE
-   blocks of 128 KiB its stream refuses); zstd's golden decompression files (tools/oracles/zstd_golden) with the
+   which libzstd is compared with on every one (it must agree, but for the model's three STRICTER refusals); zstd's
+   golden decompression files (tools/oracles/zstd_golden) with the
    model's verdicts; XXH64 against the model's, fed whole and in pieces.
+9. zstd's encoder (phase 4): lib/std's frames of the six shapes at sizes around the 128 KiB block and the size tables
+   of libzstd's levels (16, 128 and 256 KiB) up to 1 MiB, and Parquet-like pages of 1 MiB of integers, at levels 0
+   to 9, 12 and 22, from Zstd.compress and from a ZstdEncoder fed in pieces with flushes, with and without its
+   checksum. Each frame must be read back to its input by lib/std's decoder, by libzstd's stream and its one call
+   where libzstd is installed, and by tools/oracles/zstd_model.py (for inputs up to 140,000 bytes, or all of them
+   without libzstd); a whole frame states its content size and has no checksum, a streamed one has the checksum
+   asked for. The sizes are reported against libzstd's at the same level, 1 to 9.
 
 usage: python3 tools/codec_check.py --compiler out/ceesafec [--quick] [--fuzz-seconds N] [--fuzz-seed S]
 """
@@ -318,6 +325,56 @@ def encode_inputs(quick):
     return [(f"{shape} {n}", data) for n in sizes for shape, data in shapes(n, rng)]
 
 
+def zstd_encode_inputs(quick):
+    """(label, data) for the zstd encoder: the six shapes at sizes around its edges, and Parquet-like pages."""
+    rng = random.Random(1995)
+    sizes = [0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 63, 64, 100, 255, 256, 1000, 1023, 1024, 16384, 16385, 65536, 131071,
+             131072, 131073, 262144, 262145, 300000, (1 << 20) + 5]
+    if quick:
+        sizes = [0, 1, 17, 1000, 131073, 300000]
+    inputs = [(f"{shape} {n}", data) for n in sizes for shape, data in shapes(n, rng)]
+    for k in range(1 if quick else 2):
+        page = bytearray()
+        t = 1_763_700_000_000_000
+        while len(page) < (1 << 20):
+            t += rng.choice((0, 1000, 1000, 2000, rng.randrange(1, 1 << 20)))
+            page += struct.pack("<q", t)
+        inputs.append((f"parquet page {k}", bytes(page)))
+    return inputs
+
+
+ZSTD_ENCODE_LEVELS = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 22)
+
+
+def zstd_encode_check(lib, label, level, how, frame, data, status, checksum):
+    """The problems with one of lib/std's frames: each reader must give `data` back, and its header be as asked."""
+    problems = []
+    if status != 0:
+        problems.append(f"lib/std's decoder: {STATUS.get(status, 'other bytes')}")
+    if lib is not None:
+        back = lib.decompress(frame, limit=len(data) + 1)
+        if back != data:
+            problems.append(f"libzstd's stream reads {'nothing' if back is None else len(back)}")
+        once = lib.decompress_once(frame, len(data))
+        if once != data:
+            problems.append(f"libzstd's one call reads {'nothing' if once is None else len(once)}")
+    if lib is None or len(data) <= 140000:
+        try:
+            if zm.decode(frame) != data:
+                problems.append("the model reads other bytes")
+        except zm.Refused as e:
+            problems.append(f"the model refuses it: {e}")
+    try:
+        h, _ = zm.frame_header(frame, 0)
+        if how == "whole" and (h["fcs"] != len(data) or h["checksum"]):
+            problems.append(f"its header: size {h['fcs']}, checksum {h['checksum']}")
+        if how != "whole" and (h["fcs"] is not None or h["checksum"] != checksum):
+            problems.append(f"its header: size {h['fcs']}, checksum {h['checksum']}")
+    except zm.Refused as e:
+        problems.append(f"its header: {e}")
+    return [f"zstd encoder, {label} level {level} ({how}): {p}" for p in problems]
+
+
 def build(compiler, source, exe, flags):
     p = subprocess.run([compiler, "build", source, "-o", exe] + flags, capture_output=True, text=True)
     if p.returncode != 0:
@@ -416,6 +473,44 @@ fn main() {
         }
         Err(_) => {}
     }
+    for (level in [1u32, 3, 5, 9]) {
+        var zc = Vector<u8>.create();
+        match (zc.push(7)) {
+            Ok() => {}
+            Err(_) => {
+                Console.writeLine("consistent");
+                return;
+            }
+        }
+        match (Zstd.compress(data.view(), level, mut zc)) {
+            Ok() => {
+                var back = Vector<u8>.create();
+                match (Zstd.decompress(zc[1..], 3000, mut back)) {
+                    Ok() => { if (back.view() != data.view()) { consistent = false; } }
+                    Err(e) => {
+                        match (e) {
+                            DecodeError.OutOfMemory(_) => {}
+                            _ => { consistent = false; }
+                        }
+                    }
+                }
+            }
+            Err(_) => { if (zc.length != 1) { consistent = false; } }
+        }
+        match (ZstdEncoder.create(level, true)) {
+            Ok(encoder) => {
+                var e = encoder;
+                var out = Vector<u8>.create();
+                let a = e.update(data[0..1000], mut out);
+                let b = e.flush(mut out);
+                let c = e.update(data[1000..], mut out);
+                let d = e.finish(mut out);
+                let f = e.update(data[0..10], mut out);
+                let g = e.finish(mut out);
+            }
+            Err(_) => {}
+        }
+    }
     Console.writeLine(if (consistent) "consistent" else "inconsistent");
 }
 '''
@@ -474,6 +569,14 @@ def main():
     zcases = zstd_cases(zlib_, args.quick)
     zhashes = [(g.message(n, 4), seed) for n in (0, 1, 3, 4, 7, 8, 31, 32, 33, 63, 64, 100, 1000, 100000)
                for seed in (0, 1, (1 << 64) - 1)]
+    zinputs = zstd_encode_inputs(args.quick)
+    zencodes = []  # (label, level, checksum, piece, every, data)
+    rng = random.Random(8879)
+    for label, data in zinputs:
+        for level in ZSTD_ENCODE_LEVELS:
+            piece, every = ((1, 7), (13, 5), (1000, 3))[level % 3] if len(data) < 20000 else ((70000, 2), (131072, 0),
+                                                                                            (300001, 1))[level % 3]
+            zencodes.append((label, level, rng.random() < 0.5, piece, every, data))
     if zlib_ is not None:
         agree, stricter, differ = zstd_oracle(zlib_, zcases)
         print(f"codec_check: zstd, libzstd {zlib_.version} against the model: {agree} frames agree, {stricter} "
@@ -519,6 +622,8 @@ def main():
             blob += record(7, "raw", wlog, limit, a, b, frame)
         for data, seed in zhashes:
             blob += record(8, "raw", 0, seed, 0, 0, data)
+        for label, level, checksum, piece, every, data in zencodes:
+            blob += record(9, "zlib" if checksum else "raw", level, 0, piece, every, data)
         cases_path = os.path.join(work, "cases.bin")
         results_path = os.path.join(work, "results.bin")
         with open(cases_path, "wb") as f:
@@ -632,6 +737,29 @@ def main():
                 print(f"codec_check: XXH64 of {len(data)} bytes, seed {seed}: {v1} and {v2}, the model "
                       f"{zm.xxh64(data, seed)}")
         wrong += zwrong
+        ewrong = 0
+        eours = {}
+        etheirs = {}
+        for label, level, checksum, piece, every, data in zencodes:
+            for how in ("whole", "streamed"):
+                status, n = struct.unpack_from("<BI", res, at)
+                frame = bytes(res[at + 5:at + 5 + n])
+                at += 5 + n
+                for p in zstd_encode_check(zlib_, label, level, how, frame, data, status, checksum):
+                    ewrong += 1
+                    if ewrong <= 10:
+                        print("codec_check: " + p)
+                if how == "whole" and zlib_ is not None and 1 <= level <= 9:
+                    reference = len(zlib_.compress(data, level))
+                    for key in (level, (level, label.startswith("parquet"))):
+                        eours[key] = eours.get(key, 0) + n
+                        etheirs[key] = etheirs.get(key, 0) + reference
+        wrong += ewrong
+        if zlib_ is not None:
+            print("codec_check: lib/std's zstd frames against libzstd's at the same level, all inputs: " +
+                  ", ".join(f"{lv} {eours[lv] / max(1, etheirs[lv]):.4f}" for lv in range(1, 10)) +
+                  "; Parquet-like pages: " +
+                  ", ".join(f"{lv} {eours[(lv, True)] / max(1, etheirs[(lv, True)]):.4f}" for lv in range(1, 10)))
         if slibs:
             print(f"codec_check: lib/std's snappy output against {slibs[0].path}'s: {sours / max(1, stheirs):.4f} "
                   f"of its size, {same} of {len(sinputs)} blocks byte for byte the same")
@@ -660,7 +788,8 @@ def main():
           f"{len(adlers)} Adler-32s; snappy: {len(scases)} blocks decoded ({mutants} of them prefixes and mutants), "
           f"{len(sinputs)} encodings read back by the model{' and ' + str(len(slibs)) + ' libraries' if slibs else ''}"
           f"; zstd: {len(zcases)} frames decoded whole and in steps ({sum(1 for c in zcases if c[6])} of them "
-          f"prefixes and mutants), {len(zhashes)} XXH64s; leak check and allocation sweep ({sweep_line}): "
+          f"prefixes and mutants), {len(zhashes)} XXH64s, {2 * len(zencodes)} of lib/std's frames read back; leak "
+          f"check and allocation sweep ({sweep_line}): "
           f"{problems} problems")
     return 1 if problems else 0
 

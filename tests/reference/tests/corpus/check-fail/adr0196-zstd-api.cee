@@ -1,13 +1,16 @@
-// ADR 0196 §2.2 and §2.3, phase 3: Zstd's decoder takes a limit too, so no call decodes without one; a ZstdDecoder
-// states its window limit as well; and there is no encoder yet (phase 4).
+// ADR 0196 §2.2 and §2.3, phases 3 and 4: Zstd's decoder takes a limit too, so no call decodes without one; a
+// ZstdDecoder states its window limit as well; Zstd.compress takes a level, and a ZstdEncoder is told whether to write
+// a checksum (phase 4, decided by the owner).
 fn noLimit(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, DecodeError> {
     return Zstd.decompress(input, out); // error[N0209] // error[N0205]
 }
 
 fn noWindowLimit() -> Result<ZstdDecoder, AllocError> => ZstdDecoder.create(1000); // error[N0209]
 
-fn encodes(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
-    return Zstd.compress(input, 3, out); // error[N0200]
+fn noLevel(input: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    return Zstd.compress(input, out); // error[N0209] // error[N0205]
 }
+
+fn noChecksumChoice() -> Result<ZstdEncoder, AllocError> => ZstdEncoder.create(3); // error[N0209]
 
 fn main() {}

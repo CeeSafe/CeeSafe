@@ -4424,6 +4424,20 @@ Diagnostics: none new.
   lines to the file instead (a tab, newline and backslash in a text written `\t`, `\n`, `\\`), natively on every
   system, and every call is then `Ok`.
 
+### 26.23 Push tokens (ADR 0244)
+- **`Push.register()`** (lib/std): `Result<PushToken, PushError>`, registers with the system's push service and returns
+  this device's token, blocking until it comes (30 seconds at most), from any thread but the window's; the `sleep`
+  effect. A program registers each run and sends the token to its server.
+- **`PushToken`**: `service` (`PushService.Apns`, `Fcm`), `token` (APNs: the device token's bytes in hex), and
+  `sandbox`: a development build's, whose pushes go to APNs's sandbox.
+- **`PushError`**: `Unsupported`, `Denied` (not signed for push, or the service refused), `Failed`.
+- **Where.** iOS, a windowed app: APNs, through the runtime's app delegate; the app's signing grants `aps-environment`
+  (only a profile of an explicit App ID with Push Notifications does); a development build (one that carries
+  `embedded.mobileprovision` with `aps-environment` `development`) is `sandbox`. Android, macOS, Windows, Linux,
+  FreeBSD, CosmoOS, a program with no window and `ceesafec run --interp`: `Unsupported`.
+- **Testing.** `CEESAFE_PUSH_TOKEN=<text>` is the token instead, natively on every system: `apns:HEX`,
+  `apns-sandbox:HEX` or `fcm:TOKEN`.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

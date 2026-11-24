@@ -1,0 +1,18 @@
+// ADR 0227: a borrowed temporary lives to the end of its statement, so a loan of it kept in a local and used after is
+// N0243 (§2.1); `opt!.name` of a place still may not take one field out of the optional (§2.2: N0251), as `opt!`
+// would consume it to read one field.
+struct Named {
+    name: String;
+}
+
+fn five() -> i64 => 5;
+
+fn look(v: borrow i64) -> i64 => v + 1;
+
+fn main() {
+    let kept = borrow five(); // error[N0243]
+    Console.writeLine(look(kept));
+    let opt: Named? = Named { name: String.from("a")! };
+    let name = opt!.name; // error[N0251]
+    Console.writeLine(name.view());
+}

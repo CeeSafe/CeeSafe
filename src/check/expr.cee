@@ -309,14 +309,16 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
             }
             return checkClosure(c, closure, none(), span);
         }
-        ExprNode.Borrow(mutable, operand) => { return synthBorrow(c, mutable, operand, span); }
+        ExprNode.Borrow(mutable, operand) => { return synthBorrow(c, mutable, operand, expected, span); }
         ExprNode.Move(operand) => { return synthMove(c, operand, span); }
         ExprNode.Deref(operand) => { return synthDeref(c, operand, span); }
         ExprNode.ArrayLiteral(elements) => { return synthArrayLiteral(c, elements, expected, span); }
         ExprNode.ArrayIndexed(pairs) => { return synthArrayIndexed(c, pairs, expected, span); }
         ExprNode.ArrayRepeat(value, count) => { return synthArrayRepeat(c, value, count, expected, span); }
-        ExprNode.Index(target, index) => { return synthIndex(c, target, index, span); }
-        ExprNode.Slice(target, low, high) => { return synthSlice(c, target, low, high, false, span); }
+        ExprNode.Index(target, index) => { return synthIndexExpecting(c, target, index, expected, span); }
+        ExprNode.Slice(target, low, high) => {
+            return synthSliceExpecting(c, target, low, high, false, expected, span);
+        }
         ExprNode.MutArg(_) => { return misplacedMutArgument(c, span); }
         ExprNode.Try(operand) => { return checkTry(c, operand, expected, span); }
         ExprNode.Unwrap(operand) => { return checkUnwrap(c, operand, expected, span); }
@@ -1020,12 +1022,47 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
             var text = Vector<u8>.create();
             appendText(mut text, " as ")?;
             appendBytes(mut text, c.typeName(expected))?;
+            if (readsI32Element(c, e, t)) {
+                appendLiteralElementHint(c, expected, mut message)?;
+            }
             c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.end, span.end, text)?;
             return c.errorResult(span.start, span.end);
         }
     }
+    if (number && wanted && readsI32Element(c, e, t)) {
+        appendLiteralElementHint(c, expected, mut message)?;
+    }
     c.error(typeMismatch(), span.start, span.end, message)?;
     return c.errorResult(span.start, span.end);
+}
+
+/// Whether `e`, of type `t`, reads an `i32` element of an array: perhaps of a literal whose integers took the default
+/// (ADR 0226 §2.2).
+fn readsI32Element(c: borrow Checker, e: u32, t: u32) -> bool {
+    if (t != c.types.i32) {
+        return false;
+    }
+    return match (c.hir.exprs[e as usize]) {
+        HirExpr.Index(target, _) => c.types.is(c.typeOf(target), TypeKind.Array),
+        _ => false,
+    };
+}
+
+/// The hint for an array literal's `i32` elements read where another number is expected (ADR 0226 §2.2).
+fn appendLiteralElementHint(
+    c: borrow Checker,
+    expected: u32,
+    message: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    appendText(
+        message,
+        "; an array literal's integers are 'i32' unless an array or slice type is expected where it is written: if the array is one, give its type where it is declared ('let a: [",
+    )?;
+    appendBytes(message, c.typeName(expected))?;
+    appendText(message, "; N] = …') or a suffix to its first element ('[1")?;
+    appendBytes(message, c.typeName(expected))?;
+    appendText(message, ", 2]')")?;
+    return Ok();
 }
 
 /// N0205 for a borrow of an optional where an optional borrow is expected (ADR 0195 §2.4.2), saying which is which,
@@ -2301,6 +2338,27 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
         return c.errorResult(span.start, span.end);
     }
     let fieldType = c.types.fields[field as usize].typ;
+    let unwrappedFrom = match (c.hir.exprs[value as usize]) {
+        HirExpr.Unwrap(operand) => operand,
+        HirExpr.Try(operand) => operand,
+        _ => none(),
+    };
+    if (unwrappedFrom != none() && !c.types.isCopy(fieldType) && toPlace(c, unwrappedFrom)? == none() &&
+        isTemporaryValue(c, unwrappedFrom)) {
+        // `make()?.name`, `opt!.name` (ADR 0227 §2.2): the unwrapped value is held in a local of its own, as if
+        // `{ let unwrapped = make()?; unwrapped.name }`, so the field is moved out of a struct local and the rest of
+        // it is destroyed at the block's end, as any partly moved local is (§14.3, §14.5).
+        let holderName = c.intern("unwrapped")?;
+        let holder = c.hir.addLocal(c.function, holderName, valueType, false, false, span.start, span.end)?;
+        let declaration = c.hir.addStmt(HirStmt.LocalDecl(holder, value), span.start, span.end)?;
+        let read = c.expr(HirExpr.LocalRef(holder), valueType, span.start, span.end)?;
+        let access = c.expr(HirExpr.FieldAccess(read, field), fieldType, span.start, span.end)?;
+        let yielded = c.hir.addStmt(HirStmt.Yield(access), span.start, span.end)?;
+        let statements = [declaration, yielded];
+        let list = c.hir.list(statements[..])?;
+        let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+        return c.expr(HirExpr.StmtValue(block), fieldType, span.start, span.end);
+    }
     return c.expr(HirExpr.FieldAccess(value, field), fieldType, span.start, span.end);
 }
 

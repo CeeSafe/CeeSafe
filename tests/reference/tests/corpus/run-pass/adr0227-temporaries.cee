@@ -1,0 +1,62 @@
+// ADR 0227: a shared borrow of a temporary (§2.1), and a field moved out of an unwrapped temporary (§2.2), whose
+// other fields are destroyed once, at the end of the expression. Expected values worked by hand: take(1) = 2,
+// look(5) = 6, look(40) = 41; each Noisy is dropped exactly once (ids 1 and 2 from make, 3 and 4 from tried), the
+// rest of an unwrapped pair at the end of its expression, the fields kept when their locals go (§14.5: in reverse).
+struct Noisy {
+    id: u32;
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.id);
+    }
+}
+
+struct Pair {
+    kept: Noisy;
+    other: Noisy;
+}
+
+enum Failure {
+    Missing,
+}
+
+fn take(x: borrow u32) -> u32 => x + 1;
+
+fn look(n: borrow i64) -> i64 => n + 1;
+
+fn forty() -> i64 => 40;
+
+fn make() -> Pair? => Pair { kept: Noisy { id: 1 }, other: Noisy { id: 2 } };
+
+fn tried() -> Result<Pair, Failure> => Ok(Pair { kept: Noisy { id: 3 }, other: Noisy { id: 4 } });
+
+fn viaTry() -> Result<void, Failure> {
+    let k = tried()?.kept;
+    Console.writeLine(k.id);
+    return Ok();
+}
+
+fn main() {
+    Console.writeLine(take(borrow 1u32));
+    Console.writeLine(look(borrow 5));
+    Console.writeLine(look(borrow forty()));
+    let k = make()!.kept;
+    Console.writeLine("after");
+    var slot: Pair? = make();
+    let s = replace(mut slot, null)!.other;
+    Console.writeLine(s.id);
+    viaTry()!;
+    Console.writeLine(k.id);
+}
+// expect-stdout: 2
+// expect-stdout: 6
+// expect-stdout: 41
+// expect-stdout: drop 2
+// expect-stdout: after
+// expect-stdout: drop 1
+// expect-stdout: 2
+// expect-stdout: drop 4
+// expect-stdout: 3
+// expect-stdout: drop 3
+// expect-stdout: 1
+// expect-stdout: drop 2
+// expect-stdout: drop 1

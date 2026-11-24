@@ -646,7 +646,7 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "constant arrays hold integers, bools, string views or plain structs (type-system.md §10, ADR 0180)",
+            "constant arrays hold integers, floats, bools, string views or plain structs (type-system.md §10, ADRs 0180 and 0226)",
         )?;
         c.error(unsupported(), span.start, span.end, message)?;
         t = c.types.error;
@@ -682,10 +682,9 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
 
 fn constElementOk(c: borrow Checker, t: u32) -> bool {
     let element = c.types.info(t).element;
-    return c.types.is(
-        element,
-        TypeKind.Integer,
-    ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error) || c.types.isStringView(element) ||
+    return c.types.is(element, TypeKind.Integer) || c.types.is(element, TypeKind.Bool) ||
+        c.types.is(element, TypeKind.Float) || c.types.is(element, TypeKind.CChar) || // ADR 0226 §2.3
+        c.types.is(element, TypeKind.Error) || c.types.isStringView(element) ||
         isStaticBytesType(c, element) ||                                   // embedded files' bytes, as a table (ADR 0087 §2.8)
         (c.types.is(element, TypeKind.Struct) && !isCStrType(c, element)); // a table of plain structs (ADR 0180)
 }

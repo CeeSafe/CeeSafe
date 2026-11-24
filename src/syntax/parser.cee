@@ -2216,8 +2216,10 @@ struct Parser {
             TokenKind.CharLiteral => { return this.literalPattern(start, false); }
             TokenKind.TrueKeyword => { return this.literalPattern(start, false); }
             TokenKind.FalseKeyword => { return this.literalPattern(start, false); }
+            // Parsed so that the checker can say why a float is not a pattern and what to write (ADR 0228 §2.3).
+            TokenKind.FloatLiteral => { return this.literalPattern(start, false); }
             TokenKind.Minus => {
-                if (this.peekIs(1, TokenKind.IntLiteral)) {
+                if (this.peekIs(1, TokenKind.IntLiteral) || this.peekIs(1, TokenKind.FloatLiteral)) {
                     return this.literalPattern(start, true);
                 }
             }
@@ -2481,7 +2483,8 @@ struct Parser {
         TokenKind.TrueKeyword => true,
         TokenKind.FalseKeyword => true,
         TokenKind.NullKeyword => true,
-        TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
+        TokenKind.FloatLiteral => true, // refused by the checker, with what to write (ADR 0228 §2.3)
+        TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral) || this.peekIs(1, TokenKind.FloatLiteral),
         TokenKind.Identifier =>
             this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At) ||
                 this.peekIs(1, TokenKind.OpenBrace),

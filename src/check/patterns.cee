@@ -415,6 +415,13 @@ fn checkMatch(
         var message = Vector<u8>.create();
         appendText(mut message, "cannot match on a value of type ")?;
         appendQuotedType(mut message, c, typ)?;
+        if (c.types.is(typ, TypeKind.Float)) {
+            // ADR 0228 §2.3: floats have no patterns.
+            appendText(
+                mut message,
+                "; floats are compared with '==' (exact, 'NaN' equals nothing, '-0.0 == 0.0'): write an 'if' chain",
+            )?;
+        }
         c.error(invalidOperandTypes(), scrutineeSpan.start, scrutineeSpan.end, message)?;
         ok = false;
     }
@@ -1118,6 +1125,17 @@ fn checkPattern(
             if (isStringLiteral(c, literal)) {
                 return checkStringPattern(c, literal, typ, reference, span, failed);
             }
+            if (isFloatLiteral(c, literal)) {
+                // ADR 0228 §2.3: a float compares by '==', which a pattern would hide (NaN, -0.0, rounding).
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "a float literal is not a pattern: floats are compared with '==' (exact, 'NaN' equals nothing, '-0.0 == 0.0'), so bind the value and compare it, as in 'V.Real(r) if r == 1.5' in a match arm or 'v is V.Real(r) && r == 1.5'",
+                )?;
+                c.error(expectedPattern(), span.start, span.end, message)?;
+                failed = true;
+                return c.hir.addPattern(HirPattern.Wildcard);
+            }
             if (!c.types.is(typ, TypeKind.Integer) && !c.types.is(typ, TypeKind.Bool)) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "a literal pattern needs an integer or 'bool', but the value has type ")?;
@@ -1241,6 +1259,13 @@ fn shownType(c: borrow Checker, typ: u32, reference: u32) -> u32 =>
 
 fn isStringLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
     ExprNode.StringLiteral(_) => true,
+    _ => false,
+};
+
+/// A float literal, negated or not (ADR 0228 §2.3).
+fn isFloatLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.FloatLiteral(_, _) => true,
+    ExprNode.Unary(_, operand) => isFloatLiteral(c, operand),
     _ => false,
 };
 

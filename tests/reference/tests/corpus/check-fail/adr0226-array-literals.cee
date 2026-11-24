@@ -1,0 +1,25 @@
+// ADR 0226: what an array literal's elements still cannot be. A literal with no expected type has the first element's
+// type, `i32` for an unsuffixed integer, whatever the local's later use (§2.2: the N0205 says to give the type or a
+// suffix); an array for a slice parameter needs `[..]` (§2.1: the N0205's sure fix writes it); a function with no
+// scoped parameter cannot return a slice (§2.4: the N0245 names a `static` table and `Slice<static, T>`); constant
+// arrays of floats are valid (§2.3), of arrays still N0216.
+fn sum(xs: Slice<u64>) -> u64 => xs[0];
+
+fn names() -> Slice<StringView> => ["a", "b"][..]; // error[N0245]
+
+const GRID: [[u8; 2]; 2] = [[1, 2], [3, 4]]; // error[N0216]
+const FACTORS: [f64; 2] = [0.5, 2.0];
+
+fn f(i: usize, y: i64) -> i64 {
+    let a = [0, 2, 3, 5];
+    return a[i] + y; // error[N0205]
+}
+
+fn main() {
+    let b = [1, 2];
+    let c: u64 = b[0]; // error[N0205]
+    let d = sum([1, 2]); // error[N0205]
+    let e = sum([1, 2][..]);
+    let g: u64 = [7, 8][1];
+    Console.writeLine(FACTORS[1]);
+}

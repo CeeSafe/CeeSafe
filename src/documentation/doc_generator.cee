@@ -612,8 +612,77 @@ fn missingDocs(
     return Ok(count);
 }
 
-/// `ceesafec doc [-o file] [--title text] [--missing] path...` (Program.Document).
+/// Whether a `doc` argument is a name to look up (ADR 0236 §2.5, tooling.md §1.5): an identifier, or two joined by one
+/// `.`, that is not a file or directory.
+fn isDocName(a: Slice<u8>) -> bool {
+    if (a.length == 0 || fileExists(a) || isDirectory(a) || a.endsWith(".cee".bytes()) || a.endsWith(".c".bytes())) {
+        return false;
+    }
+    var dots = 0;
+    var start = true;
+    for (b in a) {
+        if (b == '.') {
+            if (start) {
+                return false;
+            }
+            dots += 1;
+            start = true;
+        } else if (start) {
+            if (!((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_')) {
+                return false;
+            }
+            start = false;
+        } else if (!isIdentifierByte(b)) {
+            return false;
+        }
+    }
+    return !start && dots <= 1;
+}
+
+/// `ceesafec doc NAME` (ADR 0236 §2.5, tooling.md §1.5): ceesafe_api's entries for a name in the embedded reference,
+/// each after a line naming its document and heading; with none, the closest names on standard error, and exit 1.
+fn docNameCommand(name: Slice<u8>) -> i32 {
+    var hits = Vector<ApiHit>.create();
+    var suggestions = Vector<Vector<u8>>.create();
+    apiLookup(name, mut hits, mut suggestions)!;
+    if (hits.length == 0) {
+        var message = copyBytes("no entry for '".bytes())!;
+        appendBytes(mut message, name)!;
+        message.push('\'')!;
+        for (k in 0..suggestions.length) {
+            appendText(mut message, if (k == 0) "; did you mean " else ", ")!;
+            message.push('\'')!;
+            appendBytes(mut message, suggestions[k].view())!;
+            message.push('\'')!;
+        }
+        message.push('\n')!;
+        Console.writeError(StringView.fromUtf8(message.view())!);
+        return 1;
+    }
+    var out = Vector<u8>.create();
+    for (k in 0..hits.length) {
+        if (k > 0) {
+            out.push('\n')!;
+        }
+        appendText(mut out, "<!-- ")!;
+        appendBytes(mut out, hits[k].document.view())!;
+        appendText(mut out, ": ")!;
+        appendBytes(mut out, hits[k].heading.view())!;
+        appendText(mut out, " -->\n")!;
+        appendBytes(mut out, hits[k].text.view())!;
+        if (out.length > 0 && out[out.length - 1] != '\n') {
+            out.push('\n')!;
+        }
+    }
+    Console.writeBytes(out.view());
+    return 0;
+}
+
+/// `ceesafec doc [-o file] [--title text] [--missing] path...` (Program.Document), or `ceesafec doc NAME`.
 fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
+    if (arguments.length == 1 && isDocName(arguments[0].view())) {
+        return docNameCommand(arguments[0].view());
+    }
     var output = Vector<u8>.create();
     var hasOutput = false;
     var title = Vector<u8>.create();

@@ -244,6 +244,7 @@ header
 | `==`, `!=` | compare the bytes |
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `String.from(view)`, `t.clone()` | `Result<String, AllocError>`: a new string with a copy of the text |
+| `t.intoBytes()`, `String.fromUtf8(v)` | `Vector<u8>`; `Result<String, Vector<u8>>`: the buffer moves, no copy; `Err(v)`, unchanged, for bytes that are not UTF-8 |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
 | `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
 | `t.appendChar(c)`, `t.appendUtf8(bytes)` | `Result<bool, AllocError>`: a character (`c: u32`) in UTF-8, or bytes that are UTF-8 (checked once, not copied first); `false`, appending nothing, otherwise (also on a `Vector<u8>`) |
@@ -296,6 +297,7 @@ keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-syst
 |---|---|
 | `ByteStringView.fromText(text)`, `ByteStringView.fromBytes(bytes)` | a view of the bytes, no copy |
 | `ByteString.create()`, `ByteString.fromBytes(v)`, `b.intoBytes()` | a byte string; the `Vector<u8>` taken or given back, no copy |
+| `ByteString.fromString(t)`, `b.intoString()` | a byte string, the `String`'s bytes taken; `Result<String, ByteString>`, the byte string back when it is not UTF-8; no copy |
 | `ByteString.fromText(text)`, `ByteString.copyOf(bytes)`, `b.clone()`, `v.toByteString()` | `Result<ByteString, AllocError>`, a copy |
 | `b.view()`, `b.bytes()`, `length()`, `isEmpty()`, `byteAt(i)`, `slice(lo, hi)`, `sliceFrom(lo)`, `sliceTo(hi)` | a `ByteStringView`; `Slice<u8>`; … |
 | `toUtf8()`, `isUtf8()` | `StringView?`, a view when the bytes are UTF-8; `bool` |
@@ -305,7 +307,9 @@ keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-syst
 | `v.indexOf(bytes)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, … | as a `StringView`'s, with `Slice<u8>` needles |
 | `b.append(text)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n)`, `appendUnsigned(n)`, `appendHex`, `appendChar`, … | `Result<…, AllocError>`, as a `String`'s |
 
-`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`.
+`Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`. Text built in a
+`String` becomes a byte string with `ByteString.fromString(t)`, which takes its buffer, and a byte string that is
+UTF-8 becomes a `String` with `b.intoString()` (ADR 0236).
 
 ```ceesafe
 fn main() {
@@ -323,6 +327,13 @@ fn main() {
     }
     let name = ByteStringView.fromText("id=7");
     Console.writeLine(b.view().startsWith(name.bytes()));
+    var t = String.create();
+    t.appendFixed(0.5, 2)!;
+    let c = ByteString.fromString(t); // no copy
+    match (c.intoString()) {
+        Ok(text) => { Console.writeLine(text.view()); }
+        Err(_) => { Console.writeLine("not UTF-8"); }
+    }
 }
 ```
 
@@ -332,6 +343,7 @@ true
 id=7�
 id=7 then 1
 true
+0.50
 ```
 
 ## `Vector`, arrays and slices

@@ -1,0 +1,16 @@
+// ADR 0236: `String.fromUtf8` takes a `Vector<u8>` (not a string, a view or other elements) of the written string's
+// allocator, and `intoBytes` takes no argument; a program cannot give a string a buffer itself (the libraries'
+// `adoptBuffer`, which only `StringBytes` uses, after its UTF-8 check). The moves are adr0236-string-bytes-moves.cee's.
+fn main() {
+    let t = String.from("x")!;
+    let u = t.intoBytes(1);                                               // error[N0209]
+    let again = String.fromUtf8(String.from("x")!);                       // error[N0205]
+    let view = String.fromUtf8("x".bytes());                              // error[N0205]
+    let wide = String.fromUtf8(Vector<i32>.create());                     // error[N0205]
+    let failing = String<FailingAllocator>.fromUtf8(Vector<u8>.create()); // error[N0205]
+    let none = String.fromUtf8();                                         // error[N0209]
+    var raw = Vector<u8>.create();
+    raw.push(0xFF)!;
+    var forged = String.create();
+    forged.adoptBuffer(raw.viewMut().ptr, 1, 1, false); // error[N0200]
+}

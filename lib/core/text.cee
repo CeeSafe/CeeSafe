@@ -314,3 +314,106 @@ public struct StringCopying {
         return Ok(copy);
     }
 }
+
+/// `s.intoBytes()` and `String.fromUtf8(v)` (ADR 0236, type-system.md §23.2): a string and a byte vector of one
+/// allocator become each other with no copy, the buffer, its length and its capacity moving as they are. They are
+/// written over the libraries' `releaseBuffer` and `adoptBuffer` (as `VectorRaw` is), with the block kept in the
+/// allocation report's `live`. The `…Failing` functions are for `FailingAllocator`, the `…Secret` ones for `SecretHeap`.
+public struct StringBytes {
+    /// `s.intoBytes()`: the bytes of `s`, which it gives up. Nothing is copied, allocated or freed.
+    public fn intoBytes(s: String) -> Vector<u8> {
+        var owned = s;
+        var bytes = Vector<u8>.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            // As an address: a pointer made from the view would keep the string borrowed past `releaseBuffer`.
+            let address = owned.bytes().ptr as usize;
+            owned.releaseBuffer(false);
+            bytes.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return bytes;
+    }
+
+    /// `String.fromUtf8(v)`: the bytes of `v` as a string, without a copy, when they are UTF-8; `Err(v)`, unchanged,
+    /// when they are not.
+    public fn fromUtf8(v: Vector<u8>) -> Result<String, Vector<u8>> {
+        if (StringView.fromUtf8(v.view()).isNull()) {
+            return Err(v);
+        }
+        var owned = v;
+        var text = String.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            let address = owned.viewMut().ptr as usize;
+            owned.releaseBuffer(false);
+            text.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return Ok(text);
+    }
+
+    /// `intoBytes` for a string of `FailingAllocator`.
+    public fn intoBytesFailing(s: String<FailingAllocator>) -> Vector<u8, FailingAllocator> {
+        var owned = s;
+        var bytes = Vector<u8, FailingAllocator>.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            let address = owned.bytes().ptr as usize;
+            owned.releaseBuffer(false);
+            bytes.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return bytes;
+    }
+
+    /// `fromUtf8` for a vector of `FailingAllocator`.
+    public fn fromUtf8Failing(
+        v: Vector<u8, FailingAllocator>,
+    ) -> Result<String<FailingAllocator>, Vector<u8, FailingAllocator>> {
+        if (StringView.fromUtf8(v.view()).isNull()) {
+            return Err(v);
+        }
+        var owned = v;
+        var text = String<FailingAllocator>.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            let address = owned.viewMut().ptr as usize;
+            owned.releaseBuffer(false);
+            text.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return Ok(text);
+    }
+
+    /// `intoBytes` for a string of `SecretHeap`: the vector wipes the bytes when it frees them, as the string would.
+    public fn intoBytesSecret(s: String<SecretHeap>) -> Vector<u8, SecretHeap> {
+        var owned = s;
+        var bytes = Vector<u8, SecretHeap>.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            let address = owned.bytes().ptr as usize;
+            owned.releaseBuffer(false);
+            bytes.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return bytes;
+    }
+
+    /// `fromUtf8` for a vector of `SecretHeap`.
+    public fn fromUtf8Secret(v: Vector<u8, SecretHeap>) -> Result<String<SecretHeap>, Vector<u8, SecretHeap>> {
+        if (StringView.fromUtf8(v.view()).isNull()) {
+            return Err(v);
+        }
+        var owned = v;
+        var text = String<SecretHeap>.create();
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity != 0) {
+            let address = owned.viewMut().ptr as usize;
+            owned.releaseBuffer(false);
+            text.adoptBuffer(address as *mut u8, length, capacity, false);
+        }
+        return Ok(text);
+    }
+}

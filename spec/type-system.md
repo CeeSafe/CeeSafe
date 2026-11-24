@@ -2480,7 +2480,10 @@ lib/core's `ByteString` (owned, a move type over a `Vector<u8>`) and `ByteString
 file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked for. Their fields are private (N0296).
 - **Making one.** `ByteStringView.fromText(text)` (`text: StringView`, so a literal or a lent `String`) and
   `ByteStringView.fromBytes(bytes)` view the bytes in place; `ByteString.fromBytes(v)` takes a `Vector<u8>` and
-  `b.intoBytes()` gives it back, neither copying; `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
+  `b.intoBytes()` gives it back, neither copying; `ByteString.fromString(s)` takes a `String`'s bytes and
+  `b.intoString()` (`Result<String, ByteString>`) gives a `String` when the bytes are UTF-8 and the byte string back
+  when they are not, neither copying (`s.intoBytes()` and `String.fromUtf8`, §23.2; ADR 0236);
+  `ByteString.create()`, `withCapacity(n)`, `fromText(text)`,
   `copyOf(bytes)`, `b.clone()` and `v.toByteString()` make a new one (the last four copy). `b.view()` and `b.bytes()`
   are loans of `b`. A string literal is not a `ByteStringView` (N0205): `fromText` makes one.
 - **UTF-8.** `toUtf8()` is the text as a `StringView`, with no copy, when the bytes are UTF-8 (Table 3-7, as
@@ -2617,7 +2620,8 @@ fn main() -> i32 {
 - `String<A>` owns UTF-8 text in a growable buffer (`String` means `String<SystemHeap>`). It is a
   move type that needs drop, like `Vector<u8, A>`, but a distinct type.
 - **UTF-8 invariant:** text only enters a string through `append` of a `StringView` (`String.from` and `clone` are
-  an `append`), which is always valid UTF-8 (§22.2), so a string's bytes are always valid UTF-8. Its bytes cannot be
+  an `append`), which is always valid UTF-8 (§22.2), or through `String.fromUtf8`, which checks the bytes first, so a
+  string's bytes are always valid UTF-8. Its bytes cannot be
   written: `s[i] = b` is rejected (N0211), and `borrow mut s[i]` and mutable slices of a string
   (N0248).
 - **Creation:** `String.create()` (no allocation) and `String.withCapacity(n)`:
@@ -2628,9 +2632,16 @@ fn main() -> i32 {
     that length, and none for an empty text. `A` comes from the written type (`String<A>.from(text)`) or from an
     expected `Result<String<A>, _>`, as for `withCapacity`, and is `SystemHeap` otherwise. Any other number of arguments is N0209.
     It is lib/core's StringCopying.
+  - `String.fromUtf8(v)` (`v: Vector<u8, A>`; ADR 0236): `Result<String<A>, Vector<u8, A>>`. It moves `v` and, when its
+    bytes are UTF-8 (Table 3-7, as `StringView.fromUtf8` checks), the string takes its buffer, length and capacity: no
+    copy, no allocation. Otherwise the result is `Err(v)`, the vector unchanged. A written `String<A>.fromUtf8(v)`
+    must be of the vector's allocator (N0205), and an argument that is not a `Vector<u8, A>` is N0205.
 - **Members:**
   - `s.clone()` (ADR 0108): `Result<String<A>, AllocError>`, `String<A>.from(s.view())` with the allocator of `s`.
     It takes `borrow this` and leaves `s` as it was;
+  - `s.intoBytes()` (ADR 0236): `Vector<u8, A>`. It moves `s` (`this`), and the vector takes its buffer, length and
+    capacity: no copy, no allocation, nothing freed. Both calls are lib/core's StringBytes, over the libraries'
+    `releaseBuffer` and `adoptBuffer` (§23.3), which a program cannot call on a string (N0200);
   - `s.append(text)` (`text: StringView`): `Result<void, AllocError>`, two-phase like `push`.
     Growth is as for vectors. On failure the string is unchanged;
   - `s.appendNumber(n)` (M11, G4c; `n` of any integer type, or a reference to one): appends `n` in decimal, with a

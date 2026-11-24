@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.5
+## Releases 0.25.0 to 0.95.6
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.6 | 2026-11-24 | The system's secret store: `Secrets.read`, `write` and `remove` keep an app's tokens and keys where the system keeps them encrypted, readable by that app only: the keychain on macOS and iOS, the Android Keystore, DPAPI on Windows (`Unsupported` on Linux and FreeBSD for now); `CEESAFE_SECRETS_DIR` for tests (ADR 0242) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.5 | 2026-11-24 | `f.testLock(kind, start, length)`, whether another holder has a conflicting lock, without taking it, and a held lock converted in place on POSIX (ADR 0234); `f.mapSharedReadOnly(offset, length)` and `ReadOnlyMapping`, and 16-bit atomics on a `SharedMapping` (`load16`, `store16`, `compareExchange16`, `fetchAdd16`) (ADR 0235); `s.intoBytes()`, `String.fromUtf8(v)`, `ByteString.fromString(s)` and `b.intoString()`, from text to bytes and back without a copy, and `ceesafec doc NAME` for a type or member of the embedded libraries (ADR 0236) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.4 | 2026-11-24 | `Thread.cpuCount()`, the CPUs the process may run on; `appendNumber` and `appendUnsigned` on a `Vector<u8>`; a string literal as the needle of a byte slice's search, `path.startsWith("/api")` (ADR 0237) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.3 | 2026-11-24 | The system's Back: `WindowKey.Back` and `window.setBackWanted(on)`, so a program with pages of its own takes Android's Back while it has one to go back to, and leaves it to the system otherwise (ADR 0233) | [Appendix E](./appendix-e-ceesafec) |

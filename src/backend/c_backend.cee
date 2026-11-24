@@ -222,6 +222,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_bluetooth_")) {
             out.push(runtimeFile(10, "")?)?; // Bluetooth printers (type-system.md §26.19, ADR 0177)
         }
+        if (containsBytes(mainText.view(), "ceesafe_secrets_")) {
+            out.push(runtimeFile(13, "")?)?; // the system's secret store (type-system.md §26.21, ADR 0242)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

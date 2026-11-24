@@ -111,6 +111,10 @@ jobs:
         if: always()
         shell: bash
         run: python tools/bluetooth_check.py --compiler seed/ceesafec.exe
+      - name: The secret store, DPAPI (ADR 0242)
+        if: always()
+        shell: bash
+        run: python tools/secrets_check.py --compiler seed/ceesafec.exe
       - name: Printing a PDF (ADR 0178)
         if: always()
         shell: bash

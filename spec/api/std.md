@@ -91,6 +91,8 @@
 - [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
+- [enum SecretError](#enum-secreterror)
+- [struct Secrets](#struct-secrets)
 - [struct SharedMemory](#struct-sharedmemory)
 - [struct ThreadServices](#struct-threadservices)
 - [struct Mutex](#struct-mutex)
@@ -4019,6 +4021,82 @@ public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
 ```
 
 The value at `at`, to change it. Changing a value does not change the map's version.
+
+## enum SecretError
+
+```ceesafe
+public enum SecretError {
+    Unsupported,
+    InvalidInput,
+    Locked,
+    Denied,
+    Failed,
+}
+```
+
+Why a call to the secret store failed.
+
+## struct Secrets
+
+```ceesafe
+public struct Secrets
+```
+
+The system's store for an app's secrets (ADR 0242): kept encrypted by the system, readable by this app only, and
+never carried to another device. Every call blocks and may be made from any thread.
+
+`app` names the app's own set, as `Directory.appData`'s name names its folder: not empty, no `/` or `\`, not `.`
+or `..`, at most 128 bytes. A secret's `name` is 1 to 128 ASCII letters, digits, `.`, `-` and `_`, not `.` or
+`..`.
+
+```
+Secrets.write("Marivil", "token", token.bytes())?;
+match (Secrets.read("Marivil", "token")?) {
+    Some(bytes) => {}  // kept since an earlier run
+    null => {}         // never written, or removed
+}
+```
+
+macOS and iOS: a keychain item (service `app`, account `name`), this device only, readable after the first
+unlock. Android: sealed with an AES-256-GCM key in the Android Keystore, in the app's no-backup folder. Windows:
+DPAPI, for the current user, in `%LOCALAPPDATA%\<app>\secrets`. `CEESAFE_SECRETS_DIR=<folder>` keeps them as plain
+files in that folder instead, natively on every system, for tests. Under `ceesafec run --interp` every call is
+`Unsupported`.
+
+### Secrets.valueLimit
+
+```ceesafe
+public fn valueLimit() -> usize
+```
+
+The largest value `Secrets.write` takes, in bytes (65,536): a store for keys and tokens, not documents.
+
+### Secrets.read
+
+```ceesafe
+public fn read(app: StringView, name: StringView) -> Result<Vector<u8>?, SecretError>
+```
+
+The secret `name` of `app`, or `null` when there is none.
+Safety: the runtime reads the names during the call only, and writes at most the buffer's length.
+
+### Secrets.write
+
+```ceesafe
+public fn write(app: StringView, name: StringView, value: Slice<u8>) -> Result<void, SecretError>
+```
+
+Makes the secret `name` of `app`, or replaces it; a reader sees the old value or the new, never part of one.
+Safety: the runtime reads the names and the value during the call only.
+
+### Secrets.remove
+
+```ceesafe
+public fn remove(app: StringView, name: StringView) -> Result<void, SecretError>
+```
+
+Removes the secret `name` of `app`; `Ok` when there was none.
+Safety: the runtime reads the names during the call only.
 
 ## struct SharedMemory
 

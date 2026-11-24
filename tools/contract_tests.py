@@ -18,7 +18,8 @@
   (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
   (tools/isolated_check.py, ADR 0175), the bound on running without waiting (tools/bound_check.py, ADR 0186),
   slices, natively and under the sanitizers (tools/slice_check.py, ADR 0189),
-  Bluetooth printers (tools/bluetooth_check.py, ADR 0177), printing a PDF
+  Bluetooth printers (tools/bluetooth_check.py, ADR 0177), the secret store (tools/secrets_check.py, ADR 0242),
+  printing a PDF
   (tools/print_check.py, ADR 0178), C's allocations (tools/foreign_alloc_check.py), task frame
   stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
   (tools/embed_check.py, ADR 0088), the
@@ -207,6 +208,7 @@ def main():
             ("slices tsan", py + [f"{HERE}/slice_check.py", "--compiler", cee, "--cc", SANITIZER_CC, "--cflag=-O1",
                                   "--cflag=-g", "--cflag=-fsanitize=thread"]),
             ("bluetooth", py + [f"{HERE}/bluetooth_check.py", "--compiler", cee]),  # ADR 0177
+            ("secrets", py + [f"{HERE}/secrets_check.py", "--compiler", cee]),  # ADR 0242
             ("print", py + [f"{HERE}/print_check.py", "--compiler", cee]),  # ADR 0178
             ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),

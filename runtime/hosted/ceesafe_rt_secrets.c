@@ -1,0 +1,832 @@
+/* SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0 */
+/*
+ * The system's secret store (type-system.md §26.21, ADR 0242): an app's secrets, by the app's name and the secret's,
+ * where the system keeps them encrypted. Linked only into programs that use it (c-backend.md §6).
+ *
+ * Every function blocks and may be called from any thread. lib/std has checked the names and the value's length
+ * (Secrets.check); they are checked again here, cheaply. Results: a read's length (>= 0), or one of the codes below,
+ * which lib/std maps to SecretError: -1 none (a read only), -2 Unsupported, -3 InvalidInput, -4 Locked, -5 Denied,
+ * -6 Failed. Write and remove return 0 or a code.
+ *
+ * macOS and iOS: a keychain item (generic password, service = app, account = name), this device only, after the first
+ * unlock; Security.framework and CoreFoundation loaded with dlopen. Android: org.ceesafe.window.Secrets (runtime/android),
+ * an AES-256-GCM key in the Android Keystore sealing a file per value, called over JNI. Windows: DPAPI for the current
+ * user, a file per value under %LOCALAPPDATA%\<app>\secrets, crypt32 loaded with LoadLibrary. Elsewhere Unsupported.
+ *
+ * CEESAFE_SECRETS_DIR=<folder> keeps the values as plain files <folder>/<app>/<name> instead, on every system (for
+ * tests: they are not protected).
+ */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS /* getenv */
+#endif
+#include "ceesafe/rt.h"
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CEE_SEC_NONE (-1)
+#define CEE_SEC_UNSUPPORTED (-2)
+#define CEE_SEC_INVALID (-3)
+#define CEE_SEC_LOCKED (-4)
+#define CEE_SEC_DENIED (-5)
+#define CEE_SEC_FAILED (-6)
+
+#define CEE_SEC_NAME_LIMIT 128u
+#define CEE_SEC_VALUE_LIMIT 65536u
+
+int64_t ceesafe_secrets_read(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                             uint8_t *out, uint64_t capacity);
+int32_t ceesafe_secrets_write(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                              const uint8_t *value, uint64_t length);
+int32_t ceesafe_secrets_remove(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length);
+
+/* The names as C strings, checked as lib/std's Secrets.check does; 0 when they are not names the store takes. */
+static int cee_sec_names(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                         char app_text[CEE_SEC_NAME_LIMIT + 1], char name_text[CEE_SEC_NAME_LIMIT + 1]) {
+    if (app_length == 0 || app_length > CEE_SEC_NAME_LIMIT || name_length == 0 || name_length > CEE_SEC_NAME_LIMIT) {
+        return 0;
+    }
+    for (uint64_t i = 0; i < app_length; i++) {
+        if (app[i] == '/' || app[i] == '\\' || app[i] == 0) {
+            return 0;
+        }
+    }
+    for (uint64_t i = 0; i < name_length; i++) {
+        uint8_t b = name[i];
+        int fits = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '.' ||
+                   b == '-' || b == '_';
+        if (!fits) {
+            return 0;
+        }
+    }
+    memcpy(app_text, app, (size_t)app_length);
+    app_text[app_length] = 0;
+    memcpy(name_text, name, (size_t)name_length);
+    name_text[name_length] = 0;
+    if (strcmp(app_text, ".") == 0 || strcmp(app_text, "..") == 0 || strcmp(name_text, ".") == 0 ||
+        strcmp(name_text, "..") == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+/* ---- files: CEESAFE_SECRETS_DIR's plain files, and the sealed files of Windows ---------------------------------- */
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+/* `text` (UTF-8) as UTF-16 in `out` of `room` wide characters; 0 when it does not fit. */
+static int cee_sec_wide(const char *text, wchar_t *out, int room) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, out, room);
+    return n > 0;
+}
+
+static int cee_sec_make_dir(const char *path) {
+    wchar_t wide[1024];
+    if (!cee_sec_wide(path, wide, 1024)) {
+        return 0;
+    }
+    return CreateDirectoryW(wide, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+/* The file's bytes into `out` (at most `capacity`): its length, CEE_SEC_NONE when missing, else CEE_SEC_FAILED. */
+static int64_t cee_sec_file_read(const char *path, uint8_t *out, uint64_t capacity) {
+    wchar_t wide[1024];
+    if (!cee_sec_wide(path, wide, 1024)) {
+        return CEE_SEC_FAILED;
+    }
+    HANDLE h = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? CEE_SEC_NONE : CEE_SEC_FAILED;
+    }
+    uint64_t done = 0;
+    int64_t result = 0;
+    for (;;) {
+        DWORD got = 0;
+        DWORD want = (DWORD)(capacity - done > 65536u ? 65536u : capacity - done);
+        if (want == 0) {
+            uint8_t extra;
+            if (ReadFile(h, &extra, 1, &got, NULL) && got != 0) {
+                result = CEE_SEC_FAILED; /* longer than any value */
+            }
+            break;
+        }
+        if (!ReadFile(h, out + done, want, &got, NULL)) {
+            result = CEE_SEC_FAILED;
+            break;
+        }
+        if (got == 0) {
+            break;
+        }
+        done += got;
+    }
+    CloseHandle(h);
+    return result != 0 ? result : (int64_t)done;
+}
+
+/* Writes `path` whole: a temporary file beside it, then moved over it. */
+static int32_t cee_sec_file_write(const char *path, const uint8_t *bytes, uint64_t length) {
+    char temporary[1100];
+    wchar_t wide[1100];
+    wchar_t wide_temporary[1100];
+    if (snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary ||
+        !cee_sec_wide(path, wide, 1100) || !cee_sec_wide(temporary, wide_temporary, 1100)) {
+        return CEE_SEC_FAILED;
+    }
+    HANDLE h = CreateFileW(wide_temporary, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return CEE_SEC_FAILED;
+    }
+    DWORD wrote = 0;
+    int ok = length == 0 || (WriteFile(h, bytes, (DWORD)length, &wrote, NULL) && wrote == (DWORD)length);
+    ok = FlushFileBuffers(h) && ok;
+    CloseHandle(h);
+    if (!ok || !MoveFileExW(wide_temporary, wide, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        (void)DeleteFileW(wide_temporary);
+        return CEE_SEC_FAILED;
+    }
+    return 0;
+}
+
+static int32_t cee_sec_file_remove(const char *path) {
+    wchar_t wide[1024];
+    if (!cee_sec_wide(path, wide, 1024)) {
+        return CEE_SEC_FAILED;
+    }
+    if (DeleteFileW(wide)) {
+        return 0;
+    }
+    DWORD e = GetLastError();
+    return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? 0 : CEE_SEC_FAILED;
+}
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int cee_sec_make_dir(const char *path) {
+    return mkdir(path, 0700) == 0 || errno == EEXIST;
+}
+
+static int64_t cee_sec_file_read(const char *path, uint8_t *out, uint64_t capacity) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return errno == ENOENT ? CEE_SEC_NONE : CEE_SEC_FAILED;
+    }
+    uint64_t done = 0;
+    int64_t result = 0;
+    for (;;) {
+        if (done == capacity) {
+            uint8_t extra;
+            ssize_t n = read(fd, &extra, 1);
+            if (n != 0) {
+                result = CEE_SEC_FAILED; /* longer than any value, or unreadable */
+            }
+            break;
+        }
+        ssize_t n = read(fd, out + done, (size_t)(capacity - done));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0) {
+            result = CEE_SEC_FAILED;
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        done += (uint64_t)n;
+    }
+    (void)close(fd);
+    return result != 0 ? result : (int64_t)done;
+}
+
+static int32_t cee_sec_file_write(const char *path, const uint8_t *bytes, uint64_t length) {
+    char temporary[1100];
+    if (snprintf(temporary, sizeof temporary, "%s.part", path) >= (int)sizeof temporary) {
+        return CEE_SEC_FAILED;
+    }
+    int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        return CEE_SEC_FAILED;
+    }
+    uint64_t done = 0;
+    while (done < length) {
+        ssize_t n = write(fd, bytes + done, (size_t)(length - done));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            break;
+        }
+        done += (uint64_t)n;
+    }
+    int synced = fsync(fd) == 0;
+    int closed = close(fd) == 0;
+    if (done != length || !synced || !closed || rename(temporary, path) != 0) {
+        (void)unlink(temporary);
+        return CEE_SEC_FAILED;
+    }
+    return 0;
+}
+
+static int32_t cee_sec_file_remove(const char *path) {
+    return unlink(path) == 0 || errno == ENOENT ? 0 : CEE_SEC_FAILED;
+}
+#endif
+
+/* `<dir>/<app>` made if missing, and the value's path `<dir>/<app>/<name>` in `path`; 0 when it cannot be. */
+static int cee_sec_path(const char *dir, const char *app, const char *name, int make, char *path, size_t room) {
+    char folder[1024];
+    if (snprintf(folder, sizeof folder, "%s/%s", dir, app) >= (int)sizeof folder ||
+        snprintf(path, room, "%s/%s", folder, name) >= (int)room) {
+        return 0;
+    }
+    return !make || cee_sec_make_dir(folder);
+}
+
+/* CEESAFE_SECRETS_DIR, or NULL. */
+static const char *cee_sec_test_dir(void) {
+    const char *dir = getenv("CEESAFE_SECRETS_DIR");
+    return dir != NULL && dir[0] != 0 ? dir : NULL;
+}
+
+static int64_t cee_sec_dir_read(const char *dir, const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+    char path[1100];
+    return cee_sec_path(dir, app, name, 0, path, sizeof path) ? cee_sec_file_read(path, out, capacity) : CEE_SEC_FAILED;
+}
+
+static int32_t cee_sec_dir_write(const char *dir, const char *app, const char *name, const uint8_t *v, uint64_t n) {
+    char path[1100];
+    return cee_sec_path(dir, app, name, 1, path, sizeof path) ? cee_sec_file_write(path, v, n) : CEE_SEC_FAILED;
+}
+
+static int32_t cee_sec_dir_remove(const char *dir, const char *app, const char *name) {
+    char path[1100];
+    return cee_sec_path(dir, app, name, 0, path, sizeof path) ? cee_sec_file_remove(path) : CEE_SEC_FAILED;
+}
+
+/* ---- the system's store ------------------------------------------------------------------------------------------ */
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <dlfcn.h>
+#include <pthread.h>
+
+typedef const void *cee_cf;
+typedef long cee_cf_index;
+typedef int32_t cee_os_status;
+
+static struct {
+    int loaded; /* 1 loaded, -1 failed */
+    int login;  /* macOS: the data protection keychain is not this program's; the login keychain is used */
+    cee_cf (*dictionary)(cee_cf, cee_cf_index, const void *, const void *);
+    void (*set)(cee_cf, cee_cf, cee_cf);
+    cee_cf (*string)(cee_cf, const uint8_t *, cee_cf_index, uint32_t, unsigned char);
+    cee_cf (*data)(cee_cf, const uint8_t *, cee_cf_index);
+    cee_cf_index (*data_length)(cee_cf);
+    const uint8_t *(*data_bytes)(cee_cf);
+    void (*release)(cee_cf);
+    const void *key_callbacks;
+    const void *value_callbacks;
+    cee_cf yes;
+    cee_os_status (*copy_matching)(cee_cf, cee_cf *);
+    cee_os_status (*add)(cee_cf, cee_cf *);
+    cee_os_status (*update)(cee_cf, cee_cf);
+    cee_os_status (*remove)(cee_cf);
+    cee_cf cls, generic, service, account, value, return_data, match_limit, limit_one, accessible, after_unlock,
+        data_protection;
+} cee_sec;
+
+static pthread_mutex_t cee_sec_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A constant of a framework's: the CFTypeRef its symbol holds. */
+static cee_cf cee_sec_constant(void *library, const char *symbol) {
+    const cee_cf *at = (const cee_cf *)dlsym(library, symbol);
+    return at != NULL ? *at : NULL;
+}
+
+static int cee_sec_load(void) {
+    pthread_mutex_lock(&cee_sec_lock);
+    if (cee_sec.loaded == 0) {
+        cee_sec.loaded = -1;
+        void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_GLOBAL);
+        void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW | RTLD_GLOBAL);
+        if (cf != NULL && sec != NULL) {
+            cee_sec.dictionary = (cee_cf(*)(cee_cf, cee_cf_index, const void *, const void *))dlsym(
+                cf, "CFDictionaryCreateMutable");
+            cee_sec.set = (void (*)(cee_cf, cee_cf, cee_cf))dlsym(cf, "CFDictionarySetValue");
+            cee_sec.string = (cee_cf(*)(cee_cf, const uint8_t *, cee_cf_index, uint32_t, unsigned char))dlsym(
+                cf, "CFStringCreateWithBytes");
+            cee_sec.data = (cee_cf(*)(cee_cf, const uint8_t *, cee_cf_index))dlsym(cf, "CFDataCreate");
+            cee_sec.data_length = (cee_cf_index(*)(cee_cf))dlsym(cf, "CFDataGetLength");
+            cee_sec.data_bytes = (const uint8_t *(*)(cee_cf))dlsym(cf, "CFDataGetBytePtr");
+            cee_sec.release = (void (*)(cee_cf))dlsym(cf, "CFRelease");
+            cee_sec.key_callbacks = dlsym(cf, "kCFTypeDictionaryKeyCallBacks");
+            cee_sec.value_callbacks = dlsym(cf, "kCFTypeDictionaryValueCallBacks");
+            cee_sec.yes = cee_sec_constant(cf, "kCFBooleanTrue");
+            cee_sec.copy_matching = (cee_os_status(*)(cee_cf, cee_cf *))dlsym(sec, "SecItemCopyMatching");
+            cee_sec.add = (cee_os_status(*)(cee_cf, cee_cf *))dlsym(sec, "SecItemAdd");
+            cee_sec.update = (cee_os_status(*)(cee_cf, cee_cf))dlsym(sec, "SecItemUpdate");
+            cee_sec.remove = (cee_os_status(*)(cee_cf))dlsym(sec, "SecItemDelete");
+            cee_sec.cls = cee_sec_constant(sec, "kSecClass");
+            cee_sec.generic = cee_sec_constant(sec, "kSecClassGenericPassword");
+            cee_sec.service = cee_sec_constant(sec, "kSecAttrService");
+            cee_sec.account = cee_sec_constant(sec, "kSecAttrAccount");
+            cee_sec.value = cee_sec_constant(sec, "kSecValueData");
+            cee_sec.return_data = cee_sec_constant(sec, "kSecReturnData");
+            cee_sec.match_limit = cee_sec_constant(sec, "kSecMatchLimit");
+            cee_sec.limit_one = cee_sec_constant(sec, "kSecMatchLimitOne");
+            cee_sec.accessible = cee_sec_constant(sec, "kSecAttrAccessible");
+            cee_sec.after_unlock = cee_sec_constant(sec, "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly");
+            cee_sec.data_protection = cee_sec_constant(sec, "kSecUseDataProtectionKeychain");
+            if (cee_sec.dictionary != NULL && cee_sec.set != NULL && cee_sec.string != NULL && cee_sec.data != NULL &&
+                cee_sec.data_length != NULL && cee_sec.data_bytes != NULL && cee_sec.release != NULL &&
+                cee_sec.key_callbacks != NULL && cee_sec.value_callbacks != NULL && cee_sec.yes != NULL &&
+                cee_sec.copy_matching != NULL && cee_sec.add != NULL && cee_sec.update != NULL &&
+                cee_sec.remove != NULL && cee_sec.cls != NULL && cee_sec.generic != NULL && cee_sec.service != NULL &&
+                cee_sec.account != NULL && cee_sec.value != NULL && cee_sec.return_data != NULL &&
+                cee_sec.match_limit != NULL && cee_sec.limit_one != NULL && cee_sec.accessible != NULL &&
+                cee_sec.after_unlock != NULL) {
+                cee_sec.loaded = 1;
+            }
+        }
+    }
+    int loaded = cee_sec.loaded == 1;
+    pthread_mutex_unlock(&cee_sec_lock);
+    return loaded;
+}
+
+#define CEE_SEC_UTF8 0x08000100u /* kCFStringEncodingUTF8 */
+#define CEE_SEC_NOT_FOUND (-25300)
+#define CEE_SEC_DUPLICATE (-25299)
+#define CEE_SEC_INTERACTION_NOT_ALLOWED (-25308)
+#define CEE_SEC_AUTH_FAILED (-25293)
+#define CEE_SEC_USER_CANCELED (-128)
+#define CEE_SEC_MISSING_ENTITLEMENT (-34018)
+
+/* The query naming the item (app, name), in the keychain `login` says (macOS), or NULL; the caller releases it. */
+static cee_cf cee_sec_query(const char *app, const char *name, int login) {
+    cee_cf q = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+    cee_cf service = cee_sec.string(NULL, (const uint8_t *)app, (cee_cf_index)strlen(app), CEE_SEC_UTF8, 0);
+    cee_cf account = cee_sec.string(NULL, (const uint8_t *)name, (cee_cf_index)strlen(name), CEE_SEC_UTF8, 0);
+    if (q == NULL || service == NULL || account == NULL) {
+        if (q != NULL) cee_sec.release(q);
+        if (service != NULL) cee_sec.release(service);
+        if (account != NULL) cee_sec.release(account);
+        return NULL;
+    }
+    cee_sec.set(q, cee_sec.cls, cee_sec.generic);
+    cee_sec.set(q, cee_sec.service, service);
+    cee_sec.set(q, cee_sec.account, account);
+    cee_sec.release(service);
+    cee_sec.release(account);
+#if !TARGET_OS_IPHONE
+    if (!login && cee_sec.data_protection != NULL) {
+        cee_sec.set(q, cee_sec.data_protection, cee_sec.yes);
+    }
+#else
+    (void)login;
+#endif
+    return q;
+}
+
+static int64_t cee_sec_code(cee_os_status status) {
+    switch (status) {
+    case CEE_SEC_NOT_FOUND:
+        return CEE_SEC_NONE;
+    case CEE_SEC_INTERACTION_NOT_ALLOWED:
+        return CEE_SEC_LOCKED;
+    case CEE_SEC_AUTH_FAILED:
+    case CEE_SEC_USER_CANCELED:
+    case CEE_SEC_MISSING_ENTITLEMENT:
+        return CEE_SEC_DENIED;
+    default:
+        return CEE_SEC_FAILED;
+    }
+}
+
+/* macOS: whether the keychain to use is the login keychain, found by the first call (the data protection keychain
+   answers errSecMissingEntitlement to a program without a keychain group). iOS has only the one. */
+static int cee_sec_login(void) {
+#if TARGET_OS_IPHONE
+    return 0;
+#else
+    pthread_mutex_lock(&cee_sec_lock);
+    int login = cee_sec.login;
+    pthread_mutex_unlock(&cee_sec_lock);
+    return login;
+#endif
+}
+
+static int cee_sec_fall_back(cee_os_status status) {
+#if TARGET_OS_IPHONE
+    (void)status;
+    return 0;
+#else
+    if (status != CEE_SEC_MISSING_ENTITLEMENT || cee_sec.data_protection == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&cee_sec_lock);
+    int was = cee_sec.login;
+    cee_sec.login = 1;
+    pthread_mutex_unlock(&cee_sec_lock);
+    return !was;
+#endif
+}
+
+static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+    if (!cee_sec_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    for (;;) {
+        cee_cf q = cee_sec_query(app, name, cee_sec_login());
+        if (q == NULL) {
+            return CEE_SEC_FAILED;
+        }
+        cee_sec.set(q, cee_sec.return_data, cee_sec.yes);
+        cee_sec.set(q, cee_sec.match_limit, cee_sec.limit_one);
+        cee_cf found = NULL;
+        cee_os_status status = cee_sec.copy_matching(q, &found);
+        cee_sec.release(q);
+        if (status != 0) {
+            if (cee_sec_fall_back(status)) {
+                continue;
+            }
+            return cee_sec_code(status);
+        }
+        if (found == NULL) {
+            return CEE_SEC_FAILED;
+        }
+        cee_cf_index length = cee_sec.data_length(found);
+        int64_t result = CEE_SEC_FAILED;
+        if (length >= 0 && (uint64_t)length <= capacity) {
+            if (length > 0) {
+                memcpy(out, cee_sec.data_bytes(found), (size_t)length);
+            }
+            result = (int64_t)length;
+        }
+        cee_sec.release(found);
+        return result;
+    }
+}
+
+static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+    if (!cee_sec_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    for (;;) {
+        int login = cee_sec_login();
+        cee_cf q = cee_sec_query(app, name, login);
+        cee_cf data = cee_sec.data(NULL, value, (cee_cf_index)length);
+        cee_cf change = cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+        if (q == NULL || data == NULL || change == NULL) {
+            if (q != NULL) cee_sec.release(q);
+            if (data != NULL) cee_sec.release(data);
+            if (change != NULL) cee_sec.release(change);
+            return CEE_SEC_FAILED;
+        }
+        cee_sec.set(change, cee_sec.value, data);
+        cee_os_status status = cee_sec.update(q, change);
+        if (status == CEE_SEC_NOT_FOUND) {
+            cee_sec.set(q, cee_sec.value, data);
+            if (!login) {
+                cee_sec.set(q, cee_sec.accessible, cee_sec.after_unlock);
+            }
+            status = cee_sec.add(q, NULL);
+            if (status == CEE_SEC_DUPLICATE) { /* another thread made it between the two calls */
+                cee_sec.release(q);
+                q = cee_sec_query(app, name, login);
+                status = q != NULL ? cee_sec.update(q, change) : -1;
+            }
+        }
+        if (q != NULL) cee_sec.release(q);
+        cee_sec.release(data);
+        cee_sec.release(change);
+        if (status != 0 && cee_sec_fall_back(status)) {
+            continue;
+        }
+        return status == 0 ? 0 : (int32_t)(cee_sec_code(status) == CEE_SEC_NONE ? CEE_SEC_FAILED : cee_sec_code(status));
+    }
+}
+
+static int32_t cee_sec_system_remove(const char *app, const char *name) {
+    if (!cee_sec_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    for (;;) {
+        cee_cf q = cee_sec_query(app, name, cee_sec_login());
+        if (q == NULL) {
+            return CEE_SEC_FAILED;
+        }
+        cee_os_status status = cee_sec.remove(q);
+        cee_sec.release(q);
+        if (status == 0 || status == CEE_SEC_NOT_FOUND) {
+            return 0;
+        }
+        if (cee_sec_fall_back(status)) {
+            continue;
+        }
+        return (int32_t)cee_sec_code(status);
+    }
+}
+
+#elif defined(__ANDROID__)
+/* Android: org.ceesafe.window.Secrets (runtime/android), a class of the window runtime's embedded dex, called over JNI
+   from the program's thread, attached to the VM for the call. The window runtime gives the VM, the activity and the
+   class (ceesafe_android_vm, ceesafe_android_secrets); they are weak here, so a program that opens no window links
+   without them and has no store (Unsupported). */
+#include <jni.h>
+
+JavaVM *ceesafe_android_vm(void) __attribute__((weak));
+jclass ceesafe_android_secrets(JNIEnv *env, jobject *activity) __attribute__((weak));
+
+/* The calling thread's env, attached for the call when it was not (`*attached` set): NULL without a VM. */
+static JNIEnv *cee_sec_env(JavaVM **vm, int *attached) {
+    *attached = 0;
+    *vm = ceesafe_android_vm != NULL ? ceesafe_android_vm() : NULL;
+    if (*vm == NULL) {
+        return NULL;
+    }
+    JNIEnv *env = NULL;
+    if ((**vm)->GetEnv(*vm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        if ((**vm)->AttachCurrentThread(*vm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        *attached = 1;
+    }
+    return env;
+}
+
+/* One call of Secrets' `method` (signature `signature`: the activity, the app, the name, then a byte array): its int
+   answer, or a code. `value` is the array's bytes for a write (copied in); for a read, the array of `capacity` bytes
+   the answer's length of is copied out to `out`. */
+static int64_t cee_sec_call(const char *method, const char *signature, const char *app, const char *name,
+                            const uint8_t *value, uint64_t length, uint8_t *out, uint64_t capacity) {
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_sec_env(&vm, &attached);
+    if (env == NULL) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    int64_t result = CEE_SEC_UNSUPPORTED;
+    if ((*env)->PushLocalFrame(env, 16) == 0) {
+        jobject activity = NULL;
+        jclass secrets = ceesafe_android_secrets != NULL ? ceesafe_android_secrets(env, &activity) : NULL;
+        jmethodID m = secrets != NULL ? (*env)->GetStaticMethodID(env, secrets, method, signature) : NULL;
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            m = NULL;
+        }
+        jstring app_text = (*env)->NewStringUTF(env, app);
+        jstring name_text = (*env)->NewStringUTF(env, name);
+        jbyteArray bytes = out != NULL ? (*env)->NewByteArray(env, (jsize)capacity)
+                           : value != NULL ? (*env)->NewByteArray(env, (jsize)length)
+                                           : NULL;
+        if (value != NULL && bytes != NULL && length > 0) {
+            (*env)->SetByteArrayRegion(env, bytes, 0, (jsize)length, (const jbyte *)value);
+        }
+        if (m != NULL && app_text != NULL && name_text != NULL && (bytes != NULL || (out == NULL && value == NULL)) &&
+            !(*env)->ExceptionCheck(env)) {
+            jint answer = (*env)->CallStaticIntMethod(env, secrets, m, activity, app_text, name_text, bytes);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                result = CEE_SEC_FAILED;
+            } else {
+                result = (int64_t)answer;
+                if (out != NULL && answer > 0 && (uint64_t)answer <= capacity) {
+                    (*env)->GetByteArrayRegion(env, bytes, 0, answer, (jbyte *)out);
+                }
+            }
+        } else if (secrets != NULL) {
+            result = CEE_SEC_FAILED;
+        }
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (attached) {
+        (void)(*vm)->DetachCurrentThread(vm);
+    }
+    return result;
+}
+
+static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+    return cee_sec_call("read", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app, name, NULL, 0,
+                        out, capacity);
+}
+
+static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+    static const uint8_t nothing = 0;
+    return (int32_t)cee_sec_call("write", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
+                                 name, value != NULL ? value : &nothing, length, NULL, 0);
+}
+
+static int32_t cee_sec_system_remove(const char *app, const char *name) {
+    return (int32_t)cee_sec_call("remove", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
+                                 name, NULL, 0, NULL, 0);
+}
+
+#elif defined(_WIN32)
+/* Windows: DPAPI for the current user (no prompt; the app and the name as its entropy), a sealed file per value in
+   %LOCALAPPDATA%\<app>\secrets. crypt32 is loaded at the first call. */
+typedef struct {
+    DWORD cbData;
+    BYTE *pbData;
+} cee_sec_blob;
+
+static struct {
+    volatile LONG state; /* 0 not tried, 1 loaded, 2 failed */
+    BOOL(WINAPI *protect)(cee_sec_blob *, LPCWSTR, cee_sec_blob *, void *, void *, DWORD, cee_sec_blob *);
+    BOOL(WINAPI *unprotect)(cee_sec_blob *, LPWSTR *, cee_sec_blob *, void *, void *, DWORD, cee_sec_blob *);
+} cee_sec_dpapi;
+
+#define CEE_SEC_UI_FORBIDDEN 0x1u /* CRYPTPROTECT_UI_FORBIDDEN */
+
+static int cee_sec_dpapi_load(void) {
+    if (cee_sec_dpapi.state == 0) {
+        HMODULE crypt = LoadLibraryW(L"crypt32.dll");
+        if (crypt != NULL) {
+            *(FARPROC *)&cee_sec_dpapi.protect = GetProcAddress(crypt, "CryptProtectData");
+            *(FARPROC *)&cee_sec_dpapi.unprotect = GetProcAddress(crypt, "CryptUnprotectData");
+        }
+        InterlockedExchange(&cee_sec_dpapi.state,
+                            cee_sec_dpapi.protect != NULL && cee_sec_dpapi.unprotect != NULL ? 1 : 2);
+    }
+    return cee_sec_dpapi.state == 1;
+}
+
+/* %LOCALAPPDATA%\<app>\secrets (UTF-8, '/' between the parts), made if `make`; 0 when it cannot be. */
+static int cee_sec_dpapi_dir(const char *app, int make, char *dir, size_t room) {
+    wchar_t base[600];
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, 600);
+    if (n == 0 || n >= 600) {
+        return 0;
+    }
+    char base_text[1024];
+    if (WideCharToMultiByte(CP_UTF8, 0, base, -1, base_text, sizeof base_text, NULL, NULL) <= 0) {
+        return 0;
+    }
+    char folder[1024];
+    if (snprintf(folder, sizeof folder, "%s/%s", base_text, app) >= (int)sizeof folder ||
+        snprintf(dir, room, "%s/secrets", folder) >= (int)room) {
+        return 0;
+    }
+    return !make || (cee_sec_make_dir(folder) && cee_sec_make_dir(dir));
+}
+
+static cee_sec_blob cee_sec_entropy(const char *app, const char *name, char *buffer, size_t room) {
+    int n = snprintf(buffer, room, "ceesafe.secrets/%s/%s", app, name);
+    cee_sec_blob b = {(DWORD)(n > 0 ? n : 0), (BYTE *)buffer};
+    return b;
+}
+
+static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+    if (!cee_sec_dpapi_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    char dir[1100];
+    char path[1200];
+    if (!cee_sec_dpapi_dir(app, 0, dir, sizeof dir) || snprintf(path, sizeof path, "%s/%s", dir, name) >= (int)sizeof path) {
+        return CEE_SEC_FAILED;
+    }
+    /* A sealed value is longer than the value: DPAPI's header and MAC (a few hundred bytes). */
+    uint64_t room = capacity + 4096u;
+    uint8_t *sealed = (uint8_t *)malloc((size_t)room);
+    if (sealed == NULL) {
+        return CEE_SEC_FAILED;
+    }
+    int64_t got = cee_sec_file_read(path, sealed, room);
+    int64_t result = got;
+    if (got >= 0) {
+        char e[300];
+        cee_sec_blob in = {(DWORD)got, sealed};
+        cee_sec_blob entropy = cee_sec_entropy(app, name, e, sizeof e);
+        cee_sec_blob plain = {0, NULL};
+        if (!cee_sec_dpapi.unprotect(&in, NULL, &entropy, NULL, NULL, CEE_SEC_UI_FORBIDDEN, &plain)) {
+            result = CEE_SEC_FAILED;
+        } else {
+            result = plain.cbData <= capacity ? (int64_t)plain.cbData : CEE_SEC_FAILED;
+            if (result > 0) {
+                memcpy(out, plain.pbData, plain.cbData);
+            }
+            SecureZeroMemory(plain.pbData, plain.cbData);
+            LocalFree(plain.pbData);
+        }
+    }
+    free(sealed);
+    return result;
+}
+
+static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+    if (!cee_sec_dpapi_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    char dir[1100];
+    if (!cee_sec_dpapi_dir(app, 1, dir, sizeof dir)) {
+        return CEE_SEC_FAILED;
+    }
+    char e[300];
+    static BYTE nothing;
+    /* DPAPI's input blob is not const, though CryptProtectData only reads it: the pointer is copied, not cast, so
+       -Wcast-qual has nothing to say. */
+    BYTE *bytes = &nothing;
+    if (length > 0) {
+        memcpy(&bytes, &value, sizeof bytes);
+    }
+    cee_sec_blob in = {(DWORD)length, bytes};
+    cee_sec_blob entropy = cee_sec_entropy(app, name, e, sizeof e);
+    cee_sec_blob sealed = {0, NULL};
+    if (!cee_sec_dpapi.protect(&in, L"ceesafe", &entropy, NULL, NULL, CEE_SEC_UI_FORBIDDEN, &sealed)) {
+        return CEE_SEC_FAILED;
+    }
+    char path[1200];
+    int32_t result = snprintf(path, sizeof path, "%s/%s", dir, name) < (int)sizeof path
+                         ? cee_sec_file_write(path, sealed.pbData, sealed.cbData)
+                         : CEE_SEC_FAILED;
+    LocalFree(sealed.pbData);
+    return result;
+}
+
+static int32_t cee_sec_system_remove(const char *app, const char *name) {
+    char dir[1100];
+    char path[1200];
+    if (!cee_sec_dpapi_dir(app, 0, dir, sizeof dir) || snprintf(path, sizeof path, "%s/%s", dir, name) >= (int)sizeof path) {
+        return CEE_SEC_FAILED;
+    }
+    return cee_sec_file_remove(path);
+}
+
+#else
+/* Linux, FreeBSD and the rest: no store yet (ADR 0242 §6.1). */
+static int64_t cee_sec_system_read(const char *app, const char *name, uint8_t *out, uint64_t capacity) {
+    (void)app;
+    (void)name;
+    (void)out;
+    (void)capacity;
+    return CEE_SEC_UNSUPPORTED;
+}
+
+static int32_t cee_sec_system_write(const char *app, const char *name, const uint8_t *value, uint64_t length) {
+    (void)app;
+    (void)name;
+    (void)value;
+    (void)length;
+    return CEE_SEC_UNSUPPORTED;
+}
+
+static int32_t cee_sec_system_remove(const char *app, const char *name) {
+    (void)app;
+    (void)name;
+    return CEE_SEC_UNSUPPORTED;
+}
+#endif
+
+/* ---- the entry points -------------------------------------------------------------------------------------------- */
+
+int64_t ceesafe_secrets_read(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                             uint8_t *out, uint64_t capacity) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    if (!cee_sec_names(app, app_length, name, name_length, a, n)) {
+        return CEE_SEC_INVALID;
+    }
+    if (capacity > CEE_SEC_VALUE_LIMIT) {
+        capacity = CEE_SEC_VALUE_LIMIT;
+    }
+    const char *dir = cee_sec_test_dir();
+    return dir != NULL ? cee_sec_dir_read(dir, a, n, out, capacity) : cee_sec_system_read(a, n, out, capacity);
+}
+
+int32_t ceesafe_secrets_write(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length,
+                              const uint8_t *value, uint64_t length) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    if (!cee_sec_names(app, app_length, name, name_length, a, n) || length > CEE_SEC_VALUE_LIMIT) {
+        return CEE_SEC_INVALID;
+    }
+    const char *dir = cee_sec_test_dir();
+    return dir != NULL ? cee_sec_dir_write(dir, a, n, value, length) : cee_sec_system_write(a, n, value, length);
+}
+
+int32_t ceesafe_secrets_remove(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    if (!cee_sec_names(app, app_length, name, name_length, a, n)) {
+        return CEE_SEC_INVALID;
+    }
+    const char *dir = cee_sec_test_dir();
+    return dir != NULL ? cee_sec_dir_remove(dir, a, n) : cee_sec_system_remove(a, n);
+}

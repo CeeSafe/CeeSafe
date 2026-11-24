@@ -4355,6 +4355,27 @@ Diagnostics: none new.
   shortened under the mapping, or removed or renamed while mapped, is a fault at the next access; `--sandbox`
   refuses it.
 
+### 26.21 The system's secret store (ADR 0242)
+- **`Secrets.read(app, name)`** (lib/std): `Result<Vector<u8>?, SecretError>`, the secret `name` of the app `app`,
+  or `null` when there is none. **`Secrets.write(app, name, value: Slice<u8>)`**: `Result<void, SecretError>`, makes
+  or replaces it; a reader sees the old value or the new, never part of one. **`Secrets.remove(app, name)`**:
+  `Result<void, SecretError>`, `Ok` when there was none.
+- **Names and sizes.** `app` is not empty, holds no `/`, `\` or zero byte, is not `.` or `..`, and is at most 128
+  bytes (as `Directory.appData`'s name). `name` is 1 to 128 ASCII letters, digits, `.`, `-` and `_`, not `.` or `..`.
+  A value is at most `Secrets.valueLimit()`, 65,536 bytes. Any other is `InvalidInput`, before the system is asked.
+- **`SecretError`**: `Unsupported` (no store on this system), `InvalidInput`, `Locked` (not readable until the user
+  unlocks the device or signs in), `Denied` (the system refused this program), `Failed`.
+- **Every call blocks** and may be made from any thread; each has the `sleep` effect.
+- **Where.** macOS and iOS: a keychain item (generic password, service `app`, account `name`), this device only,
+  readable after the first unlock; on macOS in the data protection keychain when the program is entitled to it, else
+  in the login keychain, where a rebuilt program may make macOS ask the user once to read what an older build wrote.
+  Android (a program with an activity): each value sealed with an AES-256-GCM key of the Android Keystore (alias
+  `ceesafe.secrets.<app>`), in the app's no-backup folder. Windows: DPAPI for the current user, in
+  `%LOCALAPPDATA%\<app>\secrets`. Linux, FreeBSD, CosmoOS and `ceesafec run --interp`: `Unsupported`. A value never
+  leaves the device it was written on.
+- **Testing.** `CEESAFE_SECRETS_DIR=<folder>` keeps the values natively as plain files `<folder>/<app>/<name>`
+  instead, on every system; never for a real app's secrets.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

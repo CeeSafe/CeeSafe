@@ -1399,6 +1399,19 @@ fn synthCall(
                                 expected,
                             );
                         }
+                        Entity.Interface(entry) => {
+                            // `I.m(x, …)`: the interface's method called on `x` (ADR 0229 §2.3).
+                            return checkInterfaceCall(
+                                c,
+                                entry,
+                                target,
+                                typeArguments,
+                                member,
+                                arguments,
+                                calleeSpan,
+                                span,
+                            );
+                        }
                         _ => {}
                     }
                     if (typeArguments.count == 0) {
@@ -1628,6 +1641,11 @@ fn voidMisplaced(c: borrow Checker, t: u32, top: bool, depth: u32) -> bool {
     // struct's is refused where it is made (ADR 0213).
     if (c.types.is(t, TypeKind.RawPointer)) {
         return false;
+    }
+    // A thread's result is what its body returns, so `Thread<void>` is a thread with no result (type-system.md §38.2): its argument is
+    // a return type, not an element.
+    if (c.types.is(t, TypeKind.Thread)) {
+        return voidMisplaced(c, info.element, true, depth + 1);
     }
     // An element or a referent of the type `void` (ADR 0213 §7): `Vector<T>`, `[T; N]`, `Slice<T>`, `borrow T`,
     // `Box<T>`.

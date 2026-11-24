@@ -1,0 +1,172 @@
+// ADR 0229: a type may have methods of one name from several interfaces (SQLite port finding 6). A call through a
+// bound or a `dyn` calls the interface's (§2.2 1, 2), in every instance of generic code, whatever order the instance
+// and its generic version are checked in; `I.m(x, …)` names one (§2.3); a call on the type with one candidate needs
+// nothing. Each method returns a different number, so the output says which one ran: worked by hand from the bodies.
+
+// A generic struct whose instance is made (by this field) before its own declaration is read.
+struct Early {
+    cache: Cached<Pager>;
+}
+
+interface PageSource {
+    fn usableSize(borrow this) -> usize;
+    fn read(borrow this, page: u32) -> u32;
+
+    fn describe(borrow this) -> usize => 100 + this.usableSize(); // the source's, in every instance
+}
+
+interface PageSink {
+    fn usableSize(borrow this) -> usize;
+    fn write(borrow mut this, page: u32);
+
+    fn describe(borrow this) -> usize => 200 + this.usableSize();
+}
+
+// One name with another signature, and a static function of one name in both.
+interface Labelled {
+    fn label(borrow this) -> u32;
+    fn make() -> Self;
+}
+
+interface Tagged {
+    fn label(borrow this, extra: u32) -> u32;
+    fn make() -> Self;
+}
+
+struct Pager {
+    size: usize;
+    writes: u32;
+}
+
+impl PageSource for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 8;
+    fn read(borrow this, page: u32) -> u32 => page * 2;
+}
+
+impl PageSink for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 32;
+    fn write(borrow mut this, page: u32) {
+        this.writes += page;
+    }
+}
+
+impl Labelled for Pager {
+    fn label(borrow this) -> u32 => 1;
+    fn make() -> Self => Pager { size: 1000, writes: 0 };
+}
+
+impl Tagged for Pager {
+    fn label(borrow this, extra: u32) -> u32 => 2 + extra;
+    fn make() -> Self => Pager { size: 2000, writes: 0 };
+}
+
+struct Cached<T: PageSink> {
+    inner: T;
+
+    fn size(borrow this) -> usize => this.inner.usableSize(); // the sink's
+}
+
+fn sourceSize<T: PageSource>(p: borrow T) -> usize => p.usableSize();
+
+fn sinkSize<T: PageSink>(p: borrow T) -> usize => p.usableSize();
+
+// The same type for both parameters: each call is its own bound's.
+fn both<S: PageSource, K: PageSink>(s: borrow S, k: borrow K) -> usize => s.usableSize() * 10000 + k.usableSize();
+
+// Both bounds on one parameter: the plain call would be N0267, the qualified ones choose.
+fn named<T: PageSource + PageSink>(p: borrow mut T) -> usize {
+    PageSink.write(mut p, 5);
+    return PageSource.usableSize(p) + PageSink.usableSize(p);
+}
+
+fn makeLabelled<T: Labelled>() -> T => T.make();
+
+fn makeTagged<T: Tagged>() -> T => T.make();
+
+fn throughDyn(p: borrow dyn PageSink) -> usize => p.usableSize();
+
+// A supertrait's method named through the subinterface.
+interface Store: PageSource {
+    fn flush(borrow this) -> u32;
+}
+
+impl Store for Pager {
+    fn flush(borrow this) -> u32 => 7;
+}
+
+fn storeSize<T: Store>(p: borrow T) -> usize => p.usableSize();
+
+// An enum with methods of one name from two interfaces.
+interface Weighed {
+    fn weight(this) -> u32;
+}
+
+interface Priced {
+    fn weight(this) -> u32;
+}
+
+enum Coin {
+    Small,
+    Large,
+}
+
+impl Weighed for Coin {
+    fn weight(this) -> u32 => match (this) {
+        Coin.Small => 3,
+        Coin.Large => 9,
+    };
+}
+
+impl Priced for Coin {
+    fn weight(this) -> u32 => match (this) {
+        Coin.Small => 10,
+        Coin.Large => 50,
+    };
+}
+
+fn main() {
+    var pager = Pager { size: 4096, writes: 0 };
+    Console.writeLine(sourceSize(pager));            // 4088
+    Console.writeLine(sinkSize(pager));              // 4064
+    Console.writeLine(both(pager, pager));           // 40884064
+    Console.writeLine(throughDyn(pager));            // 4064
+    Console.writeLine(PageSource.usableSize(pager)); // 4088
+    Console.writeLine(PageSink.usableSize(pager));   // 4064
+    PageSink.write(mut pager, 3);
+    Console.writeLine(pager.writes);                                   // 3
+    pager.write(4);                                                    // one candidate: no interface named
+    Console.writeLine(pager.read(21));                                 // 42
+    Console.writeLine(named(mut pager));                               // 8152
+    Console.writeLine(pager.writes);                                   // 12
+    Console.writeLine(PageSource.describe(pager));                     // 100 + 4088
+    Console.writeLine(PageSink.describe(pager));                       // 200 + 4064
+    Console.writeLine(Labelled.label(pager) + Tagged.label(pager, 5)); // 1 + 7
+    let cached = Early { cache: Cached { inner: Pager { size: 64, writes: 0 } } };
+    Console.writeLine(cached.cache.size()); // 32
+    let one = makeLabelled<Pager>();
+    let two = makeTagged<Pager>();
+    Console.writeLine(one.size + two.size);                                    // 3000
+    Console.writeLine(storeSize(pager));                                       // 4088
+    Console.writeLine(Store.usableSize(pager));                                // 4088, PageSource's through its subinterface
+    Console.writeLine(pager.flush());                                          // 7
+    Console.writeLine(Weighed.weight(Coin.Large) + Priced.weight(Coin.Small)); // 19
+}
+// expect-stdout: 4088
+// expect-stdout: 4064
+// expect-stdout: 40884064
+// expect-stdout: 4064
+// expect-stdout: 4088
+// expect-stdout: 4064
+// expect-stdout: 3
+// expect-stdout: 42
+// expect-stdout: 8152
+// expect-stdout: 12
+// expect-stdout: 4188
+// expect-stdout: 4264
+// expect-stdout: 8
+// expect-stdout: 32
+// expect-stdout: 3000
+// expect-stdout: 4088
+// expect-stdout: 4088
+// expect-stdout: 7
+// expect-stdout: 19

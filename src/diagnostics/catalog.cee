@@ -17,10 +17,10 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     11 =>
         "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 =>
-        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7)",
+        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7); the forms other languages write, each with what CeeSafe writes instead (below)",
     101 =>
-        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3)",
-    102 => "Expected an expression",
+        "Expected an item (`fn` or `const`) at the top level; `class Name`, which says CeeSafe has no classes and to declare a `struct` (ADR 0195 §2.3); `type Name = …`, which says CeeSafe has no type aliases",
+    102 => "Expected an expression; at a `|`, that a closure is written `(a) => a + 1`",
     103 => "Comparison operators chained",
     104 => "Invalid assignment target",
     105 =>
@@ -29,7 +29,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     107 =>
         "Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2)",
     108 =>
-        "Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`)",
+        "Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`); a float literal, which is no pattern: bind the value and compare it with `==` (ADR 0228 §2.3)",
     109 => "An `import` declaration after an item",
     110 =>
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",
@@ -66,18 +66,20 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     223 => "*(unassigned)*",
     224 => "Value of type `void` used as a value, or a `let` of a `never` expression",
     225 => "Expression statement that is not a call, an `await`, or `?` or `!` (ADR 0138 §5)",
-    226 => "`void` used other than as a return type, or `never` other than as a function's return type",
+    226 =>
+        "`void` used other than as a return type, or `never` other than as a function's return type; since ADR 0213 an instance at `void` of a generic struct with a field of that type, or of a generic enum whose variant would have a `void` payload beside others (a variant's one `void` payload makes a unit variant, §20.4)",
     227 =>
         "Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6)",
     228 =>
-        "Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107)",
+        "Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107); an impl's method (an inherited default too) named like the type's own method, or like another impl's of the same interface (ADR 0229 §2.1: two interfaces may each give a method of one name)",
     229 =>
         "Struct literal does not initialise every field; a struct pattern without `..` does not name every field (ADR 0123)",
     230 =>
         "Unknown field (in a literal, an access or a struct pattern), or a function named where a field was expected",
     231 => "Field initialised twice in a literal, or named twice in a struct pattern (ADR 0123)",
     232 => "`this` outside a method, or a `this` parameter outside a struct",
-    233 => "Method called as a static function, or a static function called on a value",
+    233 =>
+        "Method called as a static function, or a static function called on a value or through `I.f(…)`, which has no value to name its type by (ADR 0229 §2.3)",
     234 =>
         "Field access, method call or literal on something that is not a struct (an optional has only `isSome` and `isNull`, ADR 0072)",
     235 => "A block branch of an `if` or `match` expression can complete, so it has no value (type-system.md §15.3)",
@@ -89,12 +91,13 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     243 => "A place or temporary goes out of scope while borrowed",
     244 => "Returning a reference to a local or temporary (E1)",
     245 =>
-        "Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5); in a closure's body, a result that may hold a loan and is made from a capture, since the closure's environment is no source of its result (§36.2)",
+        "Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5); in a closure's body, a result that may hold a loan and is made from a capture, since the closure's environment is no source of its result (§36.2). For a result that holds a reference without being one (`Result<Slice<u8>, E>`), the message names a region parameter, not a source list (ADR 0228 §2.2); for a slice result of a function with no scoped parameter, a `static` table and `Slice<static, T>`",
     246 =>
         "Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1)",
-    247 => "`borrow` of something that is not a place",
+    247 =>
+        "`borrow mut` or `mut` of something that is not a place (a shared `borrow 5` lends a temporary for the statement, ADR 0227 §2.1)",
     248 => "`borrow mut` (or a `borrow mut this` call) on an immutable place",
-    249 => "`mut` argument marker missing or misplaced",
+    249 => "`mut` argument marker missing or misplaced (the receiver of `I.m(x, …)` too, ADR 0229 §2.3)",
     250 =>
         "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2)",
     251 =>
@@ -110,7 +113,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy (since ADR 0198, one that needs drop, an unbounded type parameter included, until arrays have drop glue), or an array larger than 2^31 − 1 bytes; since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected",
+        "Invalid array (`type-system.md` §16): a length that is not a constant expression of type `usize` (a literal, a `usize` constant, or operators over them; ADR 0143) or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), or an array larger than 2^31 − 1 bytes (an element type that needs drop was N0259 until ADR 0198's phase 2); since ADR 0198 a repeat `[e; N]` of a non-Copy `e` that is not a static initialiser (`[AtomicU64.create(0); 4]`: use `AtomicU64.constant(0)` or `arrayFrom`); since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
@@ -126,9 +129,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     266 =>
         "Generic instantiation nested more than 64 deep, or with type arguments made of more than 1048576 types and members (polymorphic recursion): a function's, or the functions of a struct or enum instance at their first use (type-system.md §20.4)",
     267 =>
-        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) or without restating its region parameters' bounds exactly (type-system.md §25.8, ADR 0134)",
+        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, a call on a type of a method or static function that two of its interfaces' impls give it where the call cannot choose (ADR 0229 §2.2; the fix writes `I.m(x, …)` when one of them alone takes the call's arguments), or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) or without restating its region parameters' bounds exactly (type-system.md §25.8, ADR 0134)",
     268 =>
-        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), an impl's target that does not implement a supertrait of its interface (ADR 0086 §2.6), or a type with region parameters coerced to `dyn I` (ADR 0054), or a function of a bounded `impl` block used on an instance that does not meet the block's bounds (ADR 0130; N0334 for `Send` and `Share`)",
+        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), an impl's target that does not implement a supertrait of its interface (ADR 0086 §2.6), or a type with region parameters coerced to `dyn I` (ADR 0054), or a function of a bounded `impl` block used on an instance that does not meet the block's bounds (ADR 0130; N0334 for `Send` and `Share`), or `I.m(x, …)` where `x`'s type does not implement `I` (ADR 0229 §2.3)",
     270 => "A scoped field or payload in a struct or enum without region parameters",
     272 =>
         "Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067); a closure that stores one capture's loan through another is such a store where the closure is made (type-system.md §36.2, ADR 0131)",
@@ -150,7 +153,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     292 =>
         "A C name that is not a valid C identifier, is a C keyword (or `bool`, `true`, `false`, `NULL`, `main`), is reserved by C, or starts with `ceesafe_`, `cee_`, `CEE_` or `cee` and an uppercase letter",
     293 =>
-        "A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) a call of a library function whose signature names one, or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1)",
+        "A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) a call of a library function whose signature names one, a float method that is a C library function (`x.exp()`, type-system.md §35.8, ADR 0218), or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1)",
     294 =>
         "An imported C type (type-system.md §31), or a C-laid-out type (§33), used where CeeSafe would need its size or would move it: as a local, parameter, result, field, element, optional or type argument, in a struct literal, or with `read`, `write`, `add`, `sub`, `offset` or `fromRaw` through a pointer; or a borrow of a pointer, `usize` or `isize` field of one",
     295 =>

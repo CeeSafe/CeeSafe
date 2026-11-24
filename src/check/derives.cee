@@ -604,17 +604,17 @@ fn orderKeyText(shape: borrow DeriveShape) -> Result<Vector<u8>, AllocError> {
 /// lib/core's `DerivedEqual` method for `typ`, a struct or enum `@derive(Equal)` gave one; else none.
 fn derivedEqualMethod(c: borrow mut Checker, typ: u32, span: Span) -> Result<u32, AllocError> {
     completeMembers(c, typ, span)?; // an instance whose impls waited for a use: the comparison
-    var found = false;
+    var found = none();
     for (i in c.implementations.view()) {
         if (i.typ == typ && isDerivedEqualInterface(c, i.interfaceEntry)) {
-            found = true;
+            found = i.interfaceEntry;
         }
     }
-    if (!found) {
+    if (found == none()) {
         return Ok(none());
     }
     let name = c.intern("derivedEqual")?;
-    return Ok(implMethodFor(c, typ, name));
+    return Ok(implMethodIn(c, typ, name, found));
 }
 
 fn isDerivedEqualInterface(c: borrow Checker, entry: u32) -> bool {

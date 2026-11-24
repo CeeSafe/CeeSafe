@@ -1,0 +1,614 @@
+// Methods of one name from several interfaces' impls on one type, and the qualified call `I.m(x, …)` that names one
+// (ADR 0229; type-system.md §21.4).
+
+/// What a call on a type finds among its impls' methods of one name: the method, or, when it cannot choose, two of
+/// the interfaces that give one (`first` is none when it could).
+struct MethodChoice {
+    function: u32;
+    first: u32;
+    second: u32;
+}
+
+/// The method named `name` that interface `interfaceEntry`'s impl gives `typ`, or none.
+fn implMethodIn(c: borrow Checker, typ: u32, name: u32, interfaceEntry: u32) -> u32 {
+    for (m in c.implMethods.view()) {
+        if (m.typ == typ && m.name == name && m.interfaceEntry == interfaceEntry) {
+            return m.function;
+        }
+    }
+    return none();
+}
+
+/// The method of `typ` named `name` declared by the function syntax `syntax` (an `@into` method), or none.
+fn implMethodWithSyntax(c: borrow Checker, typ: u32, name: u32, syntax: u32) -> u32 {
+    for (m in c.implMethods.view()) {
+        if (m.typ == typ && m.name == name && c.hir.functions[m.function as usize].syntax == syntax) {
+            return m.function;
+        }
+    }
+    return none();
+}
+
+/// Would a method `name` of interface `interfaceEntry` clash with one `typ` has (N0228)? Only with one of no
+/// interface (an inherent block's or an enum's function) or of the same interface (ADR 0229 §2.1).
+fn clashingImplMethod(c: borrow Checker, typ: u32, name: u32, interfaceEntry: u32) -> bool {
+    for (m in c.implMethods.view()) {
+        if (m.typ == typ && m.name == name && (m.interfaceEntry == none() || m.interfaceEntry == interfaceEntry)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Records an impl's method; when another interface's impl gives `typ` a method of the same name, both carry their
+/// interface in their C names (ADR 0229 §2.4).
+fn addImplMethod(
+    c: borrow mut Checker,
+    typ: u32,
+    name: u32,
+    function: u32,
+    interfaceEntry: u32,
+) -> Result<void, AllocError> {
+    c.hir.functions[function as usize].implInterface = interfaceEntry;
+    for (k in 0..c.implMethods.length) {
+        let m = c.implMethods[k];
+        if (m.typ == typ && m.name == name && m.interfaceEntry != none() && m.interfaceEntry != interfaceEntry) {
+            c.hir.functions[m.function as usize].sharedName = true;
+            c.hir.functions[function as usize].sharedName = true;
+            c.sharedNames += 1;
+        }
+    }
+    return c.implMethods.push(ImplMethod { typ: typ, name: name, function: function, interfaceEntry: interfaceEntry });
+}
+
+/// `entry` and the interfaces it has as supertraits, at any depth, each once.
+fn addInterfaceAndSupers(
+    c: borrow Checker,
+    entry: u32,
+    out: borrow mut Vector<u32>,
+    depth: u32,
+) -> Result<void, AllocError> {
+    if (depth > 32 || containsU32(out, entry)) {
+        return Ok();
+    }
+    out.push(entry)?;
+    let supers = c.interfaces[entry as usize].supertraits;
+    for (k in 0..supers.count) {
+        let bound = c.types.listAt(supers, k);
+        addInterfaceAndSupers(c, c.types.bounds[bound as usize].interfaceEntry, out, depth + 1)?;
+    }
+    return Ok();
+}
+
+/// Is `target` the interface `entry` or one of its supertraits?
+fn interfaceReaches(c: borrow Checker, entry: u32, target: u32) -> bool {
+    var all = Vector<u32>.create();
+    match (addInterfaceAndSupers(c, entry, mut all, 0)) {
+        Ok(_) => {}
+        Err(_) => { return entry == target; }
+    }
+    return containsU32(all, target);
+}
+
+/// The interface (`entry` or a supertrait) that declares a method named `name`, or none.
+fn declaringInterface(c: borrow Checker, entry: u32, name: u32) -> Result<u32, AllocError> {
+    var all = Vector<u32>.create();
+    addInterfaceAndSupers(c, entry, mut all, 0)?;
+    for (e in all.view()) {
+        if (interfaceMethod(c, e, name) != none()) {
+            return Ok(e);
+        }
+    }
+    return Ok(none());
+}
+
+/// Can the current file call `m` (ADR 0229 §2.2)? Not if its interface is file-private to another file (ADR 0109) or
+/// not public in another package, or if the method is `private` in another file of the package.
+fn implMethodVisible(c: borrow Checker, m: ImplMethod) -> bool {
+    let entry = m.interfaceEntry;
+    if (entry != none()) {
+        let file = c.interfaces[entry as usize].file;
+        if (file != none() && isOtherPackage(c, file) && !isPublicEntity(c, Entity.Interface(entry))) {
+            return false;
+        }
+        let privateFile = privateFileOf(c, Entity.Interface(entry));
+        if (privateFile != none() && privateFile != c.file && !isOtherPackage(c, privateFile)) {
+            return false;
+        }
+    }
+    let f = borrow c.hir.functions[m.function as usize];
+    if (f.syntax != none() && f.file != none() && f.file != c.file && !isOtherPackage(c, f.file) &&
+        isPrivateVisibility(c.front.ast.functions[f.syntax as usize].visibility)) {
+        return false;
+    }
+    return true;
+}
+
+/// The interface a bound gave the call whose method name is at `start` in `file`, in its generic version; or none.
+fn recordedInterface(c: borrow Checker, file: u32, start: u32) -> u32 {
+    for (b in c.boundCalls.view()) {
+        if (b.file == file && b.start == start) {
+            return b.interfaceEntry;
+        }
+    }
+    return none();
+}
+
+/// The interfaces (and their supertraits) that bound the type parameters the current environment maps to `typ`: in
+/// an instance, the bounds the generic version's calls on a value of `typ` went through (ADR 0229 §2.2).
+fn environmentInterfaces(c: borrow mut Checker, typ: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    var parameters = Vector<u32>.create();
+    for (p in c.typeEnvironment.view()) {
+        if (p.typ == typ && p.parameter != none()) {
+            parameters.push(p.parameter)?;
+        }
+    }
+    for (parameter in parameters.view()) {
+        let bounds = c.front.ast.typeParameters[parameter as usize].bounds;
+        for (k in 0..bounds.count) {
+            let syntax = c.front.ast.at(bounds, k);
+            var symbol = none();
+            match (c.front.ast.types[syntax as usize]) {
+                TypeNode.Named(q) => {
+                    if (q.parts.count == 1) {
+                        symbol = c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol;
+                    }
+                }
+                TypeNode.Generic(q, _) => {
+                    if (q.parts.count == 1) {
+                        symbol = c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol;
+                    }
+                }
+                _ => {}
+            }
+            if (symbol != none()) {
+                match (c.item(symbol)) {
+                    Entity.Interface(entry) => { addInterfaceAndSupers(c, entry, out, 0)?; }
+                    _ => {}
+                }
+            }
+        }
+    }
+    return Ok();
+}
+
+/// Which of `typ`'s impl methods named `name` a call at `span` (the method name) names (ADR 0229 §2.2): the only one;
+/// the only one the call can see; the one of the interface a bound gave this call in its generic version; the one of
+/// an interface that bounds a type parameter the instance maps to `typ`. Else two candidates, for N0267.
+fn chooseImplMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<MethodChoice, AllocError> {
+    if (c.sharedNames == 0) {
+        // No type has a name from two interfaces: the one method, as before ADR 0229.
+        return Ok(MethodChoice { function: implMethodFor(c, typ, name), first: none(), second: none() });
+    }
+    var candidates = Vector<u32>.create(); // indexes in implMethods
+    for (k in 0..c.implMethods.length) {
+        if (c.implMethods[k].typ == typ && c.implMethods[k].name == name) {
+            candidates.push(truncate<u32>(k))?;
+        }
+    }
+    if (candidates.length == 0) {
+        return Ok(MethodChoice { function: none(), first: none(), second: none() });
+    }
+    if (candidates.length == 1) {
+        return Ok(
+            MethodChoice { function: c.implMethods[candidates[0] as usize].function, first: none(), second: none() },
+        );
+    }
+    var visible = Vector<u32>.create();
+    for (k in candidates.view()) {
+        if (implMethodVisible(c, c.implMethods[k as usize])) {
+            visible.push(k)?;
+        }
+    }
+    if (visible.length == 1) {
+        return Ok(
+            MethodChoice { function: c.implMethods[visible[0] as usize].function, first: none(), second: none() },
+        );
+    }
+    let pool = if (visible.length == 0) candidates else visible;
+    let recorded = recordedInterface(c, c.file, span.start);
+    if (recorded != none()) {
+        for (k in pool.view()) {
+            if (c.implMethods[k as usize].interfaceEntry == recorded) {
+                return Ok(MethodChoice { function: c.implMethods[k as usize].function, first: none(), second: none() });
+            }
+        }
+    }
+    var bounding = Vector<u32>.create();
+    environmentInterfaces(c, typ, mut bounding)?;
+    let current = c.function;
+    if (current != none() && (current as usize) < c.hir.functions.length &&
+        c.hir.functions[current as usize].inheritedDefault && c.hir.functions[current as usize].owner == typ) {
+        // An inherited default's `Self` is bounded by its interface (ADR 0086 §2.1).
+        let defaultInterface = c.hir.functions[current as usize].implInterface;
+        if (defaultInterface != none()) {
+            addInterfaceAndSupers(c, defaultInterface, mut bounding, 0)?;
+        }
+    }
+    var chosen = none();
+    var count = 0;
+    for (k in pool.view()) {
+        if (containsU32(bounding, c.implMethods[k as usize].interfaceEntry)) {
+            chosen = k;
+            count += 1;
+        }
+    }
+    if (count == 1) {
+        return Ok(MethodChoice { function: c.implMethods[chosen as usize].function, first: none(), second: none() });
+    }
+    let first = c.implMethods[pool[0] as usize];
+    let second = c.implMethods[pool[1] as usize];
+    return Ok(MethodChoice { function: first.function, first: first.interfaceEntry, second: second.interfaceEntry });
+}
+
+/// An interface's name as the program writes it (`PageSource`, `geometry.Shape`), or `the type's own` for none.
+fn appendInterfaceName(c: borrow Checker, message: borrow mut Vector<u8>, entry: u32) -> Result<void, AllocError> {
+    if (entry == none()) {
+        return appendText(message, "its own block");
+    }
+    let name = interfaceDisplayName(c, entry)?;
+    return appendBytes(message, name.view());
+}
+
+/// N0267's text for a name with methods from two interfaces: `first` and `second`, and the qualified forms.
+fn ambiguityText(
+    c: borrow Checker,
+    typ: u32,
+    name: u32,
+    choice: MethodChoice,
+    isStatic: bool,
+    message: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    appendQuotedName(message, c, name)?;
+    appendText(message, " is ambiguous: ")?;
+    appendQuotedType(message, c, typ)?;
+    appendText(message, " has it from both '")?;
+    appendInterfaceName(c, message, choice.first)?;
+    appendText(message, "' and '")?;
+    appendInterfaceName(c, message, choice.second)?;
+    if (isStatic) {
+        appendText(message, "'; call it through a bound, 'fn make<T: ")?;
+        appendInterfaceName(c, message, choice.first)?;
+        appendText(message, ">(…) -> T => T.")?;
+        appendBytes(message, c.name(name))?;
+        appendText(message, "(…);' (type-system.md §21.4)")?;
+        return Ok();
+    }
+    appendText(message, "'; name the interface: '")?;
+    appendInterfaceName(c, message, choice.first)?;
+    appendText(message, ".")?;
+    appendBytes(message, c.name(name))?;
+    appendText(message, "(value, …)' or '")?;
+    appendInterfaceName(c, message, choice.second)?;
+    appendText(message, ".")?;
+    appendBytes(message, c.name(name))?;
+    appendText(message, "(value, …)' (type-system.md §21.4)")?;
+    return Ok();
+}
+
+/// N0267 for a name `typ` has from two interfaces, where findMethod is asked with no call to rewrite.
+fn reportAmbiguousMethod(
+    c: borrow mut Checker,
+    typ: u32,
+    name: u32,
+    choice: MethodChoice,
+    span: Span,
+) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    ambiguityText(c, typ, name, choice, false, mut message)?;
+    return c.error(implMismatch(), span.start, span.end, message);
+}
+
+/// `x.m(…)` where `x`'s type has methods named `m` from two interfaces and the call cannot choose (ADR 0229 §2.2):
+/// N0267, and true. Where only one candidate takes as many arguments as the call has, the fix rewrites the call into
+/// that interface's qualified form, `I.m(x, …)` (`mut x` for a `borrow mut this` method; §2.5).
+fn reportAmbiguousCall(
+    c: borrow mut Checker,
+    typ: u32,
+    target: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<bool, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+    completeMembers(c, typ, memberSpan)?;
+    if (c.sharedNames == 0) {
+        return Ok(false); // no type has a name from two interfaces
+    }
+    let definition = c.types.info(typ).structDef;
+    if (definition != none() && findStructFunction(c, definition, memberIdent.symbol) != none()) {
+        return Ok(false); // its own method, which no interface's shares a name with (N0228)
+    }
+    let choice = chooseImplMethod(c, typ, memberIdent.symbol, memberSpan)?;
+    if (choice.first == none()) {
+        return Ok(false);
+    }
+    var message = Vector<u8>.create();
+    ambiguityText(c, typ, memberIdent.symbol, choice, false, mut message)?;
+    // The one candidate that is a method taking this many arguments, if there is one: the fix is then sure.
+    var fitting = none();
+    var fits = 0;
+    for (m in c.implMethods.view()) {
+        if (m.typ == typ && m.name == memberIdent.symbol && m.interfaceEntry != none() && isMethod(c, m.function) &&
+            c.hir.functions[m.function as usize].parameters.length == (arguments.count as usize) + 1) {
+            fitting = m.function;
+            fits += 1;
+        }
+    }
+    if (fits != 1 || c.front.ast.typeArgumentsOfMember(member).count > 0) {
+        c.error(implMismatch(), memberSpan.start, memberSpan.end, message)?;
+        return Ok(true);
+    }
+    let targetSpan = c.front.ast.exprSpans[target as usize];
+    let syntax = c.front.ast.functions[c.hir.functions[fitting as usize].syntax as usize];
+    var insert = Vector<u8>.create();
+    appendInterfaceName(c, mut insert, c.hir.functions[fitting as usize].implInterface)?;
+    appendText(mut insert, ".")?;
+    appendBytes(mut insert, c.name(memberIdent.symbol))?;
+    appendText(mut insert, "(")?;
+    if (receiverIndex(syntax.receiver) == 3) {
+        appendText(mut insert, "mut ")?; // `borrow mut this`
+    }
+    var title = Vector<u8>.create();
+    appendText(mut title, "call it as '")?;
+    appendBytes(mut title, insert.view())?;
+    appendText(mut title, "…)'")?;
+    var between = Vector<u8>.create();
+    var secondEnd = if (span.end > 0) span.end - 1 else span.end; // the call's ')'
+    if (arguments.count > 0) {
+        appendText(mut between, ", ")?;
+        secondEnd = c.front.ast.exprSpans[c.front.ast.at(arguments, 0) as usize].start;
+    }
+    c.front.diagnostics.errorWithTwoEdits(
+        implMismatch(),
+        c.file,
+        memberSpan.start,
+        memberSpan.end,
+        message,
+        title,
+        targetSpan.start,
+        insert,
+        targetSpan.end,
+        secondEnd,
+        between,
+    )?;
+    return Ok(true);
+}
+
+/// `T.f(…)` on a concrete type: an impl's static function named `name`, chosen as a method is (ADR 0229 §2.2), or
+/// none. Two that the call cannot choose between are N0267 (`reported`): a static function has no receiver to name
+/// its interface's form with, so the message says to call it through a bound.
+fn chooseStaticFunction(
+    c: borrow mut Checker,
+    typ: u32,
+    name: u32,
+    span: Span,
+    reported: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let choice = chooseImplMethod(c, typ, name, span)?;
+    if (choice.first == none()) {
+        return Ok(choice.function);
+    }
+    var message = Vector<u8>.create();
+    ambiguityText(c, typ, name, choice, !isMethod(c, choice.function), mut message)?;
+    c.error(implMismatch(), span.start, span.end, message)?;
+    reported = true;
+    return Ok(none());
+}
+
+/// `I.m(x, a, …)` and `I<A>.m(x, …)` (ADR 0229 §2.3): interface `entry`'s method `m`, called with `x` as `this`.
+fn checkInterfaceCall(
+    c: borrow mut Checker,
+    entry: u32,
+    target: u32,
+    typeArguments: Range,
+    member: u32,
+    arguments: Range,
+    calleeSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let name = memberIdent.symbol;
+    let owning = declaringInterface(c, entry, name)?;
+    if (owning == none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "interface '")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, "' has no method named ")?;
+        appendQuotedName(mut message, c, name)?;
+        c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let signature = interfaceMethod(c, owning, name);
+    if (receiverIndex(c.front.ast.functions[signature as usize].receiver) == 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(name))?;
+        appendText(
+            mut message,
+            "' is a static function, so there is no value to name its type by: call it on a type, 'T.",
+        )?;
+        appendBytes(mut message, c.name(name))?;
+        appendText(mut message, "(…)', through a bound 'T: ")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, "' where the type has it from several interfaces (type-system.md §21.4)")?;
+        c.error(methodCallKind(), calleeSpan.start, calleeSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count == 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(name))?;
+        appendText(mut message, "' takes the value it is called on first: '")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(name))?;
+        appendText(mut message, "(value, …)' (type-system.md §21.4)")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (typeArguments.count > 0 && typeArguments.count != c.interfaces[entry as usize].parameters.count) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "interface '")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, "' takes ")?;
+        appendDecimal(mut message, c.interfaces[entry as usize].parameters.count as u64)?;
+        appendText(mut message, " type argument(s)")?;
+        c.error(argumentCount(), calleeSpan.start, calleeSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let written = c.front.ast.at(arguments, 0);
+    let receiverExpr = match (c.front.ast.exprs[written as usize]) {
+        ExprNode.MutArg(operand) => operand,
+        _ => written,
+    };
+    let rest = Range { start: arguments.start + 1, count: arguments.count - 1 };
+    let via = QualifiedCall { entry: entry, owning: owning, written: written, typeArguments: typeArguments };
+    return checkMethodCallVia(c, receiverExpr, member, rest, span, via);
+}
+
+/// A method call's interface, when it is written `I.m(x, …)` (ADR 0229 §2.3): `I`, the interface that declares `m`
+/// (`I` or a supertrait), the receiver as written (`mut x` or `x`), and `I`'s type arguments if written.
+struct QualifiedCall {
+    entry: u32;
+    owning: u32;
+    written: u32;
+    typeArguments: Range;
+}
+
+/// A method call written `x.m(…)`.
+fn plainCall() -> QualifiedCall =>
+    QualifiedCall { entry: none(), owning: none(), written: none(), typeArguments: emptyRange() };
+
+/// Does `typ` implement interface `entry` (with `required` arguments, if any) for `I.m(x)`: an impl, a bound, a `dyn`?
+fn implementsQualified(c: borrow Checker, typ: u32, entry: u32, required: Slice<u32>) -> bool {
+    if (c.types.isDyn(typ)) {
+        let bound = c.types.info(typ).dynInterface;
+        return bound != none() && interfaceReaches(c, c.types.bounds[bound as usize].interfaceEntry, entry);
+    }
+    if (c.types.is(typ, TypeKind.TypeParameter)) {
+        for (bound in c.types.typeParameters[c.types.info(typ).typeParameter as usize].bounds.view()) {
+            let b = c.types.bounds[bound as usize];
+            if (b.interfaceEntry == entry && (required.length == 0 || sameTypes(c, b.arguments, required))) {
+                return true;
+            }
+        }
+        return false;
+    }
+    for (i in c.implementations.view()) {
+        if (i.typ == typ && i.interfaceEntry == entry && (required.length == 0 || sameTypes(
+            c,
+            i.arguments,
+            required,
+        ))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The method of a qualified call `I.m(x, …)` for the receiver's type `typ` (ADR 0229 §2.3), with `mut` checked as
+/// an argument's is (N0249); none after an error (reported).
+fn qualifiedMethod(
+    c: borrow mut Checker,
+    typ: u32,
+    via: QualifiedCall,
+    member: u32,
+    currentType: u32,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+    let entry = via.entry;
+    let written = via.written;
+    var required = Vector<u32>.create();
+    for (k in 0..via.typeArguments.count) {
+        required.push(c.resolveType(c.front.ast.at(via.typeArguments, k), false)?)?;
+    }
+    let writtenSpan = c.front.ast.exprSpans[written as usize];
+    completeMembers(c, typ, memberSpan)?;
+    let function = if (implementsQualified(c, typ, entry, required.view())) findMethodVia(
+        c,
+        typ,
+        memberIdent.symbol,
+        memberSpan,
+        via.owning,
+    )? else none();
+    if (function == none()) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, typ)?;
+        appendText(mut message, " does not implement '")?;
+        appendInterfaceName(c, mut message, entry)?;
+        if (required.length > 0) {
+            appendText(mut message, "<")?;
+            for (k in 0..required.length) {
+                if (k > 0) {
+                    appendText(mut message, ", ")?;
+                }
+                appendBytes(mut message, c.typeName(required[k]))?;
+            }
+            appendText(mut message, ">")?;
+        }
+        appendText(mut message, "', so '")?;
+        appendInterfaceName(c, mut message, entry)?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(memberIdent.symbol))?;
+        appendText(mut message, "' cannot be called with it (type-system.md §21.4)")?;
+        c.error(boundNotSatisfied(), writtenSpan.start, writtenSpan.end, message)?;
+        return Ok(none());
+    }
+    let receiver = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize].receiver;
+    let mutOperand = match (c.front.ast.exprs[written as usize]) {
+        ExprNode.MutArg(operand) => operand,
+        _ => none(),
+    };
+    if (mutOperand != none() && receiverIndex(receiver) != 3) {
+        let operandSpan = c.front.ast.exprSpans[mutOperand as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "'mut' is only for a value passed to 'borrow mut this'; ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, " takes ")?;
+        appendText(mut message, receiverText(receiver))?;
+        var title = Vector<u8>.create();
+        appendText(mut title, "remove 'mut'")?;
+        c.errorWithFix(
+            mutArgumentMismatch(),
+            writtenSpan.start,
+            writtenSpan.end,
+            message,
+            title,
+            writtenSpan.start,
+            operandSpan.start,
+            Vector<u8>.create(),
+        )?;
+        return Ok(none());
+    }
+    if (mutOperand == none() && receiverIndex(receiver) == 3 && !c.types.is(currentType, TypeKind.Reference)) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, " takes 'borrow mut this': write 'mut' before the value to let the call modify it")?;
+        var title = Vector<u8>.create();
+        appendText(mut title, "write 'mut' before the value")?;
+        var insert = Vector<u8>.create();
+        appendText(mut insert, "mut ")?;
+        c.errorWithFix(
+            mutArgumentMismatch(),
+            writtenSpan.start,
+            writtenSpan.end,
+            message,
+            title,
+            writtenSpan.start,
+            writtenSpan.start,
+            insert,
+        )?;
+        return Ok(none());
+    }
+    return Ok(function);
+}

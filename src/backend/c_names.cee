@@ -549,7 +549,14 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         // An instance of a generic method (ADR 0064 §1) has its own prefix, as a generic function's does: `ceeMG_`, the
         // owner, then the name with its length and the mangled type arguments.
         let genericMethod = f.typeArguments.count > 0;
-        appendText(out, if (genericMethod) "ceeMG_" else "ceeM_")?;
+        // A method of one name from several interfaces' impls names its interface (ADR 0229 §2.4): `ceeMI_`,
+        // `ceeMGI_`, and the interface after the owner.
+        let viaInterface = sharedImplInterface(c, function);
+        if (viaInterface != none()) {
+            appendText(out, if (genericMethod) "ceeMGI_" else "ceeMI_")?;
+        } else {
+            appendText(out, if (genericMethod) "ceeMG_" else "ceeM_")?;
+        }
         // An instance, or a built-in type whose name is not an identifier (an impl on Vector<u8>, ADR 0052 §3.3).
         if (isInstanceType(c, f.owner) || c.types.is(f.owner, TypeKind.Vector)) {
             appendMangle(c, out, f.owner)?;
@@ -559,6 +566,10 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
             appendLengthId(out, owner)?;
         }
         out.push('_')?;
+        if (viaInterface != none()) {
+            appendInterfaceId(c, out, viaInterface)?;
+            out.push('_')?;
+        }
         if (genericMethod) {
             appendLengthId(out, name)?;
             return appendMangledArguments(c, out, f.typeArguments);
@@ -768,4 +779,34 @@ fn appendShadowMark(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Re
 fn isPackageSymbol(c: borrow Checker, symbol: u32) -> bool {
     let key = Word { value: symbol as u64 };
     return c.packageSymbols.find(borrow key) != null;
+}
+
+/// The interface whose name a method's C name carries (ADR 0229 §2.4): its impl's, when another interface's impl gives
+/// its owner a method of the same name; for an instance of a generic method, its generic version's. Else none.
+fn sharedImplInterface(c: borrow Checker, function: u32) -> u32 {
+    let f = borrow c.hir.functions[function as usize];
+    if (f.sharedName) {
+        return f.implInterface;
+    }
+    if (f.genericEntry != none()) {
+        let generic = c.genericFunctions[f.genericEntry as usize].generic;
+        if (generic != none() && c.hir.functions[generic as usize].sharedName) {
+            return c.hir.functions[generic as usize].implInterface;
+        }
+    }
+    return none();
+}
+
+/// An interface's name in a C name, as a type's is: its length, its package's name for a dependency's, and `lib_`
+/// before a library interface whose name a package declares too.
+fn appendInterfaceId(c: borrow Checker, out: borrow mut Vector<u8>, entry: u32) -> Result<void, AllocError> {
+    let item = c.interfaces[entry as usize].item;
+    let symbol = c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol;
+    let file = c.interfaces[entry as usize].file;
+    if (file != none() && c.fileIsLibrary[file as usize] && isPackageSymbol(c, symbol)) {
+        appendText(out, "lib_")?;
+    }
+    var name = Vector<u8>.create();
+    qualifiedName(c, file, c.name(symbol), mut name)?;
+    return appendLengthId(out, name.view());
 }

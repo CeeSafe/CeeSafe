@@ -719,6 +719,7 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0201 | an extern declaration whose C name a dependency's `public` extern declaration has, identical to it in CeeSafe (type-system.md §28.2; ADR 0081 §2.2) | remove the declaration, with its doc comment and attributes; its call sites are left as they are |
 | N0100 | `expected ';'`, with no earlier error in the file, after a declaration, assignment, `return`, or a call statement (not after an expression that cannot be a statement, N0225) | insert `;` after the previous token |
 | N0100 | `::` (`grammar.md` §1.7), wherever it stands and whatever else the file has | `::` → `.`; before `<` (`f::<T>()`), remove it |
+| N0267 | `x.m(args)` where two interfaces' impls give `x`'s type a method `m` and exactly one of them is a method taking that many arguments, the call having no type arguments of its own (type-system.md §21.4, ADR 0229) | `x.m(` → `I.m(x, ` (`I.m(mut x, ` for a `borrow mut this` method), or `x.m()` → `I.m(x)`: two edits, one fix |
 
 ### 5.3 `ceesafec fix`
 

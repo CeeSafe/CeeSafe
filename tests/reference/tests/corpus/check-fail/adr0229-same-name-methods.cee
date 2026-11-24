@@ -1,0 +1,95 @@
+// ADR 0229: a call on a type with methods of one name from two interfaces that cannot choose is N0267 (§2.2 4, 5);
+// the qualified form's own errors (§2.3); what stays as it was: an inherent method beside an interface's of the same
+// name (N0228), one generic interface for two argument lists (N0228, ADR 0165 §7), two bounds with the name (N0267).
+interface PageSource {
+    fn usableSize(borrow this) -> usize;
+    fn read(borrow this, page: u32) -> u32;
+}
+
+interface PageSink {
+    fn usableSize(borrow this) -> usize;
+    fn write(borrow mut this, page: u32);
+}
+
+interface Labelled {
+    fn label(borrow this) -> u32;
+    fn make() -> Self;
+}
+
+interface Tagged {
+    fn label(borrow this, extra: u32) -> u32;
+    fn make() -> Self;
+}
+
+interface Weighed {
+    fn weight(this) -> u32;
+}
+
+interface Store: PageSource {
+    fn flush(borrow this) -> u32;
+}
+
+interface Conv<T> {
+    fn convert(borrow this, seed: T) -> u64;
+}
+
+struct Pager {
+    size: usize;
+}
+
+impl PageSource for Pager {
+    fn usableSize(borrow this) -> usize => this.size;
+    fn read(borrow this, page: u32) -> u32 => page;
+}
+
+impl PageSink for Pager {
+    fn usableSize(borrow this) -> usize => this.size - 1;
+    fn write(borrow mut this, page: u32) {
+        this.size += page as usize;
+    }
+}
+
+impl Labelled for Pager {
+    fn label(borrow this) -> u32 => 1;
+    fn make() -> Self => Pager { size: 1 };
+}
+
+impl Tagged for Pager {
+    fn label(borrow this, extra: u32) -> u32 => extra;
+    fn make() -> Self => Pager { size: 2 };
+}
+
+impl Conv<u8> for Pager {
+    fn convert(borrow this, seed: u8) -> u64 => seed as u64;
+}
+
+impl Conv<u16> for Pager {                                    // error[N0267]
+    fn convert(borrow this, seed: u16) -> u64 => seed as u64; // error[N0228]
+}
+
+struct Own {
+    size: usize;
+
+    fn usableSize(borrow this) -> usize => this.size; // error[N0228]
+}
+
+impl PageSource for Own {
+    fn usableSize(borrow this) -> usize => this.size;
+    fn read(borrow this, page: u32) -> u32 => page;
+}
+
+fn bothBounds<T: PageSource + PageSink>(p: borrow T) -> usize => p.usableSize(); // error[N0267]
+
+fn main() {
+    var pager = Pager { size: 10 };
+    let a = pager.usableSize();               // error[N0267]
+    let b = pager.label();                    // error[N0267]
+    let c = Pager.make();                     // error[N0267]
+    let d = Weighed.weight(pager);            // error[N0268]
+    let e = PageSource.flush(pager);          // error[N0200]
+    let f = Labelled.make();                  // error[N0233]
+    let g = PageSource.usableSize();          // error[N0209]
+    PageSink.write(pager, 1);                 // error[N0249]
+    let h = PageSource.usableSize(mut pager); // error[N0249]
+    let i = Store.usableSize(pager);          // error[N0268]
+}

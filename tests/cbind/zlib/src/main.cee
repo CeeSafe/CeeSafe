@@ -1,6 +1,9 @@
 // A program over the zlib binding ceesafec cbind writes (src/zlib.cee, made by tools/cbind_zlib_check.py): compress a
 // buffer, uncompress it, compare, and print the two checksums, which the check compares with Python's zlib.
 
+// zlib's sizes and checksums are `uLong`, C's `unsigned long`: `CULong`, 32 bits on Windows and 64 elsewhere
+// (ADR 0221). A `usize` goes in through checkedTruncate; a `CULong` comes out with `as`, lossless on every target.
+
 /// The CRC-32 of `data`, as zlib computes it.
 /// Safety: C reads `data.length` bytes from `data.ptr`, a live slice; the length fits a `u32` (checked).
 fn crc32Of(data: Slice<u8>) -> u64 => unsafe { crc32(0, data.ptr, checkedTruncate<u32>(data.length)!) as u64 };
@@ -13,14 +16,15 @@ fn adler32Of(data: Slice<u8>) -> u64 => unsafe { adler32(1, data.ptr, checkedTru
 /// Safety: C writes at most `length` bytes into `out`, whose size it is told, and reads `data.length` from `data`.
 fn compressed(data: Slice<u8>) -> Vector<u8> {
     var out = Vector<u8>.create();
-    out.resize(unsafe { compressBound(data.length) }, 0)!;
-    var length = out.length;
+    let size = checkedTruncate<CULong>(data.length)!;
+    out.resize(unsafe { compressBound(size) } as usize, 0)!;
+    var length = checkedTruncate<CULong>(out.length)!;
     let space = out.viewMut();
-    let status = unsafe { compress(space.ptr, borrow mut length as *mut usize, data.ptr, data.length) };
+    let status = unsafe { compress(space.ptr, borrow mut length as *mut CULong, data.ptr, size) };
     if (status != Z_OK) {
         Process.exit(1);
     }
-    out.truncate(length);
+    out.truncate(length as usize);
     return out;
 }
 
@@ -29,13 +33,18 @@ fn compressed(data: Slice<u8>) -> Vector<u8> {
 fn uncompressed(packed: Slice<u8>, size: usize) -> Vector<u8> {
     var out = Vector<u8>.create();
     out.resize(size, 0)!;
-    var length = out.length;
+    var length = checkedTruncate<CULong>(out.length)!;
     let space = out.viewMut();
-    let status = unsafe { uncompress(space.ptr, borrow mut length as *mut usize, packed.ptr, packed.length) };
+    let status = unsafe { uncompress(
+        space.ptr,
+        borrow mut length as *mut CULong,
+        packed.ptr,
+        checkedTruncate<CULong>(packed.length)!,
+    ) };
     if (status != Z_OK) {
         Process.exit(2);
     }
-    out.truncate(length);
+    out.truncate(length as usize);
     return out;
 }
 

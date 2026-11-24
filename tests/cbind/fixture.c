@@ -7,6 +7,7 @@ const char *const fx_names[4] = {"a", "b", "c", "d"};
 const char *fx_current = "now";
 
 int fx_add(int a, int b) { return a + b; }
+unsigned long fx_span(long from, unsigned long count) { return (unsigned long)(from + (long)count); }
 struct fx_point fx_make(int x, int y) { return (struct fx_point){x, y}; }
 int fx_log(const char *fmt, ...) { return fmt[0]; }
 int type(int in) { return in + 1; }

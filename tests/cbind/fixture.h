@@ -11,6 +11,8 @@
 #define FX_LIMIT 22
 #define FX_MASK ((uint32_t)1 << 31)
 #define FX_NEGATIVE (-5)
+#define FX_LONG 7L    /* C's long and unsigned long: CLong and CULong (ADR 0221) */
+#define FX_ULONG 9UL
 #define FX_NAME "fixture"
 #define FX_CALL(x) ((x) + 1)
 #define FX_STATEMENT do { } while (0)
@@ -111,5 +113,6 @@ void fx_takes_reserved(struct __fx_reserved *p);
 struct _Fx_reserved *fx_gives_reserved(void);
 int fx_takes_alias(const fx_reserved_t *p);
 static inline uint32_t fx_twice(uint32_t v) { return v * 2; }
+unsigned long fx_span(long from, unsigned long count);
 
 #endif

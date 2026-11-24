@@ -227,10 +227,16 @@ fn cbScalar(c: Slice<u8>) -> StringView? {
     if (sameText(c, "unsigned int") || sameText(c, "uint32_t") || sameText(c, "unsigned")) {
         return "u32";
     }
-    if (sameText(c, "long") || sameText(c, "long long") || sameText(c, "int64_t")) {
+    if (sameText(c, "long")) {
+        return "CLong"; // the target's width (ADR 0221)
+    }
+    if (sameText(c, "unsigned long")) {
+        return "CULong";
+    }
+    if (sameText(c, "long long") || sameText(c, "int64_t")) {
         return "i64";
     }
-    if (sameText(c, "unsigned long") || sameText(c, "size_t") || sameText(c, "uintptr_t")) {
+    if (sameText(c, "size_t") || sameText(c, "uintptr_t")) {
         return "usize";
     }
     if (sameText(c, "unsigned long long") || sameText(c, "uint64_t")) {
@@ -1601,7 +1607,9 @@ fn cbDeclareConstants(r: borrow mut CbReading, macros: borrow Vector<Vector<u8>>
         var ok = false;
         match (spelt) {
             Some(s) => {
-                ok = value.found && (cbIsInteger(s.view()) || cbHasEnum(r, s.view()));
+                // C's long and unsigned long are constants of their own type too (ADR 0221).
+                ok = value.found && (cbIsInteger(s.view()) || sameText(s.view(), "CLong") ||
+                    sameText(s.view(), "CULong") || cbHasEnum(r, s.view()));
                 t = s;
             }
             null => {}

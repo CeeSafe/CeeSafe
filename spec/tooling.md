@@ -1257,10 +1257,11 @@ The declarations whose definition is in the named header, not in the headers it 
 | `extern T name;` | `static name: T;` (`static mut` unless the object is `const` or atomic) |
 | a member, parameter or function whose name is a CeeSafe keyword | `@cname("type") type_: …` (a parameter: `in_`) |
 
-Types: the C integer and floating types and `<stdint.h>`'s names by §28.3's table (`size_t`, `uintptr_t` and
-`unsigned long` are `usize`; `long` is `i64`), `bool`, `char *` as `*mut CChar`, `const T *` as `*T`, `T *` as
-`*mut T`, `void *` as `*mut void`, `T name[N]` as `[T; N]`, `_Atomic` integers as `AtomicU8`, `AtomicU32`,
-`AtomicU64`, `AtomicUSize`, a function pointer as `extern "C" fn(…) -> R`. A `char` member is `u8` (§31.1 has no
+Types: the C integer and floating types and `<stdint.h>`'s names by §28.3's table (`size_t` and `uintptr_t` are
+`usize`; `long` and `unsigned long` are `CLong` and `CULong`, of the target's width, ADR 0221; `long long` is `i64`),
+`bool`, `char *` as `*mut CChar`, `const T *` as `*T`, `T *` as `*mut T`, `void *` as `*mut void`, `T name[N]` as
+`[T; N]`, `_Atomic` integers as `AtomicU8`, `AtomicU32`, `AtomicU64`, `AtomicUSize` (not of `long`, which is left
+out: there is no atomic of `CLong`), a function pointer as `extern "C" fn(…) -> R`. A `char` member is `u8` (§31.1 has no
 `CChar` member). A pointer to a function pointer's typedef is a pointer to the typedef's name.
 
 A declaration that CeeSafe cannot spell is left out, never guessed: a function that takes or returns a struct by

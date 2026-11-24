@@ -3270,12 +3270,22 @@ ADR 0221's.
     `File`s do not conflict, and closing any of them releases the process's locks on the file. On Windows a lock
     never converts or splits, and is mandatory for other handles' reads and writes of its bytes. Portable use: lock a
     range the `File` does not hold, unlock exactly the ranges it locked, and lock bytes the program does not read.
-  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock` and `unlock` none.
+  - On POSIX hosts a conversion is atomic: a `tryLock` that meets a conflict is `false` and leaves the `File`'s held
+    lock as it was, and a `lock` waits with it kept (os_unix.c's SHARED to EXCLUSIVE). A program that also runs on
+    Windows unlocks and locks again, as os_win.c does (ADR 0234 §2.3).
+  - `f.testLock(kind, start, length)` (ADR 0234): `Result<FileLock?, IoError>`, null when a `kind` lock on the range
+    could be taken now, else the kind of another holder's lock that conflicts (which one, when several do, is
+    unspecified). On POSIX hosts it takes nothing (`F_OFD_GETLK`, else `F_GETLK`), and the `File`'s own locks are
+    not counted; on Windows it tries the lock without waiting and releases it at once (os_win.c's way), so another
+    holder may see it for that instant, and the `File`'s own locks on the range count as a conflict. Any open `File`
+    may test. The answer is a snapshot.
+  - Dropping the `File` releases its locks. `lock` has the `sleep` effect; `tryLock`, `testLock` and `unlock` none.
   - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
-    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4). It does not check
-    the `File`'s access mode.
+    `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4), and its `testLock`
+    reports only the program's other `File`s' locks. It does not check the `File`'s access mode.
 - **Shared mappings** (ADR 0232; lib/std's `SharedMapping`, hosted; `borrow this`): `f.mapShared(offset: u64,
-  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20).
+  length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20);
+  `f.mapSharedReadOnly(offset, length)` maps it for reading only, `Result<ReadOnlyMapping, IoError>` (ADR 0235).
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
   read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
@@ -4297,7 +4307,8 @@ Diagnostics: none new.
   process writes may mix old and new bytes); `m.load32(at, LoadOrdering)`, `m.store32(at, value, StoreOrdering)`,
   `m.compareExchange32(at, expected, desired, Ordering) -> Result<u32, u32>`, `m.fetchAdd32(at, value, Ordering)`,
   and `load64`, `store64`, `compareExchange64`, `fetchAdd64`, are `AtomicU32`'s and `AtomicU64`'s `…With`
-  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order.
+  operations (§38.3, ADR 0021) on the bytes at `at`, atomic between processes, in the host's byte order; so are
+  `load16`, `store16`, `compareExchange16` and `fetchAdd16` on a `u16` (ADR 0235 §2.1: SQLite's hash slots).
   `SharedMapping.fence()` is a sequentially consistent fence. `m.sync()` writes the region's changed pages to the
   file and waits (`msync`; `FlushViewOfFile` on Windows). `m.length()` and `m.offset()` describe the region.
 - **A copy whose bytes are not all inside the region panics**, and so does an atomic whose bytes are not, or whose
@@ -4305,8 +4316,16 @@ Diagnostics: none new.
 - **A file shortened under a mapping** by another party (another process, or the program's own `f.setLength`):
   natively an access to a page wholly past the new end ends the program by `SIGBUS`, the system's default; the
   access does not complete, so nothing wrong is read or written (ADR 0232 §2.3). Windows refuses to shorten a mapped
-  file.
-- `mapShared` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
+  file. It is not made an `IoError` (ADR 0235 §2.3: only a process-wide signal handler that jumps out of a copy could).
+- **`f.mapSharedReadOnly(offset: u64, length: usize)`** (ADR 0235 §2.2; lib/std's
+  `ReadOnlyMapping.mapSharedReadOnly(f, offset, length)`): `Result<ReadOnlyMapping, IoError>`, the same bytes mapped
+  shared for reading only (`PROT_READ`; Windows `PAGE_READONLY`), from any `File` open for reading (`File.open`
+  too); one open only for writing is `BadDescriptor`. The file is never extended: a range that ends past its length is
+  `InvalidInput`, as are `length` 0 and a range past 2^63 - 1. `ReadOnlyMapping` has `r.length()`, `r.offset()`,
+  `r.readAt(at, into)`, `r.load16(at, LoadOrdering)` and `r.load32(at, LoadOrdering)`, with `SharedMapping`'s bounds,
+  alignment, atomicity and `fence`; no method writes, so a write is an error of the checker. It has no `load64` (a
+  32-bit x86 host's 64-bit atomic load may write). It is a move type that needs drop, Send and Share.
+- `mapShared`, `mapSharedReadOnly` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
 - **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
   Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a
   positional read or write of the file, so the program's mappings and threads see one memory and other processes see

@@ -193,28 +193,52 @@ algorithm, runs at 68 to 84% of libsnappy's speed, with output within 1% of its 
 
 ## Zstandard
 
-lib/std's `Zstd.decompress` (ADR 0196 phase 3; decoding only), against the system's libzstd 1.5.7 called from C
-(`benchmarks/codecs/zstd.c`, `ZSTD_decompressDCtx`), on the same three 32 MiB inputs. Both decoders read libzstd's
-frame of each input at levels 1, 3 and 19. Figures are MB/s of uncompressed data, the best of three, measured 2026-11-23
-on the Apple M1 with Apple clang, `ceesafec build`, on a machine shared with other work (load average 7 to 9):
+lib/std's `Zstd.decompress` (ADR 0196 phase 3) and `Zstd.compress` (phase 4), against the system's libzstd 1.5.7 called
+from C (`benchmarks/codecs/zstd.c`, `ZSTD_decompressDCtx` and `ZSTD_compressCCtx`), on the same three 32 MiB inputs.
+Both decoders read libzstd's frame of each input at levels 1, 3 and 19; both encoders compress each input at levels 1,
+3, 6 and 9. Figures are MB/s of uncompressed data, the best of three, measured 2026-11-24 on the Apple M1 with Apple
+clang, `ceesafec build`, on a machine shared with other work (load average 5 to 7):
 
 | input | level | size | decode libzstd | decode lib/std | lib/std / libzstd |
 |---|---:|---:|---:|---:|---:|
-| CSV | 1 | 10,484,267 | 1,528 | 614 | 40% |
-| CSV | 3 | 10,958,702 | 1,401 | 529 | 38% |
-| CSV | 19 | 9,706,712 | 1,163 | 516 | 44% |
-| integers | 1 | 8,732,993 | 1,123 | 516 | 46% |
-| integers | 3 | 8,732,322 | 1,191 | 545 | 46% |
-| integers | 19 | 8,728,417 | 1,166 | 529 | 45% |
-| text | 1 | 7,192,671 | 1,177 | 447 | 38% |
-| text | 3 | 6,940,874 | 1,352 | 499 | 37% |
-| text | 19 | 4,550,212 | 2,156 | 823 | 38% |
+| CSV | 1 | 10,484,267 | 1,525 | 632 | 41% |
+| CSV | 3 | 10,958,702 | 1,524 | 593 | 39% |
+| CSV | 19 | 9,706,712 | 1,290 | 545 | 42% |
+| integers | 1 | 8,732,993 | 1,201 | 545 | 45% |
+| integers | 3 | 8,732,322 | 1,178 | 539 | 46% |
+| integers | 19 | 8,728,417 | 1,096 | 485 | 44% |
+| text | 1 | 7,192,671 | 946 | 345 | 36% |
+| text | 3 | 6,940,874 | 1,036 | 440 | 42% |
+| text | 19 | 4,550,212 | 2,338 | 870 | 37% |
 
-lib/std's decoder runs at 450 to 820 MB/s, 37 to 46% of libzstd's. ADR 0196 §4.4's target is 500 MB/s, met on seven
-of the nine inputs (under a load average of 70 to 145 the same runs gave 280 to 525). It decodes the four Huffman
-streams of a block's literals in turn and runs each sequence as it decodes it, with the bit reader in locals: clang
-does not inline the reader's methods into the large block function, and keeping them out of line cost a third. Its
-other costs are the bounds checks of each table lookup and copy, and the checked shifts. libzstd's loops have neither, and prefetch matches.
+lib/std's decoder runs at 35 to 46% of libzstd's speed. On 2026-11-23, at a load average of 7 to 9, the same runs gave
+450 to 820 MB/s, so ADR 0196 §4.4's target of 500 MB/s was met on seven of the nine inputs (under a load average of
+70 to 145 they gave 280 to 525). It decodes the four Huffman streams of a block's literals in turn and runs each
+sequence as it decodes it, with the bit reader in locals: clang does not inline the reader's methods into the large
+block function, and keeping them out of line cost a third. Its other costs are the bounds checks of each table lookup
+and copy, and the checked shifts. libzstd's loops have neither, and prefetch matches.
+
+| input | level | libzstd size | lib/std size | lib/std / libzstd | encode libzstd | encode lib/std | lib/std / libzstd |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| CSV | 1 | 10,484,267 | 10,482,945 | 1.000 | 641 | 296 | 46% |
+| CSV | 3 | 10,958,702 | 11,016,883 | 1.005 | 324 | 220 | 68% |
+| CSV | 6 | 11,052,871 | 11,147,382 | 1.009 | 115 | 75 | 65% |
+| CSV | 9 | 11,020,573 | 11,042,694 | 1.002 | 69 | 27 | 39% |
+| integers | 1 | 8,732,993 | 8,733,550 | 1.000 | 493 | 292 | 59% |
+| integers | 3 | 8,732,322 | 8,732,850 | 1.000 | 455 | 269 | 59% |
+| integers | 6 | 8,735,082 | 8,734,750 | 1.000 | 143 | 76 | 53% |
+| integers | 9 | 8,735,236 | 8,735,058 | 1.000 | 80 | 30 | 38% |
+| text | 1 | 7,192,671 | 7,200,459 | 1.001 | 481 | 295 | 61% |
+| text | 3 | 6,940,874 | 7,065,850 | 1.018 | 496 | 331 | 67% |
+| text | 6 | 6,633,649 | 6,639,105 | 1.001 | 103 | 87 | 84% |
+| text | 9 | 6,350,136 | 6,331,495 | 0.997 | 68 | 46 | 68% |
+
+lib/std's encoder writes frames within 2% of libzstd's size at every level here (within 0.3% over all of
+`tools/codec_check.py`'s inputs), at 38 to 84% of its speed: 292 to 296 MB/s at level 1, just under §4.4's target of
+300. It follows libzstd's strategies by level (`fast` at levels 1 and 2, `dfast` at 3 and 4, hash chains at 5 to 9)
+with its parameters, so the sizes match closely; the time goes where the decoder's does, to bounds checks on the hash
+tables and the input. At levels 5 to 9 libzstd searches with its row-based match finder, which compares 16 or 32 tags
+of a hash's row at once; lib/std walks a hash chain one entry at a time, and is at 38 to 68% of libzstd's at level 9.
 
 ## Run it yourself
 

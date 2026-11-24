@@ -4,6 +4,7 @@
 //   main unsnappy <file.snappy> <size> <reps>  as inflate, for a raw snappy block
 //   main snappy <file> 0 <reps>                as deflate
 //   main unzstd <file.zst> <size> <reps>       as inflate, for zstd frames; the size printed is the input's
+//   main zstd <file> <level> <reps>            as deflate, for Zstd.compress
 
 fn readAll(path: StringView) -> Vector<u8> {
     var f = File.open(path)!;
@@ -31,6 +32,8 @@ fn main() {
         let t = Clock.monotonicNanos();
         if (mode == "inflate") {
             Zlib.decompress(input.view(), truncate<usize>(number(3)), mut out)!;
+        } else if (mode == "zstd") {
+            Zstd.compress(input.view(), truncate<u32>(number(3)), mut out)!;
         } else if (mode == "unzstd") {
             Zstd.decompress(input.view(), truncate<usize>(number(3)), mut out)!;
         } else if (mode == "unsnappy") {

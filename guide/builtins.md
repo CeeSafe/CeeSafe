@@ -249,7 +249,7 @@ header
 | `s.parseInt<T>()`, `s.parseIntRadix<T>(radix)`, `s.parseFloat<T>()` | `T?`: `null` for text that is not a `T` |
 
 The searches and parsers work on a `String` too, and on bytes: a `Slice<u8>` (or a `Vector<u8>`) takes and gives
-`Slice<u8>` where a view takes and gives `StringView`. Every view they return stays valid UTF-8. Floats parse
+`Slice<u8>` where a view takes and gives `StringView`; a string literal there is its bytes, `path.startsWith("/api")`. Every view they return stays valid UTF-8. Floats parse
 correctly rounded, and accept `inf`, `infinity` and `nan` in any case.
 
 A `StringView` is a borrow: a variable holding one is a `let`, and a struct or enum holding one needs a region
@@ -500,6 +500,7 @@ true
 | `Secret.wipe(mut place)` | sets a zeroable place, or `mut bytes[a..b]`, to zero bytes in a way the C compiler keeps: for keys (see [memory](memory.md#secrets)) |
 | `FixedBufferAllocator.over(mut bytes)` | an allocator over a caller's buffer, for freestanding code |
 | `Arena`, `Scratch`, `Pool<T>`, `SlotMap<T>`, `StableVector<T>` | see [memory](memory.md) and [collections](collections.md) |
+| `Thread.cpuCount()` | `u32`, at least 1: the CPUs the process may run on (on Linux its affinity mask) |
 | `Thread.spawn`, `Thread.both`, `Async.run`, `Async.scope` | see [threads](threads.md) and [async](async.md) |
 | `OnceLock<T>.constant()`, `Mutex<T>.constant(v)`, `Vector<T>.empty()` | static initialisers: an empty cell, a mutex whose lock is made at its first use, an empty vector ([In a static](threads.md#in-a-static)) |
 | `OnceCell<T>`, `OnceLock<T>` | a value written once and then lent as `borrow T`: `getOrInit(init)`, `tryInit<E>(init)`, `get()`, `set(v)`; `OnceLock` is the one threads share ([threads](threads.md#built-once-oncelock)) |

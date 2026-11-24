@@ -93,6 +93,20 @@ fn checkBytesTextMethod(
             ident.symbol,
             span,
         )?;
+        if (!isText && function != none() && arguments.count == 1 && !sameText(text, "indexOfByte")) {
+            // `bytes.startsWith("/api")`: a string literal is its bytes there (ADR 0237 §2.3)
+            let needleSyntax = c.front.ast.at(arguments, 0);
+            if (isStringLiteral(c, needleSyntax)) {
+                let view = c.types.stringView;
+                let needle = checkExpr(c, needleSyntax, view)?;
+                let needleSpan = c.front.ast.exprSpans[needleSyntax as usize];
+                let u8Type = c.types.u8;
+                let bytes = c.types.sliceOf(u8Type, false)?;
+                let cast = c.expr(HirExpr.Cast(needle), bytes, needleSpan.start, needleSpan.end)?;
+                let values = [shared, cast];
+                return libraryCall(c, function, values[..], span);
+            }
+        }
         return checkLibraryMethodCall(c, function, arguments, shared, span);
     }
     if (isText) {

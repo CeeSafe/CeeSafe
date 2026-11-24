@@ -19,6 +19,9 @@
 #else
 #include <errno.h>
 #include <pthread.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #endif
@@ -218,6 +221,54 @@ void ceesafe_thread_join(cee_thread *t) {
     (void)pthread_join(t->thread, NULL);
 #endif
     ceesafe_free(t, CEE_ALLOC_SYSTEM);
+}
+
+/* `Thread.cpuCount()` (ADR 0237). On Linux the affinity mask, in a buffer that doubles while the kernel says it is too
+   small (a machine may have more CPUs than cpu_set_t holds); elsewhere, or when that fails, the online CPUs. */
+uint32_t ceesafe_thread_cpu_count(void) {
+#if defined(CEE_COSMOOS)
+    return 1u; /* CosmoOS's userland has no call for it */
+#elif defined(_WIN32)
+    DWORD_PTR process = 0;
+    DWORD_PTR system = 0;
+    DWORD online = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    /* A mask is for one processor group: it counts only where the machine has one. */
+    if (GetActiveProcessorGroupCount() == 1 && GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) {
+        DWORD allowed = 0;
+        while (process != 0) {
+            allowed += (DWORD)(process & 1u);
+            process >>= 1;
+        }
+        if (allowed > 0) {
+            return (uint32_t)allowed;
+        }
+    }
+    return online > 0 ? (uint32_t)online : 1u;
+#else
+#if defined(__linux__)
+    for (int cpus = 1024; cpus <= 65536; cpus *= 2) {
+        cpu_set_t *set = CPU_ALLOC(cpus);
+        if (set == NULL) {
+            break;
+        }
+        size_t size = CPU_ALLOC_SIZE(cpus);
+        CPU_ZERO_S(size, set);
+        /* The process's main thread: a worker that pinned itself does not change the answer. */
+        int failed = sched_getaffinity(getpid(), size, set);
+        int error = errno;
+        int allowed = failed == 0 ? CPU_COUNT_S(size, set) : 0;
+        CPU_FREE(set);
+        if (failed == 0 && allowed > 0) {
+            return (uint32_t)allowed;
+        }
+        if (failed == 0 || error != EINVAL) {
+            break;
+        }
+    }
+#endif
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    return online > 0 ? (uint32_t)online : 1u;
+#endif
 }
 
 /* ---- Mutexes (type-system.md §38.3): the platform lock, allocated so a Mutex<T> may move ---------------------- */

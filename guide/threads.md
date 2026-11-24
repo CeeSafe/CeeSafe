@@ -412,6 +412,24 @@ fn main() {
 - The interpreter runs threads one at a time, and reports a thread that waits to send on a full channel as a
   deadlock: there, give the channel room for what is sent before the receiver runs, as above.
 
+## How many threads
+
+`Thread.cpuCount()` is the number of CPUs the process may run on, at least 1. On Linux it follows `taskset` and a
+container's cpuset. A program that splits work over the machine starts that many threads:
+
+```ceesafe
+fn main() {
+    let workers = Thread.cpuCount();
+    Console.writeLine(workers >= 1);
+}
+```
+
+Expected output:
+
+```
+true
+```
+
 ## Waiting for a time, and reaping finished threads
 
 `Thread.sleep(ms)` blocks the calling thread for at least `ms` milliseconds. `channel.recvTimeout(ms)` is `recv`

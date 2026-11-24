@@ -1276,6 +1276,8 @@ int ceesafe_thread_service(void *(*body)(void *), void *arg, const uint8_t *name
 bool ceesafe_thread_finished(cee_thread *t);
 /* ADR 0222 §2.1: the calling thread waits at least `ms` milliseconds; 0 returns at once. */
 void ceesafe_thread_sleep(uint64_t ms);
+/* ADR 0237: how many CPUs this process may run on, at least 1. It never waits. */
+uint32_t ceesafe_thread_cpu_count(void);
 /* A platform mutex in allocated memory, or NULL. */
 void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);

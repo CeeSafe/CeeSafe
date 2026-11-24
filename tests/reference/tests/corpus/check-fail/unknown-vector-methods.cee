@@ -6,7 +6,7 @@ fn main() {
     var bytes = Vector<u8>.create();
     bytes.appendHex(255, 2, false)!;
     bytes.appendHx(1);      // error[N0200]: did you mean 'appendHex'?
-    bytes.appendNumber(42); // error[N0200]: it has 'push', … 'clone', 'appendHex', 'appendOctal', 'appendFixed', …
+    bytes.frobnicate(42);   // error[N0200]: it has 'push', … 'clone', 'appendHex', 'appendOctal', 'appendFixed', …
     var words = Vector<u32>.create();
     words.frob(); // error[N0200]: it has 'push', … 'swapRemove' and 'clone'
     var text = String.create();

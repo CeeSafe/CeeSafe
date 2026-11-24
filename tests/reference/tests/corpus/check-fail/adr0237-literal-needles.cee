@@ -1,0 +1,3 @@
+// ADR 0237 §2.3: only a string literal becomes bytes, not another StringView.
+fn f(path: Slice<u8>, prefix: StringView) -> bool => path.startsWith(prefix); // error[N0205]
+fn main() {}

@@ -25,6 +25,8 @@ extern "C" {
     fn ceesafe_mutex_once_unlock();
     @effects(sleep)
     fn ceesafe_thread_sleep(ms: u64);
+    @effects()
+    fn ceesafe_thread_cpu_count() -> u32;
 }
 
 /// Thread services that are not a thread's own (ADR 0222): `Thread.sleep(ms)` is the checker's name for
@@ -36,6 +38,12 @@ public struct ThreadServices {
     public fn sleep(ms: u64) {
         unsafe { ceesafe_thread_sleep(ms); }
     }
+
+    /// `Thread.cpuCount()`: how many CPUs this process may run on, at least 1 (ADR 0237): on Linux those in its
+    /// affinity mask (so `taskset` and a container's cpuset count, a CPU-time quota does not), elsewhere the online
+    /// ones. Asked of the system each time; it never waits. The interpreter runs one thread at a time and answers 1.
+    /// Safety: the runtime only reads the system's count.
+    public fn cpuCount() -> u32 => unsafe { ceesafe_thread_cpu_count() };
 }
 
 /// Mutual exclusion: the data is reached only through a guard, which one thread holds at a time.

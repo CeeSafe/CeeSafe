@@ -1312,7 +1312,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
   written, and **panics** "index out of bounds" there otherwise.
 
 **Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments; on byte slices with
-`Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it.
+`Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it. On bytes, an argument
+that is a string literal is its UTF-8 bytes (`path.startsWith("/api")`; ADR 0237 §2.3); another `StringView` is N0205.
 - `s.indexOf(t)` and `s.lastIndexOf(t)`: `usize?`, where `t` first or last starts; an empty `t` is at `0`, and at
   `s.length` for `lastIndexOf`. `s.indexOfByte(b)` (`b: u8`): `usize?`.
 - `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)` and `s.equalsIgnoreAsciiCase(t)`: `bool`; only `A`–`Z` and
@@ -2651,6 +2652,8 @@ fn main() -> i32 {
     `Result<bool, AllocError>`: the character in UTF-8, or the bytes when they are UTF-8 (checked once, with no copy
     first); `false`, appending nothing, for a value that is not a Unicode scalar value or bytes that are not UTF-8.
     They are lib/core's `AppendText` interface, for `Vector<u8>` in lib/core and `String` in lib/std;
+  - a `Vector<u8>`'s `v.appendNumber(n)` (`n: i64`) and `v.appendUnsigned(n)` (`n: u64`) (ADR 0237 §2.2), each
+    `Result<void, AllocError>`: `n` in decimal, as a `ByteString`'s. They are lib/core's `AppendDecimal` interface;
   - `s.clear()`, `s.length` (bytes), `s.capacity`;
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;
@@ -6202,6 +6205,9 @@ fn main() {
   least `ms` milliseconds (`nanosleep`, resumed for the time left after a signal; `Sleep` on Windows); 0 returns at
   once. A task waits with `await Timer.sleep(ms)` instead. In the interpreter it is a wait on the virtual clock
   (§40.8): other threads run, and when every thread waits, the clock moves to the earliest deadline.
+- **`Thread.cpuCount() -> u32`** (ADR 0237 §2.1; lib/std's `ThreadServices.cpuCount`, hosted): how many CPUs the process
+  may run on, at least 1: on Linux those of its affinity mask (`taskset`, a container's cpuset), elsewhere the online
+  ones. A CPU-time quota does not count. The interpreter answers 1. It has no effect (§32).
 - A panic in any thread aborts the process (OD-5).
 - **Effects** (§32): `spawn` and `service` have `sleep` and `alloc`. `join`, dropping a `Thread<T>`, and
   `Thread.sleep` have `sleep`; `isFinished` has none.

@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.3
+## Releases 0.25.0 to 0.95.4
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.4 | 2026-11-24 | `Thread.cpuCount()`, the CPUs the process may run on; `appendNumber` and `appendUnsigned` on a `Vector<u8>`; a string literal as the needle of a byte slice's search, `path.startsWith("/api")` (ADR 0237) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.3 | 2026-11-24 | The system's Back: `WindowKey.Back` and `window.setBackWanted(on)`, so a program with pages of its own takes Android's Back while it has one to go back to, and leaves it to the system otherwise (ADR 0233) | [Appendix E](./appendix-e-ceesafec) |
 | 0.95.2 | 2026-11-24 | Methods of one name from several interfaces on one type, and the qualified call `I.m(x, …)` that names one (N0267 when a call on the concrete type is ambiguous) (ADR 0229); a file's `private` items in a scope of their own, so two files may each have a private item of one name (ADR 0230); `ByteString` and `ByteStringView` in lib/core, text of any bytes with `toUtf8`, `toUtf8Lossy` and `chunks` (ADR 0231); `SharedMapping` in lib/std, `f.mapShared(offset, length)` with `readAt`/`writeAt` and 32- and 64-bit atomics on a region of a file shared between processes (ADR 0232); a `Thread<void>` in a generic signature (`Vector<Thread<void>>.swapRemove`) is no longer N0226 | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.1 | 2026-11-24 | Zstandard encoding in lib/std: `Zstd.compress` for one frame of a whole buffer, and `ZstdEncoder` to encode a stream with `update`, `flush` and `finish`, at libzstd's levels 1 to 9 in meaning and parameters (0 its default, 3), frames any zstd decoder reads, within about 1% of libzstd's size (ADR 0196, phase 4) | [Appendix C](./appendix-c-built-in-types) |

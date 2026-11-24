@@ -288,7 +288,8 @@ Ada
 
 Numbers in other forms go through lib/core's helpers, which a `String` and a `Vector<u8>` both have (and `VectorBytes`
 as static functions): `appendHex(n, minWidth, upper)`, `appendOctal(n)`, `appendFixed(f, digits)`, rounded half to
-even as Rust's `{:.3}` is, and `appendPadded(text, width, align, fill)` for a field of `width` characters.
+even as Rust's `{:.3}` is, and `appendPadded(text, width, align, fill)` for a field of `width` characters. A
+`Vector<u8>` writes decimals with `appendNumber(n)` (an `i64`) and `appendUnsigned(n)` (a `u64`).
 
 ```ceesafe
 fn main() {

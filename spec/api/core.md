@@ -43,6 +43,7 @@
 - [enum TextAlign](#enum-textalign)
 - [struct Formatted](#struct-formatted)
 - [interface AppendFormatted](#interface-appendformatted)
+- [interface AppendDecimal](#interface-appenddecimal)
 - [interface AppendText](#interface-appendtext)
 - [enum PanicKind](#enum-panickind)
 - [struct TaskCrash](#struct-taskcrash)
@@ -2897,6 +2898,18 @@ public interface AppendFormatted {
 `s.appendHex(…)` and the other helpers (ADR 0087 §2.9), through `Formatted`: implemented here for a `Vector<u8>`,
 and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
 UTF-8.
+
+## interface AppendDecimal
+
+```ceesafe
+public interface AppendDecimal {
+    fn appendNumber(borrow mut this, value: i64) -> Result<void, AllocError>;
+    fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError>;
+}
+```
+
+`v.appendNumber(n)` and `v.appendUnsigned(n)` (ADR 0237 §2.2): decimal digits added to a `Vector<u8>`, as a
+`ByteString`'s methods of those names add them. (A `String`'s built-in `appendNumber` takes any number.)
 
 ## interface AppendText
 

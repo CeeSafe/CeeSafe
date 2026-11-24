@@ -3942,6 +3942,17 @@ public fn sleep(ms: u64)
 thread, so an async function cannot call it (its effect is `sleep`): a task waits with `Timer.sleep(ms)`.
 Safety: the runtime only waits.
 
+### ThreadServices.cpuCount
+
+```ceesafe
+public fn cpuCount() -> u32
+```
+
+`Thread.cpuCount()`: how many CPUs this process may run on, at least 1 (ADR 0237): on Linux those in its
+affinity mask (so `taskset` and a container's cpuset count, a CPU-time quota does not), elsewhere the online
+ones. Asked of the system each time; it never waits. The interpreter runs one thread at a time and answers 1.
+Safety: the runtime only reads the system's count.
+
 ## struct Mutex
 
 ```ceesafe

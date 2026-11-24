@@ -1393,6 +1393,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_thread_sleep")) {
         return "s:-"; // ADR 0222 §2.1
     }
+    if (sameText(name, "ceesafe_thread_cpu_count")) {
+        return ":u"; // ADR 0237
+    }
     if (sameText(name, "ceesafe_chan_wait_until")) {
         return "Pss:-"; // ADR 0222 §2.2
     }
@@ -2286,6 +2289,9 @@ fn callC(
             waitUntil(it, c, n, 4, 0, ms)?;
         }
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_thread_cpu_count")) {
+        return Ok(valueOf(1, 4)); // ADR 0237: one thread runs at a time
     }
     if (sameText(n0, "ceesafe_host_is_terminal")) {
         return Ok(hostResult(interpIsTerminal(it, arguments[0].bits(0, 4)?)));

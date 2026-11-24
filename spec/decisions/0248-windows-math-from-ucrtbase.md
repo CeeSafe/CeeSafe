@@ -94,8 +94,8 @@ it was built), not on the machine it runs on.
 
 - A CeeSafe program built on Windows by `cl` or by gcc prints the same floats, and the same as Python on that
   machine. The SQLite engine built by either agrees with `sqlite3.exe` exactly where the system's ucrtbase.dll and
-  the SDK `sqlite3.exe` was built with agree; on the laptop of §1 (Windows 11 22H2) its three math tests still differ
-  from that file (§5).
+  the SDK `sqlite3.exe` was built with agree (build 26100's do, §5); on the laptop of §1 (Windows 11 22H2) its three
+  math tests still differ from that file (§5).
 - The first math call of a Windows program loads ucrtbase.dll if the program has not already (a UCRT program has);
   each call is then one indirect call more and one `InitOnce` check.
 - Until §2.3 is done, `run --interp` on Windows can differ from a build in the last bit, where the static UCRT of
@@ -108,9 +108,24 @@ it was built), not on the machine it runs on.
   `f64` and `f32`, with each C compiler given and under `run --interp`, and compares every result bit for bit with
   each other and with the system's libm called through Python's `ctypes` (ucrtbase.dll on Windows), and the `f64`
   ones with Python's `math` where it calls libm. On Windows the interpreter's differences are reported as
-  information (§2.3). With `cl` among the compilers it also reports, as information, how
-  a C program built `cl /MT` (the SDK's static UCRT) differs. windows.yml runs it with `cl` and the runner's gcc.
-- Results: ROADMAP §10.
+  information (§2.3). With `cl` among the compilers it also reports, as information, how a C program built
+  `cl /MT` (the SDK's static UCRT) differs. windows.yml runs it with `cl` and the runner's gcc on windows-2022 and
+  windows-2025.
+- Results (ROADMAP §10 has the runs), 19,071 results per run (12,871 `f64`, 6,200 `f32`):
+  - the laptop of §1 (ucrtbase.dll 10.0.22621.3593): built with `cl` and with WinLibs gcc 16.2 (UCRT), 0
+    differences from ucrtbase.dll, and Python's `math` 0 of 10,920; the interpreter (ceesafec built by `cl`) and the
+    static UCRT of SDK 10.0.26100 differ in 124 (exp2 65, cosh 28, sinh 13, asin 6 …), `pow(2, -1075)` 0.0 there
+    and 4.94e-324 in the DLL;
+  - windows-2022 (Server 2022, ucrtbase.dll 10.0.20348.5756, MSVC 14.44, MinGW-Builds gcc 14.2, msvcrt flavour):
+    the same: 0 differences for both builds, 124 for the interpreter and the static UCRT;
+  - windows-2025 (Server 2025, ucrtbase.dll 10.0.26100.33648, MSVC 14.52 with SDK 10.0.26100, MinGW-Builds gcc
+    15.2): 0 differences anywhere, the interpreter and the static UCRT included, and `pow(2, -1075)` is 0.0 in both.
+    The system's DLL and the SDK's copy give the same results when their versions match, so on a Windows of build
+    26100 (11 24H2, Server 2025) the system's results are, as far as measured, those of a `sqlite3.exe` built with
+    SDK 10.0.26100;
+  - the SQLite package's tests on the laptop, built with gcc by this branch's ceesafec, against sqlite.org's
+    `sqlite3.exe` 3.54.1: 221 passed, 3 failed, finding 50's three math tests. A UCRT gcc build called ucrtbase.dll
+    before this ADR too (§1.1), and that file's static UCRT is not the laptop's ucrtbase.dll.
 
 ## 6. Questions for the owner
 

@@ -43,6 +43,10 @@ jobs:
           tar -xzf "stage1/$STAGE1_ASSET" -C stage1
           stage1/ceesafec build -o out/ceesafec
           out/ceesafec --version
+      - name: Processes and names that are not text, on Linux x64 (ADRs 0257-0259)
+        run: |
+          python3 tools/process_check.py --compiler out/ceesafec
+          python3 tools/child_check.py --compiler out/ceesafec
       - name: A program built for i386
         run: |
           printf 'fn main() {\n    Console.writeLine(Target.pointerBits());\n    let big: u64 = 5000000000;\n    Console.writeLine(big as usize);\n}\n' > bits.cee

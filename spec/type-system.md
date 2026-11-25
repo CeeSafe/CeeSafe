@@ -3226,7 +3226,11 @@ fn main() -> i32 {
   encoding (§22.5), `null` only if `i` is out of range: an argument that is not UTF-8 arrives too.
 - On Windows the arguments are read from the program's command line (`GetCommandLineW`), split by
   `CommandLineToArgvW`'s rules (ADR 0259 §2.1), as UTF-16 made WTF-8, not from the C runtime's `argv`, which is in the
-  ANSI code page. Before ADR 0259 a non-ASCII argument was lost there.
+  ANSI code page. Before ADR 0259 a non-ASCII argument was lost there. The rules: argument 0 is read without escapes
+  (to the closing `"`, or to the first space or tab); after it, `2n` backslashes before a `"` are `n` and the `"`
+  opens or closes a quoted part, `2n + 1` are `n` and a literal `"`, other backslashes are themselves; of a run of
+  quotes, every third is a literal `"` and one that ends on the second leaves the quoted part; a space or tab outside
+  one ends an argument. An empty command line is one argument, the program's path.
 
 ### 26.2 `IoError`
 A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDenied`,
@@ -3236,7 +3240,8 @@ after it (ADR 0044, so the earlier variants keep their tags) the network kinds `
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
 `AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host",
 and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`, and (ADR 0104)
-`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`, and (ADR 0221 §2.2)
+`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`. `InvalidInput` is also `EILSEQ`
+(ADR 0257), a name the file system refuses as macOS's does one that is not UTF-8. And (ADR 0221 §2.2)
 `BadDescriptor`: `EBADF`, Windows' `ERROR_INVALID_HANDLE`. It is what reading a `File` opened only for writing
 (`File.create`, `File.openAppend`) or writing one opened only for reading (`File.open`) gives, and a lock of the wrong
 kind (§26.3).

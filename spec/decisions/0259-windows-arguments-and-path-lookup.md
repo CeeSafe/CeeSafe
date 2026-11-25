@@ -31,9 +31,12 @@ On Windows the runtime, at start (`ceesafe_args_set`, before `main`), reads `Get
   tab.
 - **Each argument after it**, past the spaces and tabs before it: `2n` backslashes before a `"` are `n` backslashes,
   and the `"` opens or closes a quoted part; `2n + 1` backslashes before a `"` are `n` backslashes and a literal `"`;
-  backslashes before anything else are themselves. Outside a quoted part a space or tab ends the argument. Inside one,
-  `""` is a literal `"` and the quoted part goes on (`CommandLineToArgvW`'s rule since Windows 7, checked against it by
-  `tools/process_check.py`).
+  backslashes before anything else are themselves. Outside a quoted part a space or tab ends the argument. A run of
+  quotes counts from the one that opened the quoted part: every third is a literal `"`, and a run that ends on the
+  second leaves the quoted part, so inside one `""` is a literal `"` that also ends it (`"a""b c"` is `a"b` and `c`).
+  These are `CommandLineToArgvW`'s rules as Wine describes them, which `tools/process_check.py` checks against the
+  system's own; the UCRT's parser of 2008 and later keeps the quoted part open there, but the lines `spawn` writes
+  never hold `""` inside quotes (§26.5), so the two agree on them.
 - An empty command line is one argument, the program's path (`GetModuleFileNameW`), as `CommandLineToArgvW` gives.
 
 Each argument's UTF-16 units become WTF-8 (ADR 0257 §2.1), kept for the process's life.
@@ -88,12 +91,14 @@ looked for in the working directory unless `PATH` has an empty entry or `.`, whi
 
 ## 5. Tests
 
-`tools/process_check.py`: the CeeSafe child is given the non-ASCII arguments too, and on Windows a lone surrogate
-(through Python's `subprocess` with a `str` holding `\udc80`), compared in hex; the splitter is run on 40 command
-lines (quotes, `""` inside quotes, backslashes before quotes and at the end, tabs, an empty line) against
-`CommandLineToArgvW` through `ctypes`. On Windows a `cmd.exe`-named program planted in a temporary working directory
-must not run (`cmd /d /c exit 3` still exits 3 from System32), and a planted `tool.exe` runs as `.\tool` and is
-`NotFound` as `tool`.
+`tools/process_check.py`: the CeeSafe child is given the non-ASCII arguments too, and the program a raw argument
+that is not text (a lone surrogate on Windows, through Python's `subprocess` with a `str` holding `\udc81`; a byte
+`80` elsewhere), compared in hex; on Windows the splitter is run on 34 command lines (quotes, `""` inside and outside
+quotes, backslashes before quotes and at the end, tabs, a quote left open, non-ASCII text) against
+`CommandLineToArgvW` through `ctypes`. A copy of the program planted in the working directory as `ceesafe-planted`
+(and on Windows as `cmd.exe`) is `NotFound` when named bare from `run`, `runWith` and `spawn`, and runs as
+`./ceesafe-planted` (`.\ceesafe-planted`); on Windows `cmd.exe /d /c "exit 3"` exits 3 from System32 with the planted
+`cmd.exe` beside it.
 
 ## 6. Questions for the owner
 

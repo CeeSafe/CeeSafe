@@ -97,12 +97,14 @@ before) or a `borrow Vector<OsStringView>`: the checker reads the argument's ele
 
 ## 5. Tests
 
-- `tools/child_check.py` (contract step `children`): a CeeSafe parent starts itself with `spawn`, `runWith` and
-  `captureWith`; the child prints its environment, which Python compares with the parent's as changed: a set
-  (an ASCII value, a non-ASCII one, an empty one), a set that replaces an existing variable, a remove, a clear with
-  and without later sets, the same name set twice (the last wins); on Windows a name set in another case replaces
-  the variable; an `=` in a name and an empty name are `InvalidInput`.
-- `tools/process_check.py`: `captureWith` gives the sqlite3-like case: HOME set for the child alone.
+- `tools/process_check.py` (contract step `processes`, and windows.yml): a CeeSafe parent starts itself with
+  `runWith`, `captureWith` and `spawn`; the child prints what `Environment.variableOs` gives for each name asked,
+  which Python compares with the parent's environment as changed: a set (an ASCII value, a non-ASCII one, an empty
+  one), a remove, the same name set twice (the last wins), HOME set for the child alone (the SQLite port's case), a
+  name set in lower case (on Windows it replaces the variable, elsewhere it is another), and a clear with a set
+  before it (forgotten) and one after it (the only variable). An `=` in a name, an empty name, `CEESAFE_HANDOVER` and
+  a zero byte in a value are `InvalidInput` from all three.
+- `tools/child_check.py`: its `ChildOptions` literal is now `ChildOptions.streams(…)`.
 
 ## 6. Questions for the owner
 

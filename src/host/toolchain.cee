@@ -42,9 +42,6 @@ fn pushCommonFlags(
     pushBytes(arguments, directory)?;
     pushText(arguments, "-ffp-contract=off")?;
     pushText(arguments, "-fno-math-errno")?;
-    // A C array member of an imported or @repr(C) struct is reached as the reference's array struct (§31.3), which
-    // strict aliasing does not allow: gcc 14 at -O2 read and wrote such members as zeros (c-backend.md §1).
-    pushText(arguments, "-fno-strict-aliasing")?;
     if (freestanding) {
         pushText(arguments, "-ffreestanding")?;
         pushText(arguments, "-fno-stack-protector")?;

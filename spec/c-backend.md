@@ -23,13 +23,23 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   -Wstrict-prototypes -Wvla -Wundef -Wimplicit-fallthrough`, `-Wframe-larger-than=2048`
   for the kernel; see `cosmoos/abi.md`). All non-exported functions are `static`, and every
   exported one has a prototype in the generated header.
-- **Compiled with `-fno-strict-aliasing`** (clang and gcc; MSVC has no type-based alias analysis). A C array member
-  of an imported or `@repr(C)` struct is reached as the reference's array struct (type-system.md §31.3, ADR 0029), an
-  access through a type the C array does not have: gcc 14 at `-O2` read and wrote such members as zeros (0.95.11, on
-  Debian 13). Until the backend reaches those members without the array struct, ceesafec passes the flag, and C a
-  user compiles from `--emit c` needs it too. CosmoOS compiles with it as well. Everything else is written to be
-  correct without it, and a whole array copied into or out of such a member (the member, or an inner array of a C
-  array of arrays) is copied as bytes already (`ceesafe_mem_copy` from a typed copy, `cee_read_unaligned`).
+- **Correct with and without `-fno-strict-aliasing`** (ADR 0250). ceesafec does not pass it, and C a user compiles
+  from `--emit c` does not need it; CosmoOS passes it for its own reasons. Every object is accessed through its own
+  type or a character type. Where an array's storage may be C's own `T f[N]` rather than CeeSafe's array struct
+  (`struct { T e[N]; }`, §2), the array is never read or written as the struct:
+  - **A borrowed array** (`borrow [T; N]`, `borrow mut [T; N]`) is a pointer to its first innermost element,
+    `const T *` or `T *` (`T` is `u8` for `[[u8; 3]; 2]`), whatever it borrows: one of CeeSafe's arrays, a C array
+    member of an imported or `@repr(C)` struct, or an inner array of either. Its elements are `p[i]`, an inner array
+    `p + i * M` (`M` the inner array's innermost elements).
+  - **A C array member** (type-system.md §31.3, ADR 0029) is reached the same way, from its own address converted to
+    its innermost element's type: `((T *)(uintptr_t)&s.f)[i]`.
+  - **An array element of a slice or vector** (a `Slice<[T; M]>` may be one of a nested C array member) is reached
+    from the slice's pointer converted the same way.
+  - **A whole array** read from or written to any of these is copied as bytes: `cee_read_unaligned(A, p)`, and a
+    typed local of the array struct `A` copied with `ceesafe_mem_copy`.
+
+  gcc 14 at `-O2` on Debian 13 had read and written C array members reached as the array struct as zeros (0.95.11);
+  0.95.13 compiled with `-fno-strict-aliasing` until this was in place.
 - **No floating-point contraction or fast-math** (M11 G7, type-system.md §35.6). `rt.h` turns contraction off where
   a pragma can (clang, MSVC) and requires `FLT_EVAL_METHOD == 0`, in programs that use floats (`CEE_FLOATS`; a
   program without floats compiles under `-mgeneral-regs-only`); builds pass `-ffp-contract=off` to clang and gcc
@@ -194,7 +204,7 @@ relies on) raises the version. Version 1 is the first.
 | `File`, `TcpListener`, `TcpStream` (C3) | `int32_t` descriptors; drop glue is the runtime's `ceesafe_fd_drop` (close). I/O built-ins call `ceesafe_*` functions declared in `ceesafe/rt.h` and implemented in `runtime/hosted/ceesafe_rt_io.c`; each returns `cee_io_result { value, error }`, and a per-type helper `ceeIOR_<Result>` turns it into `Result<X, IoError>` (written only for an `X` an I/O built-in returns: `void`, an integer or a descriptor) (the runtime maps errno to the variant; `Other` keeps the number). The generated `main` is `int main(int argc, char **argv)` — the one place plain `char` appears — and passes argv to `ceesafe_init` (§6) |
 | `StringView` (M6c) | `cee_str` = `struct { const uint8_t *ptr; cee_usize len; }` from `ceesafe/rt.h` (16 bytes on a 64-bit target, 8 on a 32-bit one); element code `PZ` (`Z` is the unsized `str`). A literal is `((cee_str){ .ptr = (const uint8_t *)"…", .len = n })`, pointing to static storage. A literal longer than 4095 bytes, the most C99 and C11 require a compiler to accept (§5.2.4.1; clang and GCC warn beyond it under `-Wpedantic`, and MSVC rejects much longer ones), is instead a file-scope `static const uint8_t ceeLS_<k>[] = { 0x…, … };`, emitted once per distinct text, and `.ptr = ceeLS_<k>` (0.15.2). The same goes for a static's initialiser and `Console.write` of a literal. A file's bytes from `embed` or `embedText` (type-system.md §10.1, ADR 0087 §2.8) are such an array at any length but zero, once per distinct contents however many constants, statics and uses name them; an `embed` value views that array as a `Slice<u8>`, and an empty file is an empty literal. In a split build (§2.4) each array is declared `extern const uint8_t ceeLS_<k>[n];` in `ceesafe_program.h` and defined once, in `ceesafe_instances.c`, its name carrying the program's as other split data does: a file is in the image once, and only one unit parses its bytes. The interpreter holds the same bytes in the program it runs, from its start. `s[lo..hi]` calls `cee_check_str_range` (range, then character boundaries; `CEE_PANIC_STR_BOUNDARY`); `==`/`!=` call `ceesafe_str_eq`; `s.bytes()` rebuilds the struct as `ceeSl_u8`; printing calls `ceesafe_write_view` |
 | `*T`, `*mut T` (M8a) | `T *` for both, `void *` for `*void`: read-only is a CeeSafe rule, and casting `const` away would trip `-Wcast-qual`. Element codes `N<T>` / `M<T>`. Every conversion to or from a pointer goes through `uintptr_t` (`(U *)(uintptr_t)p`), and `add`/`sub`/`offset` compute the address in `uintptr_t`, so no C pointer arithmetic or pointer-to-pointer cast is ever emitted; `p.read()` / `p.write(v)` are the place `(*p)`; `s.ptr` is the slice's `ptr` field; `Slice.fromRaw` builds the slice struct (`unsafe.md` §4) |
-| `borrow T` | `const T *`. `borrow mut T` → `T *` (`restrict` only where the borrow checker proves exclusivity *and* M9 enables it). `Ref(k, p)` is `&p`, a deref place is `(*r)`, and reference locals are zero-initialised to `NULL` (never read before assignment) |
+| `borrow T` | `const T *`. `borrow mut T` → `T *` (`restrict` only where the borrow checker proves exclusivity *and* M9 enables it). `Ref(k, p)` is `&p`, a deref place is `(*r)`, and reference locals are zero-initialised to `NULL` (never read before assignment). A borrowed array, `borrow [T; N]`, is a pointer to its first innermost element instead (`const uint8_t *` for `borrow [[u8; 3]; 2]`; §1, ADR 0250): `Ref` converts the array's address, an element is `r[i]` |
 | `Slice<T>` / `SliceMut<T>` | `ceeSl_<elem>` = `struct { const T *ptr; cee_usize len; }` and `ceeSm_<elem>` = `struct { T *ptr; cee_usize len; }` (M2d; two words: size 16 and align 8 on a 64-bit target, 8 and 4 on a 32-bit one, asserted). Slices are only made from arrays (N ≥ 1), so `ptr` is never NULL; `a[n..]` is the one-past-the-end pointer with length 0. An element is `s.ptr[i]`; a reborrow or `SliceMut`→`Slice` coercion rebuilds the struct from `ptr` and `len` |
 | `Box<T, A>` | `T*` when `A` is zero-sized; `struct { T* ptr; A a; }` otherwise |
 | Arrays `[T; N]` | `ceeA<N>_<elem>` = `struct { T e[N]; }`, so assignment, parameters and return by value work (M2d). An element is `a.e[i]`; `[v; N]` is a `for` loop over `e`; zero-initialised with `{0}`. Element names: integers and `bool` by name, `S<len><Name>` for structs, `E<len><Name>` for enums, `A<N>_<elem>` for arrays (`[[i32; 3]; 2]` → `ceeA2_A3_i32`) |
@@ -349,8 +359,9 @@ its bytes never take a stack slot, which no wipe would reach once the frame is g
   layout assertions follow the include. So a C header may include the exports header and a CeeSafe program may include
   that C header. `--exports-header <name>` sets the name the header is included by and written under, and its guard
   (`kernel/wait_types.h` → `KERNEL_WAIT_TYPES_H`); without it, `ceesafe_exports.h`.
-  An array field is a C array member (`CE f[N]`) in both, used in CeeSafe's C as its array struct,
-  `(*(ceeA<N>_<E> *)(uintptr_t)&p->f)`, after an assertion that the two have one size and alignment; a struct
+  An array field is a C array member (`CE f[N]`) in both, reached in CeeSafe's C through its innermost element,
+  `((CE *)(uintptr_t)&p->f)[i]`, never as the array struct (§1, ADR 0250), after an assertion that the two have one
+  size and alignment; a struct
   literal assigns it after the compound literal, and a static's initialiser writes it as `{ … }` (ADR 0029). An
   imported member is its C spelling (`spinlock_t lock;`); a `@repr(C)` struct that holds one is C-laid-out (§33.1),
   so neither file asserts its layout.
@@ -369,8 +380,9 @@ its bytes never take a stack slot, which no wipe would reach once the frame is g
   that names the struct, the field and the CeeSafe declaration's file and line. A member of an imported enum spelled
   `enum name` is matched through its address (`enum name *`), since Clang targeting Windows reads `enum name:` as an
   enum with a fixed underlying type (type-system.md §31.3).
-- **C arrays in imported types (C9, ADR 0014)**: a field `f: [E; N]` is the member seen as CeeSafe's array
-  struct, `(*(ceeA<N>_<E> *)(uintptr_t)&p->f)`: no copy, and every array operation works on it. Its checks are
+- **C arrays in imported types (C9, ADR 0014)**: a field `f: [E; N]` is reached through its innermost element,
+  `((CE *)(uintptr_t)&p->f)[i]`, borrowed as that pointer, and read or written whole as bytes (§1, ADR 0250): no
+  copy otherwise, and every array operation works on it. Its checks are
   `_Generic(&member, CE (*)[N]: 1, default: 0)` (the member itself would decay to a pointer) and equal
   `sizeof` and `_Alignof` with the array struct. A `@cname` field uses its C name in both. An array of an
   imported type is emitted as an array struct of the C type, with no layout assertion (C lays it out), and

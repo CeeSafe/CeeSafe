@@ -713,6 +713,64 @@ fn emitConstruction(
     return Ok();
 }
 
+/// A whole array into a flat place (appendPlaceShape, ADR 0250): built in a typed local, then copied as bytes to the
+/// place's address, so the storage is never written as the array struct. Through a typed local, not rt.h's
+/// cee_write_unaligned, whose `(T[1]){v}` is -Wmissing-braces for gcc.
+fn emitFlatAssign(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    target: u32,
+    r: u32,
+) -> Result<void, AllocError> {
+    let t = placeTypeIn(c, n, f, target);
+    var address = Vector<u8>.create();
+    placeShapeIn(e, c, n, sources, f, mut address, target)?;
+    e.t("    { ")?;
+    appendCTypeName(c, mut e.buf, t)?;
+    e.t(" cee_v")?;
+    match (n.rvalues[r as usize]) {
+        NirRvalue.ArrayRepeat(_) => {
+            e.t(";")?;
+            e.emit()?;
+            emitConstruction(e, c, n, sources, f, r, "cee_v".bytes(), "      ")?;
+            e.t("      ")?;
+        }
+        NirRvalue.Use(o) => {
+            if (isZeroOperand(n, o)) {
+                if (zeroNeedsHelper(c, t)) {
+                    e.t(" = ")?;
+                    appendZeroHelperName(c, mut e.buf, t)?;
+                    e.t("(); ")?;
+                } else {
+                    e.t(" = (")?;
+                    appendCTypeName(c, mut e.buf, t)?;
+                    e.t("){0}; ")?;
+                }
+            } else {
+                var value = Vector<u8>.create();
+                appendRvalue(e, c, n, sources, f, mut value, r)?;
+                e.t(" = ")?;
+                e.b(value.view())?;
+                e.t("; ")?;
+            }
+        }
+        _ => {
+            var value = Vector<u8>.create();
+            appendRvalue(e, c, n, sources, f, mut value, r)?;
+            e.t(" = ")?;
+            e.b(value.view())?;
+            e.t("; ")?;
+        }
+    }
+    e.t("ceesafe_mem_copy((char *)")?;
+    e.b(address.view())?;
+    e.t(", &cee_v, sizeof cee_v); }")?;
+    return e.emit();
+}
+
 fn isZeroOperand(n: borrow NirProgram, o: u32) -> bool => match (n.operands[o as usize]) {
     NirOperand.Zero => true,
     _ => false,
@@ -801,6 +859,12 @@ fn emitStatement(
             }
             if (isInPlaceConstruction(e, s)) {
                 return Ok(); // built in the box's memory by its Box.create (below)
+            }
+            if (isFlatPlace(c, n, f, target)) {
+                if (isElidedFill(n, s)) {
+                    return Ok(); // overwritten in full by the loop that follows (optimisations.md §7)
+                }
+                return emitFlatAssign(e, c, n, sources, f, target, r);
             }
             match (n.rvalues[r as usize]) {
                 NirRvalue.Use(o) => {
@@ -1026,18 +1090,6 @@ fn emitStatement(
             // `x = x;` is a no-op in the reference; in C it trips -Wself-assign (c-backend.md §5).
             if (!sameBytes(value.view(), place.view())) {
                 e.t("    ")?;
-                if (isWholeCArrayPlace(c, n, f, target)) {
-                    // A whole array into a C array member's storage: as bytes (isWholeCArrayPlace), through a typed
-                    // copy (rt.h's cee_write_unaligned's `(T[1]){v}` is -Wmissing-braces for gcc).
-                    e.t("{ ")?;
-                    appendCTypeName(c, mut e.buf, placeTypeIn(c, n, f, target))?;
-                    e.t(" cee_v = ")?;
-                    e.b(value.view())?;
-                    e.t("; ceesafe_mem_copy((char *)&")?;
-                    e.b(place.view())?;
-                    e.t(", &cee_v, sizeof cee_v); }")?;
-                    return e.emit();
-                }
                 e.b(place.view())?;
                 e.t(" = ")?;
                 e.b(value.view())?;
@@ -1341,10 +1393,11 @@ fn emitBuiltin(
             e.b(place.view())?;
             e.t(").ptr);")?;
         } else {
+            // The referent's size by its type: a borrowed array points to its first element (ADR 0250).
             e.t("(")?;
             e.b(place.view())?;
-            e.t("), (uint64_t)sizeof *(")?;
-            e.b(place.view())?;
+            e.t("), (uint64_t)sizeof(")?;
+            appendCTypeName(c, mut e.buf, c.types.info(typ).pointee)?;
             e.t("));")?;
         }
         return e.emit();
@@ -2089,6 +2142,14 @@ fn appendRvalue(
                 appendStaticName(c, out, item)?;
                 return out.push(')');
             }
+            if (isArrayReference(c, t)) {
+                // A borrowed array is the address of its first innermost element (ADR 0250).
+                appendText(out, "((")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")&")?;
+                appendStaticName(c, out, item)?;
+                return out.push(')');
+            }
             appendText(out, "(&")?;
             appendStaticName(c, out, item)?;
             return out.push(')');
@@ -2106,6 +2167,17 @@ fn appendRvalue(
                 appendText(out, ".ptr, .len = ")?;
                 appendBytes(out, text.view())?;
                 return appendText(out, ".len })");
+            }
+            if (isSizedArray(c, placeType)) {
+                // A borrowed array is the address of its first innermost element (ADR 0250): a flat place's text is
+                // that address already, and an array of CeeSafe's own storage converts from its array struct's.
+                var text = Vector<u8>.create();
+                let flat = placeShapeIn(e, c, n, sources, f, mut text, place)?;
+                appendText(out, "((")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, if (flat) ")" else ")&")?;
+                appendBytes(out, text.view())?;
+                return out.push(')');
             }
             if (c.types.isDyn(placeType)) {
                 // A borrow of `*p` where p is a dyn reference or box is p's pair itself (§37.4).
@@ -2137,14 +2209,28 @@ fn appendRvalue(
             return appendPlace(e, c, n, sources, f, out, place);
         }
         NirRvalue.Slice(_, base, low, high) => {
-            let baseText = appendPlaceIn(e, c, n, sources, f, base)?;
+            var baseText = Vector<u8>.create();
+            let flat = placeShapeIn(e, c, n, sources, f, mut baseText, base)?;
             let lo = operandText(e, c, n, sources, f, low)?;
             let hi = operandText(e, c, n, sources, f, high)?;
             appendText(out, "((")?;
             appendCTypeName(c, out, t)?;
             appendText(out, "){ .ptr = ")?;
-            appendBytes(out, baseText.view())?;
-            appendText(out, if (c.types.isUnsized(placeTypeIn(c, n, f, base))) ".ptr + " else ".e + ")?;
+            if (flat) {
+                // A flat array's elements from its address (ADR 0250): the pointer itself for elements that are not
+                // arrays; inner arrays are the slice's array structs, at the same address.
+                let element = c.types.info(placeTypeIn(c, n, f, base)).element;
+                if (isSizedArray(c, element)) {
+                    appendText(out, "(")?;
+                    appendCTypeName(c, out, element)?;
+                    appendText(out, " *)(uintptr_t)")?;
+                }
+                appendBytes(out, baseText.view())?;
+                appendText(out, " + ")?;
+            } else {
+                appendBytes(out, baseText.view())?;
+                appendText(out, if (c.types.isUnsized(placeTypeIn(c, n, f, base))) ".ptr + " else ".e + ")?;
+            }
             appendBytes(out, lo.view())?;
             appendText(out, ", .len = ")?;
             appendBytes(out, hi.view())?;
@@ -3148,16 +3234,7 @@ fn appendOperand(
                 let text = appendPlaceIn(e, c, n, sources, f, place)?;
                 return appendFromBoundary(c, out, placeTypeIn(c, n, f, place), text.view());
             }
-            if (isWholeCArrayPlace(c, n, f, place)) {
-                // A whole array out of a C array member's storage: as bytes (isWholeCArrayPlace).
-                let text = appendPlaceIn(e, c, n, sources, f, place)?;
-                appendText(out, "cee_read_unaligned(")?;
-                appendCTypeName(c, out, placeTypeIn(c, n, f, place))?;
-                appendText(out, ", &")?;
-                appendBytes(out, text.view())?;
-                return out.push(')');
-            }
-            return appendPlace(e, c, n, sources, f, out, place);
+            return appendPlace(e, c, n, sources, f, out, place); // a flat array is read as bytes (appendPlaceParts)
         }
         NirOperand.Const(v) => { return appendConstant(c, out, v, n.operandTypes[o as usize]); }
         NirOperand.String(text) => {
@@ -3180,28 +3257,33 @@ fn appendOperand(
     }
 }
 
-/// A whole array reached through a C array member of an imported or `@repr(C)` struct (§31.3): the member itself, or
-/// an inner array of a C array of arrays. The place's C is the reference's array struct over the C array's storage,
-/// which is right for an element (`.e[i]` has the element's own type) but not for the whole value: a read or write
-/// of the array struct there accesses the object through a type it does not have, which C's strict aliasing makes
-/// undefined, and gcc 14 at -O2 dropped such writes (c-backend.md §1). Such a value is copied as bytes instead.
-fn isWholeCArrayPlace(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
+/// Whether a place is flat (appendPlaceShape), from its types alone: a whole array behind a borrowed array or in a C
+/// array member's storage, which is read, written, borrowed and sliced through its address (ADR 0250).
+fn isFlatPlace(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
     let p = n.places[place as usize];
-    var owner = nirLocalType(n, f, p.local);
-    var through = false;
+    var t = nirLocalType(n, f, p.local);
+    var flat = false;
+    var stable = false; // `t` is a stable vector's elements, reached by its own helper
     for (k in 0..p.projections.count) {
         let projection = n.projections[(p.projections.start + k) as usize];
-        match (projection.kind) {
-            ProjectionKind.Field => {
-                if (isCArrayMember(c, owner, projection.field)) {
-                    through = true;
+        let element = c.types.info(t).element;
+        if (flat) {
+            flat = isSizedArray(c, element); // an index: still an array, or its element
+        } else {
+            match (projection.kind) {
+                ProjectionKind.Deref => { flat = isArrayReference(c, t); }
+                ProjectionKind.Field => {
+                    flat = !c.types.fields[projection.field as usize].isRegionPart &&
+                        isCArrayMember(c, t, projection.field);
                 }
+                ProjectionKind.Index => { flat = !stable && c.types.isUnsized(t) && isSizedArray(c, element); }
+                _ => {}
             }
-            _ => {}
         }
-        owner = applyNirProjection(c, owner, projection);
+        stable = isNirDeref(projection) && c.types.is(t, TypeKind.StableVector);
+        t = applyNirProjection(c, t, projection);
     }
-    return through && c.types.is(owner, TypeKind.Array);
+    return flat;
 }
 
 /// A field of an imported C type whose C type differs from the reference's C for it (IsBoundaryField, §31.3).
@@ -3237,7 +3319,9 @@ fn appendPlace(
     return appendPlaceParts(e, c, n, sources, f, out, p.local, p.projections, p.projections.count);
 }
 
-/// The first `count` projections of a place.
+/// The first `count` projections of a place, as an lvalue. A whole array reached through a borrowed array or a C array
+/// member (appendPlaceShape's `flat`) has no lvalue of its array struct: it is read as bytes here, and the callers that
+/// write one, borrow one or slice one ask appendPlaceShape for its address instead.
 fn appendPlaceParts(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -3250,15 +3334,94 @@ fn appendPlaceParts(
     count: u32,
 ) -> Result<void, AllocError> {
     var text = Vector<u8>.create();
+    let flat = appendPlaceShape(e, c, n, sources, f, mut text, local, projections, count)?;
+    if (!flat) {
+        return appendBytes(out, text.view());
+    }
+    var t = nirLocalType(n, f, local);
+    for (k in 0..count) {
+        t = applyNirProjection(c, t, n.projections[(projections.start + k) as usize]);
+    }
+    return appendFlatRead(c, out, t, text.view());
+}
+
+/// A whole array out of a flat place (appendPlaceShape): copied as bytes into a value of its array struct.
+fn appendFlatRead(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    t: u32,
+    address: Slice<u8>,
+) -> Result<void, AllocError> {
+    appendText(out, "cee_read_unaligned(")?;
+    appendCTypeName(c, out, t)?;
+    appendText(out, ", ")?;
+    appendBytes(out, address)?;
+    return out.push(')');
+}
+
+/// A place's C, and whether it is `flat` (ADR 0250): a whole array whose elements are reached without its array
+/// struct, through a borrowed array (a pointer to the first innermost element) or a C array member of an imported or
+/// `@repr(C)` struct (§31.3), whose storage is C's own `T f[N]`. Reading the array struct there would access the
+/// object through a type it does not have, which strict aliasing forbids and gcc 14 at -O2 miscompiled. A flat place's
+/// text is the address of its first innermost element; indexing it is pointer arithmetic, down to an element that is
+/// not an array, which is an lvalue of its own type.
+fn appendPlaceShape(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    out: borrow mut Vector<u8>,
+    local: u32,
+    projections: Range,
+    count: u32,
+) -> Result<bool, AllocError> {
+    var text = Vector<u8>.create();
     appendLocalNameIn(c, n, mut text, f, local)?;
     var t = nirLocalType(n, f, local);
     var stable = none(); // the stable vector whose elements `t` is (§24.2)
+    var flat = false;
     for (k in 0..count) {
         let projection = n.projections[(projections.start + k) as usize];
         var next = Vector<u8>.create();
+        if (flat) {
+            // Only an index applies to an array: past `t`'s first dimension, or down to its element.
+            let index = operandText(e, c, n, sources, f, projection.index)?;
+            let constant = match (n.operands[projection.index as usize]) {
+                NirOperand.Const(v) => Some(v),
+                _ => null,
+            };
+            let past = constant != null && !constant!.negative &&
+                constant!.magnitude >= truncate<u64>(c.types.info(t).arrayLength);
+            let element = c.types.info(t).element;
+            if (isSizedArray(c, element)) {
+                appendText(mut next, "(")?;
+                appendBytes(mut next, text.view())?;
+                appendText(mut next, if (past) " + cee_opaque_index(" else " + (")?;
+                appendBytes(mut next, index.view())?;
+                appendText(mut next, ") * ")?;
+                appendDecimal(mut next, arrayScalarCount(c, element))?;
+                appendText(mut next, "u)")?;
+            } else {
+                appendBytes(mut next, text.view())?;
+                appendText(mut next, if (past) "[cee_opaque_index(" else "[")?;
+                appendBytes(mut next, index.view())?;
+                appendText(mut next, if (past) ")]" else "]")?;
+                flat = false;
+            }
+            t = element;
+            text = next;
+            stable = none();
+            continue;
+        }
         match (projection.kind) {
             ProjectionKind.Deref => {
-                if (c.types.is(t, TypeKind.StableVector) || c.types.isSlice(t) || c.types.is(t, TypeKind.Vector)) {
+                let elements = c.types.is(t, TypeKind.StableVector) || c.types.isSlice(t) ||
+                    c.types.is(t, TypeKind.Vector);
+                if (isArrayReference(c, t)) {
+                    next = text; // the pointer is the array's address (ADR 0250)
+                    flat = true;
+                } else if (elements) {
                     next = text; // the elements' (ptr, len) are the value's
                 } else if (c.types.isPoolBox(t)) {
                     appendText(mut next, "(*")?;
@@ -3275,14 +3438,16 @@ fn appendPlaceParts(
                 if (c.types.fields[field as usize].isRegionPart) {
                     next = text; // the frame itself (§19.5)
                 } else if (isCArrayMember(c, t, field)) {
-                    // A C array member seen as the reference's array struct (§31.3), through uintptr_t.
-                    appendText(mut next, "(*(")?;
-                    appendCTypeName(c, mut next, c.types.fields[field as usize].typ)?;
+                    // A C array member (§31.3): flat, the address of its first innermost element in the element's
+                    // own C type (through uintptr_t, which drops a const the member's owner may have).
+                    appendText(mut next, "((")?;
+                    appendCTypeName(c, mut next, arrayScalar(c, c.types.fields[field as usize].typ))?;
                     appendText(mut next, " *)(uintptr_t)&")?;
                     appendBytes(mut next, text.view())?;
                     next.push('.')?;
                     appendFieldName(c, mut next, field)?;
                     next.push(')')?;
+                    flat = true;
                 } else {
                     appendBytes(mut next, text.view())?;
                     next.push('.')?;
@@ -3309,10 +3474,26 @@ fn appendPlaceParts(
                     let size = cLayout(c, c.types.info(t).element).size;
                     let huge = constant != null && !constant!.negative && size > 0 &&
                         constant!.magnitude > 0x7FFFFFFFFFFFFFFF / truncate<u64>(size);
-                    appendBytes(mut next, text.view())?;
-                    appendText(mut next, if (huge) ".ptr[cee_opaque_index(" else ".ptr[")?;
-                    appendBytes(mut next, index.view())?;
-                    appendText(mut next, if (huge) ")]" else "]")?;
+                    let element = c.types.info(t).element;
+                    if (isSizedArray(c, element)) {
+                        // An array element of a slice or vector is flat (ADR 0250): the slice may be one of a nested
+                        // C array member, whose inner arrays are C's `T f[N][M]`, not array structs.
+                        appendText(mut next, "((")?;
+                        appendCTypeName(c, mut next, arrayScalar(c, element))?;
+                        appendText(mut next, " *)(uintptr_t)")?;
+                        appendBytes(mut next, text.view())?;
+                        appendText(mut next, if (huge) ".ptr + cee_opaque_index(" else ".ptr + (")?;
+                        appendBytes(mut next, index.view())?;
+                        appendText(mut next, ") * ")?;
+                        appendDecimal(mut next, arrayScalarCount(c, element))?;
+                        appendText(mut next, "u)")?;
+                        flat = true;
+                    } else {
+                        appendBytes(mut next, text.view())?;
+                        appendText(mut next, if (huge) ".ptr[cee_opaque_index(" else ".ptr[")?;
+                        appendBytes(mut next, index.view())?;
+                        appendText(mut next, if (huge) ")]" else "]")?;
+                    }
                 } else {
                     // A constant index past the end always panics first; hiding it keeps -Warray-bounds quiet (§5).
                     let past = constant != null && !constant!.negative &&
@@ -3328,7 +3509,22 @@ fn appendPlaceParts(
         t = applyNirProjection(c, t, projection);
         text = next;
     }
-    return appendBytes(out, text.view());
+    appendBytes(out, text.view())?;
+    return Ok(flat);
+}
+
+/// A place's shape (appendPlaceShape) for the whole place.
+fn placeShapeIn(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    out: borrow mut Vector<u8>,
+    place: u32,
+) -> Result<bool, AllocError> {
+    let p = n.places[place as usize];
+    return appendPlaceShape(e, c, n, sources, f, out, p.local, p.projections, p.projections.count);
 }
 
 fn appendEnumAggregate(

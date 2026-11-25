@@ -63,12 +63,12 @@ static int32_t ceeF_main(void) {
 }
 
 static void ceeM_3Key_drop(CEE_UNUSED ceeT_Key * v_this_0) {
-    CEE_TEMP ceeA32_u8 * t_1 = NULL;
+    CEE_TEMP uint8_t * t_1 = NULL;
     CEE_TEMP uint64_t * t_2 = NULL;
-    t_1 = &(*v_this_0).f_bytes;
-    ceesafe_wipe((uint8_t *)(t_1), (uint64_t)sizeof *(t_1));
+    t_1 = ((uint8_t *)&(*v_this_0).f_bytes);
+    ceesafe_wipe((uint8_t *)(t_1), (uint64_t)sizeof(ceeA32_u8));
     t_2 = &(*v_this_0).f_rounds;
-    ceesafe_wipe((uint8_t *)(t_2), (uint64_t)sizeof *(t_2));
+    ceesafe_wipe((uint8_t *)(t_2), (uint64_t)sizeof(uint64_t));
     return;
 }
 

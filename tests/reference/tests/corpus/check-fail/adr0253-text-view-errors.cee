@@ -1,6 +1,6 @@
 // ADR 0253: a view implements an interface whose methods take it by value. A `borrow this` method reached through a
-// bound at a view is a reference to a reference (N0274); a mutable slice implements no interface (N0267). On a
-// concrete `StringView` the built-in `indexOf` still takes a `StringView` only; `TextView.indexOf` takes any text.
+// bound at a view is a reference to a reference (N0274); a mutable slice implements no interface (N0267). A
+// concrete `StringView`'s `indexOf` and `TextView.indexOf` take any text (§2.8), but not a bool.
 interface Sized2 {
     fn size(borrow this) -> usize;
 }
@@ -22,6 +22,7 @@ impl Raw for SliceMut<u8> { // error[N0267]
 fn main() {
     let n = sizeOf("abc"); // error[N0274]
     let b = ByteStringView.fromText("b");
-    let i = "abc".indexOf(b); // error[N0205]
+    let i = "abc".indexOf(b);
     let j = TextView.indexOf("abc", b);
+    let k = "abc".indexOf(true); // error[N0205]
 }

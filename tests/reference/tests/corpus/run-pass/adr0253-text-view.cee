@@ -71,24 +71,28 @@ fn firstWord<T: TextView>(t: T) -> T {
     };
 }
 
-fn bracket<B: TextBuffer, T: TextView>(out: borrow mut B, t: T) -> Result<void, AllocError> {
+/// Whether `t` went in between the brackets.
+fn bracket<B: TextBuffer, T: TextView>(out: borrow mut B, t: T) -> Result<bool, AllocError> {
     out.append("[")?;
-    out.append(t)?;
-    return out.append("]");
+    let appended = out.append(t)?;
+    out.append("]")?;
+    return Ok(appended);
 }
 
 fn buffers() {
     let raw = [0x61u8, 0xFF, 0x62];
     let bad = ByteStringView.fromBytes(raw[..]);
     var s = String.create();
-    bracket(mut s, "x")!;
-    bracket(mut s, bad)!; // not UTF-8: U+FFFD in a String
+    Console.writeLine(bracket(mut s, "x")!);
+    Console.writeLine(bracket(mut s, bad)!); // not UTF-8: a String appends nothing, and says so
+    TextBuffer.appendLossy(mut s, bad)!;     // U+FFFD for the maximal subpart
     Console.writeLine(s);
-    Console.writeLine(TextBuffer.bytes(s).length); // [x][a EF BF BD b]
+    Console.writeLine(TextBuffer.bytes(s).length); // [x][]a EF BF BD b
     var b = ByteString.create();
-    bracket(mut b, bad)!;
+    Console.writeLine(bracket(mut b, bad)!);
     b.append(ByteStringView.fromText("é"))!;
     b.append("!".bytes())!;
+    b.appendLossy(bad)!;
     Console.writeLine(hex(b.bytes()).view());
     b.clear();
     Console.writeLine(b.length());
@@ -266,9 +270,12 @@ fn main() {
 // expect-stdout: 2
 // expect-stdout: 7
 // expect-stdout: 7
-// expect-stdout: [x][a�b]
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: [x][]a�b
 // expect-stdout: 10
-// expect-stdout: 5b61ff625dc3a921
+// expect-stdout: true
+// expect-stdout: 5b61ff625dc3a92161efbfbd62
 // expect-stdout: 0
 // expect-stdout: 0
 // expect-stdout: 97 0 1 ok

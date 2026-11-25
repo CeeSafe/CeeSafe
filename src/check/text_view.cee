@@ -85,6 +85,40 @@ fn byteStringViewIndex(c: borrow mut Checker, target: u32, position: u32, span: 
     return libraryCall(c, function, values[..], span);
 }
 
+/// `"abc"` on a `ByteStringView` inside another pattern (`Some("abc")`, a field's, a payload's; ADR 0253 §2.7): the
+/// view's bytes, matched as a `Slice<u8>`'s are, through its field: `ByteStringView { data: "abc" }`. Coverage is a
+/// byte slice's.
+fn byteStringViewPattern(
+    c: borrow mut Checker,
+    literal: u32,
+    typ: u32,
+    reference: u32,
+    span: Span,
+    failed: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let definition = c.types.info(typ).structDef;
+    let count = c.types.structs[definition as usize].fields.length;
+    var trees = Vector<u32>.create();
+    var found = false;
+    for (i in 0..count) {
+        let field = c.types.structs[definition as usize].fields[i];
+        let t = c.types.fields[field as usize].typ;
+        let target = if (c.types.isSlice(t)) viewTarget(c, t) else none();
+        if (!found && target != none() && !c.types.info(target).isStr && c.types.info(target).element == c.types.u8) {
+            found = true;
+            trees.push(checkStringPattern(c, literal, t, reference, span, failed)?)?;
+        } else {
+            trees.push(c.hir.addPattern(HirPattern.Wildcard)?)?;
+        }
+    }
+    if (!found) {
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    let list = c.hir.list(trees.view())?;
+    return c.hir.addPattern(HirPattern.Struct(typ, list, false));
+}
+
 /// Is `pattern` a string literal, or alternatives or an `@` binding of them only (as `viewPattern` asks)?
 fn isStringPatternSyntax(c: borrow Checker, pattern: u32) -> bool {
     match (c.front.ast.patterns[pattern as usize]) {

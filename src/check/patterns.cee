@@ -1138,6 +1138,9 @@ fn checkPattern(
         }
         PatternNode.Literal(literal) => {
             if (isStringLiteral(c, literal)) {
+                if (isByteStringViewType(c, typ)) {
+                    return byteStringViewPattern(c, literal, typ, reference, span, failed); // ADR 0253 §2.7
+                }
                 return checkStringPattern(c, literal, typ, reference, span, failed);
             }
             if (isFloatLiteral(c, literal)) {

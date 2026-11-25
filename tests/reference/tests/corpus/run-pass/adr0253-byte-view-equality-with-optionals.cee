@@ -1,0 +1,59 @@
+// ADR 0253 §2.6 with ADR 0251 §2.5–§2.6: `==` on ByteStringViews (lowered to their bytes) inside lib/std's
+// `HashKey<ByteString>.sameAs`, in an optional's comparison, and next to `String == StringView` and owned optionals
+// that are not Copy. A compiler whose embedded lib/core lacked TextView's impls reported N0216 here. Expectations
+// written by hand.
+
+fn wrap(b: ByteStringView) -> ByteStringView? => Some(b);
+
+fn main() {
+    let a = ByteString.fromText("abc")!;
+    let b = ByteString.fromText("abc")!;
+    let other = ByteString.fromText("abd")!;
+    // ByteStringView with ByteStringView and with text
+    Console.writeLine(a.view() == b.view());
+    Console.writeLine(a.view() != other.view());
+    Console.writeLine(a.view() == "abc");
+    // a HashMap keyed by ByteString: its sameAs compares the views
+    var m = HashMap<ByteString, i32>.create();
+    let _ = m.put(ByteString.fromText("abc")!, 7)!;
+    Console.writeLine(m.get(a) == Some(7));
+    Console.writeLine(m.get(other) == null);
+    // optionals of ByteStringView: compared through their values' bytes
+    let o = wrap(b.view());
+    Console.writeLine(o == wrap(a.view()));
+    Console.writeLine(o != wrap(other.view()));
+    Console.writeLine(o == Some(a.view()));
+    Console.writeLine(o! == "abc");
+    // owned optionals of ByteString, which is not Copy: lent, not consumed (ADR 0251 §2.5)
+    let x: ByteString? = Some(ByteString.fromText("x")!);
+    let y: ByteString? = Some(ByteString.fromText("x")!);
+    Console.writeLine(x == y);
+    Console.writeLine(x == Some(ByteString.fromText("x")!));
+    Console.writeLine(x.isSome() && y.isSome());
+    // String with StringView (ADR 0251 §2.6) beside them
+    let s = String.from("abc")!;
+    Console.writeLine(s == "abc");
+    Console.writeLine(s.view() == "abc");
+    // a match of a ByteStringView with string patterns
+    Console.writeLine(match (a.view()) {
+        "abd" => 1,
+        "abc" => 2,
+        _ => 0,
+    });
+}
+
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 2

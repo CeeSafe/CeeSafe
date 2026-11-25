@@ -59,8 +59,8 @@ Python script (`tests/capture.py`) started by `Process.spawn`.
   an array of name and value texts, a kind for each (set or remove) and whether to clear.
 - POSIX: the runtime builds the child's `envp` from `environ` (or nothing, when cleared), without
   `CEESAFE_HANDOVER`, applies the changes in order, adds its own `CEESAFE_HANDOVER` word when things are handed over,
-  and passes it to `posix_spawnp`. The program is still looked up on the **parent's** `PATH`, whatever the options say
-  (§6 question 1).
+  and passes it to `posix_spawnp`. A bare program name is looked up on the child's `PATH` when the options set it, else
+  on the parent's (ADR 0259 §2.4, the owner's answer to §6 question 1).
 - Windows: the same on the UTF-16 block of `GetEnvironmentStringsW` (`CREATE_UNICODE_ENVIRONMENT`), each name and
   value from WTF-8 (ADR 0257 §2.6). An empty environment is a block of two terminators.
 
@@ -109,5 +109,7 @@ before) or a `borrow Vector<OsStringView>`: the checker reads the argument's ele
 ## 6. Questions for the owner
 
 1. The program is looked up on the parent's `PATH` even when the options set the child's (Rust searches the child's
-   first). Search the child's?
+   first). Search the child's? **Answered 2026-11-25: yes**, when the options set the child's `PATH`; the parent's
+   otherwise. ADR 0259 §2.4.
 2. `runWith` and `captureWith` are new names; should `run` and `capture` take options instead (a source change)?
+   **Answered 2026-11-25: keep `runWith` and `captureWith`**; merging them into `run` and `capture` is for 1.0.

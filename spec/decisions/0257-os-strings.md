@@ -187,5 +187,8 @@ has OS strings, the interpreter can pass them through.
 
 1. The OS-string forms are named with an `Os` suffix (`listOs`, `currentOs`, `argumentOs`, `variableOs`,
    `executableOs`), as Rust's `args_os` and `var_os`. Should a later release make the OS forms the plain names?
+   **Answered 2026-11-25: keep the `…Os` names for now**; making the OS forms the plain names is for 1.0.
 2. `toUtf8Lossy` replaces an encoded surrogate by one U+FFFD on every system (Rust: on Windows only). Keep it uniform?
+   **Answered 2026-11-25: keep it uniform**, one U+FFFD per encoded surrogate on every system.
 3. `Process.run`, a built-in, keeps `StringView`s; `runWith` takes OS strings. Should `run` become lib/std's too?
+   **Answered 2026-11-25: `Process.run` stays a built-in for now**; moving it to lib/std is a later item.

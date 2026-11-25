@@ -1,7 +1,7 @@
 // Whole arrays into and out of a @repr(C) struct's array members (type-system.md §28.5, c-backend.md §1). In C those
-// members are C arrays, seen as the reference's array struct; a whole array copied there is copied as bytes, since an
-// access through the array struct's type is one strict aliasing forbids: gcc 14 at -O2 dropped the writes of a struct
-// literal's arrays (ffi/exported-c-state.cee on Debian 13), so the sums below came out with zeros.
+// members are C arrays, never accessed as the reference's array struct (ADR 0250); a whole array copied there is copied
+// as bytes, since an access through the array struct's type is one strict aliasing forbids: gcc 14 at -O2 dropped the
+// writes of a struct literal's arrays (ffi/exported-c-state.cee on Debian 13), so the sums below came out with zeros.
 
 @repr(C)
 struct Grid {

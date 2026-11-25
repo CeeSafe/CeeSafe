@@ -5494,9 +5494,11 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   Microsoft extension) and refuses it.
 - An array field `f: [E; N]` (C9) is asserted with `_Generic(&((S *)0)->f, CE (*)[N]: 1, default: 0)`, exact
   where `_Generic` of the member itself would see a decayed pointer, and, for integer and `bool` elements, with
-  the size of CeeSafe's array. Its place is `(*(A *)(uintptr_t)&(*p).f)` (through `uintptr_t`, as `p` may be a `const` pointer), where `A` is CeeSafe's array struct
-  (`struct { CE e[N]; }`, c-backend.md §2), which has the array's size and alignment: an access through it is an
-  access through an aggregate containing the member's type (C11 6.5p7). No copy is made.
+  the size of CeeSafe's array. It is reached without CeeSafe's array struct (`struct { CE e[N]; }`, c-backend.md §2),
+  which would be an access through a type the C array does not have (ADR 0250): an element is
+  `((CE *)(uintptr_t)&(*p).f)[i]` (through `uintptr_t`, as `p` may be a `const` pointer), a borrow of the member is
+  that pointer (a borrowed array is a pointer to its first innermost element), and a whole array read from or written
+  to it is copied as bytes. No copy is made otherwise.
 
 ### 31.4 The interpreter
 `run --interp` has no headers, so it has no layout for an imported type. A function that accesses

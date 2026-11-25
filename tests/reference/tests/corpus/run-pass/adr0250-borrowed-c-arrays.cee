@@ -1,0 +1,114 @@
+// Borrowed arrays (ADR 0250): in C a `borrow [T; N]` is a pointer to the first innermost element, so one function
+// reaches a CeeSafe array and a C array member of a @repr(C) struct (type-system.md §28.5) alike, with the elements'
+// own type and never the array struct. Read and written through the borrow: elements, inner arrays of a nested array,
+// whole arrays (a copy, a literal, a repeat), slices of it; borrowed from a local, a struct's C array member, an
+// inner array of one, a static's member, and returned from a function.
+
+@repr(C)
+struct Grid {
+    tag: u8;
+    data: [u8; 3];
+    cells: [[u16; 2]; 2];
+}
+
+fn total(a: borrow [u8; 3]) -> u32 {
+    var sum: u32 = 0;
+    for (v in a) {
+        sum += v as u32;
+    }
+    return sum;
+}
+
+fn bump(a: borrow mut [u8; 3]) {
+    a[0] += 1;
+    a[2] = a[1] + a[0];
+}
+
+fn replace(a: borrow mut [u8; 3], b: [u8; 3]) {
+    *a = b;
+}
+
+fn reset(a: borrow mut [u8; 3]) {
+    *a = [4; 3];
+}
+
+fn cellSum(cells: borrow [[u16; 2]; 2]) -> u32 {
+    let row = cells[1]; // an inner array, whole
+    return cells[0][0] as u32 + cells[0][1] as u32 + row[0] as u32 + row[1] as u32;
+}
+
+fn setRow(cells: borrow mut [[u16; 2]; 2], k: usize, row: [u16; 2]) {
+    cells[k] = row;
+    cells[k][1] += 1;
+}
+
+fn rowSum(row: borrow [u16; 2]) -> u32 => row[0] as u32 + row[1] as u32;
+
+fn rowsOf(cells: borrow [[u16; 2]; 2]) -> u32 {
+    var sum: u32 = 0;
+    for (row in cells[..]) {
+        sum += rowSum(row);
+    }
+    return sum;
+}
+
+fn sliceSum(bytes: Slice<u8>) -> u32 {
+    var sum: u32 = 0;
+    for (b in bytes) {
+        sum += b as u32;
+    }
+    return sum;
+}
+
+fn dataOf(g: borrow Grid) -> borrow [u8; 3] => borrow g.data;
+
+static mut SHARED: Grid = Grid { tag: 2, data: [1, 1, 1], cells: [[5, 5], [5, 5]] };
+
+/// Safety: SHARED is changed only here, on the one thread.
+fn main() {
+    // A CeeSafe array, borrowed.
+    var local: [u8; 3] = [1, 2, 3];
+    Console.writeLine(total(local)); // 6
+    bump(mut local);
+    Console.writeLine(total(local)); // 2 + 2 + 4 = 8
+    // A C array member, borrowed: read, changed in place, replaced whole.
+    var g = Grid { tag: 1, data: [10, 20, 30], cells: [[1, 2], [3, 4]] };
+    Console.writeLine(total(g.data)); // 60
+    bump(mut g.data);
+    Console.writeLine(total(g.data)); // 11 + 20 + 31 = 62
+    replace(mut g.data, [7, 8, 9]);
+    Console.writeLine(total(g.data)); // 24
+    reset(mut g.data);
+    Console.writeLine(total(g.data));            // 12
+    Console.writeLine(sliceSum(dataOf(g)[1..])); // 8
+    // A nested C array member: whole, and an inner array borrowed on its own.
+    Console.writeLine(cellSum(g.cells)); // 10
+    setRow(mut g.cells, 0, [20, 30]);
+    Console.writeLine(cellSum(g.cells));   // 20 + 31 + 3 + 4 = 58
+    Console.writeLine(rowSum(g.cells[1])); // 7
+    Console.writeLine(rowsOf(g.cells));    // 58
+    // A static's member.
+    unsafe {
+        replace(mut SHARED.data, g.data);
+        setRow(mut SHARED.cells, 1, [9, 9]);
+        Console.writeLine(total(SHARED.data) + cellSum(SHARED.cells)); // 12 + 5 + 5 + 9 + 10 = 41
+    }
+    // A local nested array, borrowed the same way.
+    var cells: [[u16; 2]; 2] = [[1, 1], [1, 1]];
+    setRow(mut cells, 1, [2, 2]);
+    Console.writeLine(cellSum(cells)); // 1 + 1 + 2 + 3 = 7
+}
+
+// expect-stdout: 6
+// expect-stdout: 8
+// expect-stdout: 60
+// expect-stdout: 62
+// expect-stdout: 24
+// expect-stdout: 12
+// expect-stdout: 8
+// expect-stdout: 10
+// expect-stdout: 58
+// expect-stdout: 7
+// expect-stdout: 58
+// expect-stdout: 41
+// expect-stdout: 7

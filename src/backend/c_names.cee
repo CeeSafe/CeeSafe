@@ -331,6 +331,34 @@ fn appendMangleTail(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Re
     return appendBytes(out, code[1..]);
 }
 
+/// An array type's innermost element, `u8` for `[[u8; 3]; 2]` (any other type is itself): what a borrowed array points
+/// to in C (ADR 0250 §2.3).
+fn arrayScalar(c: borrow Checker, t: u32) -> u32 {
+    var s = t;
+    while (isSizedArray(c, s)) {
+        s = c.types.info(s).element;
+    }
+    return s;
+}
+
+/// How many innermost elements an array type holds, 6 for `[[u8; 3]; 2]` (1 for any other type).
+fn arrayScalarCount(c: borrow Checker, t: u32) -> u64 {
+    var count: u64 = 1;
+    var s = t;
+    while (isSizedArray(c, s)) {
+        count = count * truncate<u64>(c.types.info(s).arrayLength);
+        s = c.types.info(s).element;
+    }
+    return count;
+}
+
+/// A borrowed array (`&[T; N]`, `&mut [T; N]`, not a slice): its C is a pointer to the first innermost element.
+fn isArrayReference(c: borrow Checker, t: u32) -> bool =>
+    c.types.is(t, TypeKind.Reference) && isSizedArray(c, c.types.info(t).pointee);
+
+/// `[T; N]`, not the unsized `[T]` behind a slice.
+fn isSizedArray(c: borrow Checker, t: u32) -> bool => c.types.is(t, TypeKind.Array) && !c.types.isUnsized(t);
+
 /// A type's C name (CTypeName).
 fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
     let info = c.types.info(t);
@@ -382,7 +410,9 @@ fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Res
             }
         }
         TypeKind.Reference => {
-            let pointee = info.pointee;
+            // A borrowed array is a pointer to its first innermost element, never to the array struct, so the same
+            // pointer reaches CeeSafe's arrays and a C array member's storage with the elements' own type (ADR 0250).
+            let pointee = arrayScalar(c, info.pointee);
             if (c.types.isDynReference(t)) {
                 appendText(out, "ceeDR_")?; // (data, table), §37.4
                 appendMangle(c, out, pointee)?;

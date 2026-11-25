@@ -1,4 +1,4 @@
-// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.13: what stays refused. A String and a ByteStringView
+// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.12: what stays refused. A String and a ByteStringView
 // have no ordering; against a ByteStringView?, `Some` of a number or of a String (which would move) is no text; and a
 // pattern on a ByteStringView payload is a string literal, not a number or a slice pattern.
 fn wrap(b: ByteStringView) -> ByteStringView? => Some(b);

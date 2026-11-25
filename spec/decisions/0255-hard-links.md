@@ -59,7 +59,7 @@ UTF-16 on Windows through `cee_win_path`). After `EPERM` or `EACCES` (Windows: `
 
 ### 2.3 The interpreter
 
-The interpreter is built by the release stage 0 (0.94.5, Decision 0009), whose library has no `File.link`, and the
+The interpreter is built by the release stage 0 (0.95.10, Decision 0009), whose library has no `File.link`, and the
 runtime's `ceesafe_host_link` is not a name a program may declare (N0292, type-system.md §28.2), so it links through
 the system's own calls, in `extern "C"` blocks configured by target (§28.4): `link` on Unix hosts, `CreateHardLinkW`
 and `GetLastError` on Windows. The link it makes is the system's, as a native program's. Its errors:
@@ -78,7 +78,7 @@ through one name and written through the other is seen through both. When the re
 interpreter calls it instead.
 
 **A known difference, accepted by the owner (2026-11-25).** Until a release stage 0 has `File.link` (a release after
-0.95.13 moved into `bootstrap/reference.md`), a POSIX link that fails for a reason the paths do not show is
+0.95.12 moved into `bootstrap/reference.md`), a POSIX link that fails for a reason the paths do not show is
 `PermissionDenied` in the interpreter where a native program says `Other` (`EXDEV` across volumes, `EMLINK` past
 the link limit) or `Unsupported` (a file system without hard links that says `ENOTSUP`). Every error a program can
 foresee from its paths (a missing file or directory, an existing `new`, a directory, an empty path) is the same

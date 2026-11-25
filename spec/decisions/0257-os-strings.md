@@ -134,7 +134,7 @@ The `StringView`/`String` forms stay, each refusing what is not text as before; 
 
 ### 2.7 The interpreter
 
-`ceesafec run --interp` runs a program's file calls through the compiler's own, which the release's stage 0 (0.94.5)
+`ceesafec run --interp` runs a program's file calls through the compiler's own, which the release's stage 0 (0.95.10)
 must still build, so its `File` takes text: the interpreter refuses a name that is not UTF-8 with `InvalidInput` (it
 panicked before, when the checker could not let one through), gives `Directory.listOs` only names that are UTF-8
 (else `InvalidInput`), and `Environment.variableOs` and `Process.argumentOs` only values that are. Once a stage 0
@@ -159,7 +159,7 @@ has OS strings, the interpreter can pass them through.
 - lib/std's signatures change from `StringView` to `OsStringView` (spec/api/std.md). A program that **takes the
   address** of one of them as a function value of a `StringView` parameter (`let f = Directory.create;` used as
   `fn(StringView) -> …`) no longer compiles; none does in the compiler, lib/, CeeSafeLibs or CeeSafeApps.
-- The compiler's own sources (`src/`) keep their `StringView` paths: they are built by stage 0 0.94.5, which has no
+- The compiler's own sources (`src/`) keep their `StringView` paths: they are built by stage 0 0.95.10, which has no
   OS strings, and they compile unchanged under this tree with no warning.
 - On Windows, `Directory.list` refuses a directory that holds a name that is not UTF-8 where it skipped the name
   (use `listOs`).

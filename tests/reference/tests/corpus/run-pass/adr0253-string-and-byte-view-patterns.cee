@@ -1,4 +1,4 @@
-// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.13: a `String` compares with a `ByteStringView`;
+// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.12: a `String` compares with a `ByteStringView`;
 // `Some(t)` of a `StringView` stands for a value against a `ByteStringView?`, and optionals of the text types compare;
 // a string pattern matches a `ByteStringView` payload or field. Expectations written by hand.
 

@@ -385,9 +385,11 @@ On a `StringView` a match must be whole characters, so a needle that is not UTF-
 every piece stays UTF-8. A `TextBuffer` has `append(t)` (`Result<bool, AllocError>`), `appendLossy(t)`, `bytes()`
 and `clear()`: a `String` holds UTF-8 only, so its `append` of text that is not UTF-8 appends nothing and answers
 `false`, and `appendLossy` writes U+FFFD for each bad sequence. A `StringView`'s and a `String`'s own searches
-take any text as the needle too (`s.indexOf(b)` with a `ByteStringView`). A `ByteStringView` compares with `==`
-against a literal, a `StringView` or another view, `v[i]` is its byte `i`, and a `match` on it takes string
-patterns.
+take any text as the needle too (`s.indexOf(b)` with a `ByteStringView`), and a `String`'s `append` takes any
+text, answering whether it was appended. A `ByteStringView` compares with `==` against a literal, a `StringView` or
+another view, `v[i]` is its byte `i`, `v[lo..hi]` a view of its bytes, `v.length` its length, `v.parseInt<T>()`
+parses it, and a `match` on it takes string patterns. A string literal is a `ByteStringView` where one is expected
+(`let name: ByteStringView = "main";`), and `Check.equalTextOf` compares two texts of any kinds in a test.
 
 ```ceesafe
 fn keyword<T: TextView>(word: T) -> bool => word.trim().equalsIgnoreAsciiCase("select");

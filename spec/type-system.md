@@ -578,7 +578,9 @@ The algorithm that enforces these rules is in `lifetimes.md`.
 - **Auto-deref.** Where a value of type `T` is needed (an operand, a by-value argument, an
   initialiser of type `T`, a return of type `T`, `Console.write`), a `borrow T` or
   `borrow mut T` operand is read through: `*r`. Field access `r.f` and method calls
-  `r.m()` also look through references.
+  `r.m()` also look through references, every one of them: a binding a pattern makes through a borrowed optional
+  (`borrow borrow T`) calls `T`'s methods as a `borrow T` does, mutably only if each reference is `borrow mut`
+  (ADR 0260 §2.1).
 - **Writes through references.** `r = v`, `r op= v` and `r.f = v` write to the referent. This
   requires `borrow mut` (N0211: "cannot assign through a shared reference"). A reference local
   itself can never be re-pointed.
@@ -2597,7 +2599,14 @@ so it has no `dyn` type (N0331).
     and the rest, stay N0207. Optionals of these compare so too (§22.1): `o == Some("abc")` with
     `o: ByteStringView?`.
   - `v[i]` (`i: usize`) is the byte at `i`, a `u8`: `v.byteAt(i)`, panicking past the end as `s[i]` does. It is
-    read only; there is no `v[lo..hi]` (`v.slice(lo, hi)`).
+    read only. `v[lo..hi]`, `v[lo..]`, `v[..hi]` and `v[..]` are `v.slice(lo, hi)`, `v.sliceFrom(lo)`,
+    `v.sliceTo(hi)` and `v`, a `ByteStringView` of the same bytes (ADR 0260 §2.4); a mutable range of one is N0205.
+  - `v.length` is `v.length()`, on a `ByteStringView` and on a `ByteString` (lent), as `s.length` is on a
+    `StringView` and a `String`; it is not a place (ADR 0260 §2.5).
+  - A string literal where a `ByteStringView` or a `ByteStringView?` is expected is `ByteStringView.fromText` of it,
+    nothing copied (ADR 0260 §2.3); a `StringView` value is not converted (N0205).
+  - `v.parseInt<T>()`, `v.parseIntRadix<T>(radix)` and `v.parseFloat<F>()` parse `v.bytes()`, as on a `Slice<u8>`
+    (ADR 0260 §2.6); generic code writes `t.bytes().parseInt<T>()`.
   - `match (v)` with a string pattern in an arm matches `v`'s bytes as a `Slice<u8>` is matched (ADR 0085 §2.7):
     the patterns are byte strings, and a binding arm binds the bytes, a `Slice<u8>`. Inside another pattern, a
     string pattern on a `ByteStringView` payload or field matches its bytes too (`Some("abc")`, §15.2's string
@@ -2606,11 +2615,14 @@ so it has no `dyn` type (N0331).
 - **`TextBuffer`**: `append<N: TextView>(text) -> Result<bool, AllocError>`, `appendLossy<N: TextView>(text) ->
   Result<void, AllocError>`, `bytes()` and `clear()`. A `ByteString`'s `append` takes every byte and answers
   `true`. A `String` holds UTF-8 only: its `append` of text that is not UTF-8 appends nothing and answers `false`,
-  as `appendUtf8` does (§23.2). `appendLossy` appends the text with U+FFFD for each maximal subpart of an
+  as `appendUtf8` does (§23.2). On a concrete `String`, `s.append(t)` with a `StringView`, a literal or a lent
+  `String` is the built-in (`Result<void, AllocError>`); with any other `TextView` it is this `append`, answering
+  `Result<bool, AllocError>` (ADR 0260 §2.2). `appendLossy` appends the text with U+FFFD for each maximal subpart of an
   ill-formed sequence (as `toUtf8Lossy`), into either buffer.
 
 Diagnostics: none new (N0274 for a `borrow this` method called through a bound at a view, N0267, N0331, N0205,
-N0207).
+N0207, N0216, N0248). lib/std's `Check.equalTextOf<E: TextView, A: TextView>` compares two texts of any kinds by
+their bytes (ADR 0260 §2.7).
 
 ### 22.6 `OsString` and `OsStringView<region r>`: names for the system (ADR 0257)
 

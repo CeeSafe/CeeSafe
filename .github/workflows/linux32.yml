@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # The release stage 0 (bootstrap/reference.md): every workflow builds the tree from the same released ceesafec.
-  STAGE1_TAG: v0.94.5
+  STAGE1_TAG: v0.95.10
   STAGE1_ASSET: ceesafec-linux-x64.tar.gz
 
 jobs:

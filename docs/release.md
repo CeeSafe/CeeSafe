@@ -8,7 +8,7 @@ as a GitHub release, with `SHA256SUMS`. `site/public/install.sh` and `install.ps
 
 One C seed for every platform, so every binary is built from the same C and checked against it:
 
-1. **seed** (Ubuntu 22.04): downloads ceesafec 0.94.5 from this repository's release (Decision 0009;
+1. **seed** (Ubuntu 22.04): downloads ceesafec 0.95.10 from this repository's release (Decision 0009;
    `bootstrap/reference.md`, "Release stage 0"; the archive's SHA-256 is checked), bootstraps ceesafec through the
    chain recorded for it (`tools/bootstrap_release.sh`), rebuilds it with itself, and writes ceesafec's own C (`build --emit
    c`, the default form). The C of the bootstrapped and the rebuilt compiler must be identical: the fixed point.
@@ -70,13 +70,13 @@ One C seed for every platform, so every binary is built from the same C and chec
    the grammar first and set `rev` to that commit, which must reach `main` with the release.
 2. Run the contract suite on the commit: `python3 tools/contract_tests.py --ceesafec out/ceesafec` (`spec/testing.md`;
    it includes the fixed point). Then build the commit as the workflow's seed job does, from the release stage 0:
-   `sh tools/bootstrap_release.sh <ceesafec 0.94.5> HEAD <dir>/ceesafec`. Stage 0 builds the tree directly, so the
-   compiler's own sources may use only what 0.94.5 accepts (0.78.1 until 2026-11-23; before 2026-11-20 the chain ended
-   in 0.8.0). Every workflow that builds the tree (`checks.yml`, `windows.yml`, `freebsd.yml`, `linux32.yml`) starts
+   `sh tools/bootstrap_release.sh <ceesafec 0.95.10> HEAD <dir>/ceesafec`. Stage 0 builds the tree directly, so the
+   compiler's own sources may use only what 0.95.10 accepts (0.94.5 until 2026-11-25, 0.78.1 until 2026-11-23; before
+   2026-11-20 the chain ended in 0.8.0). Every workflow that builds the tree (`checks.yml`, `windows.yml`, `freebsd.yml`, `linux32.yml`) starts
    from the same release. A newer feature in `src/` (0.18.0's first tag: a two-phase
    `mut` argument, from 0.17.0) builds with `out/ceesafec` but fails the seed.
    The contract suite does this build too, as its `release chain` step, when it has the stage 0
-   (`--release-stage0 <ceesafec 0.94.5>`, `$CEESAFE_RELEASE_STAGE0`, or `~/.cache/ceesafe/stage0/ceesafec`), so such
+   (`--release-stage0 <ceesafec 0.95.10>`, `$CEESAFE_RELEASE_STAGE0`, or `~/.cache/ceesafe/stage0/ceesafec`), so such
    a feature fails the suite on the commit that adds it; without a stage 0 the step says it was skipped.
 3. Tag and push: `git tag v<version> && git push origin v<version>`. Only such a tag runs the workflow (there is no
    manual or branch trigger); it builds, checks, signs and notarizes everything and publishes only if every job passes.

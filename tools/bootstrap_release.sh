@@ -23,9 +23,15 @@ OUTPUT=${3:-out/ceesafec}
 version=$("$STAGE0" --version)
 CHAIN_FLAGS=""
 case "$version" in
+"ceesafec 0.95.10")
+    # The release's stage 0 since 2026-11-25, for every workflow (the owner: "Move stage 0 to 0.95.9 or later"): it
+    # builds the tree at once, so the compiler's sources may use what 0.95.10 accepts, its runtime's math functions
+    # among them (ADR 0248).
+    CHAIN=""
+    ;;
 "ceesafec 0.94.5")
-    # The release's stage 0 since 2026-11-23, for every workflow (the owner: "unify the ceesafec version … to the latest
-    # released one"): it builds the tree at once, so the compiler's sources may use what 0.94.5 accepts.
+    # The release's stage 0 from 2026-11-23 to 2026-11-25, for every workflow (the owner: "unify the ceesafec version …
+    # to the latest released one"): it builds the tree at once, so the compiler's sources may use what 0.94.5 accepts.
     CHAIN=""
     ;;
 "ceesafec 0.78.1")

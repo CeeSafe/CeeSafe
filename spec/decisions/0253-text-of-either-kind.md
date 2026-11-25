@@ -198,10 +198,16 @@ a `StringView`'s concrete calls are unchanged (§2.2).
 
 ## 6. The SQLite port
 
-A scratch copy of the port, not committed there, was tried against this branch: §7 of the report in ROADMAP §10
-says what it showed. In short, `src/sqltext.cee`'s escaping can go once SQL stays a `ByteString`/`ByteStringView`;
-the tokenizer and the name comparisons become generic or byte-typed with the same calls; slicing (`s[a..b]`) and
-`==` with a literal are the remaining rewrites, since a library type has neither operator.
+A scratch copy of the port, not committed there, was tried against this branch. It checks unchanged (its
+`ByteStringView` calls pass `Slice<u8>` needles, which `TextView` still takes). Its tokenizer, made generic over
+`T: TextView` with a `ByteString` as each token's text, checks with the same calls (`byteAt`, `slice`, `length()`,
+`equalsIgnoreAsciiCase`, `append`), for a `StringView` and a `ByteStringView` alike. The first layer of what that
+breaks is 51 errors: 20 `match`es on a token's text with string patterns (a `match` takes a `StringView` or a
+`Slice<u8>`, so `match (t.text.bytes())`), 3 indexings and 1 `==` with a literal (`byteAt`, `equals`), and 27 places
+where a token's text becomes a `String` name in the AST. Past them, names stay `String` in 144 fields and vectors
+(catalog, AST, plans, messages); when those are `ByteString`, `src/sqltext.cee`'s escaping goes: `sqlTextOf` and
+`sqlBytes` become copies or nothing, `hasEscapes` and the U+10FF80 mapping disappear, and its
+`startsWithIgnoreAsciiCase` is `TextView`'s.
 
 ## 7. Evidence
 

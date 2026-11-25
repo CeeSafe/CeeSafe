@@ -41,6 +41,41 @@ extern "C" {
     fn ceesafe_host_map_fence();
 }
 
+/// What a mapped region of a file gives a reader (ADR 0254): `SharedMapping` and `ReadOnlyMapping` implement it, so
+/// code that only reads, such as SQLite's wal-index lookups, is written once for both:
+///
+/// ```
+/// fn walVersion<M: MappedRead>(block: borrow M) -> u32 => block.load32(0, LoadOrdering.Acquire);
+/// ```
+///
+/// It has nothing that writes, and no `load64`, which `ReadOnlyMapping` lacks. A type of the program's own may
+/// implement it too (a block kept in memory): `length` bytes, the region's `offset` in its file, copies and loads of
+/// those bytes, and a panic for an access outside them or a load not aligned to its size in the file. No method has
+/// an effect.
+public interface MappedRead {
+    /// The region's length in bytes.
+    @effects()
+    fn length(borrow this) -> usize;
+
+    /// Where the region starts in its file.
+    @effects()
+    fn offset(borrow this) -> u64;
+
+    /// Copies `into.length` bytes from byte `at` of the region into `into`. Panics if they are not all inside it.
+    @effects()
+    fn readAt(borrow this, at: usize, into: SliceMut<u8>);
+
+    /// The u16 at byte `at`, loaded atomically with `order`. Panics if its bytes are not inside the region or
+    /// `offset() + at` is odd.
+    @effects()
+    fn load16(borrow this, at: usize, order: LoadOrdering) -> u16;
+
+    /// The u32 at byte `at`, loaded atomically with `order`. Panics if its bytes are not inside the region or
+    /// `offset() + at` is not a multiple of 4.
+    @effects()
+    fn load32(borrow this, at: usize, order: LoadOrdering) -> u32;
+}
+
 /// A region of a file mapped shared (ADR 0232): what one mapping writes, every other mapping of those bytes sees,
 /// in this process and in others, and so does a read of the file. SQLite's wal-index (`<database>-shm`) is one.
 ///
@@ -102,34 +137,11 @@ public struct SharedMapping {
         });
     }
 
-    /// Its length in bytes.
-    public fn length(borrow this) -> usize => this.size;
-
-    /// Where it starts in the file.
-    public fn offset(borrow this) -> u64 => this.start;
-
-    /// Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
-    /// bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
-    /// it. Panics if the bytes are not all inside the region.
-    /// Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
-    public fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
-        this.inside(at, into.length, "SharedMapping.readAt: the bytes are past the mapping's end");
-        unsafe { ceesafe_host_map_read(this.address, at as u64, into.ptr, into.length as u64); }
-    }
-
     /// Copies `bytes` to byte `at` of the region. Panics if they do not all fit inside it.
     /// Safety: as readAt; the runtime reads `bytes` only.
     public fn writeAt(borrow this, at: usize, bytes: Slice<u8>) {
         this.inside(at, bytes.length, "SharedMapping.writeAt: the bytes are past the mapping's end");
         unsafe { ceesafe_host_map_write(this.address, at as u64, bytes.ptr, bytes.length as u64); }
-    }
-
-    /// The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
-    /// inside the region or `offset() + at` is not a multiple of 4.
-    /// Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
-    public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
-        this.word(at, 4);
-        return unsafe { ceesafe_host_map_load32(this.address, at as u64, SharedMapping.loadCode(order)) };
     }
 
     /// Stores `value` at byte `at` atomically with `order` (AtomicU32.storeWith). Panics as load32.
@@ -168,14 +180,6 @@ public struct SharedMapping {
     public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32 {
         this.word(at, 4);
         return unsafe { ceesafe_host_map_add32(this.address, at as u64, value, SharedMapping.code(order)) };
-    }
-
-    /// The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
-    /// inside the region or `offset() + at` is odd.
-    /// Safety: as load32.
-    public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16 {
-        this.word(at, 2);
-        return unsafe { ceesafe_host_map_load16(this.address, at as u64, SharedMapping.loadCode(order)) };
     }
 
     /// Stores the u16 `value` at byte `at`, as store32; the neighbouring bytes are untouched. Panics as load16.
@@ -324,6 +328,40 @@ public struct SharedMapping {
     }
 }
 
+/// `SharedMapping`'s reads (ADR 0254), the methods it shares with `ReadOnlyMapping`.
+impl MappedRead for SharedMapping {
+    /// Its length in bytes.
+    fn length(borrow this) -> usize => this.size;
+
+    /// Where it starts in the file.
+    fn offset(borrow this) -> u64 => this.start;
+
+    /// Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+    /// bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+    /// it. Panics if the bytes are not all inside the region.
+    /// Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+    fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
+        this.inside(at, into.length, "SharedMapping.readAt: the bytes are past the mapping's end");
+        unsafe { ceesafe_host_map_read(this.address, at as u64, into.ptr, into.length as u64); }
+    }
+
+    /// The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+    /// inside the region or `offset() + at` is not a multiple of 4.
+    /// Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+    fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
+        this.word(at, 4);
+        return unsafe { ceesafe_host_map_load32(this.address, at as u64, SharedMapping.loadCode(order)) };
+    }
+
+    /// The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
+    /// inside the region or `offset() + at` is odd.
+    /// Safety: as load32.
+    fn load16(borrow this, at: usize, order: LoadOrdering) -> u16 {
+        this.word(at, 2);
+        return unsafe { ceesafe_host_map_load16(this.address, at as u64, SharedMapping.loadCode(order)) };
+    }
+}
+
 /// A region of a file mapped shared for reading only (ADR 0235): SQLite's `readonly_shm`, a `-shm` the program may
 /// not write. It sees what every read-write mapping of those bytes writes, in this process and in others, but has no
 /// method that writes, and its pages are mapped without write access.
@@ -384,38 +422,6 @@ public struct ReadOnlyMapping {
         });
     }
 
-    /// Its length in bytes.
-    public fn length(borrow this) -> usize => this.size;
-
-    /// Where it starts in the file.
-    public fn offset(borrow this) -> u64 => this.start;
-
-    /// Copies `into.length` bytes from byte `at` of the region into `into`, as SharedMapping.readAt. Panics if the
-    /// bytes are not all inside the region.
-    /// Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
-    public fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
-        if (at > this.size || into.length > this.size - at) {
-            panic("ReadOnlyMapping.readAt: the bytes are past the mapping's end");
-        }
-        unsafe { ceesafe_host_map_read(this.address, at as u64, into.ptr, into.length as u64); }
-    }
-
-    /// The u16 at byte `at`, loaded atomically with `order`. Panics if its two bytes are not inside the region or
-    /// `offset() + at` is odd.
-    /// Safety: the word is inside the mapping and aligned; the runtime's load never writes.
-    public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16 {
-        this.word(at, 2);
-        return unsafe { ceesafe_host_map_load16(this.address, at as u64, ReadOnlyMapping.loadCode(order)) };
-    }
-
-    /// The u32 at byte `at`, loaded atomically with `order`. Panics if its four bytes are not inside the region or
-    /// `offset() + at` is not a multiple of 4.
-    /// Safety: as load16.
-    public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
-        this.word(at, 4);
-        return unsafe { ceesafe_host_map_load32(this.address, at as u64, ReadOnlyMapping.loadCode(order)) };
-    }
-
     /// Panics unless the `width` bytes at `at` lie inside the region and are aligned to `width` in the file.
     fn word(borrow this, at: usize, width: usize) {
         if (at > this.size || width > this.size - at) {
@@ -437,5 +443,40 @@ public struct ReadOnlyMapping {
     /// Safety: the start, length and handle are what the runtime gave, given back once.
     drop {
         unsafe { ceesafe_host_map_unmap(this.base, this.extent, this.handle); }
+    }
+}
+
+/// `ReadOnlyMapping`'s reads (ADR 0254), the methods it shares with `SharedMapping`.
+impl MappedRead for ReadOnlyMapping {
+    /// Its length in bytes.
+    fn length(borrow this) -> usize => this.size;
+
+    /// Where it starts in the file.
+    fn offset(borrow this) -> u64 => this.start;
+
+    /// Copies `into.length` bytes from byte `at` of the region into `into`, as SharedMapping.readAt. Panics if the
+    /// bytes are not all inside the region.
+    /// Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+    fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
+        if (at > this.size || into.length > this.size - at) {
+            panic("ReadOnlyMapping.readAt: the bytes are past the mapping's end");
+        }
+        unsafe { ceesafe_host_map_read(this.address, at as u64, into.ptr, into.length as u64); }
+    }
+
+    /// The u16 at byte `at`, loaded atomically with `order`. Panics if its two bytes are not inside the region or
+    /// `offset() + at` is odd.
+    /// Safety: the word is inside the mapping and aligned; the runtime's load never writes.
+    fn load16(borrow this, at: usize, order: LoadOrdering) -> u16 {
+        this.word(at, 2);
+        return unsafe { ceesafe_host_map_load16(this.address, at as u64, ReadOnlyMapping.loadCode(order)) };
+    }
+
+    /// The u32 at byte `at`, loaded atomically with `order`. Panics if its four bytes are not inside the region or
+    /// `offset() + at` is not a multiple of 4.
+    /// Safety: as load16.
+    fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
+        this.word(at, 4);
+        return unsafe { ceesafe_host_map_load32(this.address, at as u64, ReadOnlyMapping.loadCode(order)) };
     }
 }

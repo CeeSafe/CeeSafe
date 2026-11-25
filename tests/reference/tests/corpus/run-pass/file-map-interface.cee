@@ -1,0 +1,122 @@
+// MappedRead (ADR 0254), the same output natively and in the interpreter: one function generic over `M: MappedRead`
+// and one taking `borrow dyn MappedRead` read a copy, a u16 slot and a u32 word through a SharedMapping, a
+// ReadOnlyMapping of the same bytes, and a block of the program's own kept in memory (SQLite's heap-memory wal-index)
+// that implements the interface; all three agree. Integers are in the host's byte order, little-endian on every host
+// CeeSafe runs on; the expected values are Python's: struct.unpack("<H", b"\xef\xbe") is 48879 (0xBEEF), and
+// struct.unpack("<I", b"\x0d\xf0\xad\x0b") is 195948557 (0x0BADF00D).
+
+/// A block kept in memory: its bytes, and the file offset it stands for.
+struct HeapBlock {
+    bytes: Vector<u8>;
+    start: u64;
+}
+
+impl MappedRead for HeapBlock {
+    fn length(borrow this) -> usize => this.bytes.length;
+
+    fn offset(borrow this) -> u64 => this.start;
+
+    fn readAt(borrow this, at: usize, into: SliceMut<u8>) {
+        let end = at + into.length;
+        if (end > this.bytes.length) {
+            panic("HeapBlock.readAt: the bytes are past the block's end");
+        }
+        into.copyFrom(this.bytes.view()[at..end]);
+    }
+
+    fn load16(borrow this, at: usize, order: LoadOrdering) -> u16 {
+        let _ = order;
+        this.aligned(at, 2);
+        return (this.bytes[at] as u16) | ((this.bytes[at + 1] as u16) << 8);
+    }
+
+    fn load32(borrow this, at: usize, order: LoadOrdering) -> u32 {
+        let _ = order;
+        this.aligned(at, 4);
+        var value: u32 = 0;
+        for (i in 0..4) {
+            value |= (this.bytes[at + i] as u32) << truncate<u32>(8 * i);
+        }
+        return value;
+    }
+}
+
+impl HeapBlock {
+    fn aligned(borrow this, at: usize, width: usize) {
+        if (at + width > this.bytes.length || (this.start + at as u64) % (width as u64) != 0) {
+            panic("HeapBlock: the load is outside the block or not aligned");
+        }
+    }
+}
+
+/// The reads the wal-index makes, written once for every kind of block.
+fn describe<M: MappedRead>(block: borrow M) {
+    var text = [0u8; 5];
+    block.readAt(100, mut text[..]);
+    Console.writeLine(StringView.fromUtf8(text[..]) ?? "?");
+    Console.writeLine(block.load16(200, LoadOrdering.Acquire));
+    Console.writeLine(block.load32(204, LoadOrdering.Acquire));
+    Console.writeLine(block.length());
+    Console.writeLine(block.offset());
+}
+
+/// The same through a table: one function for a list of blocks of different kinds.
+fn slot(block: borrow dyn MappedRead) -> u16 => block.load16(200, LoadOrdering.Relaxed);
+
+fn run(path: StringView) -> Result<void, IoError> {
+    let f = File.createReadWrite(path)?;
+    let w = f.mapShared(0, 4096)?;
+    w.writeAt(100, "hello".bytes());
+    w.store16(200, 0xBEEF, StoreOrdering.Release);
+    w.store32(204, 0x0BADF00D, StoreOrdering.Release);
+    let reader = File.open(path)?;
+    let r = reader.mapSharedReadOnly(0, 4096)?;
+    var copy = Vector<u8>.create();
+    while (copy.length < 4096) {
+        copy.push(0)!;
+    }
+    w.readAt(0, mut copy.viewMut());
+    let heap = HeapBlock { bytes: copy, start: 0 };
+    describe(borrow w);
+    describe(borrow r);
+    describe(borrow heap);
+    Console.writeLine(slot(borrow w));
+    Console.writeLine(slot(borrow r));
+    Console.writeLine(slot(borrow heap));
+    // A concrete call is unchanged; load64 stays SharedMapping's own.
+    Console.writeLine(w.load64(200, LoadOrdering.Acquire) == r.load32(200, LoadOrdering.Acquire) as u64 |
+        (r.load32(204, LoadOrdering.Acquire) as u64) << 32);
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db-shm")!;
+    match (run(path.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: hello
+// expect-stdout: 48879
+// expect-stdout: 195948557
+// expect-stdout: 4096
+// expect-stdout: 0
+// expect-stdout: hello
+// expect-stdout: 48879
+// expect-stdout: 195948557
+// expect-stdout: 4096
+// expect-stdout: 0
+// expect-stdout: hello
+// expect-stdout: 48879
+// expect-stdout: 195948557
+// expect-stdout: 4096
+// expect-stdout: 0
+// expect-stdout: 48879
+// expect-stdout: 48879
+// expect-stdout: 48879
+// expect-stdout: true

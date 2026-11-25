@@ -1,0 +1,21 @@
+// MappedRead has nothing that writes and no load64 (ADR 0254 §2.1): through a bound or a `dyn` table, a write or a
+// 64-bit load is refused by the checker, whatever mapping is behind it.
+fn writes<M: MappedRead>(block: borrow M) {
+    var header = [0u8; 48];
+    block.readAt(0, mut header[..]);
+    block.writeAt(0, header[..]);                  // error[N0234]
+    block.store32(0, 1, StoreOrdering.Release);    // error[N0234]
+    let _ = block.load64(0, LoadOrdering.Acquire); // error[N0234]
+}
+
+fn writesThroughTable(block: borrow dyn MappedRead) {
+    let _ = block.load32(0, LoadOrdering.Acquire);
+    block.store16(0, 1, StoreOrdering.Release); // error[N0234]
+}
+
+fn main() {
+    let f = File.open("db-shm")!;
+    let r = f.mapSharedReadOnly(0, 32768)!;
+    writes(borrow r);
+    writesThroughTable(borrow r);
+}

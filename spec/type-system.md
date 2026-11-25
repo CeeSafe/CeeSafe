@@ -4377,6 +4377,13 @@ Diagnostics: none new.
   `r.readAt(at, into)`, `r.load16(at, LoadOrdering)` and `r.load32(at, LoadOrdering)`, with `SharedMapping`'s bounds,
   alignment, atomicity and `fence`; no method writes, so a write is an error of the checker. It has no `load64` (a
   32-bit x86 host's 64-bit atomic load may write). It is a move type that needs drop, Send and Share.
+- **`MappedRead`** (ADR 0254; lib/std): the interface both mapping types implement, so code that only reads is
+  generic over them (`fn f<M: MappedRead>(m: borrow M)`, or `borrow dyn MappedRead`): `length()`, `offset()`,
+  `readAt(at, into)`, `load16(at, LoadOrdering)` and `load32(at, LoadOrdering)`, each `@effects()`. It has nothing
+  that writes and no `load64`. `SharedMapping`'s and `ReadOnlyMapping`'s five methods are those of their
+  `impl MappedRead` (§21.1: a type has one member of each name), and are called on either type as before. A type of
+  the program's own may implement it (a block kept in memory) with the same contract: `length` bytes standing for
+  the file's bytes from `offset`, and a panic for an access outside them or a load not aligned to its size.
 - `mapShared`, `mapSharedReadOnly` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
 - **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
   Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a

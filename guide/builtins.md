@@ -146,6 +146,7 @@ no argument 1000
 | `f.testLock(kind, start, length)` | `Result<FileLock?, IoError>`: null if the lock could be taken now, else the kind of another holder's conflicting lock; takes nothing on POSIX (`F_GETLK`), tries and releases at once on Windows (ADR 0234) |
 | `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `16` and `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232, ADR 0235) |
 | `f.mapSharedReadOnly(offset, length)` | `Result<ReadOnlyMapping, IoError>`: the same, for reading only, from a `File` open for reading (`File.open` too); `readAt`, `load16`, `load32`, and no method that writes; the file must already hold the range (ADR 0235) |
+| `MappedRead` | the interface of both mappings' reads (`length`, `offset`, `readAt`, `load16`, `load32`), for code generic over them (ADR 0254) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -201,7 +202,8 @@ A shared mapping is memory that other processes may write at any moment, so it i
 out and in, and integers are atomics, which are atomic between processes too. An access outside the region, or an
 atomic not aligned to its size in the file, panics. To reach more of the file, map another region; regions of the
 same bytes are one memory. A file the program may only read is mapped with `mapSharedReadOnly`, whose
-`ReadOnlyMapping` has copies out and loads but nothing that writes.
+`ReadOnlyMapping` has copies out and loads but nothing that writes. Code that only reads takes either through
+their interface, `MappedRead` (`fn f<M: MappedRead>(m: borrow M)`), which a block kept in memory may implement too.
 
 ```ceesafe
 fn main() {

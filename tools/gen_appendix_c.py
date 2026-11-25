@@ -425,13 +425,14 @@ TABLES.append(table(
     ],
 ))
 
-BYTES = "[ByteStringView](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-bytestringview)"
+TEXTVIEW = "[TextView](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-textview)"
 TABLES.append(table(
     "`ByteStringView`",
     "A `ByteStringView` borrows text that may hold any bytes, UTF-8 or not, and converts to UTF-8 only when asked "
     "(ADR 0231). It is Copy, and needs a region parameter in a struct as a `StringView` does. In the rows, `v` is a "
     "`ByteStringView`; lengths and indexes count bytes. A `ByteString` has the members of this table through "
-    "`b.view()`. The searches take `Slice<u8>` needles and are documented with " + BYTES + ".",
+    "`b.view()`. Its searches are lib/core's " + TEXTVIEW + "'s (ADR 0253), which a `StringView` and a `Slice<u8>` "
+    "have too: a needle `t` is any text, a string literal, either view, or bytes.",
     [],
     [
         ("`ByteStringView.fromText(text: StringView) -> ByteStringView`, "
@@ -444,6 +445,9 @@ TABLES.append(table(
          "`v.sliceTo(hi: usize) -> ByteStringView`",
          "A view of part of the bytes. A bound may fall inside a UTF-8 sequence.",
          "Panics `slice range out of bounds` for a bad range", []),
+        ("`v.isCharBoundary(i: usize) -> bool`",
+         "Whether `slice` takes `i`: every index up to the length, where a `StringView`'s takes only those between "
+         "characters.", NO, []),
         ("`v.toUtf8() -> StringView?`, `v.isUtf8() -> bool`",
          "The bytes as a `StringView` with no copy when they are UTF-8; whether they are.",
          "`null` when the bytes are not valid UTF-8", []),
@@ -454,19 +458,24 @@ TABLES.append(table(
         ("`v.chunks() -> Utf8Chunks`",
          "An iterator over `Utf8Chunk`s: each a `valid` `StringView` and the `invalid` `Slice<u8>` after it, to print "
          "the bytes with escapes.", NO, []),
-        ("`v.equals(other: ByteStringView) -> bool`, `v.compare(other: ByteStringView) -> i32`, `v == w`",
-         "Whether two byte strings have the same bytes; their bytewise order.", NO, []),
-        ("`v.indexOf(needle: Slice<u8>) -> usize?`, `v.lastIndexOf(needle: Slice<u8>) -> usize?`, "
+        ("`v.equals(t) -> bool`, `v.compare(t) -> i32`, `v == w`",
+         "Whether two texts have the same bytes; their bytewise order.", NO, []),
+        ("`v.equalsIgnoreAsciiCase(t) -> bool`, `v.compareIgnoreAsciiCase(t) -> i32`",
+         "The same, with `A`-`Z` taken as `a`-`z`.", NO, []),
+        ("`v.indexOf(t) -> usize?`, `v.lastIndexOf(t) -> usize?`, `v.indexOfIgnoreAsciiCase(t) -> usize?`, "
          "`v.indexOfByte(b: u8) -> usize?`",
-         "The index where `needle`, or the byte `b`, first or last occurs.", "`null` when it does not occur", []),
-        ("`v.contains(needle: Slice<u8>) -> bool`, `v.startsWith(prefix: Slice<u8>) -> bool`, "
-         "`v.endsWith(suffix: Slice<u8>) -> bool`, `v.equalsIgnoreAsciiCase(other: Slice<u8>) -> bool`",
+         "The index where `t`, or the byte `b`, first or last occurs.", "`null` when it does not occur", []),
+        ("`v.contains(t) -> bool`, `v.startsWith(t) -> bool`, `v.endsWith(t) -> bool`, "
+         "`v.startsWithIgnoreAsciiCase(t) -> bool`, `v.endsWithIgnoreAsciiCase(t) -> bool`",
          "As a `StringView`'s, on bytes.", NO, []),
         ("`v.trim() -> ByteStringView`, `v.trimStart() -> ByteStringView`, `v.trimEnd() -> ByteStringView`",
          "The bytes without the ASCII whitespace at both ends, at the start, or at the end.", NO, []),
-        ("`v.splitOnce(separator: Slice<u8>) -> ByteStringHalves?`, `v.split(separator: Slice<u8>) -> ByteStringSplit`",
-         "The bytes before and after the first `separator`; an iterator over the pieces between separators.",
-         "`null` from `splitOnce` when `separator` does not occur", []),
+        ("`v.splitOnce(t) -> TextPair<ByteStringView>?`, `v.split(t) -> TextPieces`",
+         "The bytes before and after the first `t` (`left`, `right`); an iterator over the pieces between them.",
+         "`null` from `splitOnce` when `t` does not occur", []),
+        ("`v.chars() -> TextChars`",
+         "An iterator over the `TextChar`s: each a scalar value, its offset and length, or one U+FFFD with `valid` "
+         "false for each maximal subpart of an ill-formed sequence.", NO, []),
         ("`v.toByteString() -> Result<ByteString, AllocError>`", "A `ByteString` that owns a copy of the bytes.",
          OOM, []),
         ("`v.writeTo(w: borrow mut TextWriter)`", "Writes the bytes as they are into a `TextWriter`.", NO, []),
@@ -501,7 +510,7 @@ TABLES.append(table(
         ("`b.toUtf8() -> StringView?`, `b.toUtf8Lossy() -> Result<String, AllocError>`",
          "As the view's: the text when the bytes are UTF-8, or the text with U+FFFD for bad sequences.",
          "`null` from `toUtf8` when the bytes are not UTF-8; " + OOM + " from `toUtf8Lossy`", []),
-        ("`b.append(text: StringView) -> Result<void, AllocError>`, "
+        ("`b.append(text) -> Result<void, AllocError>` (any text: lib/core's `TextBuffer`, ADR 0253), "
          "`b.appendBytes(bytes: Slice<u8>) -> Result<void, AllocError>`, "
          "`b.appendByte(byte: u8) -> Result<void, AllocError>`",
          "Adds a text, bytes, or one byte at the end.", OOM + "; the byte string is unchanged", []),

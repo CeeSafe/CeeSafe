@@ -1,0 +1,14 @@
+// ADR 0253 §2.6–§2.8: a ByteStringView compares with `==` and `!=` against text only, and has no ordering; a
+// search's needle is text; and a generic `T: TextView` is not matched (match its `bytes()`).
+fn first<T: TextView>(t: T) -> i32 => match (t) { // error[N0207]
+    "a" => 1,
+    _ => 0,
+};
+
+fn main() {
+    let v = ByteStringView.fromText("abc");
+    let a = v == 3;           // error[N0207]
+    let b = v < "b";          // error[N0207]
+    let c = "abc".indexOf(7); // error[N0205]
+    let d = first(v);
+}

@@ -19,6 +19,31 @@ fn implMethodIn(c: borrow Checker, typ: u32, name: u32, interfaceEntry: u32) -> 
     return none();
 }
 
+/// Is a call of `name` on a value of `typ` one of an interface's methods implemented for a view (ADR 0253 §2.2)? A
+/// qualified call `I.m(view)` always is. A plain one is when the view has such a method and either the name is
+/// none of the view's built-in methods, or the call's generic version went through a bound: an instance calls the
+/// interface's method, as its generic version did, even where the view has a built-in of the name.
+fn viewImplCall(c: borrow Checker, typ: u32, name: u32, general: bool, start: u32) -> bool {
+    if (!isViewImplTarget(c, typ)) {
+        return false;
+    }
+    if (!general) {
+        return true;
+    }
+    if (implMethodFor(c, typ, name) == none()) {
+        return false;
+    }
+    if (recordedInterface(c, c.file, start) != none()) {
+        return true;
+    }
+    let text = c.name(name);
+    if (c.types.isStringView(typ)) {
+        return !(sameText(text, "bytes") || isBytesTextMethod(text));
+    }
+    let bytes = c.types.info(c.types.info(typ).pointee).element == c.types.u8;
+    return !(isSliceMethodName(text) || (bytes && isBytesTextMethod(text)));
+}
+
 /// The method of `typ` named `name` declared by the function syntax `syntax` (an `@into` method), or none.
 fn implMethodWithSyntax(c: borrow Checker, typ: u32, name: u32, syntax: u32) -> u32 {
     for (m in c.implMethods.view()) {

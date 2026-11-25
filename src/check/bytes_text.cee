@@ -93,6 +93,29 @@ fn checkBytesTextMethod(
             ident.symbol,
             span,
         )?;
+        if (isText && function != none() && arguments.count == 1 && !sameText(text, "indexOfByte") &&
+            !isStringLiteral(c, c.front.ast.at(arguments, 0))) {
+            // A needle of any `TextView` (ADR 0253 §2.8): a `StringView` takes the built-in search, as before; a
+            // `ByteStringView` or bytes `TextView`'s, which finds whole characters only.
+            let needleSyntax = c.front.ast.at(arguments, 0);
+            let needle = synth(c, needleSyntax, none())?;
+            let other = otherTextNeedleSearch(c, ident.symbol, shared, needle, span)?;
+            if (other != none()) {
+                return Ok(other);
+            }
+            if (c.isBottom(needle)) {
+                return c.errorResult(span.start, span.end);
+            }
+            let needleSpan = c.front.ast.exprSpans[needleSyntax as usize];
+            let parameter = c.hir.functions[function as usize].parameters[1];
+            let parameterType = c.hir.locals[parameter as usize].typ;
+            let checked = coerce(c, needle, parameterType, needleSpan)?;
+            if (c.isBottom(checked)) {
+                return c.errorResult(span.start, span.end);
+            }
+            let values = [shared, checked];
+            return libraryCall(c, function, values[..], span);
+        }
         if (!isText && function != none() && arguments.count == 1 && !sameText(text, "indexOfByte")) {
             // `bytes.startsWith("/api")`: a string literal is its bytes there (ADR 0237 §2.3)
             let needleSyntax = c.front.ast.at(arguments, 0);

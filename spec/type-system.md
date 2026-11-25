@@ -1314,7 +1314,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
 - A read or write checks `at < length` and `at + size(T) - 1 < length` at the call, before anything is read or
   written, and **panics** "index out of bounds" there otherwise.
 
-**Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments; on byte slices with
+**Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments (or any other
+`TextView`, which finds whole characters only, §22.5, ADR 0253 §2.8); on byte slices with
 `Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it. On bytes, an argument
 that is a string literal is its UTF-8 bytes (`path.startsWith("/api")`; ADR 0237 §2.3); another `StringView` is N0205.
 - `s.indexOf(t)` and `s.lastIndexOf(t)`: `usize?`, where `t` first or last starts; an empty `t` is at `0`, and at
@@ -2194,7 +2195,14 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   the interface's arguments (N0267), and the target is a struct or an enum (N0267). Its methods are checked once, with the parameters opaque, and
   instantiated per instance like a generic struct's: a call on the concrete type, a call through a bound and a `dyn`
   table all use the instance. A type with region parameters is implemented with them named, `impl<region r> I for
-  S<r>` (§25.3), and no other scoped type implements an interface (N0267).
+  S<r>` (§25.3). **A view** (ADR 0253 §2.2), `StringView` or a shared `Slice<T>` whose element type is not scoped,
+  is implemented with no region written, `impl I for StringView`, `impl I for Slice<u8>`: regions are erased
+  (§25.5), and a method that returns a view of `this` has its region by elision (§25.6). Its methods take `this` by
+  value, since a `borrow this` of a view would be a reference to a reference (generic code calling one is N0274 at
+  the view, §25.4). On the concrete view, a name that is one of its built-in methods (§16.6, §22.2) is the built-in;
+  another is the interface's; through a bound, `I.m(v, …)`, and in an instance of generic code whose call went
+  through a bound (§21.4), the interface's, whatever the name. The same holds for `String`'s and a vector's
+  built-in names (ADR 0052 §3.3). No other scoped type implements an interface (N0267).
   - The block must define the interface's methods that have no default, and may define those that have one, each
     with the same receiver kind, parameter types and return type, after the interface's type arguments (and `Self`)
     are substituted (N0267). It may not define other functions.
@@ -2511,16 +2519,19 @@ file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked fo
   well-formed sequence where none is, or the one byte that begins none. `v.chunks()` is an iterator (§16.4) of
   `Utf8Chunk<r>`s, each a `valid: StringView<r>` run then an `invalid: Slice<r, u8>` maximal subpart, empty only in
   the last chunk; empty bytes give none.
-- **Bytes.** `length()`, `isEmpty()`, `byteAt(i)`, `slice(start, end)`, `sliceFrom(start)`, `sliceTo(end)` (panics
-  out of range, as slicing does; a slice may cut a sequence), and on a view the searches of §16.6 with `Slice<u8>`
-  needles: `indexOf`, `lastIndexOf`, `indexOfByte`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`,
-  `trim`, `trimStart`, `trimEnd`, `splitOnce` (`ByteStringHalves<r>?`) and `split` (`ByteStringSplit<r>`, an
-  iterator of views).
-- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes. `v.equals(w)` compares views of
-  two regions, `v.compare(w)` orders bytewise (negative, zero, positive; a prefix first). `ByteString` implements
+- **Bytes.** A `ByteStringView` is a `TextView` (§22.5, ADR 0253): `length()`, `isEmpty()`, `byteAt(i)`,
+  `slice(start, end)`, `sliceFrom(start)`, `sliceTo(end)` (panics out of range, as slicing does; a slice may cut a
+  sequence), `chars()`, and the searches, with any text as the needle (a literal, either view, bytes): `indexOf`,
+  `lastIndexOf`, `indexOfByte`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase` and the other
+  `…IgnoreAsciiCase` ones, `trim`, `trimStart`, `trimEnd`, `splitOnce` (`TextPair<ByteStringView<r>>?`) and `split`
+  (`TextPieces`, an iterator of views). A `ByteString` has `length()` and `isEmpty()`, and the rest through `view()`.
+- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes, and a view compares so with a
+  `StringView` or a string literal too, either side (`v == "select"`, §22.5). `v[i]` is a view's byte `i`, and a
+  `match` on a view takes string patterns (§22.5). `v.equals(t)` compares with any
+  text, `v.compare(t)` orders bytewise (negative, zero, positive; a prefix first). `ByteString` implements
   lib/std's `HashKey` and `OrderKey`; a view, a scoped type, keys no map (N0274).
 - **Appending** to a `ByteString`, each `Result<…, AllocError>`, growing at most once and unchanged on failure:
-  `append(text: StringView)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n: i64)`,
+  `append(text)` of any text (`TextBuffer`, §22.5), `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n: i64)`,
   `appendUnsigned(n: u64)`, and lib/core's `AppendFormatted` (`appendHex`, `appendOctal`, `appendFixed`,
   `appendPadded`) and `AppendText` (`appendChar`, `appendUtf8`, which append only a scalar value or UTF-8);
   `clear()`, `truncate(n)`, `capacity()`.
@@ -2528,6 +2539,69 @@ file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked fo
   `TextWriter`. `Console.write` prints text only: a byte string there is N0207, whose message names `writeBytes`.
 
 Diagnostics: none new (N0205, N0207, N0270, N0274, N0296).
+
+### 22.5 `TextView` and `TextBuffer`: text of either kind (ADR 0253)
+
+```ceesafe
+fn keyword<T: TextView>(word: T) -> bool => word.equalsIgnoreAsciiCase("select");
+
+fn quoted<B: TextBuffer, T: TextView>(out: borrow mut B, name: T) -> Result<void, AllocError> {
+    out.append("\"")?;
+    let whole = out.append(name)?; // false: a String does not take what is not UTF-8
+    if (!whole) {
+        out.appendLossy(name)?;
+    }
+    out.append("\"")?;
+    return Ok();
+}
+```
+lib/core's interface `TextView: Copy` is implemented by `StringView` (UTF-8), `ByteStringView<r>` (any bytes) and
+`Slice<u8>` (bytes as text); `TextBuffer` by `String` and `ByteString`. A function bounded by one takes text of
+either kind, and is compiled once per type (§20.4); its calls are direct (§21.2). `TextView` has generic methods,
+so it has no `dyn` type (N0331).
+- **`TextView`'s methods** take the view by value. An implementation gives `bytes()` (a `Slice<u8>` borrowed as the
+  view is), `slice(start, end) -> Self`, and, if not every position up to the length is one, `isCharBoundary(at)`
+  (a `StringView`'s: not inside a UTF-8 sequence). The rest are defaults over them: `length`, `isEmpty`, `byteAt`,
+  `sliceFrom`, `sliceTo`, `toUtf8` (`StringView?`, no copy), `isUtf8`, `equals`, `compare` (bytewise),
+  `equalsIgnoreAsciiCase`, `compareIgnoreAsciiCase`, `indexOf`, `lastIndexOf`, `indexOfByte`,
+  `indexOfIgnoreAsciiCase`, `contains`, `startsWith`, `endsWith`, `startsWithIgnoreAsciiCase`,
+  `endsWithIgnoreAsciiCase`, `trim`, `trimStart`, `trimEnd` (`-> Self`), `splitOnce` (`TextPair<Self>?`, fields
+  `left` and `right`), `split` (`TextPieces<Self, N>`, an iterator of `Self` with `TextSplit`'s rules, §16.6) and
+  `chars` (`TextChars<Self>`).
+- **Needles** (`<N: TextView>`) are any text: a string literal, either view, or bytes; an owned text is passed as its
+  `view()`. On a view whose positions are not all character boundaries, a match must start and end on boundaries:
+  a needle found inside a character (`A9` in `é`) is not found there, and the search goes on. So every `Self` a
+  method returns is a valid `slice`.
+- **ASCII case**: the `…IgnoreAsciiCase` methods fold `A`–`Z` to `a`–`z`, byte by byte, and nothing else.
+- **Characters**: `chars()` gives `TextChar { value: u32, offset: usize, length: usize, valid: bool }` in order: a
+  scalar value and its bytes, or, where the bytes are not UTF-8, one maximal subpart of an ill-formed sequence (as
+  `toUtf8Lossy` replaces, §22.4) with `value` U+FFFD and `valid` false. `slice(c.offset, c.offset + c.length)` is
+  a character's bytes, so nothing is lost.
+- **On the concrete view** the built-in methods of §16.6 and §22.2 keep their names and code; `TextView`'s are
+  reached there by the names the view does not have (`s.slice(0, 2)`, `s.chars()`, `s.length()`), by
+  `TextView.indexOf(s, v)`, and through a bound (§21.1).
+- **Any needle on a concrete `StringView` or `String`** (ADR 0253 §2.8): the searches with one text argument
+  (`indexOf`, `lastIndexOf`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`, `splitOnce`, `split`)
+  take a `StringView` or a string literal as the built-in, unchanged, and any other `TextView` (a `ByteStringView`,
+  a `Slice<u8>`) as `TextView`'s method of the name, so a match is whole characters: `"café".indexOf(b)` with the
+  byte `A9` is null. With such a needle `splitOnce` gives a `TextPair<StringView>?` and `split` a `TextPieces`; with
+  a `StringView`, `TextHalves` and `TextSplit` as before. Another type is N0205, as before.
+- **`ByteStringView` operators** (ADR 0253 §2.6, §2.7):
+  - `v == t` and `v != t`, either side, where the other is a `StringView` (a literal included) or a
+    `ByteStringView`: the bytes compared, as `v.equals(t)`. Other operands, and `<` and the rest, stay N0207.
+  - `v[i]` (`i: usize`) is the byte at `i`, a `u8`: `v.byteAt(i)`, panicking past the end as `s[i]` does. It is
+    read only; there is no `v[lo..hi]` (`v.slice(lo, hi)`).
+  - `match (v)` with a string pattern in an arm matches `v`'s bytes as a `Slice<u8>` is matched (ADR 0085 §2.7):
+    the patterns are byte strings, and a binding arm binds the bytes, a `Slice<u8>`. A match on a type parameter
+    bounded by `TextView` takes no string pattern (N0207): match `t.bytes()`.
+- **`TextBuffer`**: `append<N: TextView>(text) -> Result<bool, AllocError>`, `appendLossy<N: TextView>(text) ->
+  Result<void, AllocError>`, `bytes()` and `clear()`. A `ByteString`'s `append` takes every byte and answers
+  `true`. A `String` holds UTF-8 only: its `append` of text that is not UTF-8 appends nothing and answers `false`,
+  as `appendUtf8` does (§23.2). `appendLossy` appends the text with U+FFFD for each maximal subpart of an
+  ill-formed sequence (as `toUtf8Lossy`), into either buffer.
+
+Diagnostics: none new (N0274 for a `borrow this` method called through a bound at a view, N0267, N0331, N0205,
+N0207).
 
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
@@ -2978,8 +3052,15 @@ Each parameter and the result of a function have **flow names**:
   otherwise N0245 (as in v0). Where the result is no reference itself but holds one (`Result<Slice<u8>, E>`, an
   optional of a view), a source list `borrow(a) T` would make the whole result a reference, so N0245's message names
   a region parameter instead: `fn f<region r>(a: Slice<r, u8>, b: Slice<u8>) -> Result<Slice<r, u8>, E>`; so does
-  the N0245 of a method whose result borrows from a parameter other than the receiver (ADR 0228 §2.2). A function
-  with no scoped parameter that returns a slice is told to return a `static` table as `Slice<static, T>`.
+  the N0245 of a method whose result borrows from a parameter other than the receiver (ADR 0228 §2.2). **With no
+  scoped parameter** (ADR 0253 §2.3), the single parameter whose type is a type parameter that may hold loans (one
+  not bounded by `Send` or `Share`) is the source, so `fn bytes(this) -> Slice<u8>` in an interface and `fn raw<T:
+  TextView>(t: T) -> Slice<u8>` borrow what `this` or `t` holds, as for a view; an instance at an unscoped type has
+  a result that borrows from nothing it is given. **In an instance**, a parameter scoped only by its type argument
+  (`n: N` at `N = StringView`) is no candidate for this elision when the result's written type names a type
+  parameter: the declaration's flows already give the result's sources (`fn mk<T, N>(t: T, n: N) -> Pair<T, N>` at
+  two views). Otherwise a function with no scoped parameter that returns a slice is told to return a `static`
+  table as `Slice<static, T>`.
 - for a result `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions written on the
   reference itself, whose pointee names regions (`-> borrow HeaderList<r>`): the reference's own region is elided
   as above, when there is a single scoped parameter. So the result is tied to that parameter, and is not a deep

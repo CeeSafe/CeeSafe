@@ -1,0 +1,290 @@
+// ADR 0253: lib/core's TextView (StringView, ByteStringView, Slice<u8>) and TextBuffer (String, ByteString). Generic
+// functions over each, needles of every kind, ASCII case, a needle that is not UTF-8 inside a StringView, the
+// built-ins on the concrete views unchanged, and `TextView.m(view)`. Expectations written by hand; bytes that are not
+// UTF-8 are printed in hex.
+
+fn hex(bytes: Slice<u8>) -> String {
+    var out = String.create();
+    if (bytes.length == 0) {
+        out.append("-")!;
+    }
+    for (b in bytes) {
+        out.appendHex(b as u64, 2, false)!;
+    }
+    return out;
+}
+
+fn show<T: TextView>(label: StringView, t: T) {
+    Console.write(label);
+    Console.write(" ");
+    Console.writeLine(hex(t.bytes()).view());
+}
+
+fn keyword<T: TextView>(word: T) -> bool => word.equalsIgnoreAsciiCase("select");
+
+/// Every member of TextView once, on `t`.
+fn members<T: TextView>(t: T) {
+    Console.writeLine(t.length());
+    Console.writeLine(t.isEmpty());
+    Console.writeLine(t.byteAt(1));
+    show("slice", t.slice(1, 3));
+    show("from", t.sliceFrom(4));
+    show("to", t.sliceTo(2));
+    Console.writeLine(t.isCharBoundary(1));
+    Console.writeLine(t.isUtf8());
+    Console.writeLine(t.toUtf8().isSome());
+    Console.writeLine(t.equals(" ab"));
+    Console.writeLine(t.compare(" ab"));
+    Console.writeLine(t.equalsIgnoreAsciiCase(" AB, C "));
+    Console.writeLine(t.compareIgnoreAsciiCase(" AB, D"));
+    Console.writeLine(t.indexOf(",") ?? 99);
+    Console.writeLine(t.lastIndexOf(" ") ?? 99);
+    Console.writeLine(t.indexOfByte('c') ?? 99);
+    Console.writeLine(t.indexOfIgnoreAsciiCase("B,") ?? 99);
+    Console.writeLine(t.contains("b, c"));
+    Console.writeLine(t.startsWith(" a"));
+    Console.writeLine(t.endsWith("c "));
+    Console.writeLine(t.startsWithIgnoreAsciiCase(" A"));
+    Console.writeLine(t.endsWithIgnoreAsciiCase("C "));
+    show("trim", t.trim());
+    show("trimStart", t.trimStart());
+    show("trimEnd", t.trimEnd());
+    let pair = t.splitOnce(",")!;
+    show("left", pair.left);
+    show("right", pair.right);
+    Console.writeLine(t.splitOnce(";").isNull());
+    for (piece in t.split(" ")) {
+        show("piece", piece);
+    }
+    var n: u32 = 0;
+    for (c in t.chars()) {
+        n += c.value;
+    }
+    Console.writeLine(n);
+}
+
+fn firstWord<T: TextView>(t: T) -> T {
+    let trimmed = t.trim();
+    return match (trimmed.indexOfByte(' ')) {
+        Some(i) => trimmed.sliceTo(i),
+        null => trimmed,
+    };
+}
+
+/// Whether `t` went in between the brackets.
+fn bracket<B: TextBuffer, T: TextView>(out: borrow mut B, t: T) -> Result<bool, AllocError> {
+    out.append("[")?;
+    let appended = out.append(t)?;
+    out.append("]")?;
+    return Ok(appended);
+}
+
+fn buffers() {
+    let raw = [0x61u8, 0xFF, 0x62];
+    let bad = ByteStringView.fromBytes(raw[..]);
+    var s = String.create();
+    Console.writeLine(bracket(mut s, "x")!);
+    Console.writeLine(bracket(mut s, bad)!); // not UTF-8: a String appends nothing, and says so
+    TextBuffer.appendLossy(mut s, bad)!;     // U+FFFD for the maximal subpart
+    Console.writeLine(s);
+    Console.writeLine(TextBuffer.bytes(s).length); // [x][]a EF BF BD b
+    var b = ByteString.create();
+    Console.writeLine(bracket(mut b, bad)!);
+    b.append(ByteStringView.fromText("é"))!;
+    b.append("!".bytes())!;
+    b.appendLossy(bad)!;
+    Console.writeLine(hex(b.bytes()).view());
+    b.clear();
+    Console.writeLine(b.length());
+    TextBuffer.clear(mut s);
+    Console.writeLine(s.length);
+}
+
+fn chars() {
+    // a, é, an unpaired surrogate's three bytes (one maximal subpart each: ED A0 is no prefix of a sequence), ☺
+    let raw = [0x61u8, 0xC3, 0xA9, 0xED, 0xA0, 0x80, 0xE2, 0x98, 0xBA, 0xE2, 0x82];
+    for (c in ByteStringView.fromBytes(raw[..]).chars()) {
+        Console.write(c.value);
+        Console.write(" ");
+        Console.write(c.offset);
+        Console.write(" ");
+        Console.write(c.length);
+        Console.writeLine(if (c.valid) " ok" else " bad");
+    }
+    var count = 0;
+    for (c in "a☺".chars()) {
+        count += 1;
+        Console.writeLine(c.value);
+    }
+    Console.writeLine(count);
+}
+
+fn main() {
+    let text = " ab, c ";
+    members(text);
+    members(ByteStringView.fromText(text));
+    members(text.bytes());
+    // Generic code over either kind, with needles of each kind.
+    Console.writeLine(keyword(firstWord("  SeLeCt * from t")));
+    Console.writeLine(keyword(firstWord(ByteStringView.fromText("select"))));
+    Console.writeLine(keyword("selects".bytes()));
+    let raw = [0x53u8, 0x45, 0xFF, 0x20, 0x61];
+    let b = ByteStringView.fromBytes(raw[..]);
+    show("first", firstWord(b));
+    Console.writeLine(b.startsWith("SE"));
+    Console.writeLine(b.startsWith(ByteStringView.fromText("SE")));
+    Console.writeLine(b.startsWith(raw[..2]));
+    Console.writeLine(b.contains(b.sliceFrom(2)));
+    // A needle that is not UTF-8 occurs inside 'é' (C3 A9), but not as a whole character of a StringView.
+    let cafe = "caf\u{E9}s";
+    let tail = [0xA9u8];
+    Console.writeLine(TextView.indexOf(cafe, tail[..]).isNull());
+    Console.writeLine(TextView.contains(cafe, tail[..]));
+    Console.writeLine(ByteStringView.fromText(cafe).indexOf(tail[..]) ?? 99);
+    Console.writeLine(cafe.slice(0, 3));
+    Console.writeLine(cafe.isCharBoundary(4));
+    // The built-ins on the concrete views are unchanged.
+    Console.writeLine(text.indexOf("c") ?? 99);
+    Console.writeLine(text.trim());
+    Console.writeLine(text.bytes().indexOf("b") ?? 99);
+    Console.writeLine(text.length);
+    Console.writeLine(text.length());
+    buffers();
+    chars();
+}
+
+// expect-stdout: 7
+// expect-stdout: false
+// expect-stdout: 97
+// expect-stdout: slice 6162
+// expect-stdout: from 206320
+// expect-stdout: to 2061
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: -1
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: trim 61622c2063
+// expect-stdout: trimStart 61622c206320
+// expect-stdout: trimEnd 2061622c2063
+// expect-stdout: left 206162
+// expect-stdout: right 206320
+// expect-stdout: true
+// expect-stdout: piece -
+// expect-stdout: piece 61622c
+// expect-stdout: piece 63
+// expect-stdout: piece -
+// expect-stdout: 434
+// expect-stdout: 7
+// expect-stdout: false
+// expect-stdout: 97
+// expect-stdout: slice 6162
+// expect-stdout: from 206320
+// expect-stdout: to 2061
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: -1
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: trim 61622c2063
+// expect-stdout: trimStart 61622c206320
+// expect-stdout: trimEnd 2061622c2063
+// expect-stdout: left 206162
+// expect-stdout: right 206320
+// expect-stdout: true
+// expect-stdout: piece -
+// expect-stdout: piece 61622c
+// expect-stdout: piece 63
+// expect-stdout: piece -
+// expect-stdout: 434
+// expect-stdout: 7
+// expect-stdout: false
+// expect-stdout: 97
+// expect-stdout: slice 6162
+// expect-stdout: from 206320
+// expect-stdout: to 2061
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: -1
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: trim 61622c2063
+// expect-stdout: trimStart 61622c206320
+// expect-stdout: trimEnd 2061622c2063
+// expect-stdout: left 206162
+// expect-stdout: right 206320
+// expect-stdout: true
+// expect-stdout: piece -
+// expect-stdout: piece 61622c
+// expect-stdout: piece 63
+// expect-stdout: piece -
+// expect-stdout: 434
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: first 5345ff
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 4
+// expect-stdout: caf
+// expect-stdout: false
+// expect-stdout: 5
+// expect-stdout: ab, c
+// expect-stdout: 2
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: [x][]a�b
+// expect-stdout: 10
+// expect-stdout: true
+// expect-stdout: 5b61ff625dc3a92161efbfbd62
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 97 0 1 ok
+// expect-stdout: 233 1 2 ok
+// expect-stdout: 65533 3 1 bad
+// expect-stdout: 65533 4 1 bad
+// expect-stdout: 65533 5 1 bad
+// expect-stdout: 9786 6 3 ok
+// expect-stdout: 65533 9 2 bad
+// expect-stdout: 97
+// expect-stdout: 9786
+// expect-stdout: 2

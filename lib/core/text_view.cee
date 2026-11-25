@@ -1,0 +1,361 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: text of either kind (ADR 0253). `TextView` is what `StringView` (UTF-8), `ByteStringView` (any bytes) and
+// `Slice<u8>` (bytes as text) have in common, and `TextBuffer` what `String` and `ByteString` have, so a function
+// written once over a bound takes either kind: `fn keyword<T: TextView>(w: T) -> bool => w.equalsIgnoreAsciiCase("by")`.
+// Bundled with ceesafec and part of every package.
+//
+// Generic code is monomorphised: each text type gets its own copy, whose calls are direct. An implementation gives
+// `bytes` and `slice` (a `StringView` also `isCharBoundary`); everything else is a default written over them. On a
+// concrete `StringView` or `Slice<u8>` the built-in methods of the same names (type-system.md §16.6) are called as
+// before; through a bound, these.
+
+/// A borrowed text: `StringView`, `ByteStringView` or `Slice<u8>`, taken and returned by value (a view is Copy).
+/// Lengths and indexes count bytes. Needles are any `TextView`: a string literal, either view, or bytes. On a view
+/// whose positions are not all character boundaries (a `StringView`), a match is a whole run of characters: a needle
+/// found inside a character is not found there, so every view a method returns is a valid `slice`.
+public interface TextView: Copy {
+    /// The bytes, borrowed as the view is.
+    fn bytes(this) -> Slice<u8>;
+
+    /// The bytes from `start` up to `end`, as this kind of text. Panics outside the text, as `s[start..end]` does, and
+    /// on a `StringView` off a character boundary.
+    fn slice(this, start: usize, end: usize) -> Self;
+
+    /// Whether `at` is a position `slice` accepts: for bytes every one up to the length, for UTF-8 one that is not
+    /// inside a character.
+    fn isCharBoundary(this, at: usize) -> bool => at <= this.bytes().length;
+
+    /// The length in bytes.
+    fn length(this) -> usize => this.bytes().length;
+
+    /// Whether there are no bytes.
+    fn isEmpty(this) -> bool => this.bytes().length == 0;
+
+    /// The byte at `index`; panics past the end.
+    fn byteAt(this, index: usize) -> u8 {
+        let b = this.bytes();
+        return b[index];
+    }
+
+    /// The text from `start` to the end.
+    fn sliceFrom(this, start: usize) -> Self => this.slice(start, this.bytes().length);
+
+    /// The first `end` bytes.
+    fn sliceTo(this, end: usize) -> Self => this.slice(0, end);
+
+    /// The text as a `StringView`, with no copy, when the bytes are UTF-8; null when they are not.
+    fn toUtf8(this) -> StringView? => StringView.fromUtf8(this.bytes());
+
+    /// Whether the bytes are UTF-8.
+    fn isUtf8(this) -> bool => StringView.fromUtf8(this.bytes()) != null;
+
+    /// Whether the bytes are `other`'s.
+    fn equals<N: TextView>(this, other: N) -> bool => TextScan.compare(this.bytes(), other.bytes(), false) == 0;
+
+    /// Bytewise order: negative, zero or positive as this text comes before, is the same as or comes after `other`;
+    /// a prefix comes first. For UTF-8 it is code point order.
+    fn compare<N: TextView>(this, other: N) -> i32 => TextScan.compare(this.bytes(), other.bytes(), false);
+
+    /// Whether the bytes are `other`'s, `A`–`Z` and `a`–`z` taken as the same.
+    fn equalsIgnoreAsciiCase<N: TextView>(this, other: N) -> bool =>
+        TextScan.compare(this.bytes(), other.bytes(), true) == 0;
+
+    /// `compare` with `A`–`Z` taken as `a`–`z` (SQLite's `NOCASE`).
+    fn compareIgnoreAsciiCase<N: TextView>(this, other: N) -> i32 =>
+        TextScan.compare(this.bytes(), other.bytes(), true);
+
+    /// Where `needle` first is, in bytes; 0 for an empty needle.
+    fn indexOf<N: TextView>(this, needle: N) -> usize? => TextScan.indexOfFrom(this, needle.bytes(), 0, false);
+
+    /// Where `needle` last is; the length for an empty needle.
+    fn lastIndexOf<N: TextView>(this, needle: N) -> usize? => TextScan.lastIndexOf(this, needle.bytes());
+
+    /// Where the byte `b` first is.
+    fn indexOfByte(this, b: u8) -> usize? => ByteScan.indexOfByte(this.bytes(), b);
+
+    /// Where `needle` first is, `A`–`Z` and `a`–`z` taken as the same.
+    fn indexOfIgnoreAsciiCase<N: TextView>(this, needle: N) -> usize? =>
+        TextScan.indexOfFrom(this, needle.bytes(), 0, true);
+
+    /// Whether `needle` occurs.
+    fn contains<N: TextView>(this, needle: N) -> bool => TextScan.indexOfFrom(this, needle.bytes(), 0, false) != null;
+
+    /// Whether the text begins with `prefix`.
+    fn startsWith<N: TextView>(this, prefix: N) -> bool => TextScan.prefix(this, prefix.bytes(), false);
+
+    /// Whether the text ends with `suffix`.
+    fn endsWith<N: TextView>(this, suffix: N) -> bool => TextScan.suffix(this, suffix.bytes(), false);
+
+    /// Whether the text begins with `prefix`, ASCII case ignored.
+    fn startsWithIgnoreAsciiCase<N: TextView>(this, prefix: N) -> bool => TextScan.prefix(this, prefix.bytes(), true);
+
+    /// Whether the text ends with `suffix`, ASCII case ignored.
+    fn endsWithIgnoreAsciiCase<N: TextView>(this, suffix: N) -> bool => TextScan.suffix(this, suffix.bytes(), true);
+
+    /// Without ASCII whitespace (space, `\t`, `\n`, `\v`, `\f`, `\r`) at either end.
+    fn trim(this) -> Self {
+        let b = this.bytes();
+        let start = ByteScan.trimStartIndex(b);
+        let end = ByteScan.trimEndIndex(b);
+        return if (start >= end) this.slice(0, 0) else this.slice(start, end);
+    }
+
+    /// Without ASCII whitespace at the start.
+    fn trimStart(this) -> Self => this.slice(ByteScan.trimStartIndex(this.bytes()), this.bytes().length);
+
+    /// Without ASCII whitespace at the end.
+    fn trimEnd(this) -> Self => this.slice(0, ByteScan.trimEndIndex(this.bytes()));
+
+    /// The text before the first `separator` and after it, or null if it does not occur. An empty separator is
+    /// found at the start.
+    fn splitOnce<N: TextView>(this, separator: N) -> TextPair<Self>? {
+        let sep = separator.bytes();
+        let i = TextScan.indexOfFrom(this, sep, 0, false)?;
+        return TextPair { left: this.slice(0, i), right: this.slice(i + sep.length, this.bytes().length) };
+    }
+
+    /// The pieces between separators, in order: `"a,,b"` by `","` is `"a"`, `""`, `"b"`; an empty text is one empty
+    /// piece; an empty separator gives the text whole.
+    fn split<N: TextView>(this, separator: N) -> TextPieces<Self, N> =>
+        TextPieces { text: this, separator: separator, position: 0, finished: false };
+
+    /// The characters, in order: each scalar value, or U+FFFD for each maximal subpart of an ill-formed sequence.
+    fn chars(this) -> TextChars<Self> => TextChars { text: this, position: 0 };
+}
+
+/// A text that grows: `String` (UTF-8 only) and `ByteString` (any bytes). Generic code reads one through its view
+/// (`s.view()`) and writes it through this.
+public interface TextBuffer {
+    /// Appends `text` (a literal, either view, or bytes), growing at most once and unchanged if that fails; true when
+    /// it was appended. A `ByteString` takes every byte. A `String` holds UTF-8 only: text that is not UTF-8 is not
+    /// appended and the result is false, as `appendUtf8` answers; `appendLossy` appends it with replacements.
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>;
+
+    /// Appends `text` with each maximal subpart of an ill-formed UTF-8 sequence replaced by U+FFFD, as `toUtf8Lossy`
+    /// gives it: into a `String` and a `ByteString` alike, so the result is UTF-8. On failure what was appended stays.
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
+
+    /// The bytes, a loan of the text.
+    fn bytes(borrow this) -> Slice<u8>;
+
+    /// Removes every byte; the capacity stays.
+    fn clear(borrow mut this);
+}
+
+/// The parts of a text before and after a separator: what `t.splitOnce(sep)` finds.
+public struct TextPair<T> {
+    public left: T;
+    public right: T;
+}
+
+/// The pieces of a text between separators, in order: `t.split(sep)`. `next()` gives each, then null.
+public struct TextPieces<T: TextView, N: TextView> {
+    text: T;
+    separator: N;
+    position: usize; // where the next piece starts
+    finished: bool;
+}
+
+impl<T: TextView, N: TextView> Iterator<T> for TextPieces<T, N> {
+    /// The next piece, or null after the last.
+    fn next(borrow mut this) -> T? {
+        if (this.finished) {
+            return null;
+        }
+        let text = this.text;
+        let separator = this.separator;
+        let sep = separator.bytes();
+        let start = this.position;
+        if (sep.length > 0) {
+            match (TextScan.indexOfFrom(text, sep, start, false)) {
+                Some(i) => {
+                    this.position = i + sep.length;
+                    return text.slice(start, i);
+                }
+                null => {}
+            }
+        }
+        this.finished = true;
+        return text.slice(start, text.bytes().length);
+    }
+}
+
+/// A character of a text (`t.chars()`): a scalar value and where its bytes are, or, where the bytes are not UTF-8,
+/// one maximal subpart of an ill-formed sequence (1 to 3 bytes) with `value` U+FFFD and `valid` false.
+@derive(Equal)
+public struct TextChar {
+    /// The scalar value; U+FFFD for bytes that are not UTF-8.
+    public value: u32;
+    /// Where its bytes start.
+    public offset: usize;
+    /// How many bytes: 1 to 4 for a character, 1 to 3 for a maximal subpart.
+    public length: usize;
+    /// Whether the bytes are a well-formed UTF-8 sequence.
+    public valid: bool;
+}
+
+/// The characters of a text, in order: `t.chars()`. `next()` gives each, then null.
+public struct TextChars<T: TextView> {
+    text: T;
+    position: usize; // where the next character starts
+}
+
+impl<T: TextView> Iterator<TextChar> for TextChars<T> {
+    /// The next character, or null after the last.
+    fn next(borrow mut this) -> TextChar? {
+        let text = this.text;
+        let bytes = text.bytes();
+        let at = this.position;
+        if (at >= bytes.length) {
+            return null;
+        }
+        let n = Utf8Sequence.validLength(bytes, at);
+        if (n == 0) {
+            let bad = Utf8Sequence.maximalSubpart(bytes, at);
+            this.position = at + bad;
+            return TextChar { value: 0xFFFD, offset: at, length: bad, valid: false };
+        }
+        let first = bytes[at] as u32;
+        var value = if (n == 1) first else if (n == 2) first & 0x1F else if (n == 3) first & 0x0F else first & 0x07;
+        for (k in 1..n) {
+            value = (value << 6) | ((bytes[at + k] as u32) & 0x3F);
+        }
+        this.position = at + n;
+        return TextChar { value: value, offset: at, length: n, valid: true };
+    }
+}
+
+/// The searches of `TextView`'s defaults, over bytes, keeping to the text's character boundaries.
+struct TextScan {
+    /// Bytewise order, `A`–`Z` folded to `a`–`z` when `fold`; a prefix first.
+    fn compare(a: Slice<u8>, b: Slice<u8>, fold: bool) -> i32 {
+        let n = if (a.length < b.length) a.length else b.length;
+        for (k in 0..n) {
+            let x = if (fold) ByteScan.lowerAscii(a[k]) else a[k];
+            let y = if (fold) ByteScan.lowerAscii(b[k]) else b[k];
+            if (x != y) {
+                return if (x < y) -1 else 1;
+            }
+        }
+        return if (a.length < b.length) -1 else if (a.length > b.length) 1 else 0;
+    }
+
+    /// Whether `needle` is at `at` in `bytes`, with ASCII case folded when `fold`.
+    fn matchesAt(bytes: Slice<u8>, at: usize, needle: Slice<u8>, fold: bool) -> bool {
+        if (!fold) {
+            return ByteScan.matchesAt(bytes, at, needle);
+        }
+        if (at > bytes.length || bytes.length - at < needle.length) {
+            return false;
+        }
+        for (k in 0..needle.length) {
+            if (ByteScan.lowerAscii(bytes[at + k]) != ByteScan.lowerAscii(needle[k])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Whether `needle` at `at` in `t` starts and ends on character boundaries.
+    fn whole<T: TextView>(t: T, at: usize, length: usize) -> bool =>
+        t.isCharBoundary(at) && t.isCharBoundary(at + length);
+
+    /// Where `needle` first is in `t` at or after `from`, as a whole run of characters.
+    fn indexOfFrom<T: TextView>(t: T, needle: Slice<u8>, from: usize, fold: bool) -> usize? {
+        let bytes = t.bytes();
+        if (fold) {
+            var i = from;
+            while (i <= bytes.length && bytes.length - i >= needle.length) {
+                if (TextScan.matchesAt(bytes, i, needle, true) && TextScan.whole(t, i, needle.length)) {
+                    return i;
+                }
+                i += 1;
+            }
+            return null;
+        }
+        var i = from;
+        while (i <= bytes.length) {
+            let rest = bytes[i..];
+            let k = ByteScan.indexOf(rest, needle)?;
+            let at = i + k;
+            if (TextScan.whole(t, at, needle.length)) {
+                return at;
+            }
+            i = at + 1;
+        }
+        return null;
+    }
+
+    /// Where `needle` last is in `t`, as a whole run of characters.
+    fn lastIndexOf<T: TextView>(t: T, needle: Slice<u8>) -> usize? {
+        let bytes = t.bytes();
+        var limit = bytes.length; // a match ends at or before it
+        while (true) {
+            let window = bytes[..limit];
+            let at = ByteScan.lastIndexOf(window, needle)?;
+            if (TextScan.whole(t, at, needle.length)) {
+                return at;
+            }
+            if (at + needle.length == 0) {
+                return null;
+            }
+            limit = at + needle.length - 1;
+        }
+        return null;
+    }
+
+    /// Whether `t` begins with `prefix`, as a whole run of characters.
+    fn prefix<T: TextView>(t: T, prefix: Slice<u8>, fold: bool) -> bool =>
+        TextScan.matchesAt(t.bytes(), 0, prefix, fold) && t.isCharBoundary(prefix.length);
+
+    /// Whether `t` ends with `suffix`, as a whole run of characters.
+    fn suffix<T: TextView>(t: T, suffix: Slice<u8>, fold: bool) -> bool {
+        let bytes = t.bytes();
+        if (suffix.length > bytes.length) {
+            return false;
+        }
+        let at = bytes.length - suffix.length;
+        return TextScan.matchesAt(bytes, at, suffix, fold) && t.isCharBoundary(at);
+    }
+}
+
+impl TextView for StringView {
+    fn bytes(this) -> Slice<u8> => this.bytes();
+
+    fn slice(this, start: usize, end: usize) -> StringView => this[start..end];
+
+    fn isCharBoundary(this, at: usize) -> bool {
+        let b = this.bytes();
+        if (at == 0 || at == b.length) {
+            return true;
+        }
+        return at < b.length && (b[at] & 0xC0) != 0x80;
+    }
+}
+
+impl TextView for Slice<u8> {
+    fn bytes(this) -> Slice<u8> => this;
+
+    fn slice(this, start: usize, end: usize) -> Slice<u8> => this[start..end];
+}
+
+impl TextBuffer for String {
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError> {
+        match (StringView.fromUtf8(text.bytes())) {
+            Some(valid) => {
+                this.append(valid)?;
+                return Ok(true);
+            }
+            null => { return Ok(false); }
+        }
+    }
+
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError> =>
+        ByteStringView.fromBytes(text.bytes()).appendLossyTo(this);
+
+    fn bytes(borrow this) -> Slice<u8> => this.bytes();
+
+    fn clear(borrow mut this) {
+        this.clear();
+    }
+}

@@ -305,7 +305,7 @@ keep any bytes as they are, and convert to UTF-8 when asked (ADR 0231, type-syst
 | `toUtf8Lossy()`, `v.appendLossyTo(mut s)` | a `String` with U+FFFD for each maximal subpart of a bad sequence, as browsers and Python decode |
 | `v.chunks()` | the `Utf8Chunk`s: each a `valid` `StringView` then an `invalid` `Slice<u8>`, for printing with escapes |
 | `==`, `v.equals(w)`, `v.compare(w)` | the bytes compared; bytewise order. A `ByteString` is a `HashMap` and `OrderedMap` key |
-| `v.indexOf(bytes)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, … | as a `StringView`'s, with `Slice<u8>` needles |
+| `v.indexOf(t)`, `startsWith`, `endsWith`, `contains`, `trim`, `splitOnce`, `split`, `chars`, … | `TextView`'s (below): any text as the needle, a literal included |
 | `b.append(text)`, `appendBytes(bytes)`, `appendByte(b)`, `appendNumber(n)`, `appendUnsigned(n)`, `appendHex`, `appendChar`, … | `Result<…, AllocError>`, as a `String`'s |
 
 `Console.write` prints text only; write a byte string's bytes with `Console.writeBytes(b.bytes())`. Text built in a
@@ -326,8 +326,7 @@ fn main() {
         Console.write(" then ");
         Console.writeLine(chunk.invalid.length);
     }
-    let name = ByteStringView.fromText("id=7");
-    Console.writeLine(b.view().startsWith(name.bytes()));
+    Console.writeLine(b.view().startsWith("id=7"));
     var t = String.create();
     t.appendFixed(0.5, 2)!;
     let c = ByteString.fromString(t); // no copy
@@ -345,6 +344,65 @@ id=7�
 id=7 then 1
 true
 0.50
+```
+
+### Code for either kind of text: `TextView` and `TextBuffer`
+
+lib/core's interface `TextView` is implemented by `StringView`, `ByteStringView` and `Slice<u8>`, and `TextBuffer` by
+`String` and `ByteString` (ADR 0253, type-system.md §22.5). A function bounded by one is written once and compiled
+for each kind of text it is given, with direct calls, so a `StringView` loses nothing. Needles are any text: a
+literal, either view, or bytes; an owned text is passed as its `view()`.
+
+| Member of `TextView` | Type |
+|---|---|
+| `bytes()`, `length()`, `isEmpty()`, `byteAt(i)` | the bytes; counts and indexes are in bytes |
+| `slice(lo, hi)`, `sliceFrom(lo)`, `sliceTo(hi)`, `trim()`, `trimStart()`, `trimEnd()` | the same kind of text |
+| `equals(t)`, `compare(t)`, `equalsIgnoreAsciiCase(t)`, `compareIgnoreAsciiCase(t)` | `bool`, `i32`; ASCII case only |
+| `indexOf(t)`, `lastIndexOf(t)`, `indexOfByte(b)`, `indexOfIgnoreAsciiCase(t)` | `usize?` |
+| `contains(t)`, `startsWith(t)`, `endsWith(t)`, `startsWithIgnoreAsciiCase(t)`, `endsWithIgnoreAsciiCase(t)` | `bool` |
+| `splitOnce(t)`, `split(t)` | `TextPair` (`left`, `right`) or null; an iterator of pieces |
+| `chars()` | an iterator of `TextChar` (`value`, `offset`, `length`, `valid`): U+FFFD for each maximal subpart of a bad sequence |
+| `toUtf8()`, `isUtf8()`, `isCharBoundary(i)` | `StringView?`; `bool`; `bool` |
+
+On a `StringView` a match must be whole characters, so a needle that is not UTF-8 is never found inside one, and
+every piece stays UTF-8. A `TextBuffer` has `append(t)` (`Result<bool, AllocError>`), `appendLossy(t)`, `bytes()`
+and `clear()`: a `String` holds UTF-8 only, so its `append` of text that is not UTF-8 appends nothing and answers
+`false`, and `appendLossy` writes U+FFFD for each bad sequence. A `StringView`'s and a `String`'s own searches
+take any text as the needle too (`s.indexOf(b)` with a `ByteStringView`). A `ByteStringView` compares with `==`
+against a literal, a `StringView` or another view, `v[i]` is its byte `i`, and a `match` on it takes string
+patterns.
+
+```ceesafe
+fn keyword<T: TextView>(word: T) -> bool => word.trim().equalsIgnoreAsciiCase("select");
+
+fn quoted<B: TextBuffer, T: TextView>(out: borrow mut B, name: T) -> Result<void, AllocError> {
+    out.append("\"")?;
+    out.appendLossy(name)?;
+    out.append("\"")?;
+    return Ok();
+}
+
+fn main() {
+    let raw = [0x53u8, 0x65, 0x6C, 0x65, 0x63, 0x74];
+    Console.writeLine(keyword(" SELECT "));
+    Console.writeLine(keyword(ByteStringView.fromBytes(raw[..])));
+    let bad = [0x61u8, 0xFF];
+    var s = String.create();
+    quoted(mut s, ByteStringView.fromBytes(bad[..]))!;
+    Console.writeLine(s);
+    for (c in ByteStringView.fromBytes(bad[..]).chars()) {
+        Console.write(c.value);
+        Console.writeLine(if (c.valid) "" else " (not UTF-8)");
+    }
+}
+```
+
+```text
+true
+true
+"a�"
+97
+65533 (not UTF-8)
 ```
 
 ## `Vector`, arrays and slices

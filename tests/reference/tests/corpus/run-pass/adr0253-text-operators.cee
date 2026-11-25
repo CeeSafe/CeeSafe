@@ -1,0 +1,96 @@
+// ADR 0253 §2.6–§2.8: `==` between a ByteStringView and a literal, a StringView or another ByteStringView; `v[i]` on
+// a ByteStringView; a `match` of one with string patterns; and a concrete StringView's or String's searches with a
+// needle of any TextView, which find whole characters only. Expectations written by hand.
+
+fn kind(word: ByteStringView) -> i32 => match (word) {
+    "select" | "SELECT" => 1,
+    "insert" => 2,
+    _ => 0,
+};
+
+fn main() {
+    let raw = [0x61u8, 0xFF, 0x62];
+    let bad = ByteStringView.fromBytes(raw[..]);
+    let sel = ByteStringView.fromText("select");
+    // ==, either order, with a literal, a StringView and a ByteStringView
+    Console.writeLine(sel == "select");
+    Console.writeLine("select" == sel);
+    Console.writeLine(sel != "SELECT");
+    let s: StringView = "select";
+    Console.writeLine(sel == s);
+    Console.writeLine(s != sel);
+    Console.writeLine(bad == ByteStringView.fromBytes(raw[..]));
+    Console.writeLine(bad == "a\u{FFFD}b");
+    // indexing gives a byte
+    Console.writeLine(bad[1]);
+    var sum: u32 = 0;
+    for (i in 0..bad.length()) {
+        sum += bad[i] as u32;
+    }
+    Console.writeLine(sum);
+    // match with string patterns
+    Console.writeLine(kind(sel));
+    Console.writeLine(kind(ByteStringView.fromText("SELECT")));
+    Console.writeLine(kind(ByteStringView.fromText("insert")));
+    Console.writeLine(kind(bad));
+    let r = match (bad) {
+        "a" => 1,
+        x => if (x.length == 3) 3 else 0, // the bytes
+    };
+    Console.writeLine(r);
+    // needles of any kind on a concrete StringView and String
+    let text: StringView = "caf\u{E9} au lait";
+    let tail = [0xA9u8];
+    Console.writeLine(text.indexOf(ByteStringView.fromText("au")) ?? 99);
+    Console.writeLine(text.indexOf(tail[..]).isNull());
+    Console.writeLine(text.contains(ByteStringView.fromBytes(tail[..])));
+    Console.writeLine(text.startsWith("caf".bytes()));
+    Console.writeLine(text.endsWith(ByteStringView.fromText("lait")));
+    Console.writeLine(text.equalsIgnoreAsciiCase(ByteStringView.fromText("CAF\u{E9} AU LAIT")));
+    Console.writeLine(text.lastIndexOf(ByteStringView.fromText("a")) ?? 99);
+    let pair = text.splitOnce(ByteStringView.fromText(" "))!;
+    Console.writeLine(pair.left);
+    Console.writeLine(pair.right);
+    var n = 0;
+    for (piece in text.split(ByteStringView.fromText(" "))) {
+        n += 1;
+        Console.writeLine(piece);
+    }
+    Console.writeLine(n);
+    let owned = String.from("x,y")!;
+    Console.writeLine(owned.indexOf(ByteStringView.fromText(",")) ?? 99);
+    Console.writeLine(text.indexOf("au") ?? 99);
+    let au: StringView = "au";
+    Console.writeLine(text.indexOf(au) ?? 99);
+}
+
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 255
+// expect-stdout: 450
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 10
+// expect-stdout: café
+// expect-stdout: au lait
+// expect-stdout: café
+// expect-stdout: au
+// expect-stdout: lait
+// expect-stdout: 3
+// expect-stdout: 1
+// expect-stdout: 6
+// expect-stdout: 6

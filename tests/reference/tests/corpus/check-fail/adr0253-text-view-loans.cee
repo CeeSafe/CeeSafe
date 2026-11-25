@@ -1,0 +1,25 @@
+// ADR 0253 §2.3: `fn raw(this) -> Slice<u8>` in an interface borrows what `this` holds. An implementation for an
+// owning type cannot return a loan of its by-value `this` (N0244), and the bytes a generic `bytes()` returns do not
+// outlive the text they view (N0243).
+interface Raw {
+    fn raw(this) -> Slice<u8>;
+}
+
+struct Owner {
+    data: [u8; 4];
+}
+
+impl Raw for Owner {
+    fn raw(this) -> Slice<u8> => this.data[..]; // error[N0244]
+}
+
+fn rawOf<T: TextView>(t: T) -> Slice<u8> => t.bytes();
+
+fn main() {
+    var keep = "x".bytes();
+    {
+        let s = String.from("hello")!;
+        keep = rawOf(s.view());
+    } // error[N0243]
+    Console.writeLine(keep.length);
+}

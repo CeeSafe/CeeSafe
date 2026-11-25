@@ -1,0 +1,136 @@
+// lib/core's text views in the checker (ADR 0253 §2.6–§2.8): `==` between a `ByteStringView` and a `StringView` or
+// another `ByteStringView`, `v[i]` on a `ByteStringView`, a `match` of one with string patterns, and a concrete
+// `StringView`'s searches with a needle of any `TextView`. Each is lowered to lib/core calls: no new HIR.
+
+/// Is `t` lib/core's `ByteStringView`?
+fn isByteStringViewType(c: borrow Checker, t: u32) -> bool {
+    if (t == none() || !c.types.is(t, TypeKind.Struct) || c.types.info(t).structDef == none()) {
+        return false;
+    }
+    let file = c.types.structs[c.types.info(t).structDef as usize].file;
+    return file != none() && (file as usize) < c.filePaths.length &&
+        startsWithText(c.filePaths[file as usize].view(), "lib/core/") && sameText(c.typeName(t), "ByteStringView");
+}
+
+/// The `TextView` method `name` of `typ` (an impl's, or an inherited default), or none.
+fn textViewMethod(c: borrow mut Checker, typ: u32, name: StringView) -> Result<u32, AllocError> {
+    let symbol = c.intern(name)?;
+    return Ok(implMethodFor(c, typ, symbol));
+}
+
+/// The bytes of `value`, a `StringView` (its bytes, as a cast) or a `ByteStringView` (its `bytes()`), as a
+/// `Slice<u8>`.
+fn textViewBytes(c: borrow mut Checker, value: u32, span: Span) -> Result<u32, AllocError> {
+    let t = c.typeOf(value);
+    let u8Type = c.types.u8;
+    let slice = c.types.sliceOf(u8Type, false)?;
+    if (c.types.isStringView(t)) {
+        let s = c.spanOf(value);
+        return c.expr(HirExpr.Cast(value), slice, s.start, s.end);
+    }
+    let function = textViewMethod(c, t, "bytes")?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [value];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `v == t` and `v != t` where one side is a `ByteStringView` and the other a `StringView` (a string literal
+/// included) or a `ByteStringView` (ADR 0253 §2.6): the bytes compared. None for any other operands.
+fn textViewEquality(c: borrow mut Checker, op: BinaryOp, left: u32, right: u32, span: Span) -> Result<u32, AllocError> {
+    let lt = c.typeOf(left);
+    let rt = c.typeOf(right);
+    let leftBytes = isByteStringViewType(c, lt);
+    let rightBytes = isByteStringViewType(c, rt);
+    if (!leftBytes && !rightBytes) {
+        return Ok(none());
+    }
+    if (!(leftBytes || c.types.isStringView(lt)) || !(rightBytes || c.types.isStringView(rt))) {
+        return Ok(none());
+    }
+    let l = textViewBytes(c, left, span)?;
+    let r = textViewBytes(c, right, span)?;
+    if (c.isBottom(l) || c.isBottom(r)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let boolType = c.types.boolType;
+    return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+}
+
+/// `v[i]` on a `ByteStringView` (ADR 0253 §2.7): its `byteAt(i)`, a `u8`, panicking past the end as `s[i]` does.
+fn byteStringViewIndex(c: borrow mut Checker, target: u32, position: u32, span: Span) -> Result<u32, AllocError> {
+    let function = textViewMethod(c, c.typeOf(target), "byteAt")?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [target, position];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// Is `pattern` a string literal, or alternatives or an `@` binding of them only (as `viewPattern` asks)?
+fn isStringPatternSyntax(c: borrow Checker, pattern: u32) -> bool {
+    match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Literal(literal) => { return isStringLiteral(c, literal); }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (!isStringPatternSyntax(c, c.front.ast.at(alternatives, k))) {
+                    return false;
+                }
+            }
+            return alternatives.count > 0;
+        }
+        PatternNode.At(_, inner) => { return isStringPatternSyntax(c, inner); }
+        _ => { return false; }
+    }
+}
+
+/// The interface `TextView`'s entry in the checker, or none.
+fn textViewInterface(c: borrow mut Checker) -> Result<u32, AllocError> {
+    let symbol = c.intern("TextView")?;
+    return Ok(match (foundEntity(c.coreItems, Word { value: symbol as u64 })) {
+        Entity.Interface(entry) => entry,
+        _ => none(),
+    });
+}
+
+/// `s.indexOf(t)` and the other searches of a concrete `StringView` (or a `String`'s text, `view`) whose one
+/// argument, already checked as `needle`, is a `TextView` other than a `StringView` (ADR 0253 §2.8): `TextView`'s
+/// method of the name, with the needle's type, so matches stay whole characters. None when the needle is no such
+/// text: the caller then takes it as a `StringView`, as before.
+fn otherTextNeedleSearch(
+    c: borrow mut Checker,
+    name: u32,
+    view: u32,
+    needle: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let needleType = c.typeOf(needle);
+    if (c.types.isStringView(needleType) || c.isBottom(needle)) {
+        return Ok(none());
+    }
+    let entry = textViewInterface(c)?;
+    if (entry == none()) {
+        return Ok(none());
+    }
+    let none0 = Vector<u32>.create();
+    if (!implementsQualified(c, needleType, entry, none0.view())) {
+        return Ok(none());
+    }
+    let viewType = c.typeOf(view);
+    let method = implMethodIn(c, viewType, name, entry);
+    if (method == none()) {
+        return Ok(none());
+    }
+    let template = c.hir.functions[method as usize].methodTemplate;
+    if (template == none()) {
+        return Ok(none());
+    }
+    let arguments = [needleType];
+    let instance = instantiateFunction(c, template, arguments[..], span)?;
+    if (instance == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [view, needle];
+    return libraryCall(c, instance, values[..], span);
+}

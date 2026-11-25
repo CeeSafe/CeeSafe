@@ -470,6 +470,27 @@ fn checkMethodCallVia(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    if (viewImplCall(c, c.typeOf(receiver), memberIdent.symbol, general, memberIdent.start)) {
+        // A method of an interface implemented for a view (ADR 0253 §2.2): `this` is the view itself.
+        let viewType = c.typeOf(receiver);
+        let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+        if (!general) {
+            let named = qualifiedMethod(c, viewType, via, member, viewType)?;
+            if (named == none()) {
+                checkArgumentsLoosely(c, arguments)?;
+                return c.errorResult(span.start, span.end);
+            }
+            return passReceiver(c, named, receiver, viewType, viewType, target, member, arguments, span);
+        }
+        if (reportAmbiguousCall(c, viewType, target, member, arguments, span)?) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let function = findMethod(c, viewType, memberIdent.symbol, memberSpan)?;
+        if (function != none() && isMethod(c, function)) {
+            return passReceiver(c, function, receiver, viewType, viewType, target, member, arguments, span);
+        }
+    }
     let read = autoDeref(c, receiver)?;
     let readType = c.typeOf(read);
     if (general && c.types.is(readType, TypeKind.RawPointer)) {
@@ -561,8 +582,11 @@ fn checkMethodCallVia(
     }
     // A Vector's or String's own methods, unless the name is an impl's (ADR 0052 §3.3): impl methods on them are reached
     // by the general lookup below, and so is every method a qualified call names.
+    // An instance of generic code whose call went through a bound calls the interface's method, as its generic version
+    // did, though the name is a built-in one too (`append` of `TextBuffer`, ADR 0253 §2.2).
     let implOnVector = !general || (c.types.is(c.typeOf(vector), TypeKind.Vector) &&
-        vectorMethodArity(c.types.isString(c.typeOf(vector)), c.name(memberIdent.symbol)) < 0 &&
+        (vectorMethodArity(c.types.isString(c.typeOf(vector)), c.name(memberIdent.symbol)) < 0 ||
+            recordedInterface(c, c.file, memberIdent.start) != none()) &&
         implMethodFor(c, c.typeOf(vector), memberIdent.symbol) != none());
     if (c.types.is(c.typeOf(vector), TypeKind.Vector) && !implOnVector) {
         return checkVectorMethod(c, member, arguments, vector, targetSpan, span);
@@ -759,7 +783,13 @@ fn passReceiver(
                 argument = borrowReceiver(c, receiver, true, targetSpan)?;
             }
         }
-        _ => { argument = autoDeref(c, receiver)?; }
+        _ => {
+            // A view's interface method takes the view by value (ADR 0253 §2.2), not what it refers to.
+            argument = if (isViewImplTarget(c, structType) && c.typeOf(receiver) == structType) receiver else autoDeref(
+                c,
+                receiver,
+            )?;
+        }
     }
     if (c.isBottom(argument)) {
         checkArgumentsLoosely(c, arguments)?;

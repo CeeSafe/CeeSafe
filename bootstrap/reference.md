@@ -9,10 +9,10 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 
 | Item | Value |
 |---|---|
-| Compiler | `ceesafec 0.94.5`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.94.5/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
-| sha256 | `62558b8a648e9d86c1a7f0f554a55a7feaa93829da1147da9c1429623d381afe` (linux-x64), `de082908d70b8411c602abaa9143d0f180bf73ce55f60f18a51d8eac470c3754` (osx-arm64) (v0.94.5's `SHA256SUMS`) |
-| Chain | none: 0.94.5 builds the tree directly (`tools/bootstrap_release.sh`) |
-| Workflows | `release.yml` and `checks.yml`, `windows.yml`, `freebsd.yml` and `linux32.yml`: every one builds the tree from this release (before 2026-11-23, `freebsd.yml` used 0.51.1 and `linux32.yml` 0.82.0) |
+| Compiler | `ceesafec 0.95.10`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.95.10/ceesafec-linux-x64.tar.gz` (and `ceesafec-osx-arm64.tar.gz` on a Mac) |
+| sha256 | `b177ef522e3264fb6260f73bbb863e826e95e0b1843b0d6f9d8ff7ea06d44fb3` (linux-x64), `3419a1a58904c46939db326346fe12a648d56039de31150fc13b5bb5391b2aea` (osx-arm64) (v0.95.10's `SHA256SUMS`) |
+| Chain | none: 0.95.10 builds the tree directly (`tools/bootstrap_release.sh`) |
+| Workflows | `release.yml` and `checks.yml`, `windows.yml`, `freebsd.yml` and `linux32.yml`: every one builds the tree from this release's linux-x64 archive (before 2026-11-23, `freebsd.yml` used 0.51.1 and `linux32.yml` 0.82.0) |
 | Checked | 2026-11-23 at the commit that makes it stage 0: macOS arm64 (the released, notarized binary) and Ubuntu 24.04 x86-64 (its linux-x64 archive, with clang 18), `tools/bootstrap_release.sh` with no chain, fixed point reached on both, the same seed `main.c` on both (sha-256 `35e3eb3d7a9e011b…`) |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
@@ -36,6 +36,7 @@ A platform with no release builds a first `ceesafec` from a release's C seed (`c
 | 2026-11-01 | ceesafec 0.3.2 | the first release built from a CeeSafe release; it builds the tree with no chain (`tools/bootstrap_release.sh` keeps 0.2.0's) |
 | 2026-11-20 | ceesafec 0.78.1 | the owner: "we need to replace it with a latest version": 0.3.2's chain ended in 0.8.0, which held the compiler's own sources to 0.8.0's language (no `let _`, no two-phase borrows) |
 | 2026-11-23 | ceesafec 0.94.5 | the owner: "We need to unify the ceesafec version … to the latest released one instead of 0.51.0 and 0.78.1": one stage 0 for every workflow, the latest release; `freebsd.yml`'s 0.51.1 had refused a line 0.78.1 accepts |
+| 2026-11-25 | ceesafec 0.95.10 | the owner: "Move stage 0 to 0.95.9 or later": the newest release, which builds the tree with no chain; the compiler's own sources may now use what 0.95.10 accepts, ADR 0218's float methods and the runtime's `ceesafe_math_*` among them (ADR 0248 §2.3 and §6.2) |
 
 ## Fixed points
 

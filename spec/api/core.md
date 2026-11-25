@@ -25,8 +25,6 @@
 - [struct VectorBytes](#struct-vectorbytes)
 - [struct ByteStringView](#struct-bytestringview)
 - [struct ByteString](#struct-bytestring)
-- [struct ByteStringHalves](#struct-bytestringhalves)
-- [struct ByteStringSplit](#struct-bytestringsplit)
 - [struct Utf8Chunk](#struct-utf8chunk)
 - [struct Utf8Chunks](#struct-utf8chunks)
 - [struct RawCell](#struct-rawcell)
@@ -81,6 +79,12 @@
 - [struct ByteSearch](#struct-bytesearch)
 - [struct StringCopying](#struct-stringcopying)
 - [struct StringBytes](#struct-stringbytes)
+- [interface TextView](#interface-textview)
+- [interface TextBuffer](#interface-textbuffer)
+- [struct TextPair](#struct-textpair)
+- [struct TextPieces](#struct-textpieces)
+- [struct TextChar](#struct-textchar)
+- [struct TextChars](#struct-textchars)
 
 ## struct PhysAddr
 
@@ -1834,80 +1838,6 @@ public fn fromBytes(bytes: Slice<r, u8>) -> ByteStringView<r>
 
 `bytes`, as a byte string: no copy, and no check.
 
-### ByteStringView.bytes
-
-```ceesafe
-public fn bytes(borrow this) -> Slice<r, u8>
-```
-
-The bytes.
-
-### ByteStringView.length
-
-```ceesafe
-public fn length(borrow this) -> usize
-```
-
-The length in bytes.
-
-### ByteStringView.isEmpty
-
-```ceesafe
-public fn isEmpty(borrow this) -> bool
-```
-
-Whether there are no bytes.
-
-### ByteStringView.byteAt
-
-```ceesafe
-public fn byteAt(borrow this, index: usize) -> u8
-```
-
-The byte at `index`; panics past the end, as `s[index]` does.
-
-### ByteStringView.slice
-
-```ceesafe
-public fn slice(borrow this, start: usize, end: usize) -> ByteStringView<r>
-```
-
-The bytes from `start` up to `end`; panics as `s[start..end]` does when they are not inside. A slice may cut
-a UTF-8 sequence: the bytes are any bytes.
-
-### ByteStringView.sliceFrom
-
-```ceesafe
-public fn sliceFrom(borrow this, start: usize) -> ByteStringView<r>
-```
-
-The bytes from `start` to the end.
-
-### ByteStringView.sliceTo
-
-```ceesafe
-public fn sliceTo(borrow this, end: usize) -> ByteStringView<r>
-```
-
-The first `end` bytes.
-
-### ByteStringView.toUtf8
-
-```ceesafe
-public fn toUtf8(borrow this) -> StringView<r>?
-```
-
-The text as a `StringView` when the bytes are UTF-8 (the Unicode Standard's Table 3-7, as
-`StringView.fromUtf8` checks), with no copy; null when they are not.
-
-### ByteStringView.isUtf8
-
-```ceesafe
-public fn isUtf8(borrow this) -> bool
-```
-
-Whether the bytes are UTF-8.
-
 ### ByteStringView.toUtf8Lossy
 
 ```ceesafe
@@ -1936,121 +1866,6 @@ The text in pieces, for a printer that escapes what is not UTF-8: each `Utf8Chun
 and then one maximal subpart of an ill-formed sequence (1 to 3 bytes), which only the last chunk may lack.
 Empty bytes give no chunk.
 
-### ByteStringView.equals
-
-```ceesafe
-public fn equals(borrow this, other: ByteStringView) -> bool
-```
-
-Whether the bytes are the same as `other`'s: `==` across regions.
-
-### ByteStringView.compare
-
-```ceesafe
-public fn compare(borrow this, other: ByteStringView) -> i32
-```
-
-Bytewise order: negative, zero or positive as this text comes before, is the same as or comes after
-`other`; a prefix comes before the longer text. For UTF-8 it is code point order, as for `String`.
-
-### ByteStringView.indexOf
-
-```ceesafe
-public fn indexOf(borrow this, needle: Slice<u8>) -> usize?
-```
-
-Where `needle` first is, in bytes; 0 for an empty needle.
-
-### ByteStringView.lastIndexOf
-
-```ceesafe
-public fn lastIndexOf(borrow this, needle: Slice<u8>) -> usize?
-```
-
-Where `needle` last is; the length for an empty needle.
-
-### ByteStringView.indexOfByte
-
-```ceesafe
-public fn indexOfByte(borrow this, b: u8) -> usize?
-```
-
-Where the byte `b` first is.
-
-### ByteStringView.contains
-
-```ceesafe
-public fn contains(borrow this, needle: Slice<u8>) -> bool
-```
-
-Whether `needle` occurs.
-
-### ByteStringView.startsWith
-
-```ceesafe
-public fn startsWith(borrow this, prefix: Slice<u8>) -> bool
-```
-
-Whether the bytes begin with `prefix`.
-
-### ByteStringView.endsWith
-
-```ceesafe
-public fn endsWith(borrow this, suffix: Slice<u8>) -> bool
-```
-
-Whether the bytes end with `suffix`.
-
-### ByteStringView.equalsIgnoreAsciiCase
-
-```ceesafe
-public fn equalsIgnoreAsciiCase(borrow this, other: Slice<u8>) -> bool
-```
-
-Whether the bytes are `other`'s, `A`–`Z` and `a`–`z` taken as the same.
-
-### ByteStringView.trim
-
-```ceesafe
-public fn trim(borrow this) -> ByteStringView<r>
-```
-
-Without ASCII whitespace at either end.
-
-### ByteStringView.trimStart
-
-```ceesafe
-public fn trimStart(borrow this) -> ByteStringView<r>
-```
-
-Without ASCII whitespace at the start.
-
-### ByteStringView.trimEnd
-
-```ceesafe
-public fn trimEnd(borrow this) -> ByteStringView<r>
-```
-
-Without ASCII whitespace at the end.
-
-### ByteStringView.splitOnce
-
-```ceesafe
-public fn splitOnce(borrow this, separator: Slice<u8>) -> ByteStringHalves<r>?
-```
-
-The bytes before the first `separator` and after it, or null if it does not occur. An empty separator is
-found at the start.
-
-### ByteStringView.split
-
-```ceesafe
-public fn split(borrow this, separator: Slice<r, u8>) -> ByteStringSplit<r>
-```
-
-The pieces between separators, in order, as `StringView`'s `split`: `"a,,b"` by `","` is `"a"`, `""`, `"b"`;
-empty bytes are one empty piece; an empty separator gives the bytes whole.
-
 ### ByteStringView.toByteString
 
 ```ceesafe
@@ -2066,6 +1881,24 @@ public fn writeTo(borrow this, w: borrow mut TextWriter)
 ```
 
 Writes the bytes, as they are, to `w`.
+
+### ByteStringView.bytes
+
+```ceesafe
+fn bytes(this) -> Slice<r, u8>
+```
+
+The bytes.
+
+### ByteStringView.slice
+
+```ceesafe
+fn slice(this, start: usize, end: usize) -> ByteStringView<r>
+```
+
+The bytes from `start` up to `end`; panics as `s[start..end]` does when they are not inside.
+
+Implements `TextView`.
 
 ## struct ByteString
 
@@ -2159,14 +1992,6 @@ public fn view(borrow this) -> ByteStringView
 
 A view of the text, a loan of the byte string.
 
-### ByteString.bytes
-
-```ceesafe
-public fn bytes(borrow this) -> Slice<u8>
-```
-
-The bytes, a loan of the byte string.
-
 ### ByteString.length
 
 ```ceesafe
@@ -2191,14 +2016,6 @@ public fn isEmpty(borrow this) -> bool
 
 Whether there are no bytes.
 
-### ByteString.clear
-
-```ceesafe
-public fn clear(borrow mut this)
-```
-
-Removes every byte; the capacity stays.
-
 ### ByteString.truncate
 
 ```ceesafe
@@ -2222,14 +2039,6 @@ public fn toUtf8Lossy(borrow this) -> Result<String, AllocError>
 ```
 
 `view().toUtf8Lossy()`: a new string, U+FFFD for each maximal subpart of an ill-formed sequence.
-
-### ByteString.append
-
-```ceesafe
-public fn append(borrow mut this, text: StringView) -> Result<void, AllocError>
-```
-
-Appends the bytes of `text`. Each append grows the buffer at most once and leaves it as it was if that fails.
 
 ### ByteString.appendBytes
 
@@ -2262,6 +2071,38 @@ public fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError
 ```
 
 Appends `value` in decimal: `appendNumber` for a `u64` past `i64`'s range.
+
+### ByteString.append
+
+```ceesafe
+fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>
+```
+
+Appends the bytes of `text`: a literal, a `StringView`, a `ByteStringView` or bytes.
+
+### ByteString.appendLossy
+
+```ceesafe
+fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>
+```
+
+Appends `text` with U+FFFD for each maximal subpart of an ill-formed sequence: the bytes become UTF-8.
+
+### ByteString.bytes
+
+```ceesafe
+fn bytes(borrow this) -> Slice<u8>
+```
+
+The bytes, a loan of the byte string.
+
+### ByteString.clear
+
+```ceesafe
+fn clear(borrow mut this)
+```
+
+Removes every byte; the capacity stays.
 
 ### ByteString.appendHex
 
@@ -2305,38 +2146,11 @@ fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError>
 fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError>
 ```
 
+Implements `TextBuffer`.
+
 Implements `AppendFormatted`.
 
 Implements `AppendText`.
-
-## struct ByteStringHalves
-
-```ceesafe
-public struct ByteStringHalves<region r> {
-    public left: ByteStringView<r>;
-    public right: ByteStringView<r>;
-}
-```
-
-The parts of a byte string before and after a separator: what `s.splitOnce(sep)` finds.
-
-## struct ByteStringSplit
-
-```ceesafe
-public struct ByteStringSplit<region r>
-```
-
-The pieces of a byte string between separators, in order: `s.split(sep)`.
-
-### ByteStringSplit.next
-
-```ceesafe
-fn next(borrow mut this) -> ByteStringView<r>?
-```
-
-The next piece, or null after the last.
-
-Implements `Iterator<ByteStringView<r>>`.
 
 ## struct Utf8Chunk
 
@@ -3418,7 +3232,7 @@ public struct OsStringView<region r>
 
 A borrowed name in the system's encoding, valid for region `r` as a `StringView<r>` is. Copy; `==` compares the
 bytes. A function that takes one also takes a string literal, a `StringView` or a lent `String` (type-system.md
-§22.5). A field of this type needs a region parameter, as a view's does.
+§22.6). A field of this type needs a region parameter, as a view's does.
 
 ### OsStringView.fromText
 
@@ -3540,7 +3354,7 @@ Whether the two hold the same bytes (views of two regions).
 public struct OsString
 ```
 
-An owned name in the system's encoding (type-system.md §22.5), in a growable buffer. A move type; `==` compares the
+An owned name in the system's encoding (type-system.md §22.6), in a growable buffer. A move type; `==` compares the
 bytes.
 
 ### OsString.create
@@ -4618,3 +4432,136 @@ public fn fromUtf8Secret(v: Vector<u8, SecretHeap>) -> Result<String<SecretHeap>
 ```
 
 `fromUtf8` for a vector of `SecretHeap`.
+
+## interface TextView
+
+```ceesafe
+public interface TextView: Copy {
+    fn bytes(this) -> Slice<u8>;
+    fn slice(this, start: usize, end: usize) -> Self;
+    fn isCharBoundary(this, at: usize) -> bool => at <= this.bytes().length;
+    fn length(this) -> usize => this.bytes().length;
+    fn isEmpty(this) -> bool => this.bytes().length == 0;
+    fn byteAt(this, index: usize) -> u8 {
+        let b = this.bytes();
+        return b[index];
+    }
+    fn sliceFrom(this, start: usize) -> Self => this.slice(start, this.bytes().length);
+    fn sliceTo(this, end: usize) -> Self => this.slice(0, end);
+    fn toUtf8(this) -> StringView? => StringView.fromUtf8(this.bytes());
+    fn isUtf8(this) -> bool => StringView.fromUtf8(this.bytes()) != null;
+    fn equals<N: TextView>(this, other: N) -> bool => TextScan.compare(this.bytes(), other.bytes(), false) == 0;
+    fn compare<N: TextView>(this, other: N) -> i32 => TextScan.compare(this.bytes(), other.bytes(), false);
+    fn equalsIgnoreAsciiCase<N: TextView>(this, other: N) -> bool =>
+        TextScan.compare(this.bytes(), other.bytes(), true) == 0;
+    fn compareIgnoreAsciiCase<N: TextView>(this, other: N) -> i32 =>
+        TextScan.compare(this.bytes(), other.bytes(), true);
+    fn indexOf<N: TextView>(this, needle: N) -> usize? => TextScan.indexOfFrom(this, needle.bytes(), 0, false);
+    fn lastIndexOf<N: TextView>(this, needle: N) -> usize? => TextScan.lastIndexOf(this, needle.bytes());
+    fn indexOfByte(this, b: u8) -> usize? => ByteScan.indexOfByte(this.bytes(), b);
+    fn indexOfIgnoreAsciiCase<N: TextView>(this, needle: N) -> usize? =>
+        TextScan.indexOfFrom(this, needle.bytes(), 0, true);
+    fn contains<N: TextView>(this, needle: N) -> bool => TextScan.indexOfFrom(this, needle.bytes(), 0, false) != null;
+    fn startsWith<N: TextView>(this, prefix: N) -> bool => TextScan.prefix(this, prefix.bytes(), false);
+    fn endsWith<N: TextView>(this, suffix: N) -> bool => TextScan.suffix(this, suffix.bytes(), false);
+    fn startsWithIgnoreAsciiCase<N: TextView>(this, prefix: N) -> bool => TextScan.prefix(this, prefix.bytes(), true);
+    fn endsWithIgnoreAsciiCase<N: TextView>(this, suffix: N) -> bool => TextScan.suffix(this, suffix.bytes(), true);
+    fn trim(this) -> Self {
+        let b = this.bytes();
+        let start = ByteScan.trimStartIndex(b);
+        let end = ByteScan.trimEndIndex(b);
+        return if (start >= end) this.slice(0, 0) else this.slice(start, end);
+    }
+    fn trimStart(this) -> Self => this.slice(ByteScan.trimStartIndex(this.bytes()), this.bytes().length);
+    fn trimEnd(this) -> Self => this.slice(0, ByteScan.trimEndIndex(this.bytes()));
+    fn splitOnce<N: TextView>(this, separator: N) -> TextPair<Self>? {
+        let sep = separator.bytes();
+        let i = TextScan.indexOfFrom(this, sep, 0, false)?;
+        return TextPair { left: this.slice(0, i), right: this.slice(i + sep.length, this.bytes().length) };
+    }
+    fn split<N: TextView>(this, separator: N) -> TextPieces<Self, N> =>
+        TextPieces { text: this, separator: separator, position: 0, finished: false };
+    fn chars(this) -> TextChars<Self> => TextChars { text: this, position: 0 };
+}
+```
+
+A borrowed text: `StringView`, `ByteStringView` or `Slice<u8>`, taken and returned by value (a view is Copy).
+Lengths and indexes count bytes. Needles are any `TextView`: a string literal, either view, or bytes. On a view
+whose positions are not all character boundaries (a `StringView`), a match is a whole run of characters: a needle
+found inside a character is not found there, so every view a method returns is a valid `slice`.
+
+## interface TextBuffer
+
+```ceesafe
+public interface TextBuffer {
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>;
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
+    fn bytes(borrow this) -> Slice<u8>;
+    fn clear(borrow mut this);
+}
+```
+
+A text that grows: `String` (UTF-8 only) and `ByteString` (any bytes). Generic code reads one through its view
+(`s.view()`) and writes it through this.
+
+## struct TextPair
+
+```ceesafe
+public struct TextPair<T> {
+    public left: T;
+    public right: T;
+}
+```
+
+The parts of a text before and after a separator: what `t.splitOnce(sep)` finds.
+
+## struct TextPieces
+
+```ceesafe
+public struct TextPieces<T: TextView, N: TextView>
+```
+
+The pieces of a text between separators, in order: `t.split(sep)`. `next()` gives each, then null.
+
+### TextPieces.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+The next piece, or null after the last.
+
+Implements `Iterator<T>`.
+
+## struct TextChar
+
+```ceesafe
+@derive(Equal)
+public struct TextChar {
+    public value: u32;
+    public offset: usize;
+    public length: usize;
+    public valid: bool;
+}
+```
+
+A character of a text (`t.chars()`): a scalar value and where its bytes are, or, where the bytes are not UTF-8,
+one maximal subpart of an ill-formed sequence (1 to 3 bytes) with `value` U+FFFD and `valid` false.
+
+## struct TextChars
+
+```ceesafe
+public struct TextChars<T: TextView>
+```
+
+The characters of a text, in order: `t.chars()`. `next()` gives each, then null.
+
+### TextChars.next
+
+```ceesafe
+fn next(borrow mut this) -> TextChar?
+```
+
+The next character, or null after the last.
+
+Implements `Iterator<TextChar>`.

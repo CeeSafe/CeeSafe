@@ -14,7 +14,7 @@
   other processes and SQLite (tools/file_lock_check.py, ADR 0220), shared mappings of a file against Python's mmap
   and SQLite's -shm (tools/file_map_check.py, ADR 0232), terminals (tools/terminal_check.py, ADR 0221), a server
   stopped by SIGINT and SIGTERM (tools/signal_check.py, ADR 0125 and 0126), child processes (tools/child_check.py,
-  ADR 0169), allocation budgets (tools/budget_check.py, ADR 0170), named shared memory
+  ADR 0169), what a child receives from Process.run, capture and spawn (tools/process_check.py), allocation budgets (tools/budget_check.py, ADR 0170), named shared memory
   (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
   (tools/isolated_check.py, ADR 0175), the bound on running without waiting (tools/bound_check.py, ADR 0186),
   slices, natively and under the sanitizers (tools/slice_check.py, ADR 0189),
@@ -195,6 +195,7 @@ def main():
             ("terminals", py + [f"{HERE}/terminal_check.py", "--compiler", cee]),  # ADR 0221
             ("signals", py + [f"{HERE}/signal_check.py", "--compiler", cee]),
             ("children", py + [f"{HERE}/child_check.py", "--compiler", cee]),  # ADR 0169
+            ("processes", py + [f"{HERE}/process_check.py", "--compiler", cee]),  # type-system.md §26.5
             ("budgets", py + [f"{HERE}/budget_check.py", "--compiler", cee]),  # ADR 0170
             ("shared", py + [f"{HERE}/shared_check.py", "--compiler", cee]),  # ADR 0172
             ("handover", py + [f"{HERE}/handover_check.py", "--compiler", cee]),  # ADR 0173

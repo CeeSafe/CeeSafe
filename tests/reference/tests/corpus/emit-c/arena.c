@@ -132,15 +132,15 @@ static int32_t ceeF_main(void) {
 
 static ceeR_QS5PointE10AllocError ceeAA_S5Point(void *r, uint32_t kind, ceeT_Point v) {
     ceeT_Point *p = (ceeT_Point *)ceesafe_region_alloc_fast(r, kind, sizeof(ceeT_Point), _Alignof(ceeT_Point));
-    if (p == NULL) return ((ceeR_QS5PointE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+    if (p == NULL) return ((ceeR_QS5PointE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     *p = v;
     return ceeMk_ceeR_QS5PointE10AllocError_v_Ok(p);
 }
 
 static ceeR_QUu16E10AllocError ceeAR_u16(void *r, uint32_t kind, uint64_t n, uint16_t fill) {
-    if (n > UINT64_MAX / sizeof(uint16_t)) return ((ceeR_QUu16E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+    if (n > UINT64_MAX / sizeof(uint16_t)) return ((ceeR_QUu16E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     uint16_t *p = (uint16_t *)ceesafe_region_alloc_fast(r, kind, n == 0u ? 1u : n * sizeof(uint16_t), _Alignof(uint16_t));
-    if (p == NULL) return ((ceeR_QUu16E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+    if (p == NULL) return ((ceeR_QUu16E10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     for (uint64_t i = 0; i < n; i++) p[i] = fill;
     return ceeMk_ceeR_QUu16E10AllocError_v_Ok(((ceeSm_u16){ .ptr = p, .len = n }));
 }

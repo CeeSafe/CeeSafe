@@ -6,6 +6,8 @@ name: windows
 # its own C, and that C is compiled here; the checks then build and run their programs with it. Bluetooth printers
 # (ADR 0177) and printing a PDF (ADR 0178 §6) are checked here too: their runtime's Windows parts are built by no other
 # machine of the project's. So is the monitor of ADR 0186's bound (its Win32 thread and SRW lock, and cl's poll macro).
+# So are values of types nested past MSVC's limit on initializers (ADR 0247), which only cl refuses: gcc is on the
+# runner's PATH too, so the corpus program is built with --cc cl.
 #
 # Like checks.yml it runs when a release is tagged and when started by hand ("Run workflow"), not on pushes: it reports
 # on the release's commit and does not hold the release back.
@@ -95,10 +97,20 @@ jobs:
           cd seed
           cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
           ceesafec.exe --version
+      - name: Initializers MSVC can nest (ADR 0247), built with cl
+        if: always()
+        shell: bash
+        run: |
+          python tools/run_corpus.py --compiler seed/ceesafec.exe --corpus tests/reference/tests/corpus \
+            --family run-pass --filter adr0247 --cc cl --check-leaks
       - name: Child processes (ADR 0169)
         if: always()
         shell: bash
         run: python tools/child_check.py --compiler seed/ceesafec.exe
+      - name: What a child receives from Process.run, capture and spawn (type-system.md §26.5)
+        if: always()
+        shell: bash
+        run: python tools/process_check.py --compiler seed/ceesafec.exe
       - name: Named shared memory (ADR 0172)
         if: always()
         shell: bash

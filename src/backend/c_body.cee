@@ -260,7 +260,7 @@ fn emitFunction(
             text.push(';')?; // assigned whole before every read (§5, M9d)
         } else {
             appendText(mut text, " = ")?;
-            appendText(mut text, zero)?;
+            appendZeroInitializer(c, mut text, t)?;
             text.push(';')?;
         }
         declarations.push(text)?;
@@ -268,11 +268,14 @@ fn emitFunction(
     if ((f as usize) < e.placements.length) {
         // The storage of each stack-placed box (§2.2).
         for (slot in 0..e.placements[f as usize].slots.length) {
+            let slotType = e.placements[f as usize].slots[slot];
             var text = copyBytes("CEE_UNUSED ".bytes())?;
-            appendCTypeName(c, mut text, e.placements[f as usize].slots[slot])?;
+            appendCTypeName(c, mut text, slotType)?;
             appendText(mut text, " cee_box_")?;
             appendDecimal(mut text, slot as u64)?;
-            appendText(mut text, " = {0};")?;
+            appendText(mut text, " = ")?;
+            appendZeroInitializer(c, mut text, slotType)?;
+            text.push(';')?;
             declarations.push(text)?;
         }
     }
@@ -803,8 +806,15 @@ fn emitStatement(
                         let place = appendPlaceIn(e, c, n, sources, f, target)?;
                         e.t("    ")?;
                         e.b(place.view())?;
+                        let zeroType = n.rvalueTypes[r as usize];
+                        if (zeroNeedsHelper(c, zeroType)) {
+                            e.t(" = ")?;
+                            appendZeroHelperName(c, mut e.buf, zeroType)?;
+                            e.t("();")?; // `{0}` would reach too deep for MSVC (ADR 0247 §2.3)
+                            return e.emit();
+                        }
                         e.t(" = (")?;
-                        appendCTypeName(c, mut e.buf, n.rvalueTypes[r as usize])?;
+                        appendCTypeName(c, mut e.buf, zeroType)?;
                         e.t("){0};")?;
                         return e.emit();
                     }
@@ -2717,7 +2727,7 @@ fn appendBuiltinRvalue(
         appendVariantOf(e, c, out, t, "v_Some", 1, view.view())?;
         appendText(out, " : ((")?;
         appendCTypeName(c, out, t)?;
-        return appendText(out, "){ .tag = 0 }))");
+        return appendText(out, "){0}))");
     }
     if (b == bfSliceFromRaw()) {
         appendText(out, "((")?;
@@ -3270,11 +3280,7 @@ fn appendEnumAggregate(
     }
     let index = c.types.variants[variant as usize].index;
     if (payload.count == 0) {
-        appendText(out, "((")?;
-        appendBytes(out, name.view())?;
-        appendText(out, "){ .tag = ")?;
-        appendDecimal(out, index as u64)?;
-        return appendText(out, " })");
+        return appendUnitValue(c, out, t, name.view(), index);
     }
     var variantName = Vector<u8>.create();
     appendCVariantName(c, mut variantName, variant)?;
@@ -3316,17 +3322,35 @@ fn appendAggregate(
     values: Range,
 ) -> Result<void, AllocError> {
     let fields = borrow c.types.structs[c.types.info(t).structDef as usize].fields;
-    appendText(out, "((")?;
-    appendCTypeName(c, out, t)?;
     if (fields.length == 0) {
+        appendText(out, "((")?;
+        appendCTypeName(c, out, t)?;
         return appendText(out, "){ .cee_empty = 0 })");
     }
+    var given = false;
+    for (k in 0..fields.length) {
+        if (!isZeroOperand(n, n.at(values, truncate<u32>(k))) && !isCArrayMember(c, t, fields[k])) {
+            given = true;
+        }
+    }
+    if (!given) {
+        // Every field is zero, or a C array member assigned after: the whole value's zero (ADR 0247 §2.2).
+        return appendZeroValue(c, out, t);
+    }
+    appendText(out, "((")?;
+    appendCTypeName(c, out, t)?;
     appendText(out, "){ ")?;
-    // Fields of C state are left to C's zero-filling (§33.2); C array members are assigned after (ADR 0029).
+    // A field of C state is zero (§33.2): a scalar one is left to C's zero-filling, an aggregate one is given its
+    // zero value, since MSVC walks the whole type of a member a designated initializer leaves out (ADR 0247 §2.2). C
+    // array members are assigned after (ADR 0029).
     var any = false;
     for (k in 0..fields.length) {
         let o = n.at(values, truncate<u32>(k));
-        if (isZeroOperand(n, o) || isCArrayMember(c, t, fields[k])) {
+        let fieldType = c.types.fields[fields[k] as usize].typ;
+        let atomicInteger = if (isReprCStruct(c, t)) atomicFieldInteger(c, fieldType) else none();
+        let zero = isZeroOperand(n, o);
+        if (isCArrayMember(c, t, fields[k]) ||
+            (zero && (atomicInteger != none() || !sameText(localZero(c, fieldType).bytes(), "{0}")))) {
             continue;
         }
         if (any) {
@@ -3336,21 +3360,16 @@ fn appendAggregate(
         out.push('.')?;
         appendFieldName(c, out, fields[k])?;
         appendText(out, " = ")?;
+        if (zero) {
+            appendZeroValue(c, out, fieldType)?;
+            continue;
+        }
         let value = operandText(e, c, n, sources, f, o)?;
         appendBytes(out, value.view())?;
-        let atomicInteger = if (isReprCStruct(c, t)) atomicFieldInteger(
-            c,
-            c.types.fields[fields[k] as usize].typ,
-        ) else none();
         if (atomicInteger != none()) {
             // The member is its integer (ADR 0041 §3.1): the atomic's one field, AtomicUSize's inside an AtomicU64.
             appendText(out, if (atomicInteger == c.types.usize) ".f_inner.f_value" else ".f_value")?;
         }
-    }
-    if (!any) {
-        out.push('.')?;
-        appendFieldName(c, out, fields[0])?;
-        appendText(out, " = { 0 }")?;
     }
     return appendText(out, " })");
 }

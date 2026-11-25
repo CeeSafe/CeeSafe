@@ -915,10 +915,15 @@ public struct HostServices {
         let inPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "in"))?;
         let outPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "out"))?;
         let errPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "err"))?;
-        var file = File.create(inPath.view())?;
-        match (input) {
-            Some(bytes) => { file.write(bytes)?; }
-            null => {}
+        // The input file is closed (dropped at the end of this block) before the child is started. On Windows an
+        // open that does not share with writers fails while a handle that writes the file is open: while this file
+        // stayed open, `Process.capture` failed so for every program (ADR 0245).
+        {
+            var file = File.create(inPath.view())?;
+            match (input) {
+                Some(bytes) => { file.write(bytes)?; }
+                null => {}
+            }
         }
         var texts = Vector<HostServicesText>.create();
         HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;

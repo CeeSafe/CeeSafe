@@ -70,7 +70,7 @@ static ceeR_S3ResE4Code ceeF_make(CEE_UNUSED bool v_ok_0) {
         t_3 = t_2;
         return t_3;
     }
-    t_4 = ((ceeE_Code){ .tag = 0 });
+    t_4 = ((ceeE_Code){0});
     t_5 = ((ceeR_S3ResE4Code){ .tag = 1, .u.v_Err = { .f__0 = t_4 } });
     t_6 = t_5;
     return t_6;
@@ -94,7 +94,7 @@ static ceeR_vE4Code ceeF_use2(void) {
         return t_4;
     }
     v_r_0 = t_2.u.v_Ok.f__0;
-    t_5 = ((ceeR_vE4Code){ .tag = 0 });
+    t_5 = ((ceeR_vE4Code){0});
     t_6 = t_5;
     ceeD_3Res(&v_r_0);
     return t_6;

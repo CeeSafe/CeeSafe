@@ -895,7 +895,7 @@ fn emitServiceHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirPr
         e.line("    }")?;
         e.t("    return ((")?;
         e.b(name.view())?;
-        e.t("){ .tag = 0 });")?;
+        e.t("){0});")?;
         e.emit()?;
         e.line("}")?;
         e.line("")?;

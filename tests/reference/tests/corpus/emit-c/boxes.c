@@ -151,7 +151,7 @@ static int32_t ceeF_main(void) {
     CEE_TEMP uint32_t t_11 = 0;
     CEE_TEMP int32_t t_12 = 0;
     t_3 = ((ceeT_Res){ .f_id = ((int32_t)1) });
-    t_4 = ((ceeE_List){ .tag = 0 });
+    t_4 = ((ceeE_List){0});
     t_6 = ceeF_cons(t_3, t_4);
     t_7 = (uint32_t)t_6.tag;
     switch (t_7) {
@@ -254,7 +254,7 @@ static ceeR_XE4ListS10SystemHeapE10AllocError ceeB_XE4ListS10SystemHeap(ceeE_Lis
     ceeE_List *p = (ceeE_List *)ceesafe_alloc(sizeof(ceeE_List), CEE_ALLOC_SYSTEM);
     if (p == NULL) {
         ceeD_4List(&v);
-        return ((ceeR_XE4ListS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_XE4ListS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *p = v;
     return ceeMk_ceeR_XE4ListS10SystemHeapE10AllocError_v_Ok(p);
@@ -264,7 +264,7 @@ static ceeR_Xi32S16FailingAllocatorE10AllocError ceeB_Xi32S16FailingAllocator(in
     _Static_assert(_Alignof(int32_t) <= _Alignof(cee_max_align_t), "ceesafec: Box<i32, FailingAllocator> needs over-aligned memory");
     int32_t *p = (int32_t *)ceesafe_alloc(sizeof(int32_t), CEE_ALLOC_FAILING);
     if (p == NULL) {
-        return ((ceeR_Xi32S16FailingAllocatorE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_Xi32S16FailingAllocatorE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *p = v;
     return ceeMk_ceeR_Xi32S16FailingAllocatorE10AllocError_v_Ok(p);

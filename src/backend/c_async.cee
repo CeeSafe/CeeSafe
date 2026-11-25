@@ -1025,7 +1025,7 @@ fn emitAsyncFunction(
                 e.t(";")?; // assigned whole before every read in this resume (§5, ADR 0204)
             } else {
                 e.t(" = ")?;
-                e.t(zero)?;
+                appendZeroInitializer(c, mut e.buf, t)?;
                 e.t(";")?;
             }
             e.emit()?;

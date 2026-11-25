@@ -96,6 +96,15 @@ children with `Process.spawn`: one exits with a status, one subscribes to `Proce
 `terminate`, one is ended by `kill` (`Signal(9)`), one is dropped while it runs and must be gone, not a zombie, after
 its parent; a program that does not exist is an error; and the interpreter answers `Unsupported`.
 
+`tools/process_check.py` (type-system.md §26.5, §26.7, §26.16; in the contract suite, and on Windows in
+windows.yml) builds a program that runs a Python script and itself with awkward arguments (spaces, quotes,
+backslashes before quotes and at the end, empty arguments, tabs, newlines, `%name%`, cmd.exe's metacharacters,
+non-ASCII text, which only the script is given) through `Process.run`, `Process.capture` and `Process.spawn`; each
+child writes what it received in hex, and every argument must arrive as one and unchanged, and `capture`'s input of
+every byte value byte for byte. A missing program is `NotFound`. On Windows a `.bat` or `.cmd` program, under each
+spelling Windows reads as one (`T.CMD`, `t.bat.`, `t.cmd. .`, `t.bat::$DATA`), is refused by all three
+(`InvalidInput`), and `cmd.exe /d /c "exit 3"` runs.
+
 `tools/signal_check.py` (ADR 0125 and 0126, in the contract suite; POSIX) sends `SIGINT` and `SIGTERM` to programs,
 built and with `run --interp`: a server of tasks with a request half sent stops accepting, answers that request and
 exits 0 (built, with each reactor the host has); a server of threads does the same through `listener.shutdown()`

@@ -3315,6 +3315,10 @@ ADR 0221's.
 - `f.write(bytes)` (`Slice<u8>`): `Result<void, IoError>`; it writes all the bytes or fails.
 - `Console.read(mut buffer)`: reads standard input like `f.read`. `Console.writeBytes(bytes)`
   writes raw bytes to standard output, in order with `Console.write`.
+  - Standard input is bytes, as standard output is: on Windows a pipe or a file is read in binary mode, so `\r\n`
+    stays two bytes and `0x1A` does not end the input (ADR 0245 §2.5; before 0.95.8 the C runtime's text mode
+    dropped each `\r` before `\n` and stopped at `0x1A`). A console keeps the text mode, in which Ctrl+Z ends the
+    input; `Console.readLine` takes `\r\n` as a line's end either way.
 - `Console.writeError(text)` and `Console.writeErrorLine(text)` (`text: StringView`) write to
   standard error; standard output is flushed first, so the two keep their relative order.
 - `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.
@@ -3391,6 +3395,28 @@ ADR 0221's.
   status, or 128 plus the signal number if a signal ended it. Standard output is flushed first, so
   output keeps its order. A program that cannot be started is an error (`NotFound`, …); an argument
   with a zero byte is `InvalidInput`; if copying the arguments for the C library fails, `OutOfMemory`.
+- **Windows command lines.** A Windows program is given one command line, which it splits into its arguments itself,
+  by the C runtime's rules (`CommandLineToArgvW`). `Process.run`, `Process.capture` (§26.7), `Process.spawn` and
+  `Process.spawnWith` (§26.16, §26.18) join the program and the arguments into one line that those rules split back
+  into the same texts, and start it with `CreateProcessW`:
+  - the program is the line's first word, which is read without escapes: it is quoted when it is empty or has a
+    space or tab. A program with a `"`, which no Windows file name has, is `InvalidInput`;
+  - an argument is written as it is when it is not empty and has no space, tab or `"`. Otherwise it is quoted:
+    in the quotes a `"` is written `\"`, the backslashes before a `"` or before the closing quote are doubled, and
+    other backslashes are written as they are. So an empty argument is `""`, `a b` is one argument, and
+    `C:\dir\` stays `C:\dir\`;
+  - the line is UTF-16, from the UTF-8 texts; one longer than Windows takes (32,767 units) is an error
+    (`IoError.Other`, the C runtime's `E2BIG`).
+  - `CreateProcessW` finds a program named without a directory in the program's own directory, the working
+    directory, the system directories and then `PATH`, and adds `.exe` to a name without an extension.
+  - **Batch files are refused.** `CreateProcessW` runs a `.bat` or `.cmd` file through cmd.exe, which splits the line
+    by rules of its own and expands `%name%` in it, so no quoting by the rules above keeps an argument from being
+    read as commands (BatBadBut, CVE-2024-24576). A program whose name's last component ends in `.bat` or `.cmd`, in
+    any case, also before a `:` (a drive or an alternate stream) and with the dots and spaces Windows drops from the
+    end of a name, is therefore `InvalidInput`, before anything is started. A program that means to run a batch file
+    runs `cmd.exe` itself, and quotes the line for cmd.exe itself.
+  - Before 0.95.8 (ADR 0245), `Process.run` passed its arguments to `_wspawnvp`, which joins them without
+    quoting: an argument with a space reached the child as two.
 
 ### 26.6 Runtime (Profile A and hosted)
 Implemented in `runtime/hosted/ceesafe_rt_io.c` over the C library's `open`, `read`, `write`,
@@ -3415,7 +3441,11 @@ Diagnostics: none new.
   which CosmoOS's libc does not offer.
   - POSIX: `posix_spawn` file actions.
   - CosmoOS: `spawnvp`'s handle mapping (its `spawn.h`).
-  - Windows: `CreateProcess`, quoting the arguments by the C runtime's rules.
+  - Windows: `CreateProcessW`, with the command line of §26.5 (a batch file is refused). The input file is written
+    and closed before the child is started, and is opened for the child to read, shared with readers and writers;
+    the output files are created for the child, shared with readers. Before 0.95.8 (ADR 0245) lib/std kept the
+    input file open for writing while the runtime opened it to read without sharing with writers, which Windows
+    refuses: every `capture` failed there.
 - **Errors.** As for `Process.run`: a program that cannot be started is `NotFound` and the like, and a failed
   allocation is `OutOfMemory`. A mistake in the call's arguments is reported against `HostServices.capture`, lib/std's
   function behind it.
@@ -4208,7 +4238,7 @@ Diagnostics: none new.
 - `Process.spawn(program, arguments, options)`: `Result<ChildProcess, IoError>`. It starts `program` (a
   `StringView`, found on `PATH` as for `Process.run`) with `arguments: borrow Vector<StringView>` and returns: the
   child runs beside this program, with its environment and working directory. A program that cannot be started is
-  `NotFound` and the like.
+  `NotFound` and the like. On Windows the command line is §26.5's, and a batch file is refused (`InvalidInput`).
   - `options: ChildOptions` (lib/std) says what the child's standard `input`, `output` and `error` are, each a
     `ChildStream`: `Inherit` (the parent's) or `Null` (the null device). `ChildOptions.inherit()` and
     `ChildOptions.quiet()` are all three of one kind.

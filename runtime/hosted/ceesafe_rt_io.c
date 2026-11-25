@@ -524,9 +524,31 @@ static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t
 static void cee_socket_close(int32_t id);
 #endif
 
+#ifdef _WIN32
+/* Standard input is bytes, as standard output is (ceesafe_rt_hosted.c; ADR 0245 §2.5): a pipe or a file is read in
+   binary mode, so "\r\n" stays two bytes and 0x1A does not end it. A console keeps the text mode, in which Ctrl+Z
+   ends the input, and a stream without a handle is left alone (_setmode on it is an invalid parameter). Switched
+   once, before the first read; a thread that comes while another switches waits for it. */
+static uint32_t cee_stdin_mode; /* 0 not switched, 1 being switched, 2 switched */
+static void cee_stdin_binary(void) {
+    if (ceesafe_atomic_load_u32(&cee_stdin_mode) == 2u) return;
+    if (ceesafe_atomic_cas_u32(&cee_stdin_mode, 0u, 1u) == 0u) {
+        intptr_t handle = _get_osfhandle(0);
+        if (handle != -1 && handle != -2 && GetFileType((HANDLE)handle) != FILE_TYPE_CHAR) {
+            (void)_setmode(0, _O_BINARY);
+        }
+        ceesafe_atomic_store_u32(&cee_stdin_mode, 2u);
+    } else {
+        while (ceesafe_atomic_load_u32(&cee_stdin_mode) != 2u) {
+        }
+    }
+}
+#endif
+
 /* One read of a file descriptor (not a socket's id): the count, 0 at the end; interrupted calls are retried. */
 static cee_io_result cee_fd_read_once(int32_t fd, uint8_t *buffer, size_t chunk) {
 #ifdef _WIN32
+    if (fd == 0) cee_stdin_binary();
     int n;
     do {
         n = _read(fd, buffer, (unsigned)chunk);
@@ -2154,6 +2176,133 @@ static char *ceesafe_c_string(cee_str text, int32_t *error) {
     return copy;
 }
 
+#ifdef _WIN32
+/* Windows command lines (type-system.md §26.5). A Windows program is given one line and splits it itself, by the C
+ * runtime's rules (CommandLineToArgvW; the UCRT's parser agrees with it on every line written here, which never puts
+ * `""` inside quotes). So `Process.run`, `capture`, `spawn` and `spawnWith` join the program and its arguments into a
+ * line those rules split back into the same texts, and start it with CreateProcessW. */
+
+/* Appends `argument`: as it is when it is not empty and has no space, tab or quote; else in quotes, in which a quote
+ * is escaped (`\"`) and the backslashes before a quote, or before the closing quote, are doubled. Other backslashes
+ * are literal. */
+static size_t ceesafe_host_quote(char *line, size_t at, size_t capacity, const char *argument, int *ok) {
+    int plain = argument[0] != 0;
+    for (const char *c = argument; *c; c++) {
+        if (*c == ' ' || *c == '\t' || *c == '"') plain = 0;
+    }
+#define CEESAFE_PUT(ch) do { if (at + 1u >= capacity) { *ok = 0; return at; } line[at++] = (ch); } while (0)
+    if (plain) {
+        for (const char *c = argument; *c; c++) CEESAFE_PUT(*c);
+        return at;
+    }
+    CEESAFE_PUT('"');
+    for (const char *c = argument;; c++) {
+        size_t slashes = 0;
+        while (*c == '\\') { slashes++; c++; }
+        if (*c == 0) {
+            for (size_t i = 0; i < slashes * 2u; i++) CEESAFE_PUT('\\');
+            break;
+        }
+        if (*c == '"') {
+            for (size_t i = 0; i < slashes * 2u + 1u; i++) CEESAFE_PUT('\\');
+        } else {
+            for (size_t i = 0; i < slashes; i++) CEESAFE_PUT('\\');
+        }
+        CEESAFE_PUT(*c);
+    }
+    CEESAFE_PUT('"');
+    return at;
+}
+
+/* Appends the program, the line's first word. CreateProcessW and CommandLineToArgvW read it without escapes: to the
+ * next quote if it starts with one, else to the first space or tab. So it is quoted, as it is, when it is empty or
+ * has a space or tab; the caller has refused a quote, which no Windows file name has. */
+static size_t ceesafe_host_quote_program(char *line, size_t at, size_t capacity, const char *program, int *ok) {
+    int plain = program[0] != 0;
+    for (const char *c = program; *c; c++) {
+        if (*c == ' ' || *c == '\t') plain = 0;
+    }
+    if (!plain) CEESAFE_PUT('"');
+    for (const char *c = program; *c; c++) CEESAFE_PUT(*c);
+    if (!plain) CEESAFE_PUT('"');
+    return at;
+}
+#undef CEESAFE_PUT
+
+/* Whether `program` names a batch file. CreateProcessW runs a `.bat` or `.cmd` file through cmd.exe, which splits
+ * the line by rules of its own and expands `%name%` in it, so no quoting by CommandLineToArgvW's rules is safe for
+ * its arguments (BatBadBut, CVE-2024-24576): the runtime refuses such a program. The test is on the name's last
+ * component: each part of it between colons (a drive, an alternate stream), without the dots and spaces Windows
+ * drops from the end of a name, is checked for the two extensions, in any case. A name without an extension is no
+ * batch file: CreateProcessW adds `.exe` to it, never `.bat`. */
+static bool cee_win_batch(const char *program) {
+    const char *name = program;
+    for (const char *c = program; *c; c++) {
+        if (*c == '\\' || *c == '/') name = c + 1;
+    }
+    for (const char *part = name;;) {
+        size_t end = 0;
+        while (part[end] != 0 && part[end] != ':') end++;
+        size_t kept = end;
+        while (kept > 0u && (part[kept - 1u] == '.' || part[kept - 1u] == ' ')) kept--;
+        if (kept >= 4u && part[kept - 4u] == '.') {
+            char a = (char)(part[kept - 3u] | 0x20), b = (char)(part[kept - 2u] | 0x20), c = (char)(part[kept - 1u] | 0x20);
+            if ((a == 'b' && b == 'a' && c == 't') || (a == 'c' && b == 'm' && c == 'd')) return true;
+        }
+        if (part[end] == 0) return false;
+        part += end + 1u;
+    }
+}
+
+/* The command line for CreateProcessW: `program`, then `arguments`, as UTF-16 in `*made` (from the counted
+ * allocator; the caller frees it). 0, or a negative errno: EINVAL for a zero byte, a quote in the program, a batch
+ * file or text that is not UTF-8; E2BIG for a line longer than Windows takes (32,767 units); ENOMEM. */
+static int64_t cee_win_command_line(cee_str program, const cee_str *arguments, uint64_t count, wchar_t **made) {
+    *made = NULL;
+    size_t capacity = 32768u;
+    char *line = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
+    wchar_t *wide = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+    int ok = line != NULL && wide != NULL;
+    int64_t result = ok ? 0 : -(int64_t)ENOMEM;
+    size_t at = 0;
+    for (uint64_t i = 0; ok && i <= count; i++) {
+        int32_t error = 0;
+        char *text = ceesafe_c_string(i == 0u ? program : arguments[i - 1u], &error);
+        if (text == NULL) {
+            ok = 0;
+            result = -(int64_t)error;
+            break;
+        }
+        if (i == 0u) {
+            if (strchr(text, '"') != NULL || cee_win_batch(text)) {
+                ok = 0;
+                result = -(int64_t)EINVAL;
+            } else {
+                at = ceesafe_host_quote_program(line, at, capacity, text, &ok);
+            }
+        } else if (at + 1u >= capacity) {
+            ok = 0;
+        } else {
+            line[at++] = ' ';
+            at = ceesafe_host_quote(line, at, capacity, text, &ok);
+        }
+        ceesafe_free(text, CEE_ALLOC_SYSTEM);
+        if (!ok && result == 0) result = -(int64_t)E2BIG;
+    }
+    if (ok) {
+        line[at] = 0;
+        if (!cee_win_wide(line, wide, (int)capacity)) result = -(int64_t)EINVAL;
+    }
+    if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
+    if (result == 0) {
+        *made = wide;
+    } else if (wide != NULL) {
+        ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+    }
+    return result;
+}
+#endif
+
 cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uint64_t count) {
     if (count > 4096u) return ceesafe_io_fail(EINVAL);
     char **argv = (char **)ceesafe_alloc((size_t)(count + 2u) * sizeof(char *), CEE_ALLOC_SYSTEM);
@@ -2175,31 +2324,32 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
         argv[count + 1u] = NULL;
         (void)fflush(stdout);
 #ifdef _WIN32
-        /* The program and its arguments are UTF-8: _wspawnvp takes them as UTF-16, never in the ANSI code page. */
-        wchar_t **wide = (wchar_t **)ceesafe_alloc((size_t)(count + 2u) * sizeof(wchar_t *), CEE_ALLOC_SYSTEM);
-        uint64_t widened = 0;
-        int wide_error = wide == NULL ? ENOMEM : 0;
-        for (; wide_error == 0 && widened <= count; widened++) {
-            size_t units = strlen(argv[widened]) + 1u;
-            wide[widened] = (wchar_t *)ceesafe_alloc(units * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
-            if (wide[widened] == NULL) {
-                wide_error = ENOMEM;
-            } else if (!cee_win_wide(argv[widened], wide[widened], (int)units)) {
-                ceesafe_free(wide[widened], CEE_ALLOC_SYSTEM);
-                wide_error = EINVAL;
-            }
-            if (wide_error != 0) break;
-        }
-        if (wide_error != 0) {
-            result = ceesafe_io_fail(wide_error);
+        /* One command line, quoted as the child splits it (not _wspawnvp, which joins the arguments without quoting,
+         * so an argument with a space became two), with this process's standard streams. */
+        wchar_t *line = NULL;
+        int64_t made_line = cee_win_command_line(program, arguments, count, &line);
+        if (made_line < 0) {
+            result = ceesafe_io_fail((int32_t)-made_line);
         } else {
-            wide[count + 1u] = NULL;
-            intptr_t status = _wspawnvp(_P_WAIT, wide[0], (const wchar_t *const *)wide);
-            result = status < 0 ? ceesafe_io_errno() : ceesafe_io_ok((int64_t)status);
-        }
-        if (wide != NULL) {
-            for (uint64_t i = 0; i < widened; i++) ceesafe_free(wide[i], CEE_ALLOC_SYSTEM);
-            ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+            STARTUPINFOW startup;
+            PROCESS_INFORMATION process;
+            memset(&startup, 0, sizeof startup);
+            startup.cb = sizeof startup;
+            startup.dwFlags = STARTF_USESTDHANDLES;
+            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+            if (!CreateProcessW(NULL, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
+                result = ceesafe_io_fail(cee_win_errno(GetLastError()));
+            } else {
+                DWORD code = 0;
+                (void)WaitForSingleObject(process.hProcess, INFINITE);
+                result = GetExitCodeProcess(process.hProcess, &code) ? ceesafe_io_ok((int64_t)code)
+                                                                     : ceesafe_io_fail(cee_win_errno(GetLastError()));
+                (void)CloseHandle(process.hThread);
+                (void)CloseHandle(process.hProcess);
+            }
+            ceesafe_free(line, CEE_ALLOC_SYSTEM);
         }
 #else
         pid_t pid;
@@ -3082,39 +3232,6 @@ int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity) {
     return ceesafe_host_copy_out(name, buffer, capacity);
 }
 
-#ifdef _WIN32
-/* Appends `argument` to a command line under the C runtime's parsing rules (CommandLineToArgvW). */
-static size_t ceesafe_host_quote(char *line, size_t at, size_t capacity, const char *argument, int *ok) {
-    int plain = argument[0] != 0;
-    for (const char *c = argument; *c; c++) {
-        if (*c == ' ' || *c == '\t' || *c == '"') plain = 0;
-    }
-#define CEESAFE_PUT(ch) do { if (at + 1u >= capacity) { *ok = 0; return at; } line[at++] = (ch); } while (0)
-    if (plain) {
-        for (const char *c = argument; *c; c++) CEESAFE_PUT(*c);
-        return at;
-    }
-    CEESAFE_PUT('"');
-    for (const char *c = argument;; c++) {
-        size_t slashes = 0;
-        while (*c == '\\') { slashes++; c++; }
-        if (*c == 0) {
-            for (size_t i = 0; i < slashes * 2u; i++) CEESAFE_PUT('\\');
-            break;
-        }
-        if (*c == '"') {
-            for (size_t i = 0; i < slashes * 2u + 1u; i++) CEESAFE_PUT('\\');
-        } else {
-            for (size_t i = 0; i < slashes; i++) CEESAFE_PUT('\\');
-        }
-        CEESAFE_PUT(*c);
-    }
-    CEESAFE_PUT('"');
-#undef CEESAFE_PUT
-    return at;
-}
-#endif
-
 /* Runs argv[0] (found on PATH) with arguments argv[1..count), its stdin read from the file at `input` and its stdout
  * and stderr written to the files at `output` and `errors` (created or truncated), and waits: the exit status, or
  * 128 plus the signal that ended it, as ceesafe_process_run reports it. Files rather than pipes, so a child that writes
@@ -3143,27 +3260,22 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
         argv[count] = NULL;
         (void)fflush(stdout);
 #ifdef _WIN32
-        size_t capacity = 32768u;
-        char *line = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
-        int ok = line != NULL;
-        size_t at = 0;
-        for (uint64_t i = 0; ok && i < count; i++) {
-            if (i > 0u && at + 1u < capacity) line[at++] = ' ';
-            at = ceesafe_host_quote(line, at, capacity, argv[i], &ok);
-        }
-        if (!ok) {
-            result = -(int64_t)(line == NULL ? ENOMEM : E2BIG);
+        wchar_t *wide_line = NULL;
+        int64_t made_line = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide_line);
+        if (made_line < 0) {
+            result = made_line;
         } else {
-            line[at] = 0;
             SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
             HANDLE in = INVALID_HANDLE_VALUE, out = INVALID_HANDLE_VALUE, err = INVALID_HANDLE_VALUE;
-            /* The names and the command line are UTF-8: the wide calls take them, never the ANSI code page. */
-            wchar_t *wide = (wchar_t *)ceesafe_alloc((3u * 4096u + capacity) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
-            wchar_t *wide_line = wide == NULL ? NULL : wide + 3u * 4096u;
+            /* The names are UTF-8: the wide calls take them, never the ANSI code page. The input file is opened to
+             * read and shared with readers and writers (lib/std has closed it, but another may hold it open), and
+             * the output files, which this call creates, are shared with readers. */
+            wchar_t *wide = (wchar_t *)ceesafe_alloc(3u * 4096u * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
             DWORD failure = ERROR_NOT_ENOUGH_MEMORY;
             if (wide != NULL && cee_win_wide(in_name, wide, 4096) && cee_win_wide(out_name, wide + 4096, 4096)
-                && cee_win_wide(err_name, wide + 2u * 4096u, 4096) && cee_win_wide(line, wide_line, (int)capacity)) {
-                in = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                && cee_win_wide(err_name, wide + 2u * 4096u, 4096)) {
+                in = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL, NULL);
                 if (in != INVALID_HANDLE_VALUE) {
                     out = CreateFileW(wide + 4096, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
                                       FILE_ATTRIBUTE_NORMAL, NULL);
@@ -3201,8 +3313,8 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             if (out != INVALID_HANDLE_VALUE) (void)CloseHandle(out);
             if (err != INVALID_HANDLE_VALUE) (void)CloseHandle(err);
             if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+            ceesafe_free(wide_line, CEE_ALLOC_SYSTEM);
         }
-        if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
 #else
         pid_t pid = -1;
         int started;
@@ -3954,33 +4066,9 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
     const cee_str *texts = (const cee_str *)arguments;
     if (count == 0u || count > 4097u || handle == NULL || handed > CEE_HANDOVER_PLACES) return -(int64_t)EINVAL;
     cee_handover_read();
-    size_t capacity = 32768u;
-    char *line = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
-    wchar_t *wide = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
-    int ok = line != NULL && wide != NULL;
-    int64_t result = ok ? 0 : -(int64_t)ENOMEM;
-    size_t at = 0;
-    for (uint64_t i = 0; ok && i < count; i++) {
-        int32_t error = 0;
-        char *argument = ceesafe_c_string(texts[i], &error);
-        if (argument == NULL) {
-            ok = 0;
-            result = -(int64_t)error;
-            break;
-        }
-        if (i > 0u && at + 1u < capacity) line[at++] = ' ';
-        at = ceesafe_host_quote(line, at, capacity, argument, &ok);
-        ceesafe_free(argument, CEE_ALLOC_SYSTEM);
-        if (!ok) result = -(int64_t)E2BIG;
-    }
-    if (ok) {
-        line[at] = 0;
-        if (!cee_win_wide(line, wide, (int)capacity)) {
-            ok = 0;
-            result = -(int64_t)EINVAL;
-        }
-    }
-    if (ok) {
+    wchar_t *wide = NULL;
+    int64_t result = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide);
+    if (result == 0) {
         (void)fflush(stdout);
         SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
         HANDLE nothing = INVALID_HANDLE_VALUE;
@@ -4072,7 +4160,6 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
         if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
         if (nothing != INVALID_HANDLE_VALUE) (void)CloseHandle(nothing);
     }
-    if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
     if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
     return result;
 }

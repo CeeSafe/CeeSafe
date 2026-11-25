@@ -87,7 +87,7 @@ static ceeR_XA64_u8S10SystemHeapE10AllocError ceeF_table(void) {
     {
         ceeA64_u8 *cee_p = ceeBA_XA64_u8S10SystemHeap();
         if (cee_p == NULL) {
-            t_1 = ((ceeR_XA64_u8S10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+            t_1 = ((ceeR_XA64_u8S10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
         } else {
             for (uint64_t cee_i = 0; cee_i < 64u; cee_i++) (*cee_p).e[cee_i] = ((uint8_t)7);
             t_1 = ceeMk_ceeR_XA64_u8S10SystemHeapE10AllocError_v_Ok(cee_p);
@@ -186,7 +186,7 @@ static ceeR_XA64_u8S10SystemHeapE10AllocError ceeB_XA64_u8S10SystemHeap(ceeA64_u
     _Static_assert(_Alignof(ceeA64_u8) <= _Alignof(cee_max_align_t), "ceesafec: Box<[u8; 64]> needs over-aligned memory");
     ceeA64_u8 *p = (ceeA64_u8 *)ceesafe_alloc(sizeof(ceeA64_u8), CEE_ALLOC_SYSTEM);
     if (p == NULL) {
-        return ((ceeR_XA64_u8S10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_XA64_u8S10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *p = v;
     return ceeMk_ceeR_XA64_u8S10SystemHeapE10AllocError_v_Ok(p);
@@ -203,7 +203,7 @@ static ceeR_XS3ResS10SystemHeapE10AllocError ceeB_XS3ResS10SystemHeap(ceeT_Res v
     ceeT_Res *p = (ceeT_Res *)ceesafe_alloc(sizeof(ceeT_Res), CEE_ALLOC_SYSTEM);
     if (p == NULL) {
         ceeD_3Res(&v);
-        return ((ceeR_XS3ResS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        return ((ceeR_XS3ResS10SystemHeapE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){0}) } });
     }
     *p = v;
     return ceeMk_ceeR_XS3ResS10SystemHeapE10AllocError_v_Ok(p);

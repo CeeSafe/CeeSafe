@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.10
+## Releases 0.25.0 to 0.95.11
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.11 | 2026-11-25 | Fixes and no new feature. Every release and workflow now builds `ceesafec` from 0.95.10 rather than 0.94.5, so the compiler's own sources may use what 0.95.10 accepts. Programs compile as with 0.95.10. | — |
 | 0.95.10 | 2026-11-25 | A generic enum at `void` is accepted in any written type, whichever use comes first: `let m: Outcome<void> = …` was N0226 (ADR 0213); errors that name CeeSafe's form for `&T`, `&x`, `&self`, `self`, `.await`, `pub`, `trait`, `None` and `a.len()` | [Appendix A](./appendix-a-keywords), [13.2](./ch13-02-iteration) |
 | 0.95.9 | 2026-11-25 | On Windows the float methods (`exp`, `ln`, `pow`, the trigonometric and hyperbolic functions, ...) call System32's `ucrtbase.dll`, loaded at their first call, whatever compiler built the program (`cl` with `/MT` or `/MD`, clang, MinGW-w64 of either C library), so a program's results follow the installed Windows rather than the toolchain (ADR 0248) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.8 | 2026-11-25 | `s.add()` on a `String` or a `Vector<u8>`, a chain of appends (`text`, `char`, `number`, `signed`, `hex`, `padded`, `fixed`) whose one `done()` reports a failed allocation, and warning N0408 for a chain left without it (ADR 0217); `build --split --lto`, and split builds whose units carry their own preludes and content names (ADR 0082); fill elision (ADR 0239) and the interval of a checked result (ADR 0238); the MCP tools `ceesafe_test` and `ceesafe_doc` (ADR 0240); `cbind` writes C's `long` and `unsigned long` as `CLong` and `CULong` (ADR 0241); `Thread.cpuCount` builds with gcc's `-Werror` on Linux | [Appendix C](./appendix-c-built-in-types) |

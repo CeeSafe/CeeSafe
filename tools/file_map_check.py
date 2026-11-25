@@ -21,6 +21,9 @@ sees them and the untouched neighbour; natively and in the interpreter; (2) a re
 another process: SIGBUS natively, the fault in the interpreter; (3) SQLite's live `-shm` opened for reading only and
 mapped read-only gives the same header answers.
 
+ADR 0254 adds: Python writes u16 slots and bytes, and one function of the program generic over `MappedRead` reads them
+through a read-write and a read-only mapping (natively and in the interpreter).
+
 usage: python3 tools/file_map_check.py --compiler out/ceesafec
 """
 
@@ -49,6 +52,15 @@ fn mapped(f: borrow File, length: usize) -> SharedMapping {
     };
 }
 
+/// ADR 0254: the reads written once for both kinds of mapping.
+fn readsOf<M: MappedRead>(m: borrow M) {
+    Console.writeLine(m.load16(0, LoadOrdering.Acquire));
+    Console.writeLine(m.load32(0, LoadOrdering.Acquire));
+    var bytes = [0u8; 11];
+    m.readAt(100, mut bytes[..]);
+    Console.writeLine(text(bytes[..]));
+}
+
 fn main() {
     let mode = Process.argument(1)!;
     let path = Process.argument(2)!;
@@ -58,7 +70,19 @@ fn main() {
         Ok(f) => f,
         Err(e) => fail(e),
     };
-    if (mode == "read") {
+    if (mode == "generic") {
+        // Python wrote u16 slots at 0 and 2 and eleven bytes at 100: read through a read-write and a read-only
+        // mapping by one generic function.
+        readsOf(borrow mapped(f, 4096));
+        let reader = match (File.open(path)) {
+            Ok(r) => r,
+            Err(e) => fail(e),
+        };
+        match (reader.mapSharedReadOnly(0, 4096)) {
+            Ok(r) => { readsOf(borrow r); }
+            Err(e) => { fail(e); }
+        }
+    } else if (mode == "read") {
         // Python wrote a word at 0 and eleven bytes at 100.
         let m = mapped(f, 4096);
         Console.writeLine(m.load32(0, LoadOrdering.Acquire));
@@ -237,6 +261,25 @@ def python_16_bits(modes, path, problems):
             seen.close()
 
 
+def python_interface(modes, path, problems):
+    """ADR 0254: Python's mmap writes slots and bytes; one function generic over MappedRead reads them through a
+    read-write and a read-only mapping, which agree with what Python wrote."""
+    for name, command in modes:
+        with open(path, "wb") as f:
+            f.write(b"\0" * 4096)
+        with open(path, "r+b") as f:
+            m = mmap.mmap(f.fileno(), 4096, access=mmap.ACCESS_WRITE)
+            m[0:2] = struct.pack("=H", 0xBEEF)
+            m[2:4] = struct.pack("=H", 0x1234)
+            m[100:111] = b"from python"
+            m.close()
+        got = run(command + ["generic", path], problems, f"{name}: MappedRead of what Python wrote")
+        word = struct.unpack("=I", struct.pack("=HH", 0xBEEF, 0x1234))[0]
+        want = [str(0xBEEF), str(word), "from", "python"] * 2
+        if got is not None and got != want:
+            problems.append(f"{name}: MappedRead of what Python wrote: {got}, wanted {want}")
+
+
 def shortened(modes, path, problems, skipped):
     for mode in ("hold", "hold-ro"):
         for name, command in modes:
@@ -313,6 +356,7 @@ def main():
         if os.name == "posix":
             python_both_ways(modes, path, problems)
             python_16_bits(modes, path, problems)
+            python_interface(modes, path, problems)
             shortened(modes, path, problems, skipped)
             sqlite_shm(exe, work, problems, skipped)
         else:

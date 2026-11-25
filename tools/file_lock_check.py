@@ -17,6 +17,17 @@ keeps the held lock (§2.3); (2) against Python's shared and exclusive `fcntl.lo
 kind, and, while the program tests a byte 200 000 times, Python's own non-waiting locks of it never fail (a test takes
 nothing); (3) while `sqlite3` holds `BEGIN IMMEDIATE`, the RESERVED byte tests `Exclusive`, and `null` after `COMMIT`.
 
+4. hard links (ADR 0255), on every host, natively and in the interpreter: after the program's `File.link`, Python's
+   `os.stat` sees one file (the same `st_ino` and `st_dev`) with two links, and one after a name is removed; a link
+   made by Python's `os.link` is read through one name and written through the other by the program; a lock taken
+   through one name of a database conflicts with one through the other (the SQLite port's use);
+5. the portable lock rules (ADR 0256), on every host, natively and in the interpreter: sequences of locks and
+   unlocks on one File under `CEESAFE_LOCK_RULES=strict` and `portable` stop (panic) exactly where the ADR's model
+   says; and strict refuses exactly what Windows refuses, by Windows' own `LockFileEx` and `UnlockFileEx` called
+   through `ctypes` (live on Windows; elsewhere the answers recorded from it, WINDOWS_RECORDED): every step strict
+   lets through, Windows grants, and the step strict refuses, Windows refuses, or grants by stacking a lock over the
+   handle's own, which no POSIX host does.
+
 The SQLite lock bytes are those of its os_unix.c: PENDING 0x40000000, RESERVED 0x40000001, SHARED 0x40000002 to
 0x40000002 + 509.
 
@@ -165,6 +176,194 @@ fn main() {
     Console.writeLine(f.tryLock(FileLock.KIND, START, LENGTH)!);
 }
 """
+
+
+# File.link (ADR 0255): links argument 1 under the name argument 2 and prints "Ok" or the error.
+LINK = """
+fn main() {
+    match (File.link(Process.argument(1)!, Process.argument(2)!)) {
+        Ok() => { Console.writeLine("Ok"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+}
+"""
+
+# Reads the file at argument 1, prints it, and writes argument 3 at the start of the file at argument 2.
+READ_WRITE = """
+fn main() {
+    var f = File.open(Process.argument(1)!)!;
+    var buffer = [0u8; 64];
+    let n = f.read(mut buffer[..])!;
+    Console.writeLine(StringView.fromUtf8(buffer[0..n]) ?? "?");
+    let g = File.openReadWrite(Process.argument(2)!)!;
+    g.writeAt(Process.argument(3)!.bytes(), 0)!;
+}
+"""
+
+# ADR 0256: the steps given as arguments, on one File of argument 1: `L S|X start length` a tryLock, printed;
+# `U start length` an unlock, printed "ok". A step the rules refuse panics, so the lines printed say where.
+RULES = """
+fn number(i: usize) -> u64 => NumberParsing.parseU64(Process.argument(i)!.bytes())!;
+
+fn main() {
+    let f = File.openReadWrite(Process.argument(1)!)!;
+    var i: usize = 2;
+    while (Process.argument(i).isSome()) {
+        let op = Process.argument(i)!.bytes()[0];
+        if (op == 'U') {
+            f.unlock(number(i + 1), number(i + 2))!;
+            Console.writeLine("ok");
+            i += 3;
+        } else {
+            let kind = if (Process.argument(i + 1)!.bytes()[0] == 'S') FileLock.Shared else FileLock.Exclusive;
+            Console.writeLine(f.tryLock(kind, number(i + 2), number(i + 3))!);
+            i += 4;
+        }
+        Console.flush();
+    }
+}
+"""
+
+# Sequences of steps on one handle (ADR 0256 §4): ("L", "S" or "X", start, length) a lock that does not wait,
+# ("U", start, length) an unlock. Same, overlapping, inner, adjacent and disjoint ranges of each kind; exact, partial,
+# joined, unheld and repeated unlocks; os_win.c's and os_unix.c's steps.
+RULE_SEQUENCES = [
+    ("S then S, same range", [("L", "S", 100, 10), ("L", "S", 100, 10)]),
+    ("X then X, same range", [("L", "X", 100, 10), ("L", "X", 100, 10)]),
+    ("S then X, same range (os_unix.c's conversion)", [("L", "S", 100, 10), ("L", "X", 100, 10)]),
+    ("X then S, same range", [("L", "X", 100, 10), ("L", "S", 100, 10)]),
+    ("S then S, overlapping", [("L", "S", 100, 10), ("L", "S", 105, 10)]),
+    ("S then X, overlapping", [("L", "S", 100, 10), ("L", "X", 105, 10)]),
+    ("X then S, overlapping", [("L", "X", 100, 10), ("L", "S", 105, 10)]),
+    ("X then X, overlapping", [("L", "X", 100, 10), ("L", "X", 105, 10)]),
+    ("X then S, inside", [("L", "X", 100, 10), ("L", "S", 102, 2)]),
+    ("S then X, around", [("L", "S", 102, 2), ("L", "X", 100, 10)]),
+    ("S then S, adjacent", [("L", "S", 100, 10), ("L", "S", 110, 10)]),
+    ("X then X, adjacent", [("L", "X", 100, 10), ("L", "X", 110, 10)]),
+    ("X, disjoint", [("L", "X", 100, 10), ("L", "X", 200, 10), ("U", 200, 10), ("U", 100, 10)]),
+    ("unlock exactly", [("L", "S", 100, 10), ("U", 100, 10)]),
+    ("unlock unheld", [("U", 100, 10)]),
+    ("unlock a part", [("L", "S", 100, 10), ("U", 100, 5)]),
+    ("unlock more", [("L", "S", 100, 10), ("U", 100, 20)]),
+    ("unlock two as one", [("L", "X", 100, 1), ("L", "X", 101, 1), ("U", 100, 2)]),
+    ("unlock twice", [("L", "S", 100, 10), ("U", 100, 10), ("U", 100, 10)]),
+    ("lock after unlock", [("L", "X", 100, 10), ("U", 100, 10), ("L", "X", 100, 10), ("U", 100, 10)]),
+    ("os_win.c: SHARED to EXCLUSIVE", [("L", "S", 0x40000002, 510), ("L", "X", 0x40000001, 1),
+                                       ("L", "X", 0x40000000, 1), ("U", 0x40000002, 510),
+                                       ("L", "X", 0x40000002, 510), ("U", 0x40000002, 510), ("U", 0x40000000, 1),
+                                       ("U", 0x40000001, 1)]),
+    ("os_unix.c: SHARED to EXCLUSIVE", [("L", "S", 0x40000002, 510), ("L", "X", 0x40000001, 1),
+                                        ("L", "X", 0x40000002, 510)]),
+]
+
+# What Windows answers to each sequence on one handle, step by step, up to the step strict refuses: "granted",
+# "refused" (LockFileEx's ERROR_LOCK_VIOLATION, UnlockFileEx's ERROR_NOT_LOCKED), or "stacked" (granted over the
+# handle's own lock, and one unlock of it leaves the bytes locked: another handle's exclusive try still fails).
+# Recorded from windows_answers() on Windows; on Windows the checker computes them live instead.
+WINDOWS_RECORDED = None
+
+
+def rules_model(steps, rules):
+    """ADR 0256 §2.2's answers, step by step, until the first refusal ("panic")."""
+    held = []
+    out = []
+    for step in steps:
+        if step[0] == "U":
+            _, start, length = step
+            if (start, start + length) in [(h[0], h[1]) for h in held]:
+                held = [h for h in held if (h[0], h[1]) != (start, start + length)]
+                out.append("ok")
+                continue
+            out.append("panic")
+            break
+        _, kind, start, length = step
+        end = start + length
+        overlapping = [h for h in held if h[0] < end and start < h[1]]
+        if not overlapping:
+            held.append((start, end, kind))
+            out.append("true")
+        elif (rules == "portable" and len(overlapping) == 1 and overlapping[0][:2] == (start, end)
+              and overlapping[0][2] != kind):
+            held = [h for h in held if h[:2] != (start, end)] + [(start, end, kind)]
+            out.append("true")
+        else:
+            out.append("panic")
+            break
+    return out
+
+
+def rules_arguments(steps):
+    words = []
+    for step in steps:
+        words += [str(w) for w in step]
+    return words
+
+
+def windows_answers(path, steps):
+    """Windows' own answers (WINDOWS_RECORDED's form), with LockFileEx and UnlockFileEx through ctypes: an
+    implementation independent of CeeSafe's runtime. Every step is tried without waiting."""
+    import ctypes
+    import ctypes.wintypes as w
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class OVERLAPPED(ctypes.Structure):
+        _fields_ = [("Internal", ctypes.c_void_p), ("InternalHigh", ctypes.c_void_p), ("Offset", w.DWORD),
+                    ("OffsetHigh", w.DWORD), ("hEvent", w.HANDLE)]
+
+    k.CreateFileW.restype = w.HANDLE
+    k.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, ctypes.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+    k.LockFileEx.argtypes = [w.HANDLE, w.DWORD, w.DWORD, w.DWORD, w.DWORD, ctypes.POINTER(OVERLAPPED)]
+    k.UnlockFileEx.argtypes = [w.HANDLE, w.DWORD, w.DWORD, w.DWORD, ctypes.POINTER(OVERLAPPED)]
+    k.CloseHandle.argtypes = [w.HANDLE]
+
+    def handle():
+        # GENERIC_READ | GENERIC_WRITE, every sharing mode, OPEN_EXISTING, as the runtime opens a file
+        return k.CreateFileW(path, 0xC0000000, 7, None, 3, 0x80, None)
+
+    def lock(h, exclusive, start, length):
+        at = OVERLAPPED(Offset=start & 0xFFFFFFFF, OffsetHigh=start >> 32)
+        return bool(k.LockFileEx(h, (2 if exclusive else 0) | 1, 0, length & 0xFFFFFFFF, length >> 32,
+                                 ctypes.byref(at)))
+
+    def unlock(h, start, length):
+        at = OVERLAPPED(Offset=start & 0xFFFFFFFF, OffsetHigh=start >> 32)
+        return bool(k.UnlockFileEx(h, 0, length & 0xFFFFFFFF, length >> 32, ctypes.byref(at)))
+
+    h = handle()
+    other = handle()
+    held = []
+    out = []
+    try:
+        for step in steps:
+            if step[0] == "U":
+                _, start, length = step
+                done = unlock(h, start, length)
+                out.append("granted" if done else "refused")
+                if done:
+                    held = [x for x in held if (x[0], x[1]) != (start, start + length)]
+                continue
+            _, kind, start, length = step
+            overlaps = [x for x in held if x[0] < start + length and start < x[1]]
+            if not lock(h, kind == "X", start, length):
+                out.append("refused")
+                continue
+            if overlaps:
+                # Granted over the handle's own lock: release it once and see whether the bytes are still locked.
+                unlock(h, start, length)
+                first = overlaps[0]
+                still = not lock(other, True, first[0], first[1] - first[0])
+                if not still:
+                    unlock(other, first[0], first[1] - first[0])
+                out.append("stacked" if still else "granted")
+                if not still:
+                    held.append((start, start + length))
+            else:
+                held.append((start, start + length))
+                out.append("granted")
+    finally:
+        k.CloseHandle(h)
+        k.CloseHandle(other)
+    return out
 
 
 def program(template, kind, start, length):
@@ -385,7 +584,105 @@ def main():
                         if p.stdout.split() != ["Exclusive", "null"]:
                             problems.append(f"testLock of RESERVED during and after sqlite3's BEGIN IMMEDIATE: "
                                             f"{p.stdout.split()}, want ['Exclusive', 'null'] ({p.stderr.strip()!r})")
-    print(f"file_lock_check: Files of one program, other processes' locks, SQLite; {len(problems)} problems")
+
+        # 4. Hard links (ADR 0255), natively and in the interpreter, against Python's os.stat and os.link.
+        link_exe = build(compiler, work, "link", LINK, problems)
+        rw_exe = build(compiler, work, "read_write", READ_WRITE, problems)
+        for how, runner in (("natively", lambda exe, name, *a: [exe] + list(a)),
+                            ("in the interpreter", lambda exe, name, *a:
+                             [compiler, "run", "--interp", os.path.join(work, name + ".cee"), "--"] + list(a))):
+            if not (link_exe and rw_exe):
+                break
+            first = os.path.join(work, "first")
+            second = os.path.join(work, "second")
+            with open(first, "wb") as f:
+                f.write(b"by Python")
+            p = subprocess.run(runner(link_exe, "link", first, second), capture_output=True, text=True, timeout=120)
+            a, b = os.stat(first), os.stat(second)
+            if p.stdout.strip() != "Ok" or (a.st_ino, a.st_dev) != (b.st_ino, b.st_dev) or b.st_nlink != 2:
+                problems.append(f"File.link {how}: {p.stdout.strip()!r} {p.stderr.strip()[-200:]!r}, inodes "
+                                f"{a.st_ino} and {b.st_ino}, {b.st_nlink} links: want one file with 2 links")
+            p = subprocess.run(runner(link_exe, "link", first, second), capture_output=True, text=True, timeout=120)
+            if "exists" not in p.stdout:
+                problems.append(f"File.link {how} over an existing name: {p.stdout.strip()!r}, want AlreadyExists")
+            os.remove(first)
+            if os.stat(second).st_nlink != 1:
+                problems.append(f"File.link {how}: {os.stat(second).st_nlink} links after one name was removed")
+            # The other way: Python links, the program reads through one name and writes through the other.
+            os.link(second, first)
+            p = subprocess.run(runner(rw_exe, "read_write", first, second, "BY"), capture_output=True, text=True,
+                               timeout=120)
+            with open(first, "rb") as f:
+                seen = f.read()
+            if p.stdout.strip() != "by Python" or seen != b"BY Python":
+                problems.append(f"a link made by os.link, {how}: read {p.stdout.strip()!r}, then {seen!r} through "
+                                f"the first name, want 'by Python' and b'BY Python'")
+            os.remove(first)
+            os.remove(second)
+        # The finding's use: one database under two names, whose locks are one file's.
+        hold = build(compiler, work, "hold_link", program(HOLD, "Exclusive", RESERVED, 1), problems)
+        try_link = build(compiler, work, "try_link", program(TRY, "Shared", RESERVED, 1), problems)
+        if hold and try_link and link_exe:
+            named = os.path.join(work, "named.db")
+            other = os.path.join(work, "other.db")
+            open(named, "wb").close()
+            subprocess.run([link_exe, named, other], capture_output=True, timeout=60)
+            h = Holder(hold, named)
+            p = subprocess.run([try_link, other], capture_output=True, text=True, timeout=60)
+            h.end()
+            if h.said != "locked" or p.stdout.strip() != "false":
+                problems.append(f"a lock through one name of a linked file: {h.said!r}, and through the other "
+                                f"{p.stdout.strip()!r}, want 'locked' and 'false'")
+
+        # 5. Portable lock rules (ADR 0256): the program under strict and portable against the rules, and strict
+        # against Windows' own answers, live on Windows, recorded elsewhere.
+        rules_exe = build(compiler, work, "rules", RULES, problems)
+        rules_path = os.path.join(work, "rules.db")
+        open(rules_path, "wb").close()
+        recorded = {}
+        for name, steps in RULE_SEQUENCES:
+            for rules in ("strict", "portable"):
+                want = rules_model(steps, rules)
+                env = dict(os.environ, CEESAFE_LOCK_RULES=rules)
+                for how in ("natively", "in the interpreter"):
+                    if how == "natively":
+                        if not rules_exe:
+                            continue
+                        argv = [rules_exe, rules_path] + rules_arguments(steps)
+                    else:
+                        argv = ([compiler, "run", "--interp", os.path.join(work, "rules.cee"), "--", rules_path] +
+                                rules_arguments(steps))
+                    p = subprocess.run(argv, capture_output=True, text=True, timeout=120, env=env)
+                    got = p.stdout.split()
+                    if p.returncode != 0:
+                        got.append("panic" if "ceesafe panic: FileLocks." in p.stderr else f"status {p.returncode}")
+                    if os.name == "nt" and rules == "portable" and got != want and len(got) == len(want) and \
+                            got[-1] == "false" and want[-1] == "true":
+                        continue  # a conversion `portable` lets through, which Windows itself refuses (§2.1)
+                    if got != want:
+                        problems.append(f"{rules} rules {how}, {name}: {got} {p.stderr.strip()[-200:]!r}, want {want}")
+            strict = rules_model(steps, "strict")
+            windows = None
+            if os.name == "nt":
+                windows = windows_answers(rules_path, steps[:len(strict)])
+                recorded[name] = windows
+            elif WINDOWS_RECORDED is not None:
+                windows = WINDOWS_RECORDED.get(name)
+                if windows is None:
+                    problems.append(f"no Windows answers recorded for {name!r}")
+            if windows is not None:
+                # Every step strict lets through, Windows grants; the step strict refuses, Windows refuses, or grants
+                # over the handle's own lock by stacking the two, which no POSIX host does (§2.2).
+                for i, answer in enumerate(strict):
+                    want = ("granted",) if answer != "panic" else ("refused", "stacked")
+                    if windows[i] not in want:
+                        problems.append(f"strict and Windows differ at step {i + 1} of {name}: strict "
+                                        f"{answer}, Windows {windows[i]}")
+        if os.name == "nt":
+            print("WINDOWS_RECORDED = " + repr(recorded))
+        elif WINDOWS_RECORDED is None:
+            skipped.append("strict against Windows' answers (none recorded)")
+    print(f"file_lock_check: Files of one program, other processes' locks, SQLite, links, portable rules; {len(problems)} problems")
     for s in skipped:
         print("  SKIP " + s)
     for problem in problems:

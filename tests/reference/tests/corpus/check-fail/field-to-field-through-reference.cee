@@ -25,7 +25,8 @@ fn ownReference(c: borrow mut Cell, t: borrow Two) {
 }
 
 // Two parameters that share a region may exchange what they hold, and a caller sees the flow: a local's view must
-// not reach a `borrow mut` parameter that way.
+// not reach a `borrow mut` parameter that way. What flows is what the referents hold (`local`'s view), never the
+// references `mut into` and `mut mine` themselves (ADR 0252 §8; two N0272 for those before).
 fn exchange<region r>(left: borrow mut Two<r>, right: borrow mut Two<r>) {
     let old = left.a;
     left.a = right.a;
@@ -35,7 +36,7 @@ fn exchange<region r>(left: borrow mut Two<r>, right: borrow mut Two<r>) {
 fn leaks(into: borrow mut Two) {
     let local = String.create();
     var mine = Two { a: local.view(), b: local.view() };
-    exchange(mut into, mut mine); // error[N0272] // error[N0272]
+    exchange(mut into, mut mine); // error[N0272]
 }
 
 fn swap(t: borrow mut Two) {

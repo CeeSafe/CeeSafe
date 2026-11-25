@@ -36,7 +36,9 @@ fn x2(into: borrow mut Holder) {
 fn x3(into: borrow mut Holder) {
     let t = String.from("local local local local local local local local")!;
     var mine = Holder { text: t.view() };
-    let g = () => into.swapWith(mut mine); // error[N0272] // error[N0272] // error[N0272] // error[N0272]
+    // Two N0272 in the closure's body, for the captured references `env.mine` and `env.into` themselves, are gone:
+    // `swapWith` stores what `other` refers to holds, not `other` (ADR 0252 §8).
+    let g = () => into.swapWith(mut mine); // error[N0272] // error[N0272]
     g();
 }
 // x4: vector of views, via a user function
@@ -71,7 +73,7 @@ fn x7(into: borrow mut Holder) {
     let t = String.from("local local local local local local local local")!;
     // One N0272 fewer after 0.52.0: the one dropped said 'a value borrowed from 'into' into what 'into' refers to',
     // a capture by shared reference taken for one written through (ClayWind's M1, type-system.md §25.7 rule 2).
-    let g = () => { // error[N0272]
+    let g = () => {          // error[N0272]
         into.keep(t.view()); // error[N0272]
     };
     g();

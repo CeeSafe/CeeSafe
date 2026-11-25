@@ -1,5 +1,10 @@
-// ADR 0138 §3: `==` compares optionals of a Copy type only.
-fn s() -> String? => null;
+// ADR 0138 §3, as ADR 0251 §2.7 leaves it: `==` compares optionals whose values have `==`; a struct without
+// `@derive(Equal)` has none. (`String? == String?` compiles since ADR 0251 §2.5: both are lent.)
+struct Plain {
+    n: i64;
+}
+
+fn s() -> Plain? => null;
 
 fn main() {
     let x = s();

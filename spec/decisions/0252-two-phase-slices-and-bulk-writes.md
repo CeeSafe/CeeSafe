@@ -187,3 +187,10 @@ written (`borrow(r) T`), names the reference.
   `byKey(mut m, 3i64)` kept past their statement stay N0243 (check-fail `adr0252-key-lent-to-mutable-method`).
 - **Implementation.** `src/check/references.cee`, the flows of a function (`outerFlowNames` decides); run-pass
   `adr0252-key-lent-to-mutable-method` (`HashMap.getMut` and a generic method with a temporary key).
+- **Consequences in the corpus** (reviewed edits): N0272s that named a reference argument itself as stored, where the
+  callee can store only what its referent holds, are gone. `check-fail/field-to-field-through-reference.cee` line 38,
+  `exchange(mut into, mut mine)` with `exchange<region r>(left: borrow mut Two<r>, right: borrow mut Two<r>)`: two
+  N0272, "borrowed from 'mine'" and "from 'into'", become one, "borrowed from 'local'", the view that really
+  escapes. `check-fail/closure-capture-stores-calls.cee` line 39, `() => into.swapWith(mut mine)`: the two N0272 in
+  the closure's body for `env.mine` and `env.into` go; the two at the closure, for the captures, stay. Both programs
+  are still refused.

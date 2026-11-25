@@ -1,0 +1,106 @@
+// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.13: a `String` compares with a `ByteStringView`;
+// `Some(t)` of a `StringView` stands for a value against a `ByteStringView?`, and optionals of the text types compare;
+// a string pattern matches a `ByteStringView` payload or field. Expectations written by hand.
+
+fn wrap(b: ByteStringView) -> ByteStringView? => Some(b);
+
+struct Word<region r> {
+    text: ByteStringView<r>;
+    n: i32;
+}
+
+enum Token<region r> {
+    Name(ByteStringView<r>),
+    Number(i64),
+}
+
+fn kind(t: Token) -> i32 => match (t) {
+    Token.Name("select" | "SELECT") => 1,
+    Token.Name(w @ "from") => if (w.length() == 4) 2 else -1,
+    Token.Name(_) => 3,
+    Token.Number(_) => 4,
+};
+
+fn main() {
+    let a = ByteString.fromText("abc")!;
+    let s = String.from("abc")!;
+    let t = String.from("abd")!;
+    // a String with a ByteStringView, either order; neither is consumed
+    Console.writeLine(s == a.view());
+    Console.writeLine(a.view() == s);
+    Console.writeLine(s != a.view());
+    Console.writeLine(a.view() != t);
+    Console.writeLine(s.length);
+    // a ByteStringView? with Some(text), either order
+    let o = wrap(a.view());
+    let none: ByteStringView? = null;
+    Console.writeLine(o == Some("abc"));
+    Console.writeLine(o != Some("abc"));
+    Console.writeLine(Some("abc") == o);
+    Console.writeLine(Some("abd") != o);
+    let v: StringView = "abc";
+    Console.writeLine(o == Some(v));
+    Console.writeLine(none == Some("abc"));
+    Console.writeLine(none != Some("abc"));
+    Console.writeLine(o == Some(a.view()));
+    // optionals of a String, a StringView and a ByteStringView
+    let so: String? = Some(String.from("abc")!);
+    let sv: StringView? = Some("abd");
+    Console.writeLine(so == o);
+    Console.writeLine(o != so);
+    Console.writeLine(sv == o);
+    Console.writeLine(so.isSome());
+    // string patterns on a ByteStringView payload or field
+    Console.writeLine(match (o) {
+        Some("abd") => 1,
+        Some("abc") => 2,
+        Some(_) => 3,
+        null => 0,
+    });
+    Console.writeLine(match (none) {
+        Some("abc") => 2,
+        _ => 0,
+    });
+    let w = Word { text: ByteStringView.fromText("hi"), n: 2 };
+    Console.writeLine(match (w) {
+        Word { text: "hi", n } => n,
+        Word { .. } => 0,
+    });
+    Console.writeLine(kind(Token.Name(ByteStringView.fromText("SELECT"))));
+    Console.writeLine(kind(Token.Name(ByteStringView.fromText("from"))));
+    Console.writeLine(kind(Token.Name(ByteStringView.fromText("x"))));
+    Console.writeLine(kind(Token.Number(3)));
+    Console.writeLine(o is Some("abc"));
+    let r = borrow o;
+    Console.writeLine(match (r) {
+        Some("abc") => 1,
+        _ => 0,
+    });
+}
+
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: true
+// expect-stdout: 1

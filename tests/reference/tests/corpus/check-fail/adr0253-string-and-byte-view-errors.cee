@@ -1,0 +1,23 @@
+// ADR 0253 §2.6 and §2.7 with ADR 0251 §2.6, as added for 0.95.13: what stays refused. A String and a ByteStringView
+// have no ordering; against a ByteStringView?, `Some` of a number or of a String (which would move) is no text; and a
+// pattern on a ByteStringView payload is a string literal, not a number or a slice pattern.
+fn wrap(b: ByteStringView) -> ByteStringView? => Some(b);
+
+fn main() {
+    let a = ByteString.fromText("abc")!;
+    let s = String.from("abc")!;
+    let o = wrap(a.view());
+    let x = s < a.view();  // error[N0207]
+    let y = a.view() >= s; // error[N0207]
+    let z = o == Some(3);  // error[N0205]
+    let t = String.from("abc")!;
+    let u = o == Some(t); // error[N0205]
+    let p = match (o) {
+        Some(3) => 1, // error[N0205]
+        _ => 0,
+    };
+    let q = match (o) {
+        Some([0x61, ..]) => 1, // error[N0205]
+        _ => 0,
+    };
+}

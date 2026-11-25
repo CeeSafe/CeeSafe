@@ -29,7 +29,7 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   Debian 13). Until the backend reaches those members without the array struct, ceesafec passes the flag, and C a
   user compiles from `--emit c` needs it too. CosmoOS compiles with it as well. Everything else is written to be
   correct without it, and a whole array copied into or out of such a member (the member, or an inner array of a C
-  array of arrays) is copied as bytes already (`cee_read_unaligned`, `cee_write_unaligned`).
+  array of arrays) is copied as bytes already (`ceesafe_mem_copy` from a typed copy, `cee_read_unaligned`).
 - **No floating-point contraction or fast-math** (M11 G7, type-system.md §35.6). `rt.h` turns contraction off where
   a pragma can (clang, MSVC) and requires `FLT_EVAL_METHOD == 0`, in programs that use floats (`CEE_FLOATS`; a
   program without floats compiles under `-mgeneral-regs-only`); builds pass `-ffp-contract=off` to clang and gcc

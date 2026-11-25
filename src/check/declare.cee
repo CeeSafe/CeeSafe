@@ -322,6 +322,7 @@ fn checkProgramWith(
         enumInstances: Map<Word, Vector<u32>>.create(),
         memberOwner: none(),
         inSignature: false,
+        statementCall: Span { start: 0, end: 0 },
         instanceParents: Map<Word, Word>.create(),
         pendingMembers: Map<Word, Word>.create(),
         pendingCount: 0,

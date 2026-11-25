@@ -1253,8 +1253,10 @@ fn noSuchMethod(
     span: Span,
 ) -> Result<void, AllocError> {
     let ident = c.front.ast.idents[member as usize];
-    // `len()` with nothing inside or before its parentheses, so no comment is lost.
-    if (arguments.count == 0 && sameText(c.name(ident.symbol), "len") && span.end == ident.end + 2) {
+    // `len()` with nothing inside or before its parentheses, so no comment is lost; not as a statement, which `x.length;`
+    // is not (N0225).
+    if (arguments.count == 0 && sameText(c.name(ident.symbol), "len") && span.end == ident.end + 2 &&
+        (span.start != c.statementCall.start || span.end != c.statementCall.end)) {
         var title = Vector<u8>.create();
         appendText(mut title, "write 'length'")?;
         var text = Vector<u8>.create();

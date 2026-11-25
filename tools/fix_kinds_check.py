@@ -73,6 +73,7 @@ NO_FIX = [
     ("Box.new already unwrapped", "fn main() {\n    let b: Box<i32> = Box.new(1)!;\n}\n"),
     ("Box.new of a dyn box already unwrapped", "interface S {\n    fn a(borrow this) -> i32;\n}\n\nstruct P {\n    n: i32;\n}\n\nimpl S for P {\n    fn a(borrow this) -> i32 {\n        return this.n;\n    }\n}\n\nfn main() {\n    let b: Box<dyn S> = Box.new(P { n: 1 })!;\n}\n"),
     ("a declared Vec", "struct Vec {\n    n: i32;\n}\n\nfn main() {\n    let v = Vec.new();\n}\n"),
+    ("len() as a statement", "fn main() {\n    let a = [1, 2];\n    a.len();\n}\n"),
     ("len with an argument", "fn main() {\n    let a = [1, 2];\n    Console.writeLine(a.len(1));\n}\n"),
     ("a comment between let and mut", "fn main() {\n    let /* why */ mut n = 1;\n    n += 1;\n    Console.writeLine(n);\n}\n"),
     ("a number that would narrow", "fn main() {\n    let a: i64 = 1;\n    let z: i32 = a;\n    Console.writeLine(z);\n}\n"),

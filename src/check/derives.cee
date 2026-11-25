@@ -660,6 +660,12 @@ fn derivedEquality(
     let lt = c.typeOf(left);
     let rt = c.typeOf(right);
     let boolType = c.types.boolType;
+    if ((c.types.isString(lt) && c.types.isStringView(rt)) || (c.types.isStringView(lt) && c.types.isString(rt))) {
+        // A string and a view compare their text, byte for byte (ADR 0251 §2.6), as `s.view() == v`.
+        let l = if (c.types.isString(lt)) stringText(c, left)? else left;
+        let r = if (c.types.isString(rt)) stringText(c, right)? else right;
+        return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+    }
     if (lt != rt) {
         return Ok(none());
     }

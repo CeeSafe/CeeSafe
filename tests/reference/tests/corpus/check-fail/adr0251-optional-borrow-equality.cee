@@ -1,14 +1,17 @@
-// ADR 0251 §2.5: what `==` on optionals still refuses: two owned optionals of a type that is not Copy (ADR 0138 §3),
-// and referents of different types.
+// ADR 0251 §2.7: what `==` on optionals still refuses: values of different types, and values without `==`.
+struct Plain {
+    n: i64;
+}
+
 fn main() {
-    var s = HashMap<i64, String>.create();
-    let _ = s.put(1, String.from("a")!)!;
-    let one: i64 = 1;
-    let a: String? = Some(String.from("a")!);
-    let b: String? = Some(String.from("a")!);
-    Console.writeLine(a == b);                  // error[N0207]
-    Console.writeLine(s.get(one) == Some("a")); // error[N0205]
     var n = HashMap<i64, i64>.create();
     let _ = n.put(1, 10)!;
+    let one: i64 = 1;
     Console.writeLine(n.get(one) == Some(true)); // error[N0205]
+    let a: i64? = Some(1);
+    let b: i32? = Some(1);
+    Console.writeLine(a == b); // error[N0205]
+    let p: Plain? = Some(Plain { n: 1 });
+    let q: Plain? = Some(Plain { n: 1 });
+    Console.writeLine(p == q); // error[N0207]
 }

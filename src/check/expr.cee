@@ -701,7 +701,7 @@ fn synthBinary(
         let l = synth(c, leftSyntax, none())?;
         leftHir = if (index == 2 || index == 3) lentOptional(c, l)? else autoDeref(c, l)?;
         let leftType = c.typeOf(leftHir);
-        if ((index == 2 || index == 3) && isOptionalBorrow(c, leftType)) {
+        if ((index == 2 || index == 3) && comparedByLoan(c, leftType)) {
             rightHir = checkBorrowedOptionalOperand(c, rightSyntax, leftType)?; // `m.get(k) == Some(3)` (ADR 0251)
         } else if ((index == 2 || index == 3) && c.types.optionType(leftType) != none()) {
             rightHir = checkOptionalOperand(c, rightSyntax, leftType)?; // `o == Some(5)` (ADR 0138 §3, ADR 0251)

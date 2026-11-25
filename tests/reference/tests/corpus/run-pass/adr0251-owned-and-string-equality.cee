@@ -1,0 +1,67 @@
+// ADR 0251 §2.5 and §2.6: `==` lends two owned optionals of a type that is not Copy, so neither is consumed, and a
+// `String` compares with a `StringView` (both orders, literals too) byte for byte, also as optionals' values. Each
+// expected line is worked out by hand.
+@derive(Equal)
+struct Named {
+    id: i64;
+    name: String;
+}
+
+fn make(text: StringView) -> String? => Some(String.from(text)!);
+
+fn main() {
+    let a: String? = Some(String.from("abc")!);
+    let b: String? = Some(String.from("abc")!);
+    let c: String? = Some(String.from("abd")!);
+    let none: String? = null;
+    Console.writeLine(a == b);
+    Console.writeLine(a != c);
+    Console.writeLine(a == none);
+    Console.writeLine(none == null);
+    Console.writeLine(a == make("abc")); // a temporary, held by the comparison
+    let name = String.from("abc")!;
+    Console.writeLine(a == Some(name));  // a place in `Some(…)`, lent
+    Console.writeLine(a == Some("abc")); // a view's text
+    Console.writeLine(Some("abd") == c);
+    // Both operands, and `name`, are still usable.
+    Console.writeLine(a.asBorrow()!.length + b.asBorrow()!.length + name.length);
+
+    let p: Named? = Some(Named { id: 1, name: String.from("p")! });
+    let q: Named? = Some(Named { id: 1, name: String.from("p")! });
+    Console.writeLine(p == q);
+    Console.writeLine(p.asBorrow()!.name.length);
+
+    let s = String.from("héllo")!;
+    let v: StringView = "héllo";
+    Console.writeLine(s == "héllo");
+    Console.writeLine("héllo" == s);
+    Console.writeLine(s == v);
+    Console.writeLine(v != s);
+    Console.writeLine(s == "hello");
+    Console.writeLine(s.length);
+
+    var m = HashMap<i64, String>.create();
+    let _ = m.put(1, String.from("x")!)!;
+    let one: i64 = 1;
+    Console.writeLine(m.get(one) == Some("x"));
+    Console.writeLine(m.get(one) != Some("y"));
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 9
+// expect-stdout: true
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: 6
+// expect-stdout: true
+// expect-stdout: true

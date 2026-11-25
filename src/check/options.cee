@@ -928,8 +928,8 @@ fn comparedPayload(c: borrow Checker, t: u32) -> u32 {
     return payload;
 }
 
-/// Whether `==` compares the two as optionals (ADR 0138 §3, ADR 0251): one type, or an optional borrow and an
-/// optional (borrowed or not) of the same referent.
+/// Whether `==` compares the two as optionals (ADR 0138 §3, ADR 0251): optionals, borrowed or not, whose values have
+/// one type, or are a `String` and a `StringView` (§2.6).
 fn comparableOptionals(c: borrow Checker, lt: u32, rt: u32) -> bool {
     if (c.types.optionType(lt) == none() || c.types.optionType(rt) == none()) {
         return false;
@@ -937,8 +937,17 @@ fn comparableOptionals(c: borrow Checker, lt: u32, rt: u32) -> bool {
     if (lt == rt) {
         return true;
     }
-    return (isOptionalBorrow(c, lt) || isOptionalBorrow(c, rt)) && comparedPayload(c, lt) == comparedPayload(c, rt);
+    let l = comparedPayload(c, lt);
+    let r = comparedPayload(c, rt);
+    return l == r || (c.types.isString(
+        l,
+    ) && c.types.isStringView(r)) || (c.types.isStringView(l) && c.types.isString(r));
 }
+
+/// Whether `==` lends an optional of type `t` rather than copying it (ADR 0251): an optional borrow, or an optional of
+/// a type that is not Copy.
+fn comparedByLoan(c: borrow Checker, t: u32) -> bool =>
+    isOptionalBorrow(c, t) || (c.types.optionType(t) != none() && !c.types.isCopy(t));
 
 /// An operand of `==`: a `borrow (T?)` of a `T` that is not Copy is lent as `asBorrow()` lends it, a `(borrow T)?`
 /// (ADR 0251), so that nothing is copied out of the referent; anything else is read through its references.
@@ -994,15 +1003,24 @@ fn mayBeOptionalBorrow(c: borrow mut Checker, syntax: u32) -> Result<bool, Alloc
     });
 }
 
-/// The right operand of `==` whose left is an optional borrow `(borrow T)?` (ADR 0251). `Some(p)` with `p` a place
+/// The right operand of `==` whose left is lent (ADR 0251): an optional borrow `(borrow T)?`, or a `T?` of a `T` that
+/// is not Copy. `Some(p)` with `p` a place
 /// lends `p` as an argument for a `borrow T` parameter is lent, so it is a `(borrow T)?` too and nothing moves;
 /// `Some(e)` of a value is a `T?`; anything else is synthesized, a `borrow (T?)` lent as `asBorrow()` lends it.
 fn checkBorrowedOptionalOperand(c: borrow mut Checker, syntax: u32, leftType: u32) -> Result<u32, AllocError> {
     let span = c.front.ast.exprSpans[syntax as usize];
     let argument = someArgument(c, syntax)?;
     if (argument != none() && !isPlaceSyntax(c, argument)) {
-        // A value: an optional `T?` of the comparison's own, lent from there if `T` is not Copy (lentOperand).
+        // A value: an optional `T?` of the comparison's own, lent from there if `T` is not Copy (lentOperand). For a
+        // `String` referent it may be a view's, `Some("a")` (§2.6).
         let owned = optionOf(c, comparedPayload(c, leftType))?;
+        if (c.types.isString(comparedPayload(c, leftType))) {
+            let value = synth(c, syntax, none())?;
+            if (comparableOptionals(c, leftType, c.typeOf(value))) {
+                return Ok(value);
+            }
+            return coerce(c, value, owned, span);
+        }
         return checkExpr(c, syntax, owned);
     }
     if (argument != none()) {
@@ -1034,8 +1052,8 @@ fn checkOptionalOperand(c: borrow mut Checker, syntax: u32, leftType: u32) -> Re
     let span = c.front.ast.exprSpans[syntax as usize];
     let r = synth(c, syntax, leftType)?;
     let t = c.typeOf(r);
-    if (isOptionalBorrow(c, t) && comparedPayload(c, t) == c.types.optionType(leftType)) {
-        return Ok(r);
+    if (t != leftType && comparableOptionals(c, leftType, t)) {
+        return Ok(r); // an optional borrow of `T`, or a `String` optional against a `StringView` one (§2.6)
     }
     if (c.types.is(t, TypeKind.Reference) && !c.types.isClosure(t)) {
         let option = c.types.info(t).pointee;
@@ -1046,18 +1064,13 @@ fn checkOptionalOperand(c: borrow mut Checker, syntax: u32, leftType: u32) -> Re
     return coerce(c, r, leftType, span);
 }
 
-/// An operand of an optional `==` that is lent rather than copied (ADR 0251), when it is not Copy and it or the other
-/// operand (of type `other`) is an optional borrow: a `(borrow mut T)?`, or a `T?` whose `T` is not Copy. A place is
-/// lent as `asBorrow()` lends it, so the comparison only reads it; a temporary is first held in a local of the
-/// comparison (declared in `statements`), which ends with it. Any other operand is returned as it is.
-fn lentOperand(
-    c: borrow mut Checker,
-    e: u32,
-    other: u32,
-    statements: borrow mut Vector<u32>,
-) -> Result<u32, AllocError> {
+/// An operand of an optional `==` that is lent rather than copied (ADR 0251) when it is not Copy: a `(borrow mut T)?`,
+/// or a `T?` whose `T` is not Copy. A place is lent as `asBorrow()` lends it, so the comparison only reads it and
+/// neither operand is consumed; a temporary is first held in a local of the comparison (declared in `statements`),
+/// which ends with it. A Copy operand is returned as it is, to be copied.
+fn lentOperand(c: borrow mut Checker, e: u32, statements: borrow mut Vector<u32>) -> Result<u32, AllocError> {
     let t = c.typeOf(e);
-    if (c.types.isCopy(t) || (!isOptionalBorrow(c, t) && !isOptionalBorrow(c, other))) {
+    if (c.types.isCopy(t)) {
         return Ok(e);
     }
     let s = c.spanOf(e);
@@ -1096,12 +1109,12 @@ fn comparedValue(
     return autoDeref(c, reference);
 }
 
-/// `a == b` and `a != b` on two optionals of one Copy type whose values compare (ADR 0138 §3): equal when both are
-/// `null`, or both hold values that are equal. Lowered to the statement it replaces,
+/// `a == b` and `a != b` on two optionals whose values compare (ADR 0138 §3, ADR 0251): equal when both are `null`, or
+/// both hold values that are equal. Lowered to the statement it replaces,
 /// `{ let l = a; let r = b; if (l == null) r == null else r != null && l! == r! }` (for `!=`,
 /// `if (l == null) r != null else r == null || l! != r!`); the second test reads `r!` only when `r` holds a value.
-/// An optional borrow (ADR 0251) is compared through its references: its values are the referents, as `==` reads
-/// them through any reference (type-system.md §13.3), and either side may be one.
+/// An optional that is not Copy is lent (lentOperand), and an optional borrow is compared through its references: its
+/// values are the referents, as `==` reads them through any reference (type-system.md §13.3).
 fn synthOptionalEquality(
     c: borrow mut Checker,
     op: BinaryOp,
@@ -1109,37 +1122,21 @@ fn synthOptionalEquality(
     rightOperand: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let leftOperandType = c.typeOf(leftOperand);
-    let rightOperandType = c.typeOf(rightOperand);
     // Evaluated left to right: the left operand (held, if it is a temporary that is lent), its `compared` local, then
     // the right's.
     var statements = Vector<u32>.create();
-    let left = lentOperand(c, leftOperand, rightOperandType, mut statements)?;
+    let left = lentOperand(c, leftOperand, mut statements)?;
     let option = c.typeOf(left);
     let leftSpan = c.spanOf(left);
     let name = c.intern("compared")?;
     let l = c.hir.addLocal(c.function, name, option, false, false, leftSpan.start, leftSpan.end)?;
     statements.push(c.hir.addStmt(HirStmt.LocalDecl(l, left), leftSpan.start, leftSpan.end)?)?;
-    let right = lentOperand(c, rightOperand, leftOperandType, mut statements)?;
+    let right = lentOperand(c, rightOperand, mut statements)?;
     let rightOption = c.typeOf(right);
     let rightSpan = c.spanOf(right);
     let r = c.hir.addLocal(c.function, name, rightOption, false, false, rightSpan.start, rightSpan.end)?;
     statements.push(c.hir.addStmt(HirStmt.LocalDecl(r, right), rightSpan.start, rightSpan.end)?)?;
     if (c.isBottom(left) || c.isBottom(right)) {
-        return c.errorResult(span.start, span.end);
-    }
-    let uncopied = if (!c.types.isCopy(option)) option else if (!c.types.isCopy(rightOption)) rightOption else none();
-    if (uncopied != none()) {
-        var message = Vector<u8>.create();
-        appendText(mut message, "'")?;
-        appendText(mut message, binaryOpText(op))?;
-        appendText(mut message, "' compares optionals of a Copy type, and ")?;
-        appendQuotedType(mut message, c, uncopied)?;
-        appendText(
-            mut message,
-            " is not one: compare their borrows, 'a.asBorrow() == Some(v)' or 'a.asBorrow() == b.asBorrow()' (ADR 0251)",
-        )?;
-        c.error(invalidOperandTypes(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
     let equal = binaryIndex(op) == 2;
@@ -1195,7 +1192,7 @@ fn payloadEquality(c: borrow mut Checker, op: BinaryOp, left: u32, right: u32, s
     if (c.types.optionType(t) != none()) {
         return synthOptionalEquality(c, op, left, right, span);
     }
-    if (c.types.isStringView(t)) {
+    if (c.types.isStringView(t) && c.types.isStringView(c.typeOf(right))) {
         return c.expr(HirExpr.Binary(op, left, right), boolType, span.start, span.end); // compares the bytes
     }
     let compared = checkEquality(c, op, left, right, span)?;

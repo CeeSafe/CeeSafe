@@ -726,6 +726,7 @@ static bool cee_win_same_name(const wchar_t *a, size_t a_length, const wchar_t *
 }
 
 static bool cee_win_batch(const char *program); /* with the command lines, further down */
+static char *ceesafe_c_string(cee_str text, int32_t *error); /* with the program runs, further down */
 
 /* Whether `wide`, without its directory, has an extension: a `.` after the last `\` or `/`. */
 static bool cee_win_has_extension(const wchar_t *wide) {

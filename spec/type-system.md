@@ -893,7 +893,10 @@ and `E.V…` there are patterns.
   is N0358: a value that is not constant is tested in a guard.
 - **String literal patterns** (ADR 0085 §2.7). On a `StringView`, `"get"` matches equal bytes, as `==` does (§22.2).
   On a `Slice<u8>`, the same literal matches its UTF-8 bytes: the literal is typed by the value, as `'k'` is, so a
-  byte string is written `"cjs"`. A string pattern on any other type is N0205. String patterns never cover their
+  byte string is written `"cjs"`. On a `ByteStringView` it matches the view's bytes as on a `Slice<u8>`, wherever
+  the view is: the scrutinee itself (§22.5), or a payload or a field inside another pattern (`Some("abc")` on a
+  `ByteStringView?`, `Token.Name("from")`, `Word { text: "hi", .. }`; ADR 0253 §2.7), where `name @ "abc"` binds
+  the view. A string pattern on any other type is N0205. String patterns never cover their
   type (a match on a `StringView` needs `_` or a binding); a repeated one is N0257.
 - **Slice patterns** (ADR 0085 §2.7). `[]`, `[a, b]`, `[first, ..]`, `[.., last]`, `[x, rest @ ..]`,
   `['"', inner @ .., '"']` match a `Slice<T>`, an array or a reference to one, and a payload that is a slice or a
@@ -2371,7 +2374,9 @@ fn main() {
     right operand is checked against the left's type, so `o == Some(5)` needs no annotation. Neither is consumed: a
     Copy optional is copied, and one of a `T` that is not Copy (`String?`) is lent as by `asBorrow()`, a temporary
     held by the comparison; `a == Some(name)` then lends `name` too. A `String` value and a `StringView` one compare
-    (§22.2): `names == Some("a")`.
+    (§22.2): `names == Some("a")`. So does a `ByteStringView` value with a `StringView`, `String` or
+    `ByteStringView` one (§22.5, ADR 0251 §2.6): against a `ByteStringView?`, `Some(t)` of a `StringView` (a literal
+    included) is a `StringView?`, `o == Some("abc")` and `Some("abc") != o`; `Some(s)` of a `String` there is N0205.
   - **Optional borrows** (ADR 0251). `a == b` and `a != b` where one operand is an optional borrow of `T`,
     `(borrow T)?` or `(borrow mut T)?`, compare through its references: equal when both are `null`, or both hold
     referents equal by `T`'s `==` (§13.3: references compare their referents). `T` need not be Copy, and neither
@@ -2587,12 +2592,16 @@ so it has no `dyn` type (N0331).
   byte `A9` is null. With such a needle `splitOnce` gives a `TextPair<StringView>?` and `split` a `TextPieces`; with
   a `StringView`, `TextHalves` and `TextSplit` as before. Another type is N0205, as before.
 - **`ByteStringView` operators** (ADR 0253 §2.6, §2.7):
-  - `v == t` and `v != t`, either side, where the other is a `StringView` (a literal included) or a
-    `ByteStringView`: the bytes compared, as `v.equals(t)`. Other operands, and `<` and the rest, stay N0207.
+  - `v == t` and `v != t`, either side, where the other is a `StringView` (a literal included), a `String` (its
+    text, lent: not consumed) or a `ByteStringView`: the bytes compared, as `v.equals(t)`. Other operands, and `<`
+    and the rest, stay N0207. Optionals of these compare so too (§22.1): `o == Some("abc")` with
+    `o: ByteStringView?`.
   - `v[i]` (`i: usize`) is the byte at `i`, a `u8`: `v.byteAt(i)`, panicking past the end as `s[i]` does. It is
     read only; there is no `v[lo..hi]` (`v.slice(lo, hi)`).
   - `match (v)` with a string pattern in an arm matches `v`'s bytes as a `Slice<u8>` is matched (ADR 0085 §2.7):
-    the patterns are byte strings, and a binding arm binds the bytes, a `Slice<u8>`. A match on a type parameter
+    the patterns are byte strings, and a binding arm binds the bytes, a `Slice<u8>`. Inside another pattern, a
+    string pattern on a `ByteStringView` payload or field matches its bytes too (`Some("abc")`, §15.2's string
+    literal patterns), and `name @ "abc"` there binds the view. A match on a type parameter
     bounded by `TextView` takes no string pattern (N0207): match `t.bytes()`.
 - **`TextBuffer`**: `append<N: TextView>(text) -> Result<bool, AllocError>`, `appendLossy<N: TextView>(text) ->
   Result<void, AllocError>`, `bytes()` and `clear()`. A `ByteString`'s `append` takes every byte and answers
@@ -2802,8 +2811,8 @@ fn main() -> i32 {
     parameter is borrowed the same way;
   - read-only access as for a view: `s[i]` (`u8`), `s[lo..hi]` (a `StringView`, boundary-checked),
     `s.bytes()`, and the searches, trims, splits and parsers of §16.6;
-  - `==` and `!=` between two strings compare their bytes. A `String` and a `StringView` are different types
-    (N0207): compare `s.view()`;
+  - `==` and `!=` between two strings compare their bytes; so do they between a `String` and a `StringView` (ADR
+    0251 §2.6, §22.2) or a `ByteStringView` (ADR 0253 §2.6, §22.5), the string's text lent;
   - printing: `Console.writeLine(s)` prints the text of a string, a place or a value. A `String` value that
     is not a place (`make().name`, `a ?? b`, `String.from(t)!`), printed or given for a `StringView` parameter, is
     held to the end of the statement, where it is destroyed, and its text is lent from it (ADR 0115 §2.2).

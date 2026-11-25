@@ -201,6 +201,10 @@ operands' bytes (`v.bytes()`, the `StringView` as its `Slice<u8>`) compared as s
 call per byte. Any other operand (`v == 3`) and the orderings (`v < "b"`) stay N0207. A `ByteString` compares with
 `==` as before (`@derive(Equal)`, with another `ByteString`); with text, through its `view()`.
 
+Added for 0.95.13 (the owner, 2026-11-25): a `String` is text on the other side too. `s == v`, `v == s`, `s != v`
+and `v != s` compare the string's text, lent as `s.view()` is (the `String` is not consumed), with the view's
+bytes. `s < v` and the other orderings stay N0207. Optionals of these compare by ADR 0251 §2.6.
+
 ### 2.7 `v[i]` and `match` on a `ByteStringView`
 
 - `v[i]`, `i: usize`, is the byte at `i`, a `u8`: `v.byteAt(i)`, which panics past the end as `s[i]` does. It is a
@@ -209,6 +213,12 @@ call per byte. Any other operand (`v == 3`) and the orderings (`v < "b"`) stay N
   view's bytes as a `Slice<u8>` is matched (ADR 0085 §2.7): the literal's UTF-8 bytes, compared with the view's,
   and coverage as for a byte slice. A binding arm then binds the bytes, a `Slice<u8>` (`x => x.length`). A match
   on a `ByteStringView` without string patterns is a struct's match, as before.
+- Added for 0.95.13 (the owner, 2026-11-25): a string pattern may also stand where a `ByteStringView` is matched
+  inside another pattern: a payload (`Some("abc")` on a `ByteStringView?`, `Token.Name("from")`), a field
+  (`Word { text: "hi", .. }`), alternatives of them (`Some("a" | "b")`) and `name @ "abc"`, which binds the view
+  itself, a `ByteStringView`, as `Some(s @ "zz")` on a `StringView?` binds the view. It matches the view's bytes as
+  on a `Slice<u8>`, lowered to a struct pattern on the view's one field (`ByteStringView { data: "abc" }`): no new
+  HIR. A pattern of another type there (`Some(3)`, `Some([0x61, ..])`) stays N0205.
 - A match on a type parameter bounded by `TextView` takes no string pattern (N0207, "cannot match on a value of type
   'T'", as before): generic code matches `t.bytes()`. Making it work would need a match that dispatches through a
   bound, which nothing else does; `.bytes()` is one call and the same code.

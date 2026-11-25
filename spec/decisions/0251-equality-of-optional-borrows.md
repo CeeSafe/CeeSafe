@@ -84,6 +84,13 @@ included: `s == "abc"`, `"abc" == s`), compare the string's text with the view b
 does; a `String` is not consumed. So do an optional's values: `m.get(k) == Some("a")` with `V = String`, and
 `names == Some("a")` with `names: String?`; `Some(e)` of a value against a `String` referent may then be a view's.
 
+Added for 0.95.13 (the owner, 2026-11-25), with ADR 0253 §2.6: a `ByteStringView` value compares with a
+`StringView`, a `String` or a `ByteStringView` one, so optionals of these do too (`o == p` with `o: ByteStringView?`
+and `p: StringView?`, `String?` or `ByteStringView?`). Against a `ByteStringView?`, `Some(t)` of a `StringView` (a
+string literal included) is a `StringView?`, as `Some(e)` against a `String` referent may be a view's:
+`o == Some("abc")`, `o != Some(v)`, and in either order, `Some("abc") == o`. `Some(s)` of a `String` there is N0205
+(it would move `s` into the comparison), and so is `Some(3)`.
+
 ### 2.7 What is unchanged
 
 - Values of different types are not compared: `i64? == i32?` is N0205, as `i64 == i32` is.

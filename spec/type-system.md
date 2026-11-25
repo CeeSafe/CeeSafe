@@ -2358,9 +2358,12 @@ fn main() {
   rules of §15.2 and §18.4 apply.
 - **Comparisons.** `o == null` and `o != null` test for absence, for any `T` (the value is only
   read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s.
-  - `a == b` and `a != b` on two optionals of one Copy type `T` whose values compare with `==` (ADR 0138 §3): equal
-    when both are `null`, or both hold equal values (`T`'s own `==`, an optional's again for `T??`). The right
-    operand is checked against the left's type, so `o == Some(5)` needs no annotation. Neither is consumed.
+  - `a == b` and `a != b` on two optionals of one type `T` whose values compare with `==` (ADR 0138 §3, ADR 0251
+    §2.5): equal when both are `null`, or both hold equal values (`T`'s own `==`, an optional's again for `T??`). The
+    right operand is checked against the left's type, so `o == Some(5)` needs no annotation. Neither is consumed: a
+    Copy optional is copied, and one of a `T` that is not Copy (`String?`) is lent as by `asBorrow()`, a temporary
+    held by the comparison; `a == Some(name)` then lends `name` too. A `String` value and a `StringView` one compare
+    (§22.2): `names == Some("a")`.
   - **Optional borrows** (ADR 0251). `a == b` and `a != b` where one operand is an optional borrow of `T`,
     `(borrow T)?` or `(borrow mut T)?`, compare through its references: equal when both are `null`, or both hold
     referents equal by `T`'s `==` (§13.3: references compare their referents). `T` need not be Copy, and neither
@@ -2370,9 +2373,8 @@ fn main() {
     `T?`, copied if `T` is Copy and lent as by `asBorrow()` if it is a place of a `T` that is not; or a `borrow (T?)`,
     lent as by `asBorrow()`. A `(borrow mut T)?` place is lent shared, not moved. A `borrow (T?)` of a `T` that is
     not Copy is lent as by `asBorrow()` and compared so (`r == Some(x)`).
-  - Other comparisons of optionals, and `==` on two owned optionals of a type that is not Copy, are not defined
-    (N0207, whose message names `a.asBorrow() == b.asBorrow()`). The referents must have one type:
-    `m.get(k) == Some("a")` with `V = String` is N0205.
+  - Other comparisons of optionals are not defined: values of different types (`i64? == i32?`, N0205), or of a type
+    without `==` (N0207).
 - **Optional borrows** (ADR 0074 §2.5). `o.asBorrow()`, on a place of type `T?` or on a `borrow (T?)`, is a
   `borrow T?`: `Some` borrows the payload, and `null` is `null`. `o.asBorrowMut()`, on a mutable place of type `T?`
   or on a `borrow mut (T?)`, is a `(borrow mut T)?` (N0248 otherwise). Either is a shared or mutable loan of the place
@@ -2444,7 +2446,9 @@ fn main() {
     range check of §16.3, both bounds must fall on character boundaries (not inside a UTF-8
     multi-byte sequence). Otherwise it **panics** with "string slice not on a character
     boundary";
-  - `==` and `!=` compare the bytes;
+  - `==` and `!=` compare the bytes; so do they between a `String` and a `StringView`, in either order and with a
+    string literal (`name == "abc"`, `"abc" == name`), reading the string's text as `name.view()` does (ADR 0251
+    §2.6);
   - `Console.write(s)` and `Console.writeLine(s)` print it;
   - searching, trimming, splitting and parsing numbers: §16.6.
 - `for (b in s)` is not defined: iterate over `s.bytes()` (characters come with `String`
@@ -3031,6 +3035,9 @@ parameter without `static`. A function's **flows** are then:
   and at a call the argument contributes what it refers to holds, as for a deep result. So after
   `collect(mut words, mut all)` the vector holds what the iterator's text is borrowed from, and neither argument
   stays borrowed.
+  So is a flow whose shared names are all written inside `j`'s referent (ADR 0252 §8): `key: borrow K` into a
+  receiver that holds `K` stores a `K` read through `key`, so `m.getMut(1i64)` holds no loan of the temporary key.
+  Only `j`'s own region, elided or written on the reference (`borrow(r) T`), makes a flow carry the loan of `j`.
 
 A region's **bound** adds flows (§25.8, ADR 0134): where `region b: a` is in scope, a result or a store target
 that names `a` is read, in every rule above, as naming `b` too. A store target is a `borrow mut` parameter, as

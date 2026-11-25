@@ -1,6 +1,7 @@
 # ADR 0252 — Two-phase `copyFrom`, `fill` and slices lent mutably
 
-- Status: **Proposed**, 2026-11-25, at the owner's instruction to close the SQLite port's finding 43
+- Status: **Accepted** by the owner, 2026-11-25, with §6 answered (a reference held in a field stays not two-phase;
+  the release notes name `s.fill(s[0])`), and §8 added at the owner's request. Proposed the same day, at the owner's instruction to close the SQLite port's finding 43
   (`CeeSafeApps/sqlite/CEESAFE_FINDINGS.md`, "An argument cannot read the receiver a method borrows mutably").
   Implemented on branch `fix/g5-compiler` (§7); not released.
 - Scope: lifetimes.md §5 (B5); type-system.md §16.5 (bulk operations); intermediate-representation.md (the lowering
@@ -99,7 +100,7 @@ The rule is ADR 0073 §2.2's, applied to two more forms. It holds because each o
 | `buf[0..2].copyFrom(buf[2..4])` | N0241 | two slices of one place overlap as places (lifetimes.md §4) |
 | `v[0..2].fill(popped(mut v))` | N0241 | a later argument would change the reserved place (§2.2.4) |
 | `whole(mut v).fill(truncate<u8>(v.length))` | N0242 + note | the receiver is a call's result: the call runs, and lends `v`, before the arguments |
-| `h.buf.fill(h.buf[0])`, `h.buf` a `SliceMut` field | N0242 + note | a reference held in a field is reborrowed where it stands (ADR 0073 §2.2 covers a variable's reference only); Question 1 |
+| `h.buf.fill(h.buf[0])`, `h.buf` a `SliceMut` field | N0242 + note | a reference held in a field is reborrowed where it stands (ADR 0073 §2.2 covers a variable's reference only); kept so by the owner (§6) |
 
 For the two N0242 rows, the message gains a note at the read: "the call lends it before its arguments are read: only
 a receiver or 'mut' argument that is a place, a slice of one or a variable's reference waits for them (two-phase,
@@ -128,7 +129,8 @@ temporaries; the interpreter evaluates the same NIR order.
 ## 4. Options not taken
 
 - **Two-phase for a reference held in a field** (`h.buf.fill(h.buf[0])`). The field would be reserved like a slice's
-  place; it is a small step, but no finding asks for it yet, and ADR 0073 kept reborrows to variables. Question 1.
+  place. Not taken (the owner, §6): a later item, which needs its own soundness argument (what a later argument may
+  do to the field and to the struct holding it, through other references to that struct, before the loan is made).
 - **Two-phase for a call's result** (`v.viewMut2().fill(…)` for a user function). The call runs before the arguments
   and its result already holds the loan; delaying the call would change evaluation order. Rust refuses it too.
 - **Reserving every two-phase receiver.** B5 deliberately does not (`v.push(v.pop()!)`); only a sliced receiver needs
@@ -141,11 +143,13 @@ temporaries; the interpreter evaluates the same NIR order.
 - Messages for the overlap cases move: `d.copyFrom(d[0..2])` was "cannot borrow 'd' while 'd' is mutably borrowed" at
   the argument, and is "cannot borrow 'd' as mutable while 'd' is borrowed" at the receiver.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered 2026-11-25)
 
 1. Should a reference held in a field (`h.buf`, a `SliceMut` or `borrow mut T` field) be two-phase as a variable's is,
-   reserved like a slice's place? Recommended: yes, when a port needs it.
-2. The release notes should say that `s.fill(s[0])`, type-system.md §16.5's example of an error, now compiles.
+   reserved like a slice's place? Answered no, for now: it stays not two-phase, and is a later item that needs its own
+   soundness argument (§4).
+2. `s.fill(s[0])` was type-system.md §16.5's own example of an error (N0242), and now compiles: the release notes say
+   so. Agreed.
 
 ## 7. Implementation (2026-11-25)
 
@@ -157,3 +161,29 @@ temporaries; the interpreter evaluates the same NIR order.
 - `check-fail/slice-bulk-loans.cee`: `m.fill(m[0])` and `a[1..].fill(a[0])` lose their N0242 (they compile now).
 - `src/nir/borrow.cee`: `reportConflict` adds the note of §2.3 to N0242 when the read lies within the call that lent.
 - Corpus: run-pass `adr0252-two-phase-slices`; check-fail `adr0252-two-phase-slices`.
+
+## 8. A key lent to a `borrow mut this` method (found with §1's reproduction)
+
+`let g = ps.getMut(1i64);` with `ps: HashMap<i64, P>` was N0243 ("a temporary value is dropped at the end of this
+statement while still borrowed") on 0.95.10, though `getMut` is `fn getMut(borrow mut this, key: borrow K) ->
+borrow mut(this) V?`: the result borrows `this`, not the key. The cause is the flow the checker records for a call
+(type-system.md §25.6, ADR 0131): a method with a `borrow mut` parameter may store into it what another parameter
+gives, and the receiver here holds `K`, which `key: borrow K` names, so a flow from `key` into `this` was recorded. It
+was recorded as *direct*, carrying the loan of the reference `key` itself (the temporary `1i64`), because `K` is a name
+written on the parameter. But `K` is written inside the referent: what can be stored through `this` is a `K` read
+through `key`, which holds what the referent holds, never `key` itself. Only the reference's own region, elided or
+written (`borrow(r) T`), names the reference.
+
+- **Rule.** A flow from a reference parameter into a `borrow mut` parameter is deep (ADR 0131: it carries what the
+  referent holds) unless one of the reference's own region names, its elided one or those written on it, is among the
+  target's names. Before, it was direct whenever any written name of the parameter was among them.
+- **Sound.** A direct flow is needed only when the reference itself can be stored, which needs a slot whose type names
+  the reference's region; a name inside the pointee gives a slot for a pointee value (`K`), whose loans are what the
+  referent holds, and that is what a deep flow carries. A non-generic `key: borrow i64` already gave no flow (an `i64`
+  holds no loan), so only generic and region-carrying pointees change.
+- **Still refused.** A result that really borrows the temporary: `fn keep(borrow mut this, key: borrow(r) i64) ->
+  borrow(r) i64` in `struct Holder<region r>` stores `key` itself (its own region `r` is the receiver's), and
+  `fn byKey(m: borrow mut HashMap<i64, i64>, key: borrow i64) -> borrow(key) i64` returns it: `h.keep(2i64)` and
+  `byKey(mut m, 3i64)` kept past their statement stay N0243 (check-fail `adr0252-key-lent-to-mutable-method`).
+- **Implementation.** `src/check/references.cee`, the flows of a function (`outerFlowNames` decides); run-pass
+  `adr0252-key-lent-to-mutable-method` (`HashMap.getMut` and a generic method with a temporary key).

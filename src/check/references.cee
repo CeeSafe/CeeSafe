@@ -911,8 +911,18 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                     }
                 }
                 let source = c.hir.locals[c.hir.functions[function as usize].parameters[j] as usize].typ;
-                let deep = !direct && c.types.is(source, TypeKind.Reference) && !c.types.isSlice(source) &&
+                let isReference = c.types.is(source, TypeKind.Reference) && !c.types.isSlice(source) &&
                     !c.types.isStringView(source);
+                var deep = !direct && isReference;
+                if (direct && isReference) {
+                    // A name written inside the referent (`key: borrow K` into a receiver holding `K`): what may be
+                    // stored is a value read through the reference, which holds what the referent holds; only the
+                    // reference's own region, written or elided, can make the reference itself stored (ADR 0252 §8).
+                    var outer = Vector<u64>.create();
+                    if (outerFlowNames(c, f, j, receiverOffset, mut outer)? && !overlaps(outer, kept)) {
+                        deep = true;
+                    }
+                }
                 flows.push((if (deep) deepFlowBit() else 0u64) | (i as u64) << 32 | j as u64)?;
             }
         }

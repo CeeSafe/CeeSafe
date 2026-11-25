@@ -1,0 +1,33 @@
+// ADR 0252 §8: a `borrow K` argument of a `borrow mut this` method whose result borrows `this` lends only what a `K`
+// read through it holds; a temporary key ends with its statement and the result lives on.
+struct Bag<K, V> {
+    key: K;
+    value: V;
+
+    fn find(borrow mut this, key: borrow K) -> borrow mut(this) V? => Some(borrow mut this.value);
+
+    fn at(borrow mut this, key: borrow K) -> borrow mut(this) V => borrow mut this.value;
+}
+
+fn main() {
+    var points = HashMap<i64, i64>.create();
+    let _ = points.put(1, 5)!;
+    let g = points.getMut(1i64); // the key is a temporary
+    Console.writeLine(g != null);
+    match (g) {
+        Some(v) => { v += 1; }
+        null => {}
+    }
+    Console.writeLine(points.get(1i64) == Some(6));
+
+    var bag = Bag<i64, i64> { key: 1, value: 2 };
+    let found = bag.find(1i64);
+    Console.writeLine(found != null);
+    let at = bag.at(7i64);
+    at += 1;
+    Console.writeLine(bag.value);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 3

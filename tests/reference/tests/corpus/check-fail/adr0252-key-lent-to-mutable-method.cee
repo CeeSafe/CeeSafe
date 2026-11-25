@@ -1,0 +1,22 @@
+// ADR 0252 §8: a result that really borrows a temporary is still refused: here the result is derived from the key, and
+// the key's own region is the one stored, so the temporary would outlive its statement.
+struct Holder<region r> {
+    held: borrow(r) i64;
+
+    fn keep(borrow mut this, key: borrow(r) i64) -> borrow(r) i64 {
+        this.held = key;
+        return key;
+    }
+}
+
+fn byKey(m: borrow mut HashMap<i64, i64>, key: borrow i64) -> borrow(key) i64 => key;
+
+fn main() {
+    let first: i64 = 1;
+    var h = Holder { held: borrow first };
+    let kept = h.keep(2i64); // error[N0243]
+    Console.writeLine(kept);
+    var m = HashMap<i64, i64>.create();
+    let k = byKey(mut m, 3i64); // error[N0243]
+    Console.writeLine(k);
+}

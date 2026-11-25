@@ -259,8 +259,34 @@ RULE_SEQUENCES = [
 # What Windows answers to each sequence on one handle, step by step, up to the step strict refuses: "granted",
 # "refused" (LockFileEx's ERROR_LOCK_VIOLATION, UnlockFileEx's ERROR_NOT_LOCKED), or "stacked" (granted over the
 # handle's own lock, and one unlock of it leaves the bytes locked: another handle's exclusive try still fails).
-# Recorded from windows_answers() on Windows; on Windows the checker computes them live instead.
-WINDOWS_RECORDED = None
+# Recorded from windows_answers() on Windows; on Windows the checker computes them live instead. These are GitHub's
+# windows-2022 runner's (Windows Server 2022), printed by this script in the windows workflow's run 45577525614 on
+# 2026-11-25 (branch fix/g5-files): Windows stacks a shared lock over the handle's own lock of either kind, and refuses
+# an exclusive one over any.
+WINDOWS_RECORDED = {
+    'S then S, same range': ['granted', 'stacked'],
+    'X then X, same range': ['granted', 'refused'],
+    "S then X, same range (os_unix.c's conversion)": ['granted', 'refused'],
+    'X then S, same range': ['granted', 'stacked'],
+    'S then S, overlapping': ['granted', 'stacked'],
+    'S then X, overlapping': ['granted', 'refused'],
+    'X then S, overlapping': ['granted', 'stacked'],
+    'X then X, overlapping': ['granted', 'refused'],
+    'X then S, inside': ['granted', 'stacked'],
+    'S then X, around': ['granted', 'refused'],
+    'S then S, adjacent': ['granted', 'granted'],
+    'X then X, adjacent': ['granted', 'granted'],
+    'X, disjoint': ['granted', 'granted', 'granted', 'granted'],
+    'unlock exactly': ['granted', 'granted'],
+    'unlock unheld': ['refused'],
+    'unlock a part': ['granted', 'refused'],
+    'unlock more': ['granted', 'refused'],
+    'unlock two as one': ['granted', 'granted', 'refused'],
+    'unlock twice': ['granted', 'granted', 'refused'],
+    'lock after unlock': ['granted', 'granted', 'granted', 'granted'],
+    'os_win.c: SHARED to EXCLUSIVE': ['granted', 'granted', 'granted', 'granted', 'granted', 'granted', 'granted', 'granted'],
+    'os_unix.c: SHARED to EXCLUSIVE': ['granted', 'granted', 'refused'],
+}
 
 
 def rules_model(steps, rules):

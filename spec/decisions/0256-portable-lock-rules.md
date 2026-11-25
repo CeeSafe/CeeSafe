@@ -84,7 +84,10 @@ locks (`ERROR_LOCK_VIOLATION`, `ERROR_NOT_LOCKED`) is refused by `strict`. `stri
 grants on a handle that holds an overlapping lock — a shared lock over its own shared lock, and over its own
 exclusive one — because Windows then **stacks** the two locks, each released by its own unlock, where a POSIX host
 replaces one with the other: the program's state after the call differs by host, so it is not portable either.
-`tools/file_lock_check.py` checks both statements against `LockFileEx` itself (§4).
+`tools/file_lock_check.py` checks both statements against `LockFileEx` itself (§4). Under `portable`, the conversion it
+allows behaves on Windows as Windows decides: shared to exclusive is refused (`tryLock` `false`, `lock` waits for
+ever), and exclusive to shared is granted by stacking, so the bytes stay locked exclusively until both are unlocked:
+`portable` is for checking a POSIX scheme, `strict` for a scheme that must run on Windows.
 
 **What the rules do not check.** Windows' locks are mandatory (a byte locked exclusively cannot be read or written
 through another handle, ADR 0220 §2.2): the rules do not model that, and the contract (lock bytes the program does
@@ -157,7 +160,8 @@ scheme then panics on any host, at the call that makes it.
   the interpreter, stop (panic) exactly where §2.2's model says. Against Windows: each sequence is run on one handle
   with `LockFileEx` and `UnlockFileEx` through Python's `ctypes` (independent of CeeSafe's runtime) — live on
   Windows (the windows workflow runs the script), and on other hosts from the answers recorded there
-  (`WINDOWS_RECORDED`, with its run named in the script) — and every step `strict` lets through must be granted by
+  (`WINDOWS_RECORDED`, from the windows workflow's run 45577525614 on windows-2022, 2026-11-25) — and every step
+  `strict` lets through must be granted by
   Windows, and the step `strict` refuses must be refused by Windows or granted by stacking (one unlock of it leaves
   the bytes locked against another handle's exclusive try).
 - Without the variable every existing lock test (`file-locks.cee`, `file-lock-test.cee`, `tools/file_lock_check.py`

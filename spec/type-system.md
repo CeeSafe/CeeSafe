@@ -2511,6 +2511,38 @@ file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked fo
 
 Diagnostics: none new (N0205, N0207, N0270, N0274, N0296).
 
+### 22.5 `OsString` and `OsStringView<region r>`: names for the system (ADR 0257)
+
+lib/core's `OsString` (owned, a move type over a `Vector<u8>`) and `OsStringView<region r>` (a Copy view over a
+`Slice<r, u8>`) hold **the system's encoding of a name**: a file name, a program's argument, an environment variable.
+On POSIX that is the bytes the system calls take and give; on Windows it is WTF-8, the UTF-8 of the UTF-16 units in
+which an unpaired surrogate is the three bytes UTF-8 would give its code point (`ED A0 80` to `ED BF BF`), and a pair
+is always the four bytes of its code point. UTF-8 text is the same bytes in both. Their fields are private (N0296);
+both are `@derive(Equal)`.
+- **Not checked when made.** An OS string may hold any bytes on every system. A Windows call refuses bytes that are
+  not well-formed WTF-8 with `IoError.InvalidInput` (§26.3), as every system refuses a zero byte.
+- **Making one, without a copy:** `OsStringView.fromText(text)`, `fromBytes(bytes)`, `fromByteString(v)`;
+  `OsString.fromString(s)`, `fromBytes(v: Vector<u8>)`, `fromByteString(b)` take the buffer. **With one:**
+  `OsString.create()`, `fromText(text)`, `copyOf(bytes)`, `o.clone()`, `v.toOsString()`, and
+  `OsString.fromWide(units: Slice<u16>)`, the WTF-8 of any UTF-16 units. `o.view()`, `o.bytes()`, `v.bytes()`,
+  `v.toByteStringView()` are loans; `o.intoBytes()`, `o.intoByteString()` give the buffer back.
+- **To text.** `toUtf8()`: `StringView?` with no copy when the bytes are UTF-8, else `null`; `isUtf8()`.
+  `o.intoString()`: `Result<String, OsString>`, no copy either way. `toUtf8Lossy()`: `Result<String, AllocError>`,
+  each encoded surrogate one U+FFFD and every other ill-formed sequence as `ByteString.toUtf8Lossy` replaces it (§22.4),
+  the same on every system. Nothing converts an OS string to text implicitly.
+- **To UTF-16.** `toWide()`: `Result<Vector<u16>?, AllocError>`, the units of well-formed WTF-8, `null` for other
+  bytes; `isWtf8()`. With `fromWide`, Windows' conversion, on every system.
+- **Bytes.** `length()`, `isEmpty()`; on an `OsString`, each `Result<void, AllocError>` and unchanged on failure,
+  `append(name: OsStringView)`, `appendBytes(bytes)`, `appendByte(b)`, and `clear()`.
+- **An argument of a text type for an `OsStringView` parameter.** A call argument whose type is `StringView` (a
+  literal, a view) or `String` (lent, as for a `StringView` parameter) is accepted for a parameter of type
+  `OsStringView`: the checker passes `OsStringView.fromText(argument)`, which copies nothing. So every function that
+  takes a name (`Directory.create("out")`, a program's own `fn load(path: OsStringView)`, `o.append("/")`) takes text
+  too. Only call arguments convert: `let p: OsStringView = "a";` is N0205, and a `Vector<StringView>` is not a
+  `Vector<OsStringView>`.
+
+Diagnostics: none new (N0205, N0270, N0274, N0296).
+
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
 ### 23.1 `Vector<T, A>`
@@ -3190,6 +3222,11 @@ fn main() -> i32 {
 - `Process.argument(i)`: `StringView?`, argument `i` as a view of static text (no loans), or `null`
   if `i` is out of range or the argument's bytes are not valid UTF-8 (the `StringView` invariant,
   §22.2). Arguments are never copied.
+- `Process.argumentOs(i)` (ADR 0257, lib/std, hosted): `OsStringView<static>?`, argument `i` in the system's
+  encoding (§22.5), `null` only if `i` is out of range: an argument that is not UTF-8 arrives too.
+- On Windows the arguments are read from the program's command line (`GetCommandLineW`), split by
+  `CommandLineToArgvW`'s rules (ADR 0259 §2.1), as UTF-16 made WTF-8, not from the C runtime's `argv`, which is in the
+  ANSI code page. Before ADR 0259 a non-ASCII argument was lost there.
 
 ### 26.2 `IoError`
 A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDenied`,
@@ -3234,8 +3271,10 @@ ADR 0221's.
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
   (an error from closing is ignored). It is not scoped and not Copy.
 - `File.open(path)`: `Result<File, IoError>` for reading; `File.create(path)`: for writing, created
-  or truncated; `File.remove(path)`: `Result<void, IoError>`. `path` is a `StringView`; a path that
-  contains a zero byte or is longer than 4095 bytes is `InvalidInput`.
+  or truncated; `File.remove(path)`: `Result<void, IoError>`. `path` is a `StringView` or an `OsStringView`
+  (§22.5, ADR 0257), as for every `File` built-in that takes a path; a path that contains a zero byte or is longer than
+  4095 bytes is `InvalidInput`, and on Windows one that is not well-formed WTF-8. The interpreter refuses a path that
+  is not UTF-8 (`InvalidInput`): its file calls are the compiler's own (ADR 0257 §2.7).
 - A file may be removed or renamed while a `File` holds it open, natively on every system: the name goes, and the
   open `File` keeps reading and writing the file until it is dropped. Windows opens every file sharing delete
   (`FILE_SHARE_DELETE`), which its C runtime's `_open` does not.
@@ -3407,8 +3446,15 @@ ADR 0221's.
     `C:\dir\` stays `C:\dir\`;
   - the line is UTF-16, from the UTF-8 texts; one longer than Windows takes (32,767 units) is an error
     (`IoError.Other`, the C runtime's `E2BIG`).
-  - `CreateProcessW` finds a program named without a directory in the program's own directory, the working
-    directory, the system directories and then `PATH`, and adds `.exe` to a name without an extension.
+  - **Finding the program** (ADR 0259 §2.2; before it, `CreateProcessW`'s own search, which looked in the program's
+    own directory and the working directory first). The runtime finds it and gives `CreateProcessW` its full path. A
+    name with a `\`, `/` or `:` is used as it is (relative to the working directory). A bare name is looked for in the
+    system directory (`GetSystemDirectoryW`), then the Windows directory (`GetWindowsDirectoryW`), then each entry of
+    this process's `PATH` in order (empty entries skipped, `"`s removed); the first that holds a file, not a
+    directory, of that name is the program. The working directory and the program's own directory are never searched:
+    `.\tool` names a tool there. A name whose last component has no extension has `.exe` added; `PATHEXT` is not
+    read. Nothing found is `NotFound`. The line's first word stays the name as given.
+  - The line is made from WTF-8 (§22.5), so an argument may hold an unpaired surrogate.
   - **Batch files are refused.** `CreateProcessW` runs a `.bat` or `.cmd` file through cmd.exe, which splits the line
     by rules of its own and expands `%name%` in it, so no quoting by the rules above keeps an argument from being
     read as commands (BatBadBut, CVE-2024-24576). A program whose name's last component ends in `.bat` or `.cmd`, in
@@ -3417,6 +3463,13 @@ ADR 0221's.
     runs `cmd.exe` itself, and quotes the line for cmd.exe itself.
   - Before 0.95.8 (ADR 0245), `Process.run` passed its arguments to `_wspawnvp`, which joins them without
     quoting: an argument with a space reached the child as two.
+- **POSIX lookup.** `posix_spawnp` searches this process's `PATH`; a name with a `/` is used as it is. A bare name is
+  looked for in the working directory only where `PATH` has an empty entry or `.`, which POSIX defines so.
+- **`Process.runWith(program, arguments, options)`** (ADR 0258, lib/std, hosted): `Process.run` with
+  `options: borrow ChildOptions` (§26.16): its streams (`Inherit` or `Null`) and its environment. `program` is an
+  `OsStringView` and `arguments` a `borrow Vector<StringView>` or `borrow Vector<OsStringView>` (§26.16). It waits and
+  returns the exit status, or 128 plus the signal that ended it; standard output is flushed first. The interpreter
+  answers `Unsupported`, as for `spawn`.
 
 ### 26.6 Runtime (Profile A and hosted)
 Implemented in `runtime/hosted/ceesafe_rt_io.c` over the C library's `open`, `read`, `write`,
@@ -3430,7 +3483,8 @@ Diagnostics: none new.
 
 ### 26.7 Running a program with its output captured (M15 S7, ADR 0028)
 - `Process.capture(program, arguments, input)`: `Result<ProcessOutput, IoError>`.
-  - `program: StringView` is found on `PATH`, as for `Process.run`; `arguments: borrow Vector<StringView>`.
+  - `program: OsStringView` (a literal or a `StringView` too, §22.5) is found on `PATH`, as for `Process.run`;
+    `arguments: borrow Vector<StringView>` or `borrow Vector<OsStringView>` (ADR 0258 §2.4).
   - `input: Slice<u8>?` is the child's standard input (empty if `null`).
   - It waits for the child.
 - `ProcessOutput` (lib/std) is a struct with three fields:
@@ -3449,6 +3503,10 @@ Diagnostics: none new.
 - **Errors.** As for `Process.run`: a program that cannot be started is `NotFound` and the like, and a failed
   allocation is `OutOfMemory`. A mistake in the call's arguments is reported against `HostServices.capture`, lib/std's
   function behind it.
+- **`Process.captureWith(program, arguments, input, options)`** (ADR 0258): `capture` with the environment of
+  `options: borrow ChildOptions` (§26.16). The streams are capture's own: the options' `input`, `output` and `error`
+  are not used. The interpreter runs it as `capture` when the options change nothing, and answers `Unsupported`
+  otherwise.
 
 ### 26.8 What is at a path
 - `File.kind(path)`: `Result<PathKind?, IoError>`, following symbolic links: `PathKind.File`, `PathKind.Directory`
@@ -3459,8 +3517,14 @@ Diagnostics: none new.
 
 ### 26.9 The environment
 - `Environment.variable(name)`: `StringView?`, the variable's value, or `null` if it is not set or not valid UTF-8.
+- `Environment.variableOs(name: OsStringView)` (ADR 0257): `OsStringView<static>?`, the value in the system's
+  encoding (§22.5), `null` only if it is not set.
 - Like `Process.argument` (§26.1), the value is a view of static text with no loans. CeeSafe has no way to change the
   environment, so it stays valid. C code that calls `setenv` breaks that, as it would in C.
+- On Windows the environment is read as UTF-16 (`GetEnvironmentStringsW`) once, at the first call, and kept: names
+  are compared without case, as Windows compares them. Before ADR 0257 it was the C runtime's copy in the ANSI code
+  page, which lost non-ASCII values.
+- A child's environment is set by `ChildOptions` (§26.16, ADR 0258).
 
 ### 26.10 Directories
 - `Directory.create(path)` makes one directory: `AlreadyExists` if something is there, `NotFound` if its parent is
@@ -3470,6 +3534,9 @@ Diagnostics: none new.
   - It gives the entries' names, without `.` and `..`, **sorted by byte value**, so a program's output never depends
     on the order a file system returns them in.
   - A name that is not valid UTF-8 is `InvalidInput`, not skipped, so a program cannot miss a file without a word.
+    (On Windows the runtime passed over a name that was not valid UTF-16 until ADR 0257.)
+- `Directory.listOs(path)` (ADR 0257): `Result<Vector<OsString>, IoError>`, every name in the system's encoding
+  (§22.5), sorted by byte value, none refused.
 - `Directory.temporary()`: `Result<String, IoError>`, the path of a new, empty directory that only this user can
   enter.
   - It is created under the platform's temporary directory (`TMPDIR` or `/tmp` on POSIX, `GetTempPath` on
@@ -3485,7 +3552,9 @@ Diagnostics: none new.
     `$XDG_DATA_HOME/<name>` when that is an absolute path, else `$HOME/.local/share/<name>`. `NotFound` when the
     system names no such place (no `HOME`; on Android, a process that is not an app's).
   - A phone's system may empty `Directory.temporary()`'s folder; this one it keeps.
-- `Directory.current()`: `Result<String, IoError>`, the working directory.
+- `Directory.current()`: `Result<String, IoError>`, the working directory (`InvalidInput` when it is not UTF-8);
+  `Directory.currentOs()` (ADR 0257): `Result<OsString, IoError>`, in the system's encoding.
+- `Process.executableOs()` (ADR 0257) is `Process.executable()` (§26.16) as an `OsString`.
 - `Directory.space(path)` (ADR 0077): `Result<VolumeSpace, IoError>`, the bytes of the volume that holds `path`:
   `total`, `free`, and `available` to this process, which is at most `free` where the system keeps a reserve
   (`statvfs`; Windows `GetDiskFreeSpaceExA`). The interpreter answers `Unsupported`, so a run stays reproducible.
@@ -3493,7 +3562,9 @@ Diagnostics: none new.
   durable: `open(O_DIRECTORY)` and `fsync` on POSIX. Windows journals directory entries and cannot flush a directory,
   so there it only checks that `path` is a directory.
 - **Common rules for §26.7–§26.10.**
-  - Paths are `StringView`s, under `File.open`'s rules: a zero byte or more than 4,095 bytes is `InvalidInput`.
+  - Paths are `OsStringView`s (§22.5, ADR 0257; a literal, a `StringView` or a lent `String` is accepted), under
+    `File.open`'s rules: a zero byte or more than 4,095 bytes is `InvalidInput`, and on Windows bytes that are not
+    well-formed WTF-8. Before ADR 0257 they were `StringView`s, so a name that is not UTF-8 could not be given.
   - All of these are hosted-only. In freestanding code, `Process` and `File` are N0293, and `Environment` and
     `Directory`, being lib/std's, are not defined.
   - They are lib/std code (`lib/std/host.cee`) over the runtime's `ceesafe_host_*` functions
@@ -4235,13 +4306,28 @@ Diagnostics: none new.
 - Hosted only: in freestanding code these types are not defined (N0200).
 
 ### 26.16 Child processes (ADR 0169)
-- `Process.spawn(program, arguments, options)`: `Result<ChildProcess, IoError>`. It starts `program` (a
-  `StringView`, found on `PATH` as for `Process.run`) with `arguments: borrow Vector<StringView>` and returns: the
-  child runs beside this program, with its environment and working directory. A program that cannot be started is
+- `Process.spawn(program, arguments, options)`: `Result<ChildProcess, IoError>`. It starts `program` (an
+  `OsStringView`, §22.5, found on `PATH` as for `Process.run`) with `arguments` and returns: the child runs beside
+  this program, with its working directory and the environment the options give. A program that cannot be started is
   `NotFound` and the like. On Windows the command line is §26.5's, and a batch file is refused (`InvalidInput`).
-  - `options: ChildOptions` (lib/std) says what the child's standard `input`, `output` and `error` are, each a
-    `ChildStream`: `Inherit` (the parent's) or `Null` (the null device). `ChildOptions.inherit()` and
-    `ChildOptions.quiet()` are all three of one kind.
+  - `arguments` is a `borrow Vector<StringView>` or a `borrow Vector<OsStringView>` (ADR 0258 §2.4): the checker
+    calls lib/std's `HostServices` function of the call's name, or its `…Os` form, by the vector's element type. So it
+    is for `capture`, `captureWith`, `runWith` and `spawnWith`.
+  - `options: borrow ChildOptions` (lib/std; by value before ADR 0258) says what the child's standard `input`, `output`
+    and `error` are, each a `ChildStream`: `Inherit` (the parent's) or `Null` (the null device).
+    `ChildOptions.inherit()` and `ChildOptions.quiet()` are all three of one kind, and
+    `ChildOptions.streams(input, output, error)` each its own; its fields `input`, `output` and `error` are public.
+  - **The child's environment** (ADR 0258): `options.setEnvironment(name, value)` (`OsStringView`s; a literal is
+    accepted) gives the child `name` with `value`; `options.removeEnvironment(name)` takes `name` away;
+    `options.clearEnvironment()` starts the child's environment empty and forgets the changes made before it. The
+    first two are `Result<void, AllocError>`. The changes are applied in order to this process's environment (or the
+    empty one) when a child starts, a later change of a name replacing an earlier one; with none, the child has this
+    process's environment. At the start, an empty name, a name with `=` or a zero byte, a value with a zero byte, a
+    change naming `CEESAFE_HANDOVER` (the runtime's, §26.18), and on Windows bytes that are not well-formed WTF-8, are
+    `InvalidInput`. Names compare as the system compares them: bytes on POSIX, without case on Windows. The program is
+    looked up on this process's `PATH`, whatever the options set. CosmoOS: a change is `Unsupported`.
+  - `ChildOptions` has a private field since ADR 0258: it is not Copy, and is made by its functions, not a literal
+    (N0296).
 - `ChildProcess` (lib/std) is the parent's hold on the child: a move type that needs drop.
   - `child.id()`: `u64`, the system's id of the process.
   - `child.poll()`: `Result<ChildExit?, IoError>`: how the child ended, or `null` at once while it runs.
@@ -4259,7 +4345,8 @@ Diagnostics: none new.
 - `ChildExit` (lib/std): `Status(i32)`, the status it returned or gave `Process.exit`, or `Signal(i32)`, the signal
   that ended it (POSIX; on Windows a killed child is `Status(1)`).
 - `Process.id()`: `u64`, this process's id. `Process.executable()`: `Result<String, IoError>`, the path of the
-  running program, with which a program starts itself again as a worker.
+  running program, with which a program starts itself again as a worker; `Process.executableOs()` (ADR 0257):
+  `Result<OsString, IoError>`, the same in the system's encoding.
 - **What the child shares** is what the system gives any new program: the environment, the working directory and
   the streams above. There is no `fork`: a child is a program started, not a copy of the parent.
 - **Where.** Hosted only. CosmoOS, and the interpreter, which runs one program and starts none: `spawn` and

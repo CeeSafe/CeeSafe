@@ -367,6 +367,14 @@ struct Parser {
                     expectedItem(),
                     "expected 'fn', 'const', 'struct' or 'enum', found ",
                     if (alias) ": CeeSafe has no type aliases; write the type where it is used, or declare a struct that holds it"
+                        else if (this.at(TokenKind.Identifier) && this.nameIs(
+                            this.current(),
+                            "pub",
+                        )) ": 'pub' is written 'public'"
+                        else if (this.at(TokenKind.Identifier) && this.nameIs(
+                            this.current(),
+                            "trait",
+                        )) ": a trait is written 'interface'"
                         else "",
                 )?;
                 this.advance();
@@ -690,6 +698,16 @@ struct Parser {
         return Ok(TypeParameterLists { types: typeRange, regions: regionRange });
     }
 
+    /// Whether a parameter list starts with Rust's receiver: `self`, `&self` or `&mut self` (not `self: T`).
+    fn atRustReceiver(borrow this) -> bool {
+        var k: usize = 0;
+        if (this.at(TokenKind.Amp)) {
+            k = if (this.peekIs(1, TokenKind.MutKeyword)) 2 else 1;
+        }
+        return this.peekIs(k, TokenKind.Identifier) && this.nameIs(this.peek(k), "self") &&
+            !this.peekIs(k + 1, TokenKind.Colon);
+    }
+
     fn parseFunction(borrow mut this, visibility: Visibility, start: u32) -> Result<u32, AllocError> {
         // The doc comment belongs to the declaration's first token: the visibility, if any (grammar.md §1.2).
         let firstToken =
@@ -717,6 +735,21 @@ struct Parser {
                 receiver = if (this.eat(TokenKind.MutKeyword)) ReceiverKind.BorrowMut else ReceiverKind.Borrow;
             }
             this.expect(TokenKind.ThisKeyword)?;
+            receiverStart = rs;
+            receiverEnd = this.endFrom(rs);
+            moreParameters = this.eat(TokenKind.Comma);
+        } else if (this.atRustReceiver()) {
+            // `self`, `&self` and `&mut self`: reported once, and taken as the receiver.
+            this.errorFound(
+                expectedToken(),
+                "expected a parameter, found ",
+                ": the receiver is written 'this', 'borrow this' or 'borrow mut this'",
+            )?;
+            receiver = ReceiverKind.Value;
+            if (this.eat(TokenKind.Amp)) {
+                receiver = if (this.eat(TokenKind.MutKeyword)) ReceiverKind.BorrowMut else ReceiverKind.Borrow;
+            }
+            this.advance();
             receiverStart = rs;
             receiverEnd = this.endFrom(rs);
             moreParameters = this.eat(TokenKind.Comma);
@@ -1722,8 +1755,20 @@ struct Parser {
             }
             return this.front.ast.addType(TypeNode.Named(name), name.start, name.end);
         }
-        this.errorFound(expectedType(), "expected type, found ", "")?;
+        let ampersand = this.at(TokenKind.Amp);
+        this.errorFound(
+            expectedType(),
+            "expected type, found ",
+            if (ampersand) ": a borrow's type is 'borrow T' or 'borrow mut T', text is 'StringView' and a slice is 'Slice<T>'"
+                else "",
+        )?;
         let at = this.current().start;
+        if (ampersand) {
+            // Rust's `&T` and `&mut T`: read to its end, as a type that says nothing more.
+            this.advance();
+            this.eat(TokenKind.MutKeyword);
+            this.parseTypeCore()?;
+        }
         return this.front.ast.addType(TypeNode.Missing, at, at);
     }
 
@@ -2992,6 +3037,18 @@ struct Parser {
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Borrow(isMutable, operand), start, this.endFrom(start));
         }
+        if (this.at(TokenKind.Amp)) {
+            // Rust's `&x` and `&mut x`: reported once, and read as the borrow.
+            this.errorFound(
+                expectedExpression(),
+                "expected expression, found ",
+                ": a borrow is written 'borrow x' or 'borrow mut x'; an argument is lent as 'f(x)', or 'f(mut x)' to let the call change it",
+            )?;
+            this.advance();
+            this.eat(TokenKind.MutKeyword);
+            this.parseUnary()?;
+            return this.front.ast.addExpr(ExprNode.Error, start, this.endFrom(start));
+        }
         if (this.at(TokenKind.Star)) {
             // `*r`: reading the Copy value a reference refers to (ADR 0075 §2.14).
             this.advance();
@@ -3106,6 +3163,17 @@ struct Parser {
                 expr = this.front.ast.addExpr(ExprNode.Call(expr, range), start, this.endFrom(start))?;
             } else if (this.at(TokenKind.Dot)) {
                 this.advance();
+                if (this.at(TokenKind.AwaitKeyword)) {
+                    // Rust's `f().await`: reported once, and read as `await f()`.
+                    this.errorFound(
+                        expectedToken(),
+                        "expected identifier, found ",
+                        ": 'await' is written before the call, 'await f()' ('await f()?' to pass its error on)",
+                    )?;
+                    this.advance();
+                    expr = this.front.ast.addExpr(ExprNode.Await(expr), start, this.endFrom(start))?;
+                    continue;
+                }
                 let member = this.parseIdentifier()?;
                 if (this.isGenericArgumentListAhead()) {
                     // `x.m<T>(…)`: a generic method's or static function's type arguments (ADR 0064 §1).

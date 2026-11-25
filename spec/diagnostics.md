@@ -77,6 +77,13 @@ one error that names CeeSafe's form, and goes on as if that form had been writte
 | `let mut n = 1;` | a variable that changes is `var n = …;`; the statement is taken as that `var` | N0100 |
 | `type Id = i32;` | CeeSafe has no type aliases: write the type where it is used, or declare a struct that holds it | N0101 |
 | `\|a\| a + 1` | a closure is written `(a) => a + 1` | N0102 |
+| `&T`, `&mut T` (a type) | a borrow's type is `borrow T` or `borrow mut T`, text is `StringView` and a slice is `Slice<T>` | N0105 |
+| `&x`, `&mut x` | a borrow is written `borrow x` or `borrow mut x`; an argument is lent as `f(x)` or `f(mut x)` | N0102 |
+| `self`, `&self`, `&mut self` (a receiver) | the receiver is written `this`, `borrow this` or `borrow mut this` | N0100 |
+| `f().await` | `await` is written before the call, `await f()` | N0100 |
+| `pub`, `trait` | `public`, `interface` | N0101 |
+| `None`, `self` (a value; from the checker) | an optional without a value is `null`; a method's receiver is `this` | N0200 |
+| `a.len()` (from the checker) | its length is the field `length` | N0200 |
 
 ### Names, types and flow (N0200–N0299)
 

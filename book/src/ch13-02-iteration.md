@@ -262,6 +262,7 @@ false
 | Method | The closure | What it does |
 |---|---|---|
 | `s.sortBy(cmp)` | `(a, b) => i32` | sorts in place; `cmp` is negative, zero or positive as `a` goes before, with or after `b`; not stable |
+| `s.sortStableBy(cmp)` | `(a, b) => i32` | as `sortBy`, and stable: equal elements keep their order |
 | `s.forEach(visit)` | `(x) => void` | calls `visit` on each element in order |
 | `s.any(test)` | `(x) => bool` | `true` at the first element that passes; `false` if none or empty |
 | `s.all(test)` | `(x) => bool` | `false` at the first element that fails; `true` if none or empty |
@@ -274,8 +275,8 @@ to a total does. The receiver is lent to the method for the whole call, so the c
 vector.
 
 ::: tip Rule
-The library's closure-taking methods are `sortBy`, `forEach`, `any`, `all` and `partitionPoint` on slices and
-vectors, and `retain` on vectors. There are no others: no `map`, `filter`, `fold` or `sum`.
+The library's closure-taking methods are `sortBy`, `sortStableBy`, `forEach`, `any`, `all` and `partitionPoint` on
+slices and vectors, and `retain` on vectors. There are no others: no `map`, `filter`, `fold` or `sum`.
 
 *Specification: `type-system.md` §36.4.*
 :::
@@ -442,7 +443,7 @@ no generators and no `yield`: an iterator is a struct that keeps its own positio
 - An iterator is a struct with `fn next(borrow mut this) -> T?` (`N0205` for another shape). Passed by value
   it is used up; passed as `borrow mut` it keeps its state.
 - `impl Iterator<T> for …` lets generic code take it with a bound `I: Iterator<T>`.
-- The closure-taking methods are `sortBy`, `forEach`, `any`, `all`, `partitionPoint` and `retain`. There is
-  no adapter library (`N0200`): write the loop, or an iterator of your own.
+- The closure-taking methods are `sortBy`, `sortStableBy`, `forEach`, `any`, `all`, `partitionPoint` and
+  `retain`. There is no adapter library (`N0200`): write the loop, or an iterator of your own.
 
 Next: [The project improved](./ch13-03-project-improved) uses a closure and an iterator in `lookfor`.

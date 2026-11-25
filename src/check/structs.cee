@@ -330,6 +330,9 @@ fn resolveStructPart(c: borrow mut Checker, index: u32, fields: bool, functions:
     let savedOwner = enterMembers(c, entry.typ);
     let savedSignature = c.inSignature;
     c.inSignature = false;
+    // The fields and payloads are declared on their own, not inside the written type that made the instance.
+    let savedDepth = c.typeDepth;
+    c.typeDepth = 0;
     let firstFunction = c.hir.functions.length;
     var memberNames = Vector<u32>.create();
     if (!fields) {
@@ -486,6 +489,7 @@ fn resolveStructPart(c: borrow mut Checker, index: u32, fields: bool, functions:
         c.types.structs[definition as usize].functionNames.push(id.symbol)?;
     }
     markInstanceRepeats(c, entry.typ, firstFunction);
+    c.typeDepth = savedDepth;
     c.inSignature = savedSignature;
     c.memberOwner = savedOwner;
     swapRegions(c, savedRegions)?;
@@ -633,6 +637,9 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
     let savedOwner = enterMembers(c, entry.typ);
     let savedSignature = c.inSignature;
     c.inSignature = false;
+    // The fields and payloads are declared on their own, not inside the written type that made the instance.
+    let savedDepth = c.typeDepth;
+    c.typeDepth = 0;
     for (k in 0..variants.count) {
         let v = c.front.ast.variants[c.front.ast.at(variants, k) as usize];
         let id = c.front.ast.idents[v.name as usize];
@@ -689,6 +696,7 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
         declareEnumMethods(c, index)?; // the functions of its `impl E { … }` blocks (ADR 0107)
         markInstanceRepeats(c, entry.typ, firstFunction);
     }
+    c.typeDepth = savedDepth;
     c.inSignature = savedSignature;
     c.memberOwner = savedOwner;
     swapRegions(c, savedRegions)?;

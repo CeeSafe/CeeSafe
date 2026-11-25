@@ -345,6 +345,9 @@ fn appendEveryMethodChoice(
 ) -> Result<void, AllocError> {
     var close = Vector<Vector<u8>>.create();
     let count = methodNamesOf(c, typ, builtin, wanted, mut close)?;
+    if (sameText(c.name(wanted), "len")) {
+        return appendText(message, "; its length is the field 'length', written without '()'");
+    }
     if (close.length > 0 || count == 0) {
         return appendNameChoices(message, close);
     }

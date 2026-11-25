@@ -2402,6 +2402,14 @@ fn cannotFind(c: borrow mut Checker, symbol: u32, span: Span) -> Result<void, Al
     appendText(mut message, "cannot find ")?;
     appendQuotedName(mut message, c, symbol)?;
     appendText(mut message, " in this scope")?;
+    if (sameText(c.name(symbol), "None")) {
+        appendText(mut message, ": an optional without a value is 'null'")?;
+        return c.error(undefinedName(), span.start, span.end, message);
+    }
+    if (sameText(c.name(symbol), "self")) {
+        appendText(mut message, ": a method's receiver is 'this'")?;
+        return c.error(undefinedName(), span.start, span.end, message);
+    }
     // A capitalised name is, by the convention every library follows, a type's: the types close to it (`Vec.new()`).
     let text = c.name(symbol);
     if (text.length > 0 && text[0] >= 'A' && text[0] <= 'Z') {

@@ -97,6 +97,9 @@ everywhere else it is a name you may declare and use.
 | Word | Where it is special | What it means there | Taught in |
 |---|---|---|---|
 | `class` | At the start of an item, before a name: `class Account { … }` | An error that says CeeSafe has no classes and to declare a `struct`, behind `Box` for a value with identity. Elsewhere `class` is a name, so a field may be `class: StorageClass`. | [5.1](./ch05-01-defining-structs) for structs |
+| `pub` | Where an item is expected | An error that says `pub` is written `public`. Elsewhere `pub` is an ordinary name. | not in the chapters |
+| `trait` | Where an item is expected | An error that says a trait is written `interface`. Elsewhere `trait` is an ordinary name. | not in the chapters |
+| `self` | First in a parameter list, with no `:` after it: `(self)`, `(&self)` | An error that says the receiver is written `this`, `borrow this` or `borrow mut this`. Elsewhere `self` is an ordinary name. | not in the chapters |
 | `is` | After a complete operand, in an expression | `e is PATTERN` tests whether the value fits the pattern, and binds the pattern's names. | [6.3](./ch06-03-optionals), [19.1](./ch19-01-where-patterns-go) |
 | `region` | Before a name, in the parameter list of a generic item: `struct Token<region r>` | Declares a region parameter, which says how long the borrows inside the type last. | [10.3](./ch10-03-regions) |
 | `dyn` | In a type, before an interface, `fn` or `mut fn`: `Box<dyn Shape>` | A value of some type that implements the interface, with its methods found when the program runs. `dyn fn` is the type of a closure that owns what it captures. | [18.1](./ch18-01-dynamic-dispatch), [13.1](./ch13-01-closures) |

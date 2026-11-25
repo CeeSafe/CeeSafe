@@ -114,7 +114,21 @@ CASES = [
         2,
         "N0100",
         "'if (x > 2) { … }'"
-    ]
+    ],
+    ["a & type", "fn amp(s: &str, n: &mut i32) -> i32 {\n    return 1;\n}\n", 1, "N0105", "'borrow T'"],
+    ["a & expression", "fn lend(n: borrow i32) {}\n\nfn use1() {\n    let x = 1;\n    lend(&x);\n}\n", 5, "N0102", "'borrow x'"],
+    ["a &mut expression", "fn lend(n: borrow mut i32) {}\n\nfn use1() {\n    var x = 1;\n    lend(&mut x);\n}\n", 5, "N0102", "'f(mut x)'"],
+    ["&self", "struct P {\n    n: i32;\n\n    fn get(&self) -> i32 {\n        return this.n;\n    }\n}\n", 4, "N0100", "'borrow this'"],
+    ["&mut self with a parameter", "struct P {\n    n: i32;\n\n    fn set(&mut self, v: i32) {\n        this.n = v;\n    }\n}\n", 4, "N0100", "'borrow mut this'"],
+    ["self by value", "struct P {\n    n: i32;\n\n    fn get(self) -> i32 {\n        return this.n;\n    }\n}\n", 4, "N0100", "'this'"],
+    ["self in a body", "struct P {\n    n: i32;\n\n    fn get(borrow this) -> i32 {\n        return self.n;\n    }\n}\n", 5, "N0200", "'this'"],
+    ["None", "fn none1() {\n    let o: i32? = None;\n}\n", 2, "N0200", "'null'"],
+    [".await", "async fn one() -> i32 {\n    return 1;\n}\n\nasync fn two() -> i32 {\n    return one().await;\n}\n", 6, "N0100", "'await f()'"],
+    ["pub fn", "pub fn f1() -> i32 {\n    return 1;\n}\n\nfn g1() -> i32 => f1();\n", 1, "N0101", "'public'"],
+    ["trait", "trait Shape {\n    fn area(&self) -> i32;\n}\n", 1, "N0101", "'interface'"],
+    ["len() of an array", "fn len1() -> usize {\n    let a = [1, 2];\n    return a.len();\n}\n", 3, "N0200", "'length'"],
+    ["len() of a vector", "fn len2(v: borrow Vector<i32>) -> usize => v.len();\n", 1, "N0200", "'length'"],
+    ["len() of text", "fn len3(s: StringView) -> usize => s.len();\n", 1, "N0200", "'length'"]
 ]
 
 # A struct literal in a parenthesised condition is still one: the recovery's rule must not reach it.

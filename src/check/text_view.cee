@@ -36,9 +36,24 @@ fn textViewBytes(c: borrow mut Checker, value: u32, span: Span) -> Result<u32, A
     return libraryCall(c, function, values[..], span);
 }
 
+/// Is `t` text that `==` compares with a `ByteStringView` by its bytes: a `StringView`, a `String` or a
+/// `ByteStringView` (ADR 0253 §2.6)?
+fn isComparedText(c: borrow Checker, t: u32) -> bool =>
+    c.types.isStringView(t) || c.types.isString(t) || isByteStringViewType(c, t);
+
 /// `v == t` and `v != t` where one side is a `ByteStringView` and the other a `StringView` (a string literal
-/// included) or a `ByteStringView` (ADR 0253 §2.6): the bytes compared. None for any other operands.
-fn textViewEquality(c: borrow mut Checker, op: BinaryOp, left: u32, right: u32, span: Span) -> Result<u32, AllocError> {
+/// included), a `String` (its text, lent: not consumed) or a `ByteStringView` (ADR 0253 §2.6): the bytes compared.
+/// None for any other operands.
+fn textViewEquality(
+    c: borrow mut Checker,
+    op: BinaryOp,
+    leftOperand: u32,
+    rightOperand: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    // Text read through a reference (`str`, as an optional `String`'s value is) is its view again (sliceOperand).
+    let left = sliceOperand(c, leftOperand);
+    let right = sliceOperand(c, rightOperand);
     let lt = c.typeOf(left);
     let rt = c.typeOf(right);
     let leftBytes = isByteStringViewType(c, lt);
@@ -46,11 +61,13 @@ fn textViewEquality(c: borrow mut Checker, op: BinaryOp, left: u32, right: u32, 
     if (!leftBytes && !rightBytes) {
         return Ok(none());
     }
-    if (!(leftBytes || c.types.isStringView(lt)) || !(rightBytes || c.types.isStringView(rt))) {
+    if (!isComparedText(c, lt) || !isComparedText(c, rt)) {
         return Ok(none());
     }
-    let l = textViewBytes(c, left, span)?;
-    let r = textViewBytes(c, right, span)?;
+    let leftText = if (c.types.isString(lt)) stringText(c, left)? else left;
+    let rightText = if (c.types.isString(rt)) stringText(c, right)? else right;
+    let l = textViewBytes(c, leftText, span)?;
+    let r = textViewBytes(c, rightText, span)?;
     if (c.isBottom(l) || c.isBottom(r)) {
         return c.errorResult(span.start, span.end);
     }

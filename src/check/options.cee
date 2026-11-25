@@ -929,7 +929,7 @@ fn comparedPayload(c: borrow Checker, t: u32) -> u32 {
 }
 
 /// Whether `==` compares the two as optionals (ADR 0138 §3, ADR 0251): optionals, borrowed or not, whose values have
-/// one type, or are a `String` and a `StringView` (§2.6).
+/// one type, or are a `String` and a `StringView` (§2.6), or a `ByteStringView` and text (§2.6, ADR 0253 §2.6).
 fn comparableOptionals(c: borrow Checker, lt: u32, rt: u32) -> bool {
     if (c.types.optionType(lt) == none() || c.types.optionType(rt) == none()) {
         return false;
@@ -939,6 +939,9 @@ fn comparableOptionals(c: borrow Checker, lt: u32, rt: u32) -> bool {
     }
     let l = comparedPayload(c, lt);
     let r = comparedPayload(c, rt);
+    if ((isByteStringViewType(c, l) || isByteStringViewType(c, r)) && isComparedText(c, l) && isComparedText(c, r)) {
+        return true;
+    }
     return l == r || (c.types.isString(
         l,
     ) && c.types.isStringView(r)) || (c.types.isStringView(l) && c.types.isString(r));
@@ -1044,8 +1047,18 @@ fn checkBorrowedOptionalOperand(c: borrow mut Checker, syntax: u32, leftType: u3
 }
 
 /// The right operand of `==` whose left is an optional `T?` (ADR 0138 §3): checked against `T?`, unless it is an
-/// optional borrow of `T` (ADR 0251), which is compared through its referents.
+/// optional borrow of `T` (ADR 0251), which is compared through its referents. Against a `ByteStringView?`, `Some(t)`
+/// of a `StringView` (a string literal included) is a `StringView?`, compared by bytes (ADR 0251 §2.6).
 fn checkOptionalOperand(c: borrow mut Checker, syntax: u32, leftType: u32) -> Result<u32, AllocError> {
+    if (isByteStringViewType(c, comparedPayload(c, leftType)) && someArgument(c, syntax)? != none()) {
+        let span = c.front.ast.exprSpans[syntax as usize];
+        let value = synth(c, syntax, none())?;
+        let payload = c.types.optionType(c.typeOf(value));
+        if (payload != none() && (c.types.isStringView(payload) || isByteStringViewType(c, payload))) {
+            return Ok(value);
+        }
+        return coerce(c, value, leftType, span);
+    }
     if (!mayBeOptionalBorrow(c, syntax)?) {
         return checkExpr(c, syntax, leftType);
     }

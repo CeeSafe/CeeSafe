@@ -210,7 +210,9 @@ extern char **environ;
 #endif
 #if !defined(_WIN32) && !defined(COSMO_AF_INET) && !defined(CEE_COSMOOS)
 /* Defined with what a child is handed (ADR 0173), further down. */
-static char **cee_child_environment(char *word);
+static char **cee_child_environment(char *word, const cee_str *texts, const uint8_t *kinds, uint64_t changes,
+                                    uint32_t clear, char ***owned_out, int *error);
+static void cee_child_environment_free(char **made, char **owned);
 static int cee_spawn_only(posix_spawn_file_actions_t *actions, posix_spawnattr_t *attributes, int keep);
 static void cee_handover_read(void);
 #endif
@@ -242,9 +244,35 @@ static void cee_cloexec(int fd) {
 static uint32_t ceesafe_argc;
 static const uint8_t *const *ceesafe_argv;
 
+#ifdef _WIN32
+static bool cee_win_arguments(int32_t *count, const uint8_t *const **arguments);
+#endif
+
 void ceesafe_args_set(int32_t count, const uint8_t *const *arguments) {
+#ifdef _WIN32
+    /* ADR 0259 §2.1: the C runtime's argv is in the ANSI code page; the arguments are the command line's, split as
+       CommandLineToArgvW splits it, in WTF-8. The C runtime's are kept only if the line cannot be read. */
+    int32_t wide_count = 0;
+    const uint8_t *const *wide_arguments = NULL;
+    if (cee_win_arguments(&wide_count, &wide_arguments)) {
+        count = wide_count;
+        arguments = wide_arguments;
+    }
+#endif
     ceesafe_argv = arguments;
     ceesafe_atomic_store_u32(&ceesafe_argc, count > 0 ? (uint32_t)count : 0u);
+}
+
+/* Process.argumentOs (ADR 0257): argument `index`'s bytes, as the system gave them (WTF-8 on Windows), whether they are
+   UTF-8 or not. 1, or 0 past the end. The bytes live as long as the process. */
+int64_t ceesafe_host_argument(uint64_t index, const uint8_t **value, uint64_t *length) {
+    if (index >= (uint64_t)ceesafe_atomic_load_u32(&ceesafe_argc)) return 0;
+    const uint8_t *text = ceesafe_argv[index];
+    uint64_t n = 0;
+    while (text[n] != 0) n++;
+    *value = text;
+    *length = n;
+    return 1;
 }
 
 uint64_t ceesafe_arg_count(void) {
@@ -271,6 +299,9 @@ uint32_t ceesafe_io_kind(int32_t error) {
     case EISDIR: return CEE_IO_IS_DIRECTORY;
     case ENOTDIR: return CEE_IO_NOT_DIRECTORY;
     case EINVAL: case ENAMETOOLONG: case EMSGSIZE: return CEE_IO_INVALID_INPUT; /* EMSGSIZE: a datagram too long */
+#ifdef EILSEQ
+    case EILSEQ: return CEE_IO_INVALID_INPUT; /* a name the file system refuses: macOS's, not UTF-8 (ADR 0257) */
+#endif
     case EPIPE: return CEE_IO_BROKEN_PIPE;
     case ECONNREFUSED: return CEE_IO_CONNECTION_REFUSED;
     case EADDRINUSE: return CEE_IO_ADDRESS_IN_USE;
@@ -372,11 +403,47 @@ static int cee_win_errno(DWORD code) {
     }
 }
 
-/* UTF-8 `text`, ending in NUL, as UTF-16 into `wide` (`size` units, its NUL included); false if it is not UTF-8 or
- * does not fit. Paths are UTF-8, as every CeeSafe string, so every path goes through the wide calls (CreateFileW,
- * _wstat64, ...), never the ANSI code page's. */
+/* WTF-8 `text`, ending in NUL, as UTF-16 into `wide` (`size` units, its NUL included); false if it is not well-formed
+ * WTF-8 or does not fit (ADR 0257 §2.6). WTF-8 is UTF-8 that may also hold a surrogate's three bytes (ED A0 80 to
+ * ED BF BF), which become that one unit, but not a lead surrogate's directly followed by a trail surrogate's: a pair
+ * is its code point's four bytes. A name is an OS string, so every path, command line and environment variable goes
+ * through the wide calls (CreateFileW, _wstat64, ...), never the ANSI code page's, and a name with an unpaired
+ * surrogate survives. */
 static bool cee_win_wide(const char *text, wchar_t *wide, int size) {
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, size) > 0;
+    const unsigned char *s = (const unsigned char *)text;
+    int at = 0;
+    int after_lead = 0;
+    while (*s != 0) {
+        uint32_t c = s[0], n, point;
+        if (c < 0x80u) n = 1u;
+        else if (c >= 0xC2u && c <= 0xDFu) n = 2u;
+        else if (c >= 0xE0u && c <= 0xEFu) n = 3u;
+        else if (c >= 0xF0u && c <= 0xF4u) n = 4u;
+        else return false;
+        for (uint32_t i = 1u; i < n; i++) {
+            if ((s[i] & 0xC0u) != 0x80u) return false; /* a NUL ends the text, and is no continuation */
+        }
+        if (n == 1u) point = c;
+        else if (n == 2u) point = ((c & 0x1Fu) << 6) | (s[1] & 0x3Fu);
+        else if (n == 3u) point = ((c & 0x0Fu) << 12) | ((uint32_t)(s[1] & 0x3Fu) << 6) | (s[2] & 0x3Fu);
+        else point = ((c & 0x07u) << 18) | ((uint32_t)(s[1] & 0x3Fu) << 12) | ((uint32_t)(s[2] & 0x3Fu) << 6) | (s[3] & 0x3Fu);
+        if ((n == 3u && point < 0x800u) || (n == 4u && (point < 0x10000u || point > 0x10FFFFu))) return false;
+        int trail = point >= 0xDC00u && point <= 0xDFFFu;
+        if (trail && after_lead) return false;
+        after_lead = point >= 0xD800u && point <= 0xDBFFu;
+        int units = point >= 0x10000u ? 2 : 1;
+        if (at + units + 1 > size) return false;
+        if (units == 2) {
+            wide[at++] = (wchar_t)(0xD800u + ((point - 0x10000u) >> 10));
+            wide[at++] = (wchar_t)(0xDC00u + ((point - 0x10000u) & 0x3FFu));
+        } else {
+            wide[at++] = (wchar_t)point;
+        }
+        s += n;
+    }
+    if (at + 1 > size) return false;
+    wide[at] = 0;
+    return true;
 }
 
 /* A path from ceesafe_c_path (at most 4,095 bytes, so at most 4,095 UTF-16 units) as UTF-16; false, with errno
@@ -387,10 +454,341 @@ static bool cee_win_path(const char *name, wchar_t wide[4096]) {
     return false;
 }
 
-/* UTF-16 `wide`, ending in NUL, as UTF-8 into `text` (`size` bytes, its NUL included); false if it does not fit or is
- * not valid UTF-16. */
+/* UTF-16 `wide`, ending in NUL, as WTF-8 into `text` (`size` bytes, its NUL included): a pair is its code point's four
+ * bytes, an unpaired surrogate the three UTF-8 would give it (ADR 0257 §2.6). False only if it does not fit: every
+ * UTF-16 text has a WTF-8 form, so no name is lost. */
 static bool cee_win_narrow(const wchar_t *wide, char *text, int size) {
-    return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, text, size, NULL, NULL) > 0;
+    int at = 0;
+    for (size_t i = 0; wide[i] != 0; i++) {
+        uint32_t point = (uint32_t)(uint16_t)wide[i];
+        if (point >= 0xD800u && point <= 0xDBFFu && (uint16_t)wide[i + 1u] >= 0xDC00u && (uint16_t)wide[i + 1u] <= 0xDFFFu) {
+            point = 0x10000u + ((point - 0xD800u) << 10) + ((uint32_t)(uint16_t)wide[i + 1u] - 0xDC00u);
+            i++;
+        }
+        int n = point < 0x80u ? 1 : point < 0x800u ? 2 : point < 0x10000u ? 3 : 4;
+        if (at + n + 1 > size) return false;
+        if (n == 1) {
+            text[at++] = (char)point;
+        } else if (n == 2) {
+            text[at++] = (char)(0xC0u | (point >> 6));
+            text[at++] = (char)(0x80u | (point & 0x3Fu));
+        } else if (n == 3) {
+            text[at++] = (char)(0xE0u | (point >> 12));
+            text[at++] = (char)(0x80u | ((point >> 6) & 0x3Fu));
+            text[at++] = (char)(0x80u | (point & 0x3Fu));
+        } else {
+            text[at++] = (char)(0xF0u | (point >> 18));
+            text[at++] = (char)(0x80u | ((point >> 12) & 0x3Fu));
+            text[at++] = (char)(0x80u | ((point >> 6) & 0x3Fu));
+            text[at++] = (char)(0x80u | (point & 0x3Fu));
+        }
+    }
+    if (at + 1 > size) return false;
+    text[at] = 0;
+    return true;
+}
+
+/* The program's arguments from its command line (ADR 0259 §2.1), split by CommandLineToArgvW's rules (Wine's
+ * description of them, which tools/process_check.py checks against the system's): argument 0 is read without escapes,
+ * to the closing quote or the first space or tab; after it, each argument starts at a character that is not a space or
+ * tab. In one, `2n` backslashes before a quote are `n` and the quote opens or closes a quoted part, `2n + 1` are `n` and
+ * a literal quote, other backslashes are themselves; of the quotes that follow one, every third is a literal quote, and
+ * two leave the quoted part (so `""` inside quotes is a quote and ends the quoted part). A space or tab outside a quoted
+ * part ends the argument. An empty line is one argument, the program's path. Each argument is WTF-8, in one block from
+ * the system's heap that lives as long as the process (it is never freed: the arguments are views of static text). */
+static bool cee_win_arguments(int32_t *count, const uint8_t *const **arguments) {
+    const wchar_t *line = GetCommandLineW();
+    wchar_t module[4096];
+    if (line == NULL || line[0] == 0) {
+        DWORD got = GetModuleFileNameW(NULL, module, 4096u);
+        if (got == 0u || got >= 4096u) return false;
+        line = NULL;
+    }
+    size_t length = line != NULL ? wcslen(line) : wcslen(module);
+    /* The arguments, each ending in a NUL, are never longer than the line and a NUL per argument. */
+    wchar_t *split = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, (2u * length + 2u) * sizeof(wchar_t));
+    if (split == NULL) return false;
+    size_t made = 0, at = 0;
+    if (line == NULL) {
+        memcpy(split, module, (length + 1u) * sizeof(wchar_t));
+        at = length + 1u;
+        made = 1;
+    } else {
+        const wchar_t *s = line;
+        if (*s == L'"') {
+            s++;
+            while (*s != 0 && *s != L'"') split[at++] = *s++;
+            if (*s == L'"') s++;
+        } else {
+            while (*s != 0 && *s != L' ' && *s != L'\t') split[at++] = *s++;
+        }
+        split[at++] = 0;
+        made = 1;
+        while (*s == L' ' || *s == L'\t') s++;
+        while (*s != 0) {
+            size_t backslashes = 0;
+            int quotes = 0;
+            while (*s != 0 && !((*s == L' ' || *s == L'\t') && quotes == 0)) {
+                if (*s == L'\\') {
+                    split[at++] = *s++;
+                    backslashes++;
+                    continue;
+                }
+                if (*s == L'"') {
+                    if ((backslashes & 1u) == 0u) {
+                        at -= backslashes / 2u;
+                        quotes++;
+                    } else {
+                        at -= backslashes / 2u + 1u;
+                        split[at++] = L'"';
+                    }
+                    s++;
+                    backslashes = 0;
+                    while (*s == L'"') {
+                        if (++quotes == 3) {
+                            split[at++] = L'"';
+                            quotes = 0;
+                        }
+                        s++;
+                    }
+                    if (quotes == 2) quotes = 0;
+                    continue;
+                }
+                split[at++] = *s++;
+                backslashes = 0;
+            }
+            split[at++] = 0;
+            made++;
+            while (*s == L' ' || *s == L'\t') s++;
+        }
+    }
+    /* Each unit is at most three bytes of WTF-8 (a pair, two units, is four). */
+    size_t bytes = 3u * at + 1u;
+    uint8_t *block = (uint8_t *)HeapAlloc(GetProcessHeap(), 0, (made + 1u) * sizeof(uint8_t *) + bytes);
+    if (block == NULL || made > 0x7FFFFFFFu) {
+        (void)HeapFree(GetProcessHeap(), 0, split);
+        return false;
+    }
+    const uint8_t **list = (const uint8_t **)(void *)block;
+    char *text = (char *)(block + (made + 1u) * sizeof(uint8_t *));
+    size_t used = 0, from = 0;
+    for (size_t i = 0; i < made; i++) {
+        if (!cee_win_narrow(split + from, text + used, (int)(bytes - used))) {
+            (void)HeapFree(GetProcessHeap(), 0, split);
+            (void)HeapFree(GetProcessHeap(), 0, block);
+            return false;
+        }
+        list[i] = (const uint8_t *)(text + used);
+        used += strlen(text + used) + 1u;
+        from += wcslen(split + from) + 1u;
+    }
+    list[made] = NULL;
+    (void)HeapFree(GetProcessHeap(), 0, split);
+    *count = (int32_t)made;
+    *arguments = list;
+    return true;
+}
+
+/* This process's environment as Windows has it (UTF-16, names without case), read once (GetEnvironmentStringsW) and
+ * kept for the process's life: each variable's name in UTF-16, and its value in WTF-8, so that Environment.variable and
+ * variableOs give views that stay valid (ADR 0257 §2.6). The C runtime's copy (getenv) is in the ANSI code page. */
+typedef struct cee_win_variable {
+    const wchar_t *name; /* in the copied block; not NUL-terminated at the name's end */
+    size_t name_length;
+    const char *value; /* WTF-8, NUL-terminated */
+    size_t value_length;
+} cee_win_variable;
+static cee_win_variable *cee_win_variables;
+static size_t cee_win_variable_count;
+static uint32_t cee_win_variables_state; /* 0 not read, 1 being read, 2 read */
+
+/* The length of the name of the variable `entry` ("NAME=VALUE"): to its first `=` after the first unit, since the
+   hidden per-drive variables' names begin with one ("=C:=C:\dir"). */
+static size_t cee_win_name_length(const wchar_t *entry) {
+    size_t n = entry[0] != 0 ? 1u : 0u;
+    while (entry[n] != 0 && entry[n] != L'=') n++;
+    return n;
+}
+
+static void cee_win_read_variables(void) {
+    if (ceesafe_atomic_cas_u32(&cee_win_variables_state, 0u, 1u) != 0u) {
+        while (ceesafe_atomic_load_u32(&cee_win_variables_state) != 2u) {
+            SwitchToThread();
+        }
+        return;
+    }
+    wchar_t *all = GetEnvironmentStringsW();
+    if (all != NULL) {
+        size_t count = 0, units = 0, bytes = 0;
+        for (const wchar_t *p = all; *p != 0; p += wcslen(p) + 1u) {
+            count++;
+            units += wcslen(p) + 1u;
+            bytes += 3u * wcslen(p) + 1u;
+        }
+        HANDLE heap = GetProcessHeap();
+        cee_win_variable *list = (cee_win_variable *)HeapAlloc(heap, 0, (count + 1u) * sizeof(cee_win_variable));
+        wchar_t *names = (wchar_t *)HeapAlloc(heap, 0, (units + 1u) * sizeof(wchar_t));
+        char *values = (char *)HeapAlloc(heap, 0, bytes + 1u);
+        if (list != NULL && names != NULL && values != NULL) {
+            memcpy(names, all, units * sizeof(wchar_t));
+            size_t made = 0, used = 0;
+            for (wchar_t *p = names; made < count; p += wcslen(p) + 1u) {
+                size_t name = cee_win_name_length(p);
+                const wchar_t *value = p[name] == L'=' ? p + name + 1u : p + name;
+                if (!cee_win_narrow(value, values + used, (int)(bytes + 1u - used))) break;
+                list[made].name = p;
+                list[made].name_length = name;
+                list[made].value = values + used;
+                list[made].value_length = strlen(values + used);
+                used += list[made].value_length + 1u;
+                made++;
+            }
+            cee_win_variables = list;
+            cee_win_variable_count = made;
+        }
+        (void)FreeEnvironmentStringsW(all);
+    }
+    ceesafe_atomic_store_u32(&cee_win_variables_state, 2u);
+}
+
+/* Whether two names are one to Windows: equal without case (ordinal, as the system compares variables), by
+   CompareStringOrdinal, looked up since MinGW declares it only for a newer _WIN32_WINNT than its default; without it
+   (never on Windows 7 and later), ASCII letters only. */
+static bool cee_win_same_name(const wchar_t *a, size_t a_length, const wchar_t *b, size_t b_length) {
+    if (a_length > 0x7FFFFFFFu || b_length > 0x7FFFFFFFu) return false;
+    typedef int(WINAPI * cee_compare_ordinal)(LPCWCH, int, LPCWCH, int, BOOL);
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    FARPROC found = kernel != NULL ? GetProcAddress(kernel, "CompareStringOrdinal") : NULL;
+    cee_compare_ordinal compare = NULL;
+    ceesafe_mem_copy(&compare, &found, sizeof compare); /* ISO C has no object-to-function pointer conversion */
+    if (compare != NULL) return compare(a, (int)a_length, b, (int)b_length, TRUE) == 2; /* CSTR_EQUAL */
+    return a_length == b_length && _wcsnicmp(a, b, a_length) == 0;
+}
+
+static bool cee_win_batch(const char *program); /* with the command lines, further down */
+
+/* Whether `wide`, without its directory, has an extension: a `.` after the last `\` or `/`. */
+static bool cee_win_has_extension(const wchar_t *wide) {
+    const wchar_t *name = wide;
+    for (const wchar_t *c = wide; *c != 0; c++) {
+        if (*c == L'\\' || *c == L'/' || *c == L':') name = c + 1;
+    }
+    return wcschr(name, L'.') != NULL;
+}
+
+/* Whether a file (not a directory) is at `path`. */
+static bool cee_win_is_file(const wchar_t *path) {
+    DWORD attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0u;
+}
+
+/* `directory`\`name` into `out` (`capacity` units) if a file is there; false otherwise. */
+static bool cee_win_try_in(const wchar_t *directory, size_t directory_length, const wchar_t *name, wchar_t *out,
+                           size_t capacity) {
+    size_t name_length = wcslen(name);
+    if (directory_length == 0u || directory_length + name_length + 2u > capacity) return false;
+    memcpy(out, directory, directory_length * sizeof(wchar_t));
+    size_t at = directory_length;
+    if (out[at - 1u] != L'\\' && out[at - 1u] != L'/') out[at++] = L'\\';
+    memcpy(out + at, name, (name_length + 1u) * sizeof(wchar_t));
+    return cee_win_is_file(out);
+}
+
+/* The program to start (ADR 0259 §2.2), as CreateProcessW's application name, into `*found` (from the counted
+ * allocator; the caller frees it). A name with a `\`, `/` or `:` is used as it is; a bare name is looked for in the
+ * system directory, the Windows directory and each entry of this process's PATH, in order (empty entries skipped, quotes
+ * removed), never the working directory or the program's own. A name whose last component has no extension has `.exe`
+ * added. 0, or a negated errno: ENOENT when nothing is found, EINVAL for text that is not WTF-8, a quote in it or a batch
+ * file, ENOMEM. */
+static int64_t cee_win_find_program(cee_str program, wchar_t **found) {
+    *found = NULL;
+    char name[4096];
+    if (!ceesafe_c_path(program, name)) return -(int64_t)EINVAL;
+    size_t capacity = 32768u;
+    wchar_t *wide = (wchar_t *)ceesafe_alloc(2u * capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+    if (wide == NULL) return -(int64_t)ENOMEM;
+    wchar_t *path = wide + capacity;
+    if (!cee_win_wide(name, wide, 4096) || wcschr(wide, L'"') != NULL) {
+        ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+        return -(int64_t)EINVAL;
+    }
+    if (!cee_win_has_extension(wide)) {
+        size_t n = wcslen(wide);
+        if (n + 5u > 4096u) {
+            ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+            return -(int64_t)ENAMETOOLONG;
+        }
+        memcpy(wide + n, L".exe", 5u * sizeof(wchar_t));
+    }
+    int64_t result = -(int64_t)ENOENT;
+    bool bare = wcspbrk(wide, L"\\/:") == NULL;
+    if (!bare) {
+        size_t n = wcslen(wide);
+        memcpy(path, wide, (n + 1u) * sizeof(wchar_t));
+        result = 0;
+    } else {
+        wchar_t directory[MAX_PATH + 1];
+        UINT got = GetSystemDirectoryW(directory, MAX_PATH + 1);
+        if (got > 0u && got <= MAX_PATH && cee_win_try_in(directory, got, wide, path, capacity)) result = 0;
+        if (result != 0) {
+            got = GetWindowsDirectoryW(directory, MAX_PATH + 1);
+            if (got > 0u && got <= MAX_PATH && cee_win_try_in(directory, got, wide, path, capacity)) result = 0;
+        }
+        if (result != 0) {
+            /* PATH: entries split at `;`, a quoted part of one taken as it is (so it may hold a `;`), quotes removed. */
+            wchar_t *list = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+            DWORD length = list != NULL ? GetEnvironmentVariableW(L"PATH", list, (DWORD)capacity) : 0u;
+            if (list == NULL) {
+                result = -(int64_t)ENOMEM;
+            } else if (length > 0u && length < capacity) {
+                wchar_t *entry = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+                if (entry == NULL) {
+                    result = -(int64_t)ENOMEM;
+                } else {
+                    size_t at = 0;
+                    const wchar_t *p = list;
+                    for (;;) {
+                        int quoted = 0;
+                        at = 0;
+                        while (*p != 0 && (quoted || *p != L';')) {
+                            if (*p == L'"') quoted = !quoted;
+                            else entry[at++] = *p;
+                            p++;
+                        }
+                        if (at > 0u && cee_win_try_in(entry, at, wide, path, capacity)) {
+                            result = 0;
+                            break;
+                        }
+                        if (*p == 0) break;
+                        p++;
+                    }
+                    ceesafe_free(entry, CEE_ALLOC_SYSTEM);
+                }
+            }
+            if (list != NULL) ceesafe_free(list, CEE_ALLOC_SYSTEM);
+        }
+    }
+    if (result == 0) {
+        /* The name found is checked as the name given was: a batch file is refused (ADR 0245 §2.4). */
+        char narrow[3u * 4096u];
+        if (wcslen(path) >= 4096u || !cee_win_narrow(path, narrow, (int)sizeof narrow)) {
+            result = -(int64_t)ENAMETOOLONG;
+        } else if (cee_win_batch(narrow)) {
+            result = -(int64_t)EINVAL;
+        }
+    }
+    if (result == 0) {
+        size_t n = wcslen(path);
+        wchar_t *made = (wchar_t *)ceesafe_alloc((n + 1u) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+        if (made == NULL) {
+            result = -(int64_t)ENOMEM;
+        } else {
+            memcpy(made, path, (n + 1u) * sizeof(wchar_t));
+            *found = made;
+        }
+    }
+    ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+    return result;
 }
 
 /* _open with the share mode POSIX gives every open file: _open's lacks FILE_SHARE_DELETE, so Windows would refuse to
@@ -2327,9 +2725,12 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
         /* One command line, quoted as the child splits it (not _wspawnvp, which joins the arguments without quoting,
          * so an argument with a space became two), with this process's standard streams. */
         wchar_t *line = NULL;
+        wchar_t *application = NULL;
         int64_t made_line = cee_win_command_line(program, arguments, count, &line);
+        if (made_line == 0) made_line = cee_win_find_program(program, &application); /* ADR 0259 §2.2 */
         if (made_line < 0) {
             result = ceesafe_io_fail((int32_t)-made_line);
+            if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
         } else {
             STARTUPINFOW startup;
             PROCESS_INFORMATION process;
@@ -2339,7 +2740,7 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
             startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
             startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
             startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-            if (!CreateProcessW(NULL, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
+            if (!CreateProcessW(application, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
                 result = ceesafe_io_fail(cee_win_errno(GetLastError()));
             } else {
                 DWORD code = 0;
@@ -2350,6 +2751,7 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
                 (void)CloseHandle(process.hProcess);
             }
             ceesafe_free(line, CEE_ALLOC_SYSTEM);
+            ceesafe_free(application, CEE_ALLOC_SYSTEM);
         }
 #else
         pid_t pid;
@@ -2387,16 +2789,32 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
 
 static cee_str ceesafe_host_text(uint8_t const *bytes, uint64_t length) { return (cee_str){ .ptr = bytes, .len = (cee_usize)length }; }
 
+/* The variable's value as the system has it (bytes on POSIX, WTF-8 on Windows), UTF-8 or not: lib/std's
+   Environment.variable checks that, and variableOs does not (ADR 0257 §2.5). 1, or 0 if it is not set. */
 int64_t ceesafe_host_env(uint8_t const *name, uint64_t length, uint8_t const **value, uint64_t *value_length) {
     char key[4096];
     if (!ceesafe_c_path(ceesafe_host_text(name, length), key)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    wchar_t wide[4096];
+    if (!cee_win_wide(key, wide, 4096)) return -(int64_t)EINVAL;
+    cee_win_read_variables();
+    size_t n = wcslen(wide);
+    for (size_t i = 0; i < cee_win_variable_count; i++) {
+        const cee_win_variable *v = &cee_win_variables[i];
+        if (cee_win_same_name(v->name, v->name_length, wide, n)) {
+            *value = (const uint8_t *)v->value;
+            *value_length = (uint64_t)v->value_length;
+            return 1;
+        }
+    }
+    return 0;
+#else
     const char *found = getenv(key);
     if (found == NULL) return 0;
-    uint64_t n = (uint64_t)strlen(found);
-    if (!ceesafe_utf8_valid((const uint8_t *)found, n)) return 0;
     *value = (const uint8_t *)found;
-    *value_length = n;
+    *value_length = (uint64_t)strlen(found);
     return 1;
+#endif
 }
 
 /* 0: nothing there; 1: a file; 2: a directory; 3: something else. Symbolic links are followed. */
@@ -3014,8 +3432,9 @@ int64_t ceesafe_host_dir_next(void *dir, uint8_t const **name, uint64_t *length)
             if (_wfindnext64(d->handle, &d->entry) != 0) return errno == ENOENT ? 0 : -(int64_t)errno;
         }
         d->pending = 0;
-        /* A name that is not valid UTF-16 has no UTF-8 form; it is skipped, as ceesafe_host_env skips a value. */
-        if (!cee_win_narrow(d->entry.name, d->name, (int)sizeof d->name)) continue;
+        /* Every name has a WTF-8 form (ADR 0257 §2.6): one with an unpaired surrogate is given to lib/std, whose
+           Directory.list refuses it (InvalidInput) and listOs keeps it. Before, it was skipped here without a word. */
+        if (!cee_win_narrow(d->entry.name, d->name, (int)sizeof d->name)) return -(int64_t)ENAMETOOLONG;
         entry = d->name;
 #else
         errno = 0;
@@ -3232,13 +3651,22 @@ int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity) {
     return ceesafe_host_copy_out(name, buffer, capacity);
 }
 
+#ifdef _WIN32
+static wchar_t *cee_child_environment(const wchar_t *word, const cee_str *texts, const uint8_t *kinds, uint64_t changes,
+                                      uint32_t clear, int *error); /* with the child processes, further down */
+#endif
+
 /* Runs argv[0] (found on PATH) with arguments argv[1..count), its stdin read from the file at `input` and its stdout
  * and stderr written to the files at `output` and `errors` (created or truncated), and waits: the exit status, or
  * 128 plus the signal that ended it, as ceesafe_process_run reports it. Files rather than pipes, so a child that writes
- * much to both streams cannot block on one while the parent reads the other, without poll or threads (ADR 0028). */
+ * much to both streams cannot block on one while the parent reads the other, without poll or threads (ADR 0028). The
+ * child's environment is this process's with `changes` applied (ADR 0258; cee_child_environment). */
 int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const *input, uint64_t input_length,
-                        uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length) {
+                        uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length,
+                        void const *environment_texts, uint8_t const *environment_kinds, uint64_t changes,
+                        uint32_t clear) {
     const cee_str *texts = (const cee_str *)arguments;
+    const cee_str *variables = (const cee_str *)environment_texts;
     char in_name[4096], out_name[4096], err_name[4096];
     if (count == 0u || count > 4097u || !ceesafe_c_path(ceesafe_host_text(input, input_length), in_name)
         || !ceesafe_c_path(ceesafe_host_text(output, output_length), out_name)
@@ -3261,9 +3689,19 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
         (void)fflush(stdout);
 #ifdef _WIN32
         wchar_t *wide_line = NULL;
+        wchar_t *application = NULL;
+        wchar_t *block = NULL;
         int64_t made_line = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide_line);
+        if (made_line == 0) made_line = cee_win_find_program(texts[0], &application); /* ADR 0259 §2.2 */
+        if (made_line == 0 && (changes != 0u || clear != 0u)) {
+            int failed = 0;
+            block = cee_child_environment(NULL, variables, environment_kinds, changes, clear, &failed);
+            if (block == NULL) made_line = -(int64_t)failed;
+        }
         if (made_line < 0) {
             result = made_line;
+            if (wide_line != NULL) ceesafe_free(wide_line, CEE_ALLOC_SYSTEM);
+            if (application != NULL) ceesafe_free(application, CEE_ALLOC_SYSTEM);
         } else {
             SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
             HANDLE in = INVALID_HANDLE_VALUE, out = INVALID_HANDLE_VALUE, err = INVALID_HANDLE_VALUE;
@@ -3299,7 +3737,8 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
                 startup.hStdInput = in;
                 startup.hStdOutput = out;
                 startup.hStdError = err;
-                if (!CreateProcessW(NULL, wide_line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
+                if (!CreateProcessW(application, wide_line, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, block, NULL,
+                                    &startup, &process)) {
                     result = -(int64_t)cee_win_errno(GetLastError());
                 } else {
                     DWORD code = 0;
@@ -3313,16 +3752,21 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             if (out != INVALID_HANDLE_VALUE) (void)CloseHandle(out);
             if (err != INVALID_HANDLE_VALUE) (void)CloseHandle(err);
             if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+            if (block != NULL) ceesafe_free(block, CEE_ALLOC_SYSTEM);
             ceesafe_free(wide_line, CEE_ALLOC_SYSTEM);
+            ceesafe_free(application, CEE_ALLOC_SYSTEM);
         }
 #else
         pid_t pid = -1;
         int started;
 #ifdef COSMO_AF_INET
-        int in = open(in_name, O_RDONLY);
-        int out = open(out_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        int err = open(err_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        if (in < 0 || out < 0 || err < 0) {
+        (void)variables; (void)environment_kinds;
+        int in = changes != 0u || clear != 0u ? -1 : open(in_name, O_RDONLY);
+        int out = in < 0 ? -1 : open(out_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        int err = out < 0 ? -1 : open(err_name, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (changes != 0u || clear != 0u) {
+            started = EOPNOTSUPP; /* spawnvp takes no environment (ADR 0258 §2.5) */
+        } else if (in < 0 || out < 0 || err < 0) {
             started = errno;
         } else {
             /* The child receives exactly these handles (CosmoOS libc/include/spawn.h). */
@@ -3344,15 +3788,17 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
                three, and no word of what this process was handed. */
             posix_spawnattr_t attributes;
             cee_handover_read();
-            char **environment = cee_child_environment(NULL);
-            if (started == 0 && environment == NULL) started = ENOMEM;
+            char **owned = NULL;
+            int failed = 0;
+            char **environment = cee_child_environment(NULL, variables, environment_kinds, changes, clear, &owned, &failed);
+            if (started == 0 && environment == NULL) started = failed;
             if (started == 0) started = posix_spawnattr_init(&attributes);
             if (started == 0) {
                 started = cee_spawn_only(&actions, &attributes, 3);
                 if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, &attributes, argv, environment);
                 (void)posix_spawnattr_destroy(&attributes);
             }
-            if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
+            cee_child_environment_free(environment, owned);
             (void)posix_spawn_file_actions_destroy(&actions);
         }
 #endif
@@ -3883,8 +4329,11 @@ int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t
     return -(int64_t)EOPNOTSUPP;
 }
 int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
-                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
+                                    const uint8_t *kinds, uint32_t handed, void const *environment_texts,
+                                    uint8_t const *environment_kinds, uint64_t changes, uint32_t clear,
+                                    uint64_t *handle) {
     (void)arguments; (void)count; (void)streams; (void)handles; (void)kinds; (void)handed; (void)handle;
+    (void)environment_texts; (void)environment_kinds; (void)changes; (void)clear;
     return -(int64_t)EOPNOTSUPP;
 }
 int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle) { (void)kind; (void)handle; return -(int64_t)EOPNOTSUPP; }
@@ -4032,42 +4481,120 @@ int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out
     return 0;
 }
 
-/* This process's environment as a block for CreateProcessW, without CEESAFE_HANDOVER and with `word` (or nothing, if
-   NULL) in its place: the caller's to free; NULL: no memory. */
-static wchar_t *cee_child_environment(const wchar_t *word) {
-    wchar_t *all = GetEnvironmentStringsW();
-    if (all == NULL) return NULL;
+/* A change's "NAME=VALUE" in UTF-16, from the counted allocator; NULL with *error: EINVAL for an empty name, a name
+   with `=`, a zero byte, text that is not WTF-8 or the runtime's CEESAFE_HANDOVER (ADR 0258 §2.1); ENOMEM. */
+static wchar_t *cee_win_variable_text(cee_str name, cee_str value, int *error) {
     size_t prefix = sizeof cee_handover_name_w / sizeof cee_handover_name_w[0] - 1u;
-    size_t total = 0;
-    for (const wchar_t *p = all; *p != L'\0'; p += wcslen(p) + 1u) total += wcslen(p) + 1u;
-    size_t extra = word != NULL ? wcslen(word) + 1u : 0u;
-    wchar_t *made = (wchar_t *)ceesafe_alloc((total + extra + 2u) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
-    if (made != NULL) {
-        size_t at = 0;
-        for (const wchar_t *p = all; *p != L'\0'; p += wcslen(p) + 1u) {
-            size_t n = wcslen(p) + 1u;
-            if (_wcsnicmp(p, cee_handover_name_w, prefix) == 0) continue;
-            memcpy(made + at, p, n * sizeof(wchar_t));
-            at += n;
-        }
-        if (word != NULL) {
-            memcpy(made + at, word, extra * sizeof(wchar_t));
-            at += extra;
-        }
-        if (at == 0u) made[at++] = L'\0'; /* an empty block is two terminators */
-        made[at] = L'\0';
+    for (cee_usize i = 0; i < name.len; i++) {
+        if (name.ptr[i] == '=') { *error = EINVAL; return NULL; }
     }
-    (void)FreeEnvironmentStringsW(all);
+    if (name.len == 0u) { *error = EINVAL; return NULL; }
+    int32_t failed = 0;
+    char *a = ceesafe_c_string(name, &failed);
+    char *b = a != NULL ? ceesafe_c_string(value, &failed) : NULL;
+    size_t units = (size_t)name.len + (size_t)value.len + 2u;
+    wchar_t *text = b != NULL ? (wchar_t *)ceesafe_alloc(units * sizeof(wchar_t), CEE_ALLOC_SYSTEM) : NULL;
+    if (text == NULL) {
+        *error = failed != 0 ? failed : ENOMEM;
+    } else if (!cee_win_wide(a, text, (int)units)) {
+        *error = EINVAL;
+    } else {
+        size_t at = wcslen(text);
+        /* The runtime's own word to a child that is handed things: never the program's to set (ADR 0258 §2.1). */
+        if (at == prefix - 1u && _wcsnicmp(text, cee_handover_name_w, prefix - 1u) == 0) {
+            *error = EINVAL;
+        } else {
+            text[at++] = L'=';
+            if (!cee_win_wide(b, text + at, (int)(units - at))) *error = EINVAL;
+        }
+    }
+    if (a != NULL) ceesafe_free(a, CEE_ALLOC_SYSTEM);
+    if (b != NULL) ceesafe_free(b, CEE_ALLOC_SYSTEM);
+    if (*error != 0 && text != NULL) {
+        ceesafe_free(text, CEE_ALLOC_SYSTEM);
+        text = NULL;
+    }
+    return text;
+}
+
+/* The child's environment as a block for CreateProcessW (ADR 0258 §2.3): this process's (none, when `clear`) without
+   CEESAFE_HANDOVER, with `changes` applied in order (each two texts of `texts`, name and value, and a kind, 0 set and 1
+   remove; names compared without case, as Windows compares them), and `word` (or nothing, if NULL) added. The
+   caller's to free; NULL with *error set: ENOMEM, or EINVAL for a change cee_win_variable_text refuses. */
+static wchar_t *cee_child_environment(const wchar_t *word, const cee_str *texts, const uint8_t *kinds, uint64_t changes,
+                                      uint32_t clear, int *error) {
+    *error = 0;
+    wchar_t *all = clear != 0u ? NULL : GetEnvironmentStringsW();
+    if (clear == 0u && all == NULL) { *error = ENOMEM; return NULL; }
+    size_t prefix = sizeof cee_handover_name_w / sizeof cee_handover_name_w[0] - 1u;
+    size_t parents = 0;
+    for (const wchar_t *p = all; p != NULL && *p != L'\0'; p += wcslen(p) + 1u) parents++;
+    /* Each entry: a variable of the parent's (in `all`) or one a change made (owned, freed below). */
+    size_t capacity = parents + (size_t)changes + 1u;
+    const wchar_t **entries = (const wchar_t **)ceesafe_alloc(capacity * sizeof(wchar_t *), CEE_ALLOC_SYSTEM);
+    wchar_t **owned = (wchar_t **)ceesafe_alloc(((size_t)changes + 1u) * sizeof(wchar_t *), CEE_ALLOC_SYSTEM);
+    size_t count = 0, made_count = 0;
+    wchar_t *made = NULL;
+    if (entries == NULL || owned == NULL) {
+        *error = ENOMEM;
+    } else {
+        for (const wchar_t *p = all; p != NULL && *p != L'\0'; p += wcslen(p) + 1u) {
+            if (_wcsnicmp(p, cee_handover_name_w, prefix) == 0) continue;
+            entries[count++] = p;
+        }
+        for (uint64_t c = 0; *error == 0 && c < changes; c++) {
+            wchar_t *text = cee_win_variable_text(texts[2u * c], texts[2u * c + 1u], error);
+            if (text == NULL) break;
+            size_t name = cee_win_name_length(text);
+            size_t kept = 0;
+            for (size_t i = 0; i < count; i++) {
+                if (!cee_win_same_name(entries[i], cee_win_name_length(entries[i]), text, name)) entries[kept++] = entries[i];
+            }
+            count = kept;
+            owned[made_count++] = text;
+            if (kinds[c] == 0u) entries[count++] = text;
+        }
+    }
+    if (*error == 0) {
+        size_t total = 0;
+        for (size_t i = 0; i < count; i++) total += wcslen(entries[i]) + 1u;
+        size_t extra = word != NULL ? wcslen(word) + 1u : 0u;
+        made = (wchar_t *)ceesafe_alloc((total + extra + 2u) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+        if (made == NULL) {
+            *error = ENOMEM;
+        } else {
+            size_t at = 0;
+            for (size_t i = 0; i < count; i++) {
+                size_t n = wcslen(entries[i]) + 1u;
+                memcpy(made + at, entries[i], n * sizeof(wchar_t));
+                at += n;
+            }
+            if (word != NULL) {
+                memcpy(made + at, word, extra * sizeof(wchar_t));
+                at += extra;
+            }
+            if (at == 0u) made[at++] = L'\0'; /* an empty block is two terminators */
+            made[at] = L'\0';
+        }
+    }
+    for (size_t i = 0; i < made_count; i++) ceesafe_free(owned[i], CEE_ALLOC_SYSTEM);
+    if (owned != NULL) ceesafe_free(owned, CEE_ALLOC_SYSTEM);
+    if (entries != NULL) ceesafe_free(entries, CEE_ALLOC_SYSTEM);
+    if (all != NULL) (void)FreeEnvironmentStringsW(all);
     return made;
 }
 
 int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
-                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
+                                    const uint8_t *kinds, uint32_t handed, void const *environment_texts,
+                                    uint8_t const *environment_kinds, uint64_t changes, uint32_t clear,
+                                    uint64_t *handle) {
     const cee_str *texts = (const cee_str *)arguments;
     if (count == 0u || count > 4097u || handle == NULL || handed > CEE_HANDOVER_PLACES) return -(int64_t)EINVAL;
     cee_handover_read();
     wchar_t *wide = NULL;
+    wchar_t *application = NULL;
     int64_t result = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide);
+    if (result == 0) result = cee_win_find_program(texts[0], &application); /* ADR 0259 §2.2 */
     if (result == 0) {
         (void)fflush(stdout);
         SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
@@ -4104,14 +4631,16 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
             if (record == NULL) result = -(int64_t)cee_win_errno(GetLastError());
         }
         if (result == 0) {
-            environment = cee_child_environment(handed != 0u ? word : NULL);
-            if (environment == NULL) result = -(int64_t)ENOMEM;
+            int failed = 0;
+            environment = cee_child_environment(handed != 0u ? word : NULL, (const cee_str *)environment_texts,
+                                                environment_kinds, changes, clear, &failed);
+            if (environment == NULL) result = -(int64_t)failed;
         }
         if (result != 0) {
             /* reported below */
         } else if ((streams & 0x15u) != 0u && nothing == INVALID_HANDLE_VALUE) {
             result = -(int64_t)cee_win_errno(GetLastError());
-        } else if (!CreateProcessW(NULL, wide, NULL, NULL, TRUE,
+        } else if (!CreateProcessW(application, wide, NULL, NULL, TRUE,
                                    CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED, environment,
                                    NULL, &startup, &process)) {
             result = -(int64_t)cee_win_errno(GetLastError());
@@ -4161,11 +4690,12 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
         if (nothing != INVALID_HANDLE_VALUE) (void)CloseHandle(nothing);
     }
     if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+    if (application != NULL) ceesafe_free(application, CEE_ALLOC_SYSTEM);
     return result;
 }
 
 int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
-    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, handle);
+    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, NULL, NULL, 0u, 0u, handle);
 }
 
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {
@@ -4334,22 +4864,82 @@ int64_t ceesafe_host_inherited_take(uint32_t place, uint32_t kind, uint64_t *out
     return 0;
 }
 
-/* The environment for a child: this process's without CEESAFE_HANDOVER, and with `word` (or nothing, if NULL) in its
-   place. The array is the caller's to free; its strings are not. NULL: no memory. */
-static char **cee_child_environment(char *word) {
+/* The length of the name of the variable `entry` ("NAME=VALUE"): to its first `=`. */
+static size_t cee_variable_name_length(const char *entry) {
+    size_t n = 0;
+    while (entry[n] != 0 && entry[n] != '=') n++;
+    return n;
+}
+
+/* The environment for a child (ADR 0258 §2.3): this process's (none, when `clear`) without CEESAFE_HANDOVER, with
+   `changes` applied in order (each two texts of `texts`, name and value, and a kind, 0 set and 1 remove; names compared
+   as bytes), and `word` (or nothing, if NULL) added. One block, freed by cee_child_environment_free with `*owned`: the
+   list and its NULL, then (at `*owned`) the strings the changes made and a NULL. NULL with *error set: ENOMEM, or
+   EINVAL for an empty name, a name with `=`, a zero byte, or CEESAFE_HANDOVER, the runtime's own. */
+static char **cee_child_environment(char *word, const cee_str *texts, const uint8_t *kinds, uint64_t changes,
+                                    uint32_t clear, char ***owned_out, int *error) {
+    *error = 0;
     size_t count = 0;
-    while (environ != NULL && environ[count] != NULL) count++;
-    char **made = (char **)ceesafe_alloc((count + 2u) * sizeof(char *), CEE_ALLOC_SYSTEM);
-    if (made == NULL) return NULL;
+    while (clear == 0u && environ != NULL && environ[count] != NULL) count++;
+    size_t capacity = count + (size_t)changes + 2u;
+    char **made = (char **)ceesafe_alloc((capacity + (size_t)changes + 1u) * sizeof(char *), CEE_ALLOC_SYSTEM);
+    if (made == NULL) {
+        *error = ENOMEM;
+        return NULL;
+    }
+    char **owned = made + capacity;
+    size_t made_count = 0;
     size_t kept = 0;
-    size_t name = strlen(CEE_HANDOVER_NAME);
+    size_t handover = strlen(CEE_HANDOVER_NAME);
     for (size_t i = 0; i < count; i++) {
-        if (strncmp(environ[i], CEE_HANDOVER_NAME, name) == 0 && environ[i][name] == '=') continue;
+        if (strncmp(environ[i], CEE_HANDOVER_NAME, handover) == 0 && environ[i][handover] == '=') continue;
         made[kept++] = environ[i];
     }
+    for (uint64_t c = 0; *error == 0 && c < changes; c++) {
+        cee_str name = texts[2u * c], value = texts[2u * c + 1u];
+        int bad = name.len == 0u || (name.len == handover && memcmp(name.ptr, CEE_HANDOVER_NAME, handover) == 0);
+        for (cee_usize i = 0; i < name.len; i++) bad = bad || name.ptr[i] == '=' || name.ptr[i] == 0;
+        for (cee_usize i = 0; i < value.len; i++) bad = bad || value.ptr[i] == 0;
+        if (bad) {
+            *error = EINVAL;
+            break;
+        }
+        char *text = (char *)ceesafe_alloc((size_t)name.len + (size_t)value.len + 2u, CEE_ALLOC_SYSTEM);
+        if (text == NULL) {
+            *error = ENOMEM;
+            break;
+        }
+        memcpy(text, name.ptr, (size_t)name.len);
+        text[name.len] = '=';
+        if (value.len > 0u) memcpy(text + name.len + 1u, value.ptr, (size_t)value.len);
+        text[name.len + 1u + value.len] = 0;
+        owned[made_count++] = text;
+        size_t remaining = 0;
+        for (size_t i = 0; i < kept; i++) {
+            if (!(cee_variable_name_length(made[i]) == (size_t)name.len && memcmp(made[i], name.ptr, (size_t)name.len) == 0)) {
+                made[remaining++] = made[i];
+            }
+        }
+        kept = remaining;
+        if (kinds[c] == 0u) made[kept++] = text;
+    }
+    owned[made_count] = NULL;
     if (word != NULL) made[kept++] = word;
     made[kept] = NULL;
+    if (*error != 0) {
+        for (size_t i = 0; i < made_count; i++) ceesafe_free(owned[i], CEE_ALLOC_SYSTEM);
+        ceesafe_free(made, CEE_ALLOC_SYSTEM);
+        return NULL;
+    }
+    *owned_out = owned;
     return made;
+}
+
+/* Frees what cee_child_environment made. */
+static void cee_child_environment_free(char **made, char **owned) {
+    if (made == NULL) return;
+    for (size_t i = 0; owned[i] != NULL; i++) ceesafe_free(owned[i], CEE_ALLOC_SYSTEM);
+    ceesafe_free(made, CEE_ALLOC_SYSTEM);
 }
 
 /* Whether closing every descriptor from a number up can be a file action: glibc 2.34 and later, FreeBSD 14. The
@@ -4382,7 +4972,9 @@ static int cee_spawn_only(posix_spawn_file_actions_t *actions, posix_spawnattr_t
 }
 
 int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
-                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle) {
+                                    const uint8_t *kinds, uint32_t handed, void const *environment_texts,
+                                    uint8_t const *environment_kinds, uint64_t changes, uint32_t clear,
+                                    uint64_t *handle) {
     const cee_str *texts = (const cee_str *)arguments;
     if (count == 0u || count > 4097u || handle == NULL || handed > CEE_HANDOVER_PLACES) return -(int64_t)EINVAL;
     cee_forgotten_reap(0);
@@ -4408,8 +5000,12 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
         word[written++] = kinds[i] == 1u ? 'L' : kinds[i] == 2u ? 'D' : 'M';
     }
     word[written] = '\0';
-    char **environment = error == 0 ? cee_child_environment(handed != 0u ? word : NULL) : NULL;
-    if (error == 0 && environment == NULL) error = ENOMEM;
+    char **owned = NULL;
+    int failed = 0;
+    char **environment = error == 0 ? cee_child_environment(handed != 0u ? word : NULL, (const cee_str *)environment_texts,
+                                                            environment_kinds, changes, clear, &owned, &failed)
+                                    : NULL;
+    if (error == 0 && environment == NULL) error = failed;
     int64_t result = 0;
     if (error != 0) {
         result = -(int64_t)error;
@@ -4446,14 +5042,14 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
             result = (int64_t)pid;
         }
     }
-    if (environment != NULL) ceesafe_free(environment, CEE_ALLOC_SYSTEM);
+    cee_child_environment_free(environment, owned);
     for (uint64_t i = 0; i < made; i++) ceesafe_free(argv[i], CEE_ALLOC_SYSTEM);
     ceesafe_free(argv, CEE_ALLOC_SYSTEM);
     return result;
 }
 
 int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle) {
-    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, handle);
+    return ceesafe_host_child_start_with(arguments, count, streams, NULL, NULL, 0u, NULL, NULL, 0u, 0u, handle);
 }
 
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait) {

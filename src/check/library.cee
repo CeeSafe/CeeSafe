@@ -165,6 +165,42 @@ fn checkHostService(c: borrow mut Checker, member: u32, arguments: Range, span: 
     return checkLibraryService(c, "HostServices", member, arguments, span);
 }
 
+/// `Process.capture`, `captureWith`, `runWith`, `spawn` and `spawnWith` (§26.7, §26.16, ADR 0258 §2.4): lib/std's
+/// HostServices function of that name when the arguments (the second argument) are a `Vector<StringView>`, and its
+/// `…Os` form when they are a `Vector<OsStringView>`. The second argument is synthesized first, to read its type.
+fn checkProcessService(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count < 2) {
+        return checkHostService(c, member, arguments, span);
+    }
+    let listSyntax = c.front.ast.at(arguments, 1);
+    let list = synth(c, listSyntax, none())?;
+    var symbol = c.front.ast.idents[member as usize].symbol;
+    if (!c.isBottom(list)) {
+        var listType = c.typeOf(list);
+        if (c.types.is(listType, TypeKind.Reference)) {
+            listType = c.types.info(listType).pointee;
+        }
+        // A vector's pointee is its elements, an unsized array (`[T]`).
+        if (c.types.is(listType, TypeKind.Vector) && isOsStringView(
+            c,
+            c.types.info(c.types.info(listType).pointee).element,
+        )) {
+            var name = Vector<u8>.create();
+            appendBytes(mut name, c.name(symbol))?;
+            appendText(mut name, "Os")?;
+            symbol = c.front.symbols.intern(name.view())?.id;
+        }
+    }
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "HostServices", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this host service", "S5")?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return checkUserCallPrepared(c, function, arguments, span, none(), 1, list);
+}
+
 /// A call of the lib/std struct `holder`'s static function named as `member`: `Thread.sleep(ms)` is
 /// ThreadServices.sleep(ms) (ADR 0222 §2.1), and checkHostService's HostServices.
 fn checkLibraryService(

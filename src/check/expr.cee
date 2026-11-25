@@ -131,6 +131,32 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             let value = checkClosure(c, closure, expected, span)?;
             return coerce(c, value, expected, span);
         }
+        ExprNode.Name(name, typeArguments) => {
+            let symbol = c.front.ast.idents[name as usize].symbol;
+            if (typeArguments.count == 0 && sameText(
+                c.name(symbol),
+                "None",
+            ) && expected != none() && c.types.optionType(expected) != none()) {
+                let undeclared = match (c.lookup(symbol)?) {
+                    Entity.None => true,
+                    _ => false,
+                };
+                if (undeclared) {
+                    // `None` where an optional is expected: the sure fix is `null` (tooling.md §5.2).
+                    var message = Vector<u8>.create();
+                    appendText(
+                        mut message,
+                        "cannot find 'None' in this scope: an optional without a value is 'null'",
+                    )?;
+                    var title = Vector<u8>.create();
+                    appendText(mut title, "write 'null'")?;
+                    var text = Vector<u8>.create();
+                    appendText(mut text, "null")?;
+                    c.errorWithFix(undefinedName(), span.start, span.end, message, title, span.start, span.end, text)?;
+                    return c.errorResult(span.start, span.end);
+                }
+            }
+        }
         ExprNode.ArrayLiteral(elements) => {
             if (elements.count == 0) {
                 return emptySlice(c, expected, span); // `[]` (ADR 0075 §2.9)

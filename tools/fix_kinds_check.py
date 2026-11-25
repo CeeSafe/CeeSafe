@@ -40,12 +40,24 @@ CASES = [
     ("the declared type for a var that copies through a reference", "N0246",
      "fn next(len: borrow mut usize) -> usize {\n    var k = len;\n    k += 1;\n    return k;\n}\n\nfn main() {\n    var n: usize = 1;\n    Console.writeLine(next(mut n));\n}\n",
      "fn next(len: borrow mut usize) -> usize {\n    var k: usize = len;\n    k += 1;\n    return k;\n}\n\nfn main() {\n    var n: usize = 1;\n    Console.writeLine(next(mut n));\n}\n"),
+    ("var for let mut", "N0100",
+     "fn main() {\n    let mut n: i32 = 1;\n    n += 1;\n    Console.writeLine(n);\n}\n",
+     "fn main() {\n    var n: i32 = 1;\n    n += 1;\n    Console.writeLine(n);\n}\n"),
+    ("null for None where an optional is expected", "N0200",
+     "fn f() -> i32? {\n    return None;\n}\n\nfn main() {\n    let o: i32? = None;\n    Console.writeLine(o.isNull());\n    Console.writeLine(f().isNull());\n}\n",
+     "fn f() -> i32? {\n    return null;\n}\n\nfn main() {\n    let o: i32? = null;\n    Console.writeLine(o.isNull());\n    Console.writeLine(f().isNull());\n}\n"),
+    ("length for len()", "N0200",
+     "fn main() {\n    let a = [1, 2];\n    let s = \"abc\";\n    let t = String.from(s)!;\n    let v = Vector<i32>.create();\n    Console.writeLine(a.len() + a[..].len() + s.len() + t.len() + v.len());\n}\n",
+     "fn main() {\n    let a = [1, 2];\n    let s = \"abc\";\n    let t = String.from(s)!;\n    let v = Vector<i32>.create();\n    Console.writeLine(a.length + a[..].length + s.length + t.length + v.length);\n}\n"),
 ]
 
 # What must get no fix: a widening of what is not a variable or a field (the row's condition), and a narrowing.
 NO_FIX = [
     ("a call's result that would widen",
      "fn one() -> i32 => 1;\n\nfn main() {\n    let z: i64 = one();\n    Console.writeLine(z);\n}\n"),
+    ("None where no optional is expected", "fn main() {\n    let n: i32 = None;\n    Console.writeLine(n);\n}\n"),
+    ("len with an argument", "fn main() {\n    let a = [1, 2];\n    Console.writeLine(a.len(1));\n}\n"),
+    ("a comment between let and mut", "fn main() {\n    let /* why */ mut n = 1;\n    n += 1;\n    Console.writeLine(n);\n}\n"),
     ("a number that would narrow", "fn main() {\n    let a: i64 = 1;\n    let z: i32 = a;\n    Console.writeLine(z);\n}\n"),
 ]
 

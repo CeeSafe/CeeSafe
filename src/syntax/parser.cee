@@ -2587,14 +2587,26 @@ struct Parser {
         if (!isMutable && this.at(TokenKind.MutKeyword) && this.peekIs(1, TokenKind.Identifier)) {
             // `let mut n`, as Rust writes a variable: reported once, and taken as `var n`.
             let mutToken = this.current();
-            this.error(
-                expectedToken(),
-                mutToken.start,
-                mutToken.end,
-                textMessage(
-                    "expected a name, found 'mut': a variable that changes is 'var n = …;' ('let' never changes)",
-                )?,
+            let message = textMessage(
+                "expected a name, found 'mut': a variable that changes is 'var n = …;' ('let' never changes)",
             )?;
+            if (!this.recovering && !this.tooDeep && mutToken.start == start + 4) {
+                // `let mut` with one space: no comment between them is lost (tooling.md §5.2).
+                this.recovering = true;
+                this.front.diagnostics.errorWithEdit(
+                    expectedToken(),
+                    this.file,
+                    mutToken.start,
+                    mutToken.end,
+                    message,
+                    textMessage("write 'var'")?,
+                    start,
+                    mutToken.end,
+                    textMessage("var")?,
+                )?;
+            } else {
+                this.error(expectedToken(), mutToken.start, mutToken.end, message)?;
+            }
             this.advance();
             isVariable = true;
         }

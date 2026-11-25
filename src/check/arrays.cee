@@ -535,6 +535,9 @@ fn synthIndexExpecting(
         return Ok(target);
     }
     let t = c.typeOf(target);
+    if (isByteStringViewType(c, t) && !c.isBottom(position)) {
+        return byteStringViewIndex(c, target, position, span); // ADR 0253 §2.7
+    }
     if (!c.types.is(t, TypeKind.Array)) {
         let targetSpan = c.front.ast.exprSpans[targetSyntax as usize];
         var message = Vector<u8>.create();

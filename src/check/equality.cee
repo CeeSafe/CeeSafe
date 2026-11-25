@@ -96,6 +96,10 @@ fn checkEquality(
     rightOperand: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
+    let texts = textViewEquality(c, op, leftOperand, rightOperand, span)?; // ADR 0253 §2.6
+    if (texts != none()) {
+        return Ok(texts);
+    }
     let left = sliceOperand(c, leftOperand);
     let right = sliceOperand(c, rightOperand);
     let lt = c.typeOf(left);

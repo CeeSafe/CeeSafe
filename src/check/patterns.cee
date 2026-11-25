@@ -399,8 +399,23 @@ fn checkMatch(
     branches: borrow mut BranchType,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let scrutinee = synth(c, scrutineeSyntax, none())?;
-    let scrutineeType = c.typeOf(scrutinee);
+    var scrutinee = synth(c, scrutineeSyntax, none())?;
+    var scrutineeType = c.typeOf(scrutinee);
+    if (isByteStringViewType(c, scrutineeType) || (c.types.is(scrutineeType, TypeKind.Reference) &&
+        isByteStringViewType(c, c.types.info(scrutineeType).pointee))) {
+        // A `ByteStringView` with string patterns matches its bytes (ADR 0253 §2.7), as a `Slice<u8>` does.
+        var strings = false;
+        for (k in 0..arms.count) {
+            if (isStringPatternSyntax(c, armPattern(c, arms, k, isValue))) {
+                strings = true;
+            }
+        }
+        if (strings) {
+            let value = autoDeref(c, scrutinee)?;
+            scrutinee = textViewBytes(c, value, c.front.ast.exprSpans[scrutineeSyntax as usize])?;
+            scrutineeType = c.typeOf(scrutinee);
+        }
+    }
     let reference = if (c.types.is(scrutineeType, TypeKind.Reference)) scrutineeType else none();
     let typ = if (reference != none()) c.types.info(reference).pointee else scrutineeType;
     let scrutineeSpan = c.front.ast.exprSpans[scrutineeSyntax as usize];

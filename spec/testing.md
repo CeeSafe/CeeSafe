@@ -161,6 +161,9 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   - `// stdin: text` (ADR 0106): the program's standard input is the texts of these directives, joined with nothing
     between them; `\n`, `\r`, `\\` and `\xNN` (one byte) are the escapes, so an input may lack a last line ending
     or hold bytes that are not UTF-8. A test without one inherits the runner's input, as before.
+  - `// env: NAME=value` (ADR 0256): `NAME` is set to `value` (the rest of the line) in the program's environment,
+    natively and under `--interp`, beside the runner's own variables: a runtime's switch such as
+    `CEESAFE_LOCK_RULES=strict`.
 - `ffi/` programs are linked with their C harness (`NAME.c`, and `NAME.types.h` for imported C types,
   `type-system.md` §31); `freestanding/` programs with their environment.
 - `emit-c/*.cee` have reviewed snapshots of the generated `main.c`; `placement/`, `bounds-checks/`,

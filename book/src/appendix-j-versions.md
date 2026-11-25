@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.8
+## Releases 0.25.0 to 0.95.9
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.9 | 2026-11-25 | On Windows the float methods (`exp`, `ln`, `pow`, the trigonometric and hyperbolic functions, ...) call System32's `ucrtbase.dll`, loaded at their first call, whatever compiler built the program (`cl` with `/MT` or `/MD`, clang, MinGW-w64 of either C library), so a program's results follow the installed Windows rather than the toolchain (ADR 0248) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.8 | 2026-11-25 | `s.add()` on a `String` or a `Vector<u8>`, a chain of appends (`text`, `char`, `number`, `signed`, `hex`, `padded`, `fixed`) whose one `done()` reports a failed allocation, and warning N0408 for a chain left without it (ADR 0217); `build --split --lto`, and split builds whose units carry their own preludes and content names (ADR 0082); fill elision and the interval of a checked result (ADRs 0238, 0239); the MCP tools `ceesafe_test` and `ceesafe_doc` (ADR 0240); `cbind` writes C's `long` and `unsigned long` as `CLong` and `CULong` (ADR 0241); `Thread.cpuCount` builds with gcc's `-Werror` on Linux | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.7 | 2026-11-25 | On Windows, `Process.run` builds one command line quoted for `CommandLineToArgvW` and starts it with `CreateProcessW`, as `spawn` does, so an argument with spaces or quotes arrives whole; `Process.capture` closes its input file before the child opens it, so it no longer fails with a sharing violation; a batch file (`.bat`, `.cmd`) is refused by `run`, `capture` and `spawn` (CVE-2024-24576's class); piped standard input is read in binary mode (ADR 0245). The C for a zeroed value of a deeply nested type no longer nests initializers past MSVC's limit (C1054) (ADR 0247) | [Appendix C](./appendix-c-built-in-types) |
 | 0.95.6 | 2026-11-24 | The system's secret store: `Secrets.read`, `write` and `remove` keep an app's tokens and keys where the system keeps them encrypted, readable by that app only: the keychain on macOS and iOS, the Android Keystore, DPAPI on Windows (`Unsupported` on Linux and FreeBSD for now); `CEESAFE_SECRETS_DIR` for tests (ADR 0242) | [Appendix C](./appendix-c-built-in-types) |

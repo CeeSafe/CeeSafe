@@ -1,6 +1,6 @@
 id = "ceesafe"
 name = "CeeSafe"
-version = "0.95.9"
+version = "0.95.10"
 schema_version = 1
 authors = ["The CeeSafe authors"]
 description = "The CeeSafe language: syntax highlighting, and diagnostics, hover, go to definition, outline, formatting and quick fixes from ceesafec lsp."

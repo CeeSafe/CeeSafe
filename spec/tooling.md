@@ -733,6 +733,9 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0100 | `expected ';'`, with no earlier error in the file, after a declaration, assignment, `return`, or a call statement (not after an expression that cannot be a statement, N0225) | insert `;` after the previous token |
 | N0100 | `let mut n` (one space between the words), with no earlier syntax error being recovered from | `let mut` → `var` |
 | N0200 | `None`, undeclared, where an optional is expected | `None` → `null` |
+| N0204, N0200 | `Vec`, undeclared, as a type with arguments (`Vec<T>`, `Vec<T>.f()`), or `Vec.f()` where a vector is expected | `Vec` → `Vector` |
+| N0200 | `String.new()`, and `Vector<T>.new()` or `Vector.new()` where a vector is expected | `new` → `create` |
+| N0200 | `Box.new(x)` where a box is expected | `Box.create(x)!`, which panics when memory runs out, as Rust's does |
 | N0200 | `x.len()`, without arguments, on a vector, a `String`, a slice, an array or a `StringView` | `len()` → `length` |
 | N0100 | `::` (`grammar.md` §1.7), wherever it stands and whatever else the file has | `::` → `.`; before `<` (`f::<T>()`), remove it |
 | N0267 | `x.m(args)` where two interfaces' impls give `x`'s type a method `m` and exactly one of them is a method taking that many arguments, the call having no type arguments of its own (type-system.md §21.4, ADR 0229) | `x.m(` → `I.m(x, ` (`I.m(mut x, ` for a `borrow mut this` method), or `x.m()` → `I.m(x)`: two edits, one fix |

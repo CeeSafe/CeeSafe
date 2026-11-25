@@ -761,7 +761,8 @@ fn main() {
 `borrow mut` parameter without `mut`, a `mut` where the parameter is a shared `borrow`, `as` between integer types that
 can lose information (`truncate<T>(…)`, which wraps), a `;` missing after a statement, and a `::` from Rust or C++
 (`.`, or nothing before type arguments: `Vector<i32>.create()`, `pick<i32>(1, 2)`), and Rust's `let mut` (`var`),
-`None` (`null`) and `len()` (`length`). It also makes a `let` that is
+`None` (`null`), `len()` (`length`), `Vec` (`Vector`), `new()` of a vector or `String` (`create()`) and `Box.new(x)` where a
+box is expected (`Box.create(x)!`). It also makes a `let` that is
 borrowed mutably a `var`, writes `borrow x` where a variable is given for a reference and `x as i64` where a variable's
 number only needs widening, writes `x.asBorrow()` where a borrow of an optional should be an optional borrow, declares the
 type of a `var` that was meant to copy the value behind a reference, boxes a recursive awaited call

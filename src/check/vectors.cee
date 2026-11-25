@@ -123,7 +123,27 @@ fn checkVectorCreate(
                 ", or for raw parts 'Vector.intoRaw(v)', 'Vector.fromRaw(p, n, c)', 'Vector.intoForeign(v)' or 'Vector.fromForeign(p, n, c)'",
             )?;
         }
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        let known = isString || typeArguments.count > 0 ||
+            (expected != none() && c.types.is(expected, TypeKind.Vector));
+        if (known && arguments.count == 0 && sameText(c.name(ident.symbol), "new")) {
+            // Rust's `Vec::new()`, with the element type known (tooling.md §5.2).
+            var title = Vector<u8>.create();
+            appendText(mut title, "write 'create'")?;
+            var name = Vector<u8>.create();
+            appendText(mut name, "create")?;
+            c.errorWithFix(
+                undefinedName(),
+                ident.start,
+                ident.end,
+                message,
+                title,
+                ident.start,
+                ident.end,
+                name,
+            )?;
+        } else {
+            c.error(undefinedName(), ident.start, ident.end, message)?;
+        }
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }

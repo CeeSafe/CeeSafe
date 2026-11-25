@@ -190,6 +190,10 @@ fn resolveGenericType(
         appendBytes(mut message, n)?;
         appendText(mut message, "'")?;
         appendTypeDidYouMean(c, mut message, first.symbol)?;
+        if (sameText(n, "Vec")) {
+            vecIsVector(c, unknownType(), span, first.start, first.end, message)?;
+            return Ok(c.types.error);
+        }
     } else {
         appendText(
             mut message,

@@ -102,7 +102,32 @@ fn checkBoxCreate(
             mut message,
             "; use 'Box.create(v)', 'Box.createIn(allocator, v)', 'Box.intoRaw(b)' or 'Box.fromRaw(p)'",
         )?;
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        if (sameText(c.name(ident.symbol), "new") && arguments.count == 1 && expected != none() &&
+            c.types.is(expected, TypeKind.Box)) {
+            // Rust's `Box::new(x)` where a box is expected: `Box.create(x)!`, which panics as Rust's does when memory
+            // runs out (tooling.md §5.2).
+            var title = Vector<u8>.create();
+            appendText(mut title, "write 'Box.create(…)!'")?;
+            var name = Vector<u8>.create();
+            appendText(mut name, "create")?;
+            var bang = Vector<u8>.create();
+            appendText(mut bang, "!")?;
+            c.front.diagnostics.errorWithTwoEdits(
+                undefinedName(),
+                c.file,
+                ident.start,
+                ident.end,
+                message,
+                title,
+                span.end,
+                bang,
+                ident.start,
+                ident.end,
+                name,
+            )?;
+        } else {
+            c.error(undefinedName(), ident.start, ident.end, message)?;
+        }
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }

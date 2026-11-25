@@ -477,6 +477,35 @@ fn isBoxFromRaw(c: borrow mut Checker, e: u32) -> Result<bool, AllocError> {
     }
 }
 
+/// `Box.new(x)`, Rust's, which keeps the expected box for its fix (checkBoxCreate).
+fn isBoxNew(c: borrow mut Checker, e: u32) -> Result<bool, AllocError> {
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Unsafe(inner) => { return isBoxNew(c, inner); }
+        ExprNode.Call(callee, _) => {
+            match (c.front.ast.exprs[callee as usize]) {
+                ExprNode.Member(target, member) => {
+                    match (c.front.ast.exprs[target as usize]) {
+                        ExprNode.Name(name, typeArguments) => {
+                            if (typeArguments.count != 0) {
+                                return Ok(false);
+                            }
+                            let symbol = c.front.ast.idents[name as usize].symbol;
+                            let isBox = match (c.lookup(symbol)?) {
+                                Entity.Builtin(b) => b == builtinBox(),
+                                _ => false,
+                            };
+                            return Ok(isBox && sameText(c.name(c.front.ast.idents[member as usize].symbol), "new"));
+                        }
+                        _ => { return Ok(false); }
+                    }
+                }
+                _ => { return Ok(false); }
+            }
+        }
+        _ => { return Ok(false); }
+    }
+}
+
 /// A box or write of a C-laid-out type runs the `@placed` methods of its fields' types and its own (EnsurePlaced,
 /// §33.3): finds each one in this instance and records it on the struct.
 fn ensurePlaced(c: borrow mut Checker, typ: u32, depth: u32) {

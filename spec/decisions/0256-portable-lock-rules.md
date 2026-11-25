@@ -120,6 +120,21 @@ The SQLite port runs its lock tests a second time with `CEESAFE_LOCK_RULES=stric
 POSIX scheme (os_unix.c's SHARED-to-EXCLUSIVE conversion, which `portable` allows). A lock mistake of the Windows
 scheme then panics on any host, at the call that makes it.
 
+### 2.5 The owner's decisions (2026-11-25)
+
+- **Both values stay.** `portable` is for code that follows os_unix.c, whose SHARED-to-EXCLUSIVE step converts a held
+  range in place: it checks everything else of the contract (no lock taken twice, no overlap, unlocks as locked)
+  while letting that step through, so a POSIX scheme can be run under it on every POSIX host. `strict` is for
+  checking Windows' rules, for example the engine's Windows path forced on on macOS or Linux: it refuses the
+  conversion too, which Windows refuses (shared to exclusive) or stacks (exclusive to shared, §2.2), so it is the
+  value whose refusals are Windows' (§4's oracle). One value would serve only one of the port's two schemes.
+- **An exclusive lock on a `File` not open for writing is refused on every host, under both values**
+  (`BadDescriptor`), and a shared one on a `File` not open for reading likewise. It is the portable answer: POSIX
+  refuses it (`EBADF`), so code that relies on Windows granting it (os_win.c's exclusive try of a read-only `-shm`'s
+  DMS byte) breaks on POSIX hosts, and the rules make it break on Windows too, where it would otherwise pass. A
+  program that must take such a lock opens the file for writing, or takes the lock only where the host grants it,
+  outside the rules.
+
 ## 3. Options not taken
 
 - **Emulating Windows' answers** (a `tryLock` that is `false` over the `File`'s own lock, a `lock` that never returns,

@@ -2345,6 +2345,77 @@ Text appended to a `String` a step at a time, each step returning the appender s
 `line.add().text("status ").number(code).done()?`. A step whose allocation fails appends nothing more and marks the
 appender, so one `done()` at the end reports it; what earlier steps appended stays (ADR 0217).
 
+### TextAppender.text
+
+```ceesafe
+public fn text(borrow mut this, s: StringView) -> borrow mut TextAppender
+```
+
+`s`, as `append(s)`.
+
+### TextAppender.char
+
+```ceesafe
+public fn char(borrow mut this, c: u32) -> borrow mut TextAppender
+```
+
+The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+not a failure.
+
+### TextAppender.number
+
+```ceesafe
+public fn number(borrow mut this, n: u64) -> borrow mut TextAppender
+```
+
+`n` in decimal, as `appendNumber(n)`.
+
+### TextAppender.signed
+
+```ceesafe
+public fn signed(borrow mut this, n: i64) -> borrow mut TextAppender
+```
+
+`n` in decimal with its sign, as `appendNumber(n)`.
+
+### TextAppender.hex
+
+```ceesafe
+public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut TextAppender
+```
+
+`value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+
+### TextAppender.padded
+
+```ceesafe
+public fn padded(
+    borrow mut this,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> borrow mut TextAppender
+```
+
+`text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+
+### TextAppender.fixed
+
+```ceesafe
+public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut TextAppender
+```
+
+`value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+
+### TextAppender.done
+
+```ceesafe
+public fn done(borrow mut this) -> Result<void, AllocError>
+```
+
+Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
+
 ## struct ByteAppend
 
 ```ceesafe
@@ -2367,6 +2438,77 @@ public struct ByteAppender<region r>
 
 Text appended to a `Vector<u8>` a step at a time, as TextAppender appends to a `String` (ADR 0217): each step
 returns the appender, a failed allocation marks it, and `done()` reports it.
+
+### ByteAppender.text
+
+```ceesafe
+public fn text(borrow mut this, s: StringView) -> borrow mut ByteAppender
+```
+
+The bytes of `s`.
+
+### ByteAppender.char
+
+```ceesafe
+public fn char(borrow mut this, c: u32) -> borrow mut ByteAppender
+```
+
+The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+not a failure.
+
+### ByteAppender.number
+
+```ceesafe
+public fn number(borrow mut this, n: u64) -> borrow mut ByteAppender
+```
+
+`n` in decimal.
+
+### ByteAppender.signed
+
+```ceesafe
+public fn signed(borrow mut this, n: i64) -> borrow mut ByteAppender
+```
+
+`n` in decimal with its sign.
+
+### ByteAppender.hex
+
+```ceesafe
+public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut ByteAppender
+```
+
+`value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+
+### ByteAppender.padded
+
+```ceesafe
+public fn padded(
+    borrow mut this,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> borrow mut ByteAppender
+```
+
+`text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+
+### ByteAppender.fixed
+
+```ceesafe
+public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut ByteAppender
+```
+
+`value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+
+### ByteAppender.done
+
+```ceesafe
+public fn done(borrow mut this) -> Result<void, AllocError>
+```
+
+Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
 
 ## enum PathKind
 
@@ -3504,6 +3646,53 @@ Writes the region's changed pages to the file and waits for them (`msync`); on W
 which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
 Safety: the runtime is given what it mapped.
 
+### SharedMapping.length
+
+```ceesafe
+fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### SharedMapping.offset
+
+```ceesafe
+fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### SharedMapping.readAt
+
+```ceesafe
+fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+it. Panics if the bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### SharedMapping.load32
+
+```ceesafe
+fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+inside the region or `offset() + at` is not a multiple of 4.
+Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+
+### SharedMapping.load16
+
+```ceesafe
+fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+```
+
+The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
+inside the region or `offset() + at` is odd.
+Safety: as load32.
+
 Implements `MappedRead`.
 
 ## struct ReadOnlyMapping
@@ -3546,6 +3735,52 @@ reading (`BadDescriptor` for one open only for writing). `InvalidInput` for `len
 past 2^63 - 1.
 Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
 
+### ReadOnlyMapping.length
+
+```ceesafe
+fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### ReadOnlyMapping.offset
+
+```ceesafe
+fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### ReadOnlyMapping.readAt
+
+```ceesafe
+fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`, as SharedMapping.readAt. Panics if the
+bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### ReadOnlyMapping.load16
+
+```ceesafe
+fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+```
+
+The u16 at byte `at`, loaded atomically with `order`. Panics if its two bytes are not inside the region or
+`offset() + at` is odd.
+Safety: the word is inside the mapping and aligned; the runtime's load never writes.
+
+### ReadOnlyMapping.load32
+
+```ceesafe
+fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order`. Panics if its four bytes are not inside the region or
+`offset() + at` is not a multiple of 4.
+Safety: as load16.
+
 Implements `MappedRead`.
 
 ## enum SocketAddress
@@ -3559,6 +3794,36 @@ public enum SocketAddress {
 
 An IPv4 or IPv6 endpoint: the address bytes in network order and the port; an IPv6 address also has its scope id
 (0: none), which a link-local address needs to say which interface it is on.
+
+### SocketAddress.port
+
+```ceesafe
+fn port(borrow this) -> u16
+```
+
+### SocketAddress.withPort
+
+```ceesafe
+fn withPort(borrow this, p: u16) -> SocketAddress
+```
+
+### SocketAddress.isLoopback
+
+```ceesafe
+fn isLoopback(borrow this) -> bool
+```
+
+### SocketAddress.isUnspecified
+
+```ceesafe
+fn isUnspecified(borrow this) -> bool
+```
+
+### SocketAddress.write
+
+```ceesafe
+fn write(borrow this, w: borrow mut TextWriter)
+```
 
 Implements `SocketEndpoint`.
 

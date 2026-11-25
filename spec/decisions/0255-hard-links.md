@@ -77,6 +77,14 @@ model of files changes: it reopens a file by its path for each positional operat
 through one name and written through the other is seen through both. When the release stage 0 has `File.link`, the
 interpreter calls it instead.
 
+**A known difference, accepted by the owner (2026-11-25).** Until a release stage 0 has `File.link` (a release after
+0.95.13 moved into `bootstrap/reference.md`), a POSIX link that fails for a reason the paths do not show is
+`PermissionDenied` in the interpreter where a native program says `Other` (`EXDEV` across volumes, `EMLINK` past
+the link limit) or `Unsupported` (a file system without hard links that says `ENOTSUP`). Every error a program can
+foresee from its paths (a missing file or directory, an existing `new`, a directory, an empty path) is the same
+natively and interpreted, and the corpus tests only those. Windows' interpreted errors are the system's code, mapped
+as the runtime maps it, so they do not differ.
+
 ## 3. Options not taken
 
 - **Copying the file** in the interpreter, as its `rename` is a copy and a removal: a copy is not a second name (a

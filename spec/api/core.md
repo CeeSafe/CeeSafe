@@ -2261,6 +2261,48 @@ public fn appendUnsigned(borrow mut this, value: u64) -> Result<void, AllocError
 
 Appends `value` in decimal: `appendNumber` for a `u64` past `i64`'s range.
 
+### ByteString.appendHex
+
+```ceesafe
+fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+```
+
+### ByteString.appendOctal
+
+```ceesafe
+fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>
+```
+
+### ByteString.appendFixed
+
+```ceesafe
+fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>
+```
+
+### ByteString.appendPadded
+
+```ceesafe
+fn appendPadded(
+    borrow mut this,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> Result<void, AllocError>
+```
+
+### ByteString.appendChar
+
+```ceesafe
+fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError>
+```
+
+### ByteString.appendUtf8
+
+```ceesafe
+fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError>
+```
+
 Implements `AppendFormatted`.
 
 Implements `AppendText`.
@@ -2284,6 +2326,14 @@ public struct ByteStringSplit<region r>
 
 The pieces of a byte string between separators, in order: `s.split(sep)`.
 
+### ByteStringSplit.next
+
+```ceesafe
+fn next(borrow mut this) -> ByteStringView<r>?
+```
+
+The next piece, or null after the last.
+
 Implements `Iterator<ByteStringView<r>>`.
 
 ## struct Utf8Chunk
@@ -2305,6 +2355,14 @@ public struct Utf8Chunks<region r>
 ```
 
 The chunks of a byte string, in order: `s.chunks()`. `next()` gives each, then null.
+
+### Utf8Chunks.next
+
+```ceesafe
+fn next(borrow mut this) -> Utf8Chunk<r>?
+```
+
+The next chunk, or null after the last.
 
 Implements `Iterator<Utf8Chunk<r>>`.
 
@@ -3952,6 +4010,14 @@ public struct TextSplit<region r>
 The pieces of a text between separators, in order: `s.split(sep)`. `next()` gives each piece, then null. `"a,,b"`
 split by `","` is `"a"`, `""`, `"b"`; an empty text is one empty piece; an empty separator gives the text whole.
 
+### TextSplit.next
+
+```ceesafe
+fn next(borrow mut this) -> StringView<r>?
+```
+
+The next piece, or null after the last.
+
 Implements `Iterator<StringView<r>>`.
 
 ## struct ByteSplit
@@ -3961,6 +4027,14 @@ public struct ByteSplit<region r>
 ```
 
 The pieces of bytes between separators, in order: `s.split(sep)` on a `Slice<u8>`, as TextSplit.
+
+### ByteSplit.next
+
+```ceesafe
+fn next(borrow mut this) -> Slice<r, u8>?
+```
+
+The next piece, or null after the last.
 
 Implements `Iterator<Slice<r, u8>>`.
 

@@ -2230,6 +2230,28 @@ def main():
                 "    fn id(borrow this) -> u32;\n}\n")
         if p.returncode != 0 or want not in p.stdout:
             problems.append(f"doc: expected the interface with its constants and types:\n{p.stdout}{p.stderr[:300]}")
+        # The methods of `impl` blocks, in any file, keep their doc comments (ADR 0254: SharedMapping's methods are its
+        # `impl MappedRead`'s): an interface's impl, whose method without a comment of its own is not missing, and an
+        # inherent impl in another file, whose private function is left out.
+        with open(os.path.join(docs, "square.cee"), "w") as f:
+            f.write("/// A square.\npublic struct Square { public side: i64; }\n\n"
+                    "impl Kind for Square {\n    const CODE: u32 = 4;\n    type Item = u8;\n"
+                    "    /// The side, as an id.\n    fn id(borrow this) -> u32 => 4;\n}\n")
+        with open(os.path.join(docs, "more.cee"), "w") as f:
+            f.write("/// Square's own.\nimpl Square {\n    /// Twice the side.\n    public fn doubled(borrow this) -> i64 "
+                    "=> this.side * 2;\n    fn hidden(borrow this) -> i64 => 0;\n}\n\n"
+                    "/// A dot.\npublic struct Dot { public x: i64; }\n\nimpl Kind for Dot {\n    const CODE: u32 = 1;\n"
+                    "    type Item = u8;\n    fn id(borrow this) -> u32 => 1;\n}\n")
+        p = run([compiler, "doc", "kind.cee", "square.cee", "more.cee"], docs)
+        wanted = ["### Square.id", "The side, as an id.", "### Square.doubled", "Twice the side.", "### Dot.id",
+                  "Implements `Kind`."]
+        if p.returncode != 0 or any(w not in p.stdout for w in wanted) or "hidden" in p.stdout:
+            problems.append(f"doc: expected the impl blocks' methods with their comments, {wanted}, and no "
+                            f"private one:\n{p.stdout}{p.stderr[:300]}")
+        p = run([compiler, "doc", "--missing", "kind.cee", "square.cee", "more.cee"], docs)
+        if "Dot.id" in p.stdout or "Square.doubled" in p.stdout:
+            problems.append(f"doc --missing: an impl's documented or interface-documented method was listed:\n"
+                            f"{p.stdout}{p.stderr[:300]}")
 
         # 18. Embedded files (ADR 0087 §2.8) and constant `+` across packages (§2.7).
         embed = os.path.join(work, "embed")

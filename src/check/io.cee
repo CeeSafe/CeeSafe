@@ -89,7 +89,11 @@ fn checkResourceFunction(
     var values = Vector<u32>.create();
     let view = c.types.stringView;
     let pathSyntax = c.front.ast.at(arguments, 0);
-    values.push(checkArgument(c, pathSyntax, view)?)?;
+    if (withPort) {
+        values.push(checkArgument(c, pathSyntax, view)?)?;
+    } else {
+        values.push(checkPathArgument(c, pathSyntax)?)?;
+    }
     if (withPort) {
         let u16Type = c.types.u16;
         let portSyntax = c.front.ast.at(arguments, 1);
@@ -102,6 +106,29 @@ fn checkResourceFunction(
     }
     let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
+}
+
+/// The path of a `File` built-in (§26.3, ADR 0257 §2.4): a `StringView` (or a lent `String`), passed as it was, or an
+/// `OsStringView`, whose bytes are passed (its one field, a `Slice<u8>`: the C backend and the interpreter take a byte
+/// slice for the path as they take a view).
+fn checkPathArgument(c: borrow mut Checker, argument: u32) -> Result<u32, AllocError> {
+    let span = c.front.ast.exprSpans[argument as usize];
+    let view = c.types.stringView;
+    let value = synth(c, argument, none())?;
+    if (c.isBottom(value)) {
+        return Ok(value);
+    }
+    let valueType = c.typeOf(value);
+    if (!isOsStringView(c, valueType)) {
+        return lendValue(c, value, view, span);
+    }
+    let fields = borrow c.types.structs[c.types.info(valueType).structDef as usize].fields;
+    if (fields.length != 1) {
+        return lendValue(c, value, view, span);
+    }
+    let field = fields[0];
+    let bytesType = c.types.fields[field as usize].typ;
+    return c.expr(HirExpr.FieldAccess(value, field), bytesType, span.start, span.end);
 }
 
 fn resourceUsage(function: u32) -> StringView {

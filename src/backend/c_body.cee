@@ -1849,6 +1849,30 @@ fn appendBuiltinCall(
     return out.push(')');
 }
 
+/// A `File` built-in's runtime call on its one argument, the path: a `StringView` as it is, or an `OsStringView`'s
+/// bytes (a `Slice<u8>`, ADR 0257 §2.4) as the `cee_str` the runtime takes.
+fn appendPathCall(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    out: borrow mut Vector<u8>,
+    prefix: Slice<u8>,
+    arguments: Range,
+) -> Result<void, AllocError> {
+    if (!c.types.isSlice(argumentType(n, arguments, 0))) {
+        return appendBuiltinCall(e, c, n, sources, f, out, prefix, arguments);
+    }
+    let path = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+    appendBytes(out, prefix)?;
+    appendText(out, "(((cee_str){ .ptr = ")?;
+    appendBytes(out, path.view())?;
+    appendText(out, ".ptr, .len = ")?;
+    appendBytes(out, path.view())?;
+    return appendText(out, ".len }))");
+}
+
 /// `ceeX_<mangled pointee of argument 0>(args)`.
 fn appendHelperCall(
     e: borrow mut CEmitter,
@@ -2377,21 +2401,21 @@ fn appendBuiltinRvalue(
     }
     if (b == bfFileOpen() || b == bfFileCreate()) {
         var call = Vector<u8>.create();
-        appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
+        appendPathCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
         call.pop();
         appendText(mut call, if (b == bfFileOpen()) ", 0u)" else ", 1u)")?;
         return appendIoCall(c, out, t, call.view());
     }
     if (b == bfFileRemove()) {
         var call = Vector<u8>.create();
-        appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_remove".bytes(), arguments)?;
+        appendPathCall(e, c, n, sources, f, mut call, "ceesafe_file_remove".bytes(), arguments)?;
         return appendIoCall(c, out, t, call.view());
     }
     if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend() ||
         b == bfFileOpenRegular() || b == bfFileCreateReadWrite()) {
         // Modes 2, 3, 4 (ADR 0075 §2.1), 5 (ADR 0077), 6 (ADR 0078 §3) and 7 (ADR 0221 §2.1) of ceesafe_file_open.
         var call = Vector<u8>.create();
-        appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
+        appendPathCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
         call.pop();
         appendText(
             mut call,

@@ -291,6 +291,9 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
         }
         return borrowPlace(c, target, true, span);
     }
+    if (isOsStringView(c, parameterType)) {
+        return osNameArgument(c, argument, parameterType, span);
+    }
     if (!c.types.is(parameterType, TypeKind.Reference)) {
         return checkExpr(c, argument, parameterType);
     }
@@ -299,8 +302,69 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
         c,
         pointee,
     );
-    var value = synth(c, argument, hint)?;
-    value = contentsFor(c, value, parameterType)?;
+    let synthesized = synth(c, argument, hint)?;
+    return lendValue(c, synthesized, parameterType, span);
+}
+
+/// Whether `t` is lib/core's `OsStringView` (ADR 0257), not a program's struct of that name.
+fn isOsStringView(c: borrow mut Checker, t: u32) -> bool {
+    if (t == none() || !c.types.is(t, TypeKind.Struct) || !sameText(c.typeName(t), "OsStringView")) {
+        return false;
+    }
+    let symbol = match (c.intern("OsStringView")) {
+        Ok(s) => s,
+        Err(_) => { return false; }
+    };
+    let template = match (foundEntity(c.coreItems, Word { value: symbol as u64 })) {
+        Entity.Struct(index) => index,
+        _ => none(),
+    };
+    if (template == none() || c.structs[template as usize].item == none()) {
+        return false;
+    }
+    let definition = c.types.info(t).structDef;
+    return definition != none() && c.types.structs[definition as usize].item == c.structs[template as usize].item &&
+        c.types.structs[definition as usize].file == c.structs[template as usize].file;
+}
+
+/// An argument for an `OsStringView` parameter (type-system.md §22.5, ADR 0257): a `StringView` or a lent `String` is
+/// passed as `OsStringView.fromText(argument)`, which copies nothing; anything else is checked against the parameter.
+fn osNameArgument(c: borrow mut Checker, argument: u32, parameterType: u32, span: Span) -> Result<u32, AllocError> {
+    let value = synth(c, argument, none())?;
+    if (c.isBottom(value)) {
+        return Ok(value);
+    }
+    let valueType = c.typeOf(value);
+    if (!c.types.isStringView(valueType) && !c.types.isString(valueType)) {
+        return coerce(c, value, parameterType, span);
+    }
+    let viewType = c.types.stringView;
+    let text = lendValue(c, value, viewType, span)?;
+    if (c.isBottom(text)) {
+        return Ok(text);
+    }
+    return osNameOfText(c, text, span);
+}
+
+/// `OsStringView.fromText(text)`, for a checked `StringView` value (ADR 0257 §2.3).
+fn osNameOfText(c: borrow mut Checker, text: u32, span: Span) -> Result<u32, AllocError> {
+    let name = c.intern("fromText")?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "OsStringView", none0.view(), name, span)?;
+    if (function == none()) {
+        return Ok(text);
+    }
+    let values = [text];
+    let list = c.hir.list(values[..])?;
+    let returnType = c.hir.functions[function as usize].returnType;
+    return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
+}
+
+/// A synthesized argument for a reference parameter: a box's contents or a vector's elements, a coercion, or a shared
+/// borrow of the value (the rest of CheckArgument, §13.2).
+fn lendValue(c: borrow mut Checker, synthesized: u32, parameterType: u32, span: Span) -> Result<u32, AllocError> {
+    let pointee = c.types.info(parameterType).pointee;
+    var value = contentsFor(c, synthesized, parameterType)?;
     let valueType = c.typeOf(value);
     if (c.types.isDynReference(parameterType) && !c.types.isBottom(valueType) && !c.types.is(
         valueType,

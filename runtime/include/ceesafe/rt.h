@@ -1663,8 +1663,13 @@ void ceesafe_host_dir_close(void *dir);
 int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity);
 int64_t ceesafe_host_app_data(const uint8_t *name, uint64_t name_length, uint8_t *buffer, uint64_t capacity);
 int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity);
+/* The child's environment (ADR 0258): `changes` changes, each two texts of `environment` (name, value: cee_str) and one
+ * kind of `environment_kinds` (0 set, 1 remove), applied to this process's environment, or to an empty one if `clear`. */
 int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const *input, uint64_t input_length,
-                        uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length);
+                        uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length,
+                        void const *environment, uint8_t const *environment_kinds, uint64_t changes, uint32_t clear);
+/* Process.argumentOs (ADR 0257): argument `index`'s bytes, UTF-8 or not; 1, or 0 past the end. */
+int64_t ceesafe_host_argument(uint64_t index, uint8_t const **value, uint64_t *length);
 /* Child processes that run beside their parent (ADR 0169; runtime/hosted/ceesafe_rt_io.c says what each returns). */
 int64_t ceesafe_host_child_start(void const *arguments, uint64_t count, uint32_t streams, uint64_t *handle);
 int64_t ceesafe_host_child_poll(uint64_t handle, uint32_t wait);
@@ -1677,7 +1682,9 @@ int64_t ceesafe_host_executable(uint8_t *buffer, uint64_t capacity);
 /* Named shared memory (ADR 0172; lib/std's SharedMemory; runtime/hosted/ceesafe_rt_io.c says what each does). */
 /* What a child is handed (ADR 0173; runtime/hosted/ceesafe_rt_io.c says what each does). */
 int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uint32_t streams, const uint64_t *handles,
-                                    const uint8_t *kinds, uint32_t handed, uint64_t *handle);
+                                    const uint8_t *kinds, uint32_t handed, void const *environment,
+                                    uint8_t const *environment_kinds, uint64_t changes, uint32_t clear,
+                                    uint64_t *handle);
 int64_t ceesafe_host_handover_hold(uint32_t kind, uint64_t handle);
 void ceesafe_host_handover_release(uint32_t kind, uint64_t held);
 int64_t ceesafe_host_handover_shutdown(uint64_t held);

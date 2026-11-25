@@ -1,0 +1,327 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: names for the system (ADR 0257, type-system.md §22.6). An `OsString` (owned) and an `OsStringView<r>`
+// (borrowed) hold a file name, a program's argument or an environment variable in the system's encoding: on POSIX the
+// bytes the system calls take and give; on Windows WTF-8, the UTF-8 of the UTF-16 units in which an unpaired surrogate
+// is the three bytes UTF-8 would give its code point. UTF-8 text is the same bytes in both, so text becomes an OS
+// string, and an OS string that is UTF-8 becomes text, with no copy. Bundled with ceesafec and part of every package.
+//
+// Nothing is checked when one is made: a Windows call refuses bytes that are not well-formed WTF-8 (InvalidInput), as
+// every system refuses a zero byte.
+
+/// A borrowed name in the system's encoding, valid for region `r` as a `StringView<r>` is. Copy; `==` compares the
+/// bytes. A function that takes one also takes a string literal, a `StringView` or a lent `String` (type-system.md
+/// §22.6). A field of this type needs a region parameter, as a view's does.
+@derive(Equal)
+public struct OsStringView<region r> {
+    private data: Slice<r, u8>;
+
+    /// The bytes of `text`, as a name: no copy.
+    public fn fromText(text: StringView<r>) -> OsStringView<r> => OsStringView { data: text.bytes() };
+
+    /// `bytes` as a name in the system's encoding: no copy, and no check.
+    public fn fromBytes(bytes: Slice<r, u8>) -> OsStringView<r> => OsStringView { data: bytes };
+
+    /// The bytes of a byte string, as a name: no copy.
+    public fn fromByteString(text: ByteStringView<r>) -> OsStringView<r> => OsStringView { data: text.bytes() };
+
+    /// The bytes, in the system's encoding.
+    public fn bytes(borrow this) -> Slice<r, u8> => this.data;
+
+    /// The bytes as a byte string: no copy.
+    public fn toByteStringView(borrow this) -> ByteStringView<r> => ByteStringView.fromBytes(this.data);
+
+    /// The length in bytes.
+    public fn length(borrow this) -> usize => this.data.length;
+
+    /// Whether there are no bytes.
+    public fn isEmpty(borrow this) -> bool => this.data.length == 0;
+
+    /// The name as text, with no copy, when its bytes are UTF-8; null otherwise.
+    public fn toUtf8(borrow this) -> StringView<r>? => StringView.fromUtf8(this.data);
+
+    /// Whether the bytes are UTF-8.
+    public fn isUtf8(borrow this) -> bool => StringView.fromUtf8(this.data) != null;
+
+    /// A new string: each encoded surrogate is one U+FFFD, and every other ill-formed sequence is replaced as
+    /// `ByteString.toUtf8Lossy` replaces it. The same on every system.
+    public fn toUtf8Lossy(borrow this) -> Result<String, AllocError> {
+        var out = String.create();
+        OsText.appendLossy(this.data, mut out)?;
+        return Ok(out);
+    }
+
+    /// Whether the bytes are well-formed WTF-8: what a Windows call takes.
+    public fn isWtf8(borrow this) -> bool => OsText.wellFormed(this.data);
+
+    /// The UTF-16 units of well-formed WTF-8 (Windows' encoding of the name), or null for other bytes.
+    public fn toWide(borrow this) -> Result<Vector<u16>?, AllocError> {
+        if (!OsText.wellFormed(this.data)) {
+            return Ok(null);
+        }
+        var units = Vector<u16>.withCapacity(this.data.length)?;
+        var i: usize = 0;
+        while (i < this.data.length) {
+            let point = OsText.decode(this.data, i);
+            i += OsText.width(point);
+            if (point >= 0x10000) {
+                let rest = point - 0x10000;
+                units.push(truncate<u16>(0xD800 + (rest >> 10)))?;
+                units.push(truncate<u16>(0xDC00 + (rest & 0x3FF)))?;
+            } else {
+                units.push(truncate<u16>(point))?;
+            }
+        }
+        return Ok(Some(units));
+    }
+
+    /// A new `OsString` with a copy of the bytes.
+    public fn toOsString(borrow this) -> Result<OsString, AllocError> => OsString.copyOf(this.data);
+
+    /// Whether the two hold the same bytes (views of two regions).
+    public fn equals(borrow this, other: OsStringView) -> bool {
+        if (this.data.length != other.data.length) {
+            return false;
+        }
+        for (i in 0..this.data.length) {
+            if (this.data[i] != other.data[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+/// An owned name in the system's encoding (type-system.md §22.6), in a growable buffer. A move type; `==` compares the
+/// bytes.
+@derive(Equal)
+public struct OsString {
+    private data: Vector<u8>;
+
+    /// An empty name; no allocation.
+    public fn create() -> OsString => OsString { data: Vector<u8>.create() };
+
+    /// The bytes of `bytes`, which it takes: no copy, and no check.
+    public fn fromBytes(bytes: Vector<u8>) -> OsString => OsString { data: bytes };
+
+    /// The bytes of `text`, which it takes: no copy.
+    public fn fromString(text: String) -> OsString => OsString { data: StringBytes.intoBytes(text) };
+
+    /// The bytes of a byte string, which it takes: no copy.
+    public fn fromByteString(text: ByteString) -> OsString => OsString { data: text.intoBytes() };
+
+    /// A new name with a copy of `bytes`: one allocation, none for no bytes.
+    public fn copyOf(bytes: Slice<u8>) -> Result<OsString, AllocError> {
+        var copy = Vector<u8>.withCapacity(bytes.length)?;
+        copy.extend(bytes)?;
+        return Ok(OsString { data: copy });
+    }
+
+    /// A new name with a copy of `text`'s bytes.
+    public fn fromText(text: StringView) -> Result<OsString, AllocError> => OsString.copyOf(text.bytes());
+
+    /// The WTF-8 of any UTF-16 units: a pair is the four bytes of its code point, an unpaired surrogate the three bytes
+    /// UTF-8 would give its code point. Windows' encoding of a name, on every system.
+    public fn fromWide(units: Slice<u16>) -> Result<OsString, AllocError> {
+        var out = Vector<u8>.withCapacity(units.length)?;
+        var i: usize = 0;
+        while (i < units.length) {
+            var point = units[i] as u32;
+            i += 1;
+            if (point >= 0xD800 && point <= 0xDBFF && i < units.length && units[i] >= 0xDC00 && units[i] <= 0xDFFF) {
+                point = 0x10000 + ((point - 0xD800) << 10) + (units[i] as u32 - 0xDC00);
+                i += 1;
+            }
+            OsText.encode(point, mut out)?;
+        }
+        return Ok(OsString { data: out });
+    }
+
+    /// A new name with a copy of the bytes.
+    public fn clone(borrow this) -> Result<OsString, AllocError> => OsString.copyOf(this.data.view());
+
+    /// A view of the name, a loan of it.
+    public fn view(borrow this) -> OsStringView => OsStringView { data: this.data.view() };
+
+    /// The bytes, a loan of the name.
+    public fn bytes(borrow this) -> Slice<u8> => this.data.view();
+
+    /// The bytes, which the name gives up: no copy.
+    public fn intoBytes(this) -> Vector<u8> => this.data;
+
+    /// The bytes as a byte string, which the name gives up: no copy.
+    public fn intoByteString(this) -> ByteString => ByteString.fromBytes(this.data);
+
+    /// The name as a `String`, which the name gives up, when its bytes are UTF-8: no copy. When they are not, the
+    /// name back, unchanged.
+    public fn intoString(this) -> Result<String, OsString> {
+        return match (StringBytes.fromUtf8(this.data)) {
+            Ok(text) => Ok(text),
+            Err(bytes) => Err(OsString { data: bytes }),
+        };
+    }
+
+    /// The length in bytes.
+    public fn length(borrow this) -> usize => this.data.length;
+
+    /// Whether there are no bytes.
+    public fn isEmpty(borrow this) -> bool => this.data.length == 0;
+
+    /// The name as text, with no copy, when its bytes are UTF-8; null otherwise.
+    public fn toUtf8(borrow this) -> StringView? => StringView.fromUtf8(this.data.view());
+
+    /// Whether the bytes are UTF-8.
+    public fn isUtf8(borrow this) -> bool => StringView.fromUtf8(this.data.view()) != null;
+
+    /// As `OsStringView.toUtf8Lossy`.
+    public fn toUtf8Lossy(borrow this) -> Result<String, AllocError> {
+        var out = String.create();
+        OsText.appendLossy(this.data.view(), mut out)?;
+        return Ok(out);
+    }
+
+    /// Whether the bytes are well-formed WTF-8.
+    public fn isWtf8(borrow this) -> bool => OsText.wellFormed(this.data.view());
+
+    /// Appends `name` (a literal or a `StringView` too); unchanged on failure.
+    public fn append(borrow mut this, name: OsStringView) -> Result<void, AllocError> => this.data.extend(name.bytes());
+
+    /// Appends bytes; unchanged on failure.
+    public fn appendBytes(borrow mut this, bytes: Slice<u8>) -> Result<void, AllocError> => this.data.extend(bytes);
+
+    /// Appends one byte.
+    public fn appendByte(borrow mut this, b: u8) -> Result<void, AllocError> => this.data.push(b);
+
+    /// Empties it, keeping its capacity.
+    public fn clear(borrow mut this) {
+        this.data.clear();
+    }
+}
+
+/// WTF-8 for `OsString` and `OsStringView`: its decoding (Table 3-7 of the Unicode Standard, with the surrogates'
+/// three-byte forms allowed) and encoding.
+struct OsText {
+    /// The length of the well-formed sequence at `i`, a surrogate's three bytes counted, or 0 where none is.
+    fn sequence(bytes: Slice<u8>, i: usize) -> usize {
+        let b0 = bytes[i];
+        if (b0 < 0x80) {
+            return 1;
+        }
+        let n = bytes.length - i;
+        if (b0 >= 0xC2 && b0 <= 0xDF) {
+            return if (n >= 2 && OsText.tail(bytes[i + 1])) 2 else 0;
+        }
+        if (b0 >= 0xE0 && b0 <= 0xEF) {
+            if (n < 3 || !OsText.tail(bytes[i + 2])) {
+                return 0;
+            }
+            let b1 = bytes[i + 1];
+            let low: u8 = if (b0 == 0xE0) 0xA0 else 0x80; // ED A0..BF: a surrogate, which WTF-8 allows
+            return if (b1 >= low && b1 <= 0xBF) 3 else 0;
+        }
+        if (b0 >= 0xF0 && b0 <= 0xF4) {
+            if (n < 4 || !OsText.tail(bytes[i + 2]) || !OsText.tail(bytes[i + 3])) {
+                return 0;
+            }
+            let b1 = bytes[i + 1];
+            let low: u8 = if (b0 == 0xF0) 0x90 else 0x80;
+            let high: u8 = if (b0 == 0xF4) 0x8F else 0xBF;
+            return if (b1 >= low && b1 <= high) 4 else 0;
+        }
+        return 0;
+    }
+
+    fn tail(b: u8) -> bool => b >= 0x80 && b <= 0xBF;
+
+    /// Whether a surrogate's three bytes are at `i`: `ED A0 80` to `ED BF BF`.
+    fn surrogateAt(bytes: Slice<u8>, i: usize) -> bool =>
+        i + 2 < bytes.length && bytes[i] == 0xED && bytes[i + 1] >= 0xA0 && bytes[i + 1] <= 0xBF &&
+            OsText.tail(bytes[i + 2]);
+
+    /// The code point of the well-formed sequence at `i`.
+    fn decode(bytes: Slice<u8>, i: usize) -> u32 {
+        let b0 = bytes[i] as u32;
+        if (b0 < 0x80) {
+            return b0;
+        }
+        if (b0 < 0xE0) {
+            return ((b0 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
+        }
+        if (b0 < 0xF0) {
+            return ((b0 & 0x0F) << 12) | ((bytes[i + 1] as u32 & 0x3F) << 6) | (bytes[i + 2] as u32 & 0x3F);
+        }
+        return ((b0 & 0x07) << 18) | ((bytes[i + 1] as u32 & 0x3F) << 12) | ((bytes[i + 2] as u32 & 0x3F) << 6) |
+            (bytes[i + 3] as u32 & 0x3F);
+    }
+
+    /// The bytes a code point takes.
+    fn width(point: u32) -> usize => if (point < 0x80) 1 else if (point < 0x800) 2 else if (point < 0x10000) 3 else 4;
+
+    /// Whether the bytes are well-formed WTF-8: every sequence well-formed, and no lead surrogate's three bytes
+    /// directly followed by a trail surrogate's (a pair is its code point's four bytes).
+    fn wellFormed(bytes: Slice<u8>) -> bool {
+        var i: usize = 0;
+        var afterLead = false;
+        while (i < bytes.length) {
+            let n = OsText.sequence(bytes, i);
+            if (n == 0) {
+                return false;
+            }
+            if (n == 3 && bytes[i] == 0xED && bytes[i + 1] >= 0xA0) {
+                let lead = bytes[i + 1] <= 0xAF;
+                if (!lead && afterLead) {
+                    return false;
+                }
+                afterLead = lead;
+            } else {
+                afterLead = false;
+            }
+            i += n;
+        }
+        return true;
+    }
+
+    /// Appends the UTF-8 (or, for a surrogate, the generalised UTF-8) of `point` to `out`.
+    fn encode(point: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+        if (point < 0x80) {
+            return out.push(truncate<u8>(point));
+        }
+        if (point < 0x800) {
+            let two = [truncate<u8>(0xC0 | (point >> 6)), truncate<u8>(0x80 | (point & 0x3F))];
+            return out.extend(two[..]);
+        }
+        if (point < 0x10000) {
+            let three = [
+                truncate<u8>(0xE0 | (point >> 12)),
+                truncate<u8>(0x80 | ((point >> 6) & 0x3F)),
+                truncate<u8>(0x80 | (point & 0x3F)),
+            ];
+            return out.extend(three[..]);
+        }
+        let four = [
+            truncate<u8>(0xF0 | (point >> 18)),
+            truncate<u8>(0x80 | ((point >> 12) & 0x3F)),
+            truncate<u8>(0x80 | ((point >> 6) & 0x3F)),
+            truncate<u8>(0x80 | (point & 0x3F)),
+        ];
+        return out.extend(four[..]);
+    }
+
+    /// Appends `bytes` to `out` as text: a surrogate's three bytes are one U+FFFD, and the runs between them are
+    /// replaced as `ByteStringView.appendLossyTo` replaces them (no maximal subpart reaches into `ED`, which is no
+    /// continuation byte, so cutting the runs there changes nothing else).
+    fn appendLossy(bytes: Slice<u8>, out: borrow mut String) -> Result<void, AllocError> {
+        var start: usize = 0;
+        var i: usize = 0;
+        while (i < bytes.length) {
+            if (OsText.surrogateAt(bytes, i)) {
+                ByteStringView.fromBytes(bytes[start..i]).appendLossyTo(out)?;
+                out.append("\u{FFFD}")?;
+                i += 3;
+                start = i;
+            } else {
+                i += 1;
+            }
+        }
+        return ByteStringView.fromBytes(bytes[start..]).appendLossyTo(out);
+    }
+}

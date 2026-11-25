@@ -2691,7 +2691,15 @@ public struct ChildOptions {
 }
 ```
 
-How `Process.spawn` starts a program (type-system.md §26.16, ADR 0169).
+How `Process.spawn`, `spawnWith` and `runWith` start a program, and `captureWith`'s environment (type-system.md
+§26.16, ADRs 0169 and 0258): the child's three standard streams, and the changes to its environment.
+
+```
+var options = ChildOptions.quiet();
+options.setEnvironment("HOME", home.view())?;
+options.removeEnvironment("LANG")?;
+let status = Process.runWith("sqlite3", arguments, options)?;
+```
 
 ### ChildOptions.inherit
 
@@ -2708,6 +2716,40 @@ public fn quiet() -> ChildOptions
 ```
 
 No input and no output: the null device for all three.
+
+### ChildOptions.streams
+
+```ceesafe
+public fn streams(input: ChildStream, output: ChildStream, error: ChildStream) -> ChildOptions
+```
+
+The three streams, each its own, and the parent's environment (ADR 0258: a literal can no longer be written).
+
+### ChildOptions.setEnvironment
+
+```ceesafe
+public fn setEnvironment(borrow mut this, name: OsStringView, value: OsStringView) -> Result<void, AllocError>
+```
+
+The child has `name` with `value` (a literal or a `StringView` too), replacing what an earlier change or the
+parent gave it. The name is checked when a child starts: empty, with `=` or a zero byte, it is `InvalidInput`.
+
+### ChildOptions.removeEnvironment
+
+```ceesafe
+public fn removeEnvironment(borrow mut this, name: OsStringView) -> Result<void, AllocError>
+```
+
+The child does not have `name`.
+
+### ChildOptions.clearEnvironment
+
+```ceesafe
+public fn clearEnvironment(borrow mut this)
+```
+
+The child starts with an empty environment: the changes made before are forgotten, and the ones made after are
+its only variables.
 
 ## enum ChildExit
 
@@ -2795,6 +2837,17 @@ public fn variable(name: StringView) -> StringView?
 The value of the variable `name` as static text, or null if it is not set or not valid UTF-8.
 Safety: the runtime returns getenv's text, which stays valid and unchanged: CeeSafe has no way to change the
 environment (C code that calls setenv breaks this, as it does in C).
+
+### Environment.variableOs
+
+```ceesafe
+public fn variableOs(name: OsStringView) -> OsStringView<static>?
+```
+
+The value of the variable `name` in the system's encoding (ADR 0257), or null if it is not set. On Windows
+names compare without case.
+Safety: as `variable`; on Windows the runtime's copy of the environment, made once, is kept for the process's
+life.
 
 ## struct OpenFileLimit
 
@@ -2925,7 +2978,7 @@ public struct Directory
 ### Directory.create
 
 ```ceesafe
-public fn create(path: StringView) -> Result<void, IoError>
+public fn create(path: OsStringView) -> Result<void, IoError>
 ```
 
 Makes one directory; `AlreadyExists` if something is there already.
@@ -2934,7 +2987,7 @@ Safety: the runtime reads the path's bytes during the call only.
 ### Directory.remove
 
 ```ceesafe
-public fn remove(path: StringView) -> Result<void, IoError>
+public fn remove(path: OsStringView) -> Result<void, IoError>
 ```
 
 Removes an empty directory.
@@ -2943,7 +2996,7 @@ Safety: the runtime reads the path's bytes during the call only.
 ### Directory.space
 
 ```ceesafe
-public fn space(path: StringView) -> Result<VolumeSpace, IoError>
+public fn space(path: OsStringView) -> Result<VolumeSpace, IoError>
 ```
 
 The bytes of the volume that holds `path` (ADR 0077): `total`, `free`, and `available` to this process, which
@@ -2955,7 +3008,7 @@ Safety: the runtime reads the path's bytes and writes the three values during th
 ### Directory.sync
 
 ```ceesafe
-public fn sync(path: StringView) -> Result<void, IoError>
+public fn sync(path: OsStringView) -> Result<void, IoError>
 ```
 
 Makes the directory's entries durable: the files created, renamed or removed in it survive a power cut once
@@ -2966,11 +3019,21 @@ Safety: the runtime reads the path's bytes during the call only.
 ### Directory.list
 
 ```ceesafe
-public fn list(path: StringView) -> Result<Vector<String>, IoError>
+public fn list(path: OsStringView) -> Result<Vector<String>, IoError>
 ```
 
 The names in a directory, without `.` and `..`, sorted by byte value so programs stay deterministic. A name
 that is not valid UTF-8 is `InvalidInput`: skipping it could make a program miss a file without a word.
+Safety: the listing is closed on every path out (`defer`), and each name is copied before the next call
+reuses the runtime's buffer.
+
+### Directory.listOs
+
+```ceesafe
+public fn listOs(path: OsStringView) -> Result<Vector<OsString>, IoError>
+```
+
+The names in a directory, as `list` gives them, in the system's encoding (ADR 0257): none is refused.
 Safety: the listing is closed on every path out (`defer`), and each name is copied before the next call
 reuses the runtime's buffer.
 
@@ -2987,7 +3050,7 @@ Safety: the runtime writes at most the buffer's length.
 ### Directory.appData
 
 ```ceesafe
-public fn appData(name: StringView) -> Result<String, IoError>
+public fn appData(name: OsStringView) -> Result<String, IoError>
 ```
 
 The folder for this app's own data, kept from one run to the next, made if it is missing (ADR 0159). `name` is
@@ -3006,6 +3069,15 @@ public fn current() -> Result<String, IoError>
 The working directory.
 Safety: the runtime writes at most the buffer's length.
 
+### Directory.currentOs
+
+```ceesafe
+public fn currentOs() -> Result<OsString, IoError>
+```
+
+The working directory, in the system's encoding (ADR 0257).
+Safety: the runtime writes at most the buffer's length.
+
 ## struct HostServices
 
 ```ceesafe
@@ -3018,7 +3090,7 @@ The functions behind `Process.capture` and `File.kind`.
 
 ```ceesafe
 public fn capture(
-    program: StringView,
+    program: OsStringView,
     arguments: borrow Vector<StringView>,
     input: Slice<u8>?,
 ) -> Result<ProcessOutput, IoError>
@@ -3029,35 +3101,122 @@ public fn capture(
 standard output and standard error. The streams go through files in a private temporary directory, removed
 before this returns, so a program that writes much to both cannot block (ADR 0028).
 
+### HostServices.captureOs
+
+```ceesafe
+public fn captureOs(
+    program: OsStringView,
+    arguments: borrow Vector<OsStringView>,
+    input: Slice<u8>?,
+) -> Result<ProcessOutput, IoError>
+```
+
+`Process.capture` with arguments that are OS strings (ADR 0258 §2.4).
+
+### HostServices.captureWith
+
+```ceesafe
+public fn captureWith(
+    program: OsStringView,
+    arguments: borrow Vector<StringView>,
+    input: Slice<u8>?,
+    options: borrow ChildOptions,
+) -> Result<ProcessOutput, IoError>
+```
+
+`Process.captureWith(program, arguments, input, options)` (ADR 0258): `capture`, the child having the
+environment `options` gives. The streams are capture's own: the options' are not used.
+
+### HostServices.captureWithOs
+
+```ceesafe
+public fn captureWithOs(
+    program: OsStringView,
+    arguments: borrow Vector<OsStringView>,
+    input: Slice<u8>?,
+    options: borrow ChildOptions,
+) -> Result<ProcessOutput, IoError>
+```
+
+`Process.captureWith` with arguments that are OS strings.
+
+### HostServices.runWith
+
+```ceesafe
+public fn runWith(
+    program: OsStringView,
+    arguments: borrow Vector<StringView>,
+    options: borrow ChildOptions,
+) -> Result<i32, IoError>
+```
+
+`Process.runWith(program, arguments, options)` (ADR 0258): `Process.run` with the options' streams and
+environment. It waits, and returns the exit status, or 128 plus the signal that ended the child.
+
+### HostServices.runWithOs
+
+```ceesafe
+public fn runWithOs(
+    program: OsStringView,
+    arguments: borrow Vector<OsStringView>,
+    options: borrow ChildOptions,
+) -> Result<i32, IoError>
+```
+
+`Process.runWith` with arguments that are OS strings.
+
 ### HostServices.spawn
 
 ```ceesafe
 public fn spawn(
-    program: StringView,
+    program: OsStringView,
     arguments: borrow Vector<StringView>,
-    options: ChildOptions,
+    options: borrow ChildOptions,
 ) -> Result<ChildProcess, IoError>
 ```
 
 `Process.spawn(program, arguments, options)` (type-system.md §26.16, ADR 0169): starts `program`, found on
-`PATH`, with `arguments`, and returns: the child runs beside this program, with its environment and working
-directory, and the streams `options` says.
-Safety: the runtime reads the views during the call only, and writes the handle it gives.
+`PATH`, with `arguments`, and returns: the child runs beside this program, with its working directory, the
+environment and the streams `options` gives.
+
+### HostServices.spawnOs
+
+```ceesafe
+public fn spawnOs(
+    program: OsStringView,
+    arguments: borrow Vector<OsStringView>,
+    options: borrow ChildOptions,
+) -> Result<ChildProcess, IoError>
+```
+
+`Process.spawn` with arguments that are OS strings (ADR 0258 §2.4).
 
 ### HostServices.spawnWith
 
 ```ceesafe
 public fn spawnWith(
-    program: StringView,
+    program: OsStringView,
     arguments: borrow Vector<StringView>,
-    options: ChildOptions,
+    options: borrow ChildOptions,
     handover: borrow Handover,
 ) -> Result<ChildProcess, IoError>
 ```
 
 `Process.spawnWith(program, arguments, options, handover)` (type-system.md §26.18, ADR 0173): `spawn`, and
 the child has what `handover` lists, which `Process.inherited()` gives it.
-Safety: as `spawn`; the runtime reads the handles and kinds during the call only.
+
+### HostServices.spawnWithOs
+
+```ceesafe
+public fn spawnWithOs(
+    program: OsStringView,
+    arguments: borrow Vector<OsStringView>,
+    options: borrow ChildOptions,
+    handover: borrow Handover,
+) -> Result<ChildProcess, IoError>
+```
+
+`Process.spawnWith` with arguments that are OS strings.
 
 ### HostServices.inherited
 
@@ -3086,10 +3245,28 @@ public fn executable() -> Result<String, IoError>
 `Process.executable()` (ADR 0169): the path of the running program, to start it again.
 Safety: the runtime writes at most the buffer's 4096 bytes.
 
+### HostServices.executableOs
+
+```ceesafe
+public fn executableOs() -> Result<OsString, IoError>
+```
+
+`Process.executableOs()` (ADR 0257): `executable`, in the system's encoding.
+Safety: as `executable`.
+
+### HostServices.argumentOs
+
+```ceesafe
+public fn argumentOs(index: usize) -> OsStringView<static>?
+```
+
+`Process.argumentOs(i)` (ADR 0257): argument `i` in the system's encoding, or null past the end.
+Safety: the runtime gives a view of the argument it keeps for the process's life, never changed.
+
 ### HostServices.kind
 
 ```ceesafe
-public fn kind(path: StringView) -> Result<PathKind?, IoError>
+public fn kind(path: OsStringView) -> Result<PathKind?, IoError>
 ```
 
 `File.kind(path)` (type-system.md §26.8): what is at `path`, following symbolic links, or null if nothing is.
@@ -3135,7 +3312,7 @@ Safety: the runtime writes at most the chunk's length, during the call only.
 ### HostServices.modified
 
 ```ceesafe
-public fn modified(path: StringView) -> Result<UnixTime, IoError>
+public fn modified(path: OsStringView) -> Result<UnixTime, IoError>
 ```
 
 `File.modified(path)` (ADR 0077): when the file or directory at `path` was last modified, as a `UnixTime`
@@ -3145,7 +3322,7 @@ Safety: the runtime reads the path's bytes and writes the two values during the 
 ### HostServices.setPermissions
 
 ```ceesafe
-public fn setPermissions(path: StringView, mode: u32) -> Result<void, IoError>
+public fn setPermissions(path: OsStringView, mode: u32) -> Result<void, IoError>
 ```
 
 `File.setPermissions(path, mode)` (ADR 0077): POSIX `chmod`, the low 12 bits of `mode` (`0o640`: the owner
@@ -3157,7 +3334,7 @@ Safety: the runtime reads the path's bytes during the call only.
 ### HostServices.rename
 
 ```ceesafe
-public fn rename(from: StringView, to: StringView) -> Result<void, IoError>
+public fn rename(from: OsStringView, to: OsStringView) -> Result<void, IoError>
 ```
 
 `File.rename(from, to)` (ADR 0075 §2.1): gives the file at `from` the name `to`, atomically replacing a file

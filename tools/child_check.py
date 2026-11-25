@@ -98,7 +98,7 @@ fn main() {
     second.terminate()!;
     describe(second.wait()!);
     // One that is ended at once.
-    var third = start(me.view(), "sleeps", ChildOptions { input: ChildStream.Inherit, output: ChildStream.Null, error: ChildStream.Null });
+    var third = start(me.view(), "sleeps", ChildOptions.streams(ChildStream.Inherit, ChildStream.Null, ChildStream.Null));
     pause(200);
     third.kill()!;
     describe(third.wait()!);

@@ -1692,6 +1692,18 @@ fn checkUserCallWith(
     arguments: Range,
     span: Span,
     receiver: u32,
+) -> Result<u32, AllocError> => checkUserCallPrepared(c, function, arguments, span, receiver, none(), none());
+
+/// checkUserCallWith, with argument `preparedIndex` already synthesized as `prepared` (a reference parameter's
+/// argument, lent here): the process calls read their arguments' type before choosing the function (ADR 0258 §2.4).
+fn checkUserCallPrepared(
+    c: borrow mut Checker,
+    function: u32,
+    arguments: Range,
+    span: Span,
+    receiver: u32,
+    preparedIndex: u32,
+    prepared: u32,
 ) -> Result<u32, AllocError> {
     if (c.hir.functions[function as usize].owner != none() && c.hir.functions[function as usize].callFile == none() &&
         functionIsInstantiation(c, function)) {
@@ -1797,6 +1809,21 @@ fn checkUserCallWith(
             if ((k as usize) < parameterCount) c.hir.locals[c.hir.functions[function as usize].parameters[k as usize +
                 skip] as usize].typ else none();
         let argument = c.front.ast.at(arguments, k);
+        if (k == preparedIndex) {
+            let argumentSpan = c.front.ast.exprSpans[argument as usize];
+            let lent =
+                if (parameterType == none() || c.isBottom(prepared)) prepared else if (c.types.is(
+                    parameterType,
+                    TypeKind.Reference,
+                )) lendValue(c, prepared, parameterType, argumentSpan)? else coerce(
+                    c,
+                    prepared,
+                    parameterType,
+                    argumentSpan,
+                )?;
+            values.push(lent)?;
+            continue;
+        }
         let asyncLiteral = match (c.front.ast.exprs[argument as usize]) {
             ExprNode.Closure(closure) => c.front.ast.closures[closure as usize].isAsync,
             _ => false,
@@ -1871,13 +1898,17 @@ fn checkBuiltinMemberCall(
     if (owner == builtinConsole() && sameText(m, "isTerminal") && !c.freestanding) {
         return checkHostService(c, member, arguments, span); // lib/std's HostServices.isTerminal (ADR 0221 §2.3)
     }
-    if (owner == builtinProcess() && sameText(m, "capture") && !c.freestanding) {
-        return checkHostService(c, member, arguments, span); // lib/std's HostServices.capture (§26.7, ADR 0028)
+    if (owner == builtinProcess() && !c.freestanding &&
+        (sameText(m, "capture") || sameText(m, "captureWith") || sameText(m, "runWith") || sameText(m, "spawn") ||
+            sameText(m, "spawnWith"))) {
+        // lib/std's HostServices (§26.7, ADR 0028; §26.16, ADR 0169; §26.18, ADR 0173; ADR 0258), or its `…Os` form
+        // when the arguments are OS strings (ADR 0258 §2.4).
+        return checkProcessService(c, member, arguments, span);
     }
     if (owner == builtinProcess() && !c.freestanding &&
-        (sameText(m, "spawn") || sameText(m, "id") || sameText(m, "executable") || sameText(m, "spawnWith") ||
-            sameText(m, "inherited"))) {
-        return checkHostService(c, member, arguments, span); // lib/std's HostServices (§26.16, ADR 0169; §26.18, ADR 0173)
+        (sameText(m, "id") || sameText(m, "executable") || sameText(m, "inherited") || sameText(m, "argumentOs") ||
+            sameText(m, "executableOs"))) {
+        return checkHostService(c, member, arguments, span); // lib/std's HostServices (§26.16, ADR 0169; ADR 0257)
     }
     var function = none();
     var minArgs: u32 = 0;

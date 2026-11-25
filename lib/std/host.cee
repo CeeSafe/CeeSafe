@@ -81,9 +81,11 @@ extern "C" {
         outputLength: u64,
         errors: *u8,
         errorsLength: u64,
+        environment: *void,
+        environmentKinds: *u8,
+        changes: u64,
+        clear: u32,
     ) -> i64;
-    @effects(alloc)
-    fn ceesafe_host_child_start(arguments: *void, count: u64, streams: u32, handle: *mut u64) -> i64;
     @effects(alloc)
     fn ceesafe_host_child_start_with(
         arguments: *void,
@@ -92,8 +94,14 @@ extern "C" {
         handles: *u64,
         kinds: *u8,
         handed: u32,
+        environment: *void,
+        environmentKinds: *u8,
+        changes: u64,
+        clear: u32,
         handle: *mut u64,
     ) -> i64;
+    @effects()
+    fn ceesafe_host_argument(index: u64, value: *mut (*u8), valueLength: *mut u64) -> i64;
     @effects()
     fn ceesafe_host_handover_hold(kind: u32, handle: u64) -> i64;
     @effects()
@@ -282,19 +290,75 @@ public struct Inherited {
         Ok(SharedMemory.adopt(Inherited.take(place, 3)?));
 }
 
-/// How `Process.spawn` starts a program (type-system.md §26.16, ADR 0169).
+/// A change to a child's environment (ADR 0258): set `name` to `value`, or remove `name`.
+struct EnvironmentChange {
+    name: OsString;
+    value: OsString;
+    remove: bool;
+}
+
+/// How `Process.spawn`, `spawnWith` and `runWith` start a program, and `captureWith`'s environment (type-system.md
+/// §26.16, ADRs 0169 and 0258): the child's three standard streams, and the changes to its environment.
+///
+/// ```
+/// var options = ChildOptions.quiet();
+/// options.setEnvironment("HOME", home.view())?;
+/// options.removeEnvironment("LANG")?;
+/// let status = Process.runWith("sqlite3", arguments, options)?;
+/// ```
 public struct ChildOptions {
     public input: ChildStream;
     public output: ChildStream;
     public error: ChildStream;
+    /// The changes to the environment, in order, after the parent's (or an empty one, when `cleared`).
+    private changes: Vector<EnvironmentChange>;
+    private cleared: bool;
 
     /// The parent's three streams.
     public fn inherit() -> ChildOptions =>
-        ChildOptions { input: ChildStream.Inherit, output: ChildStream.Inherit, error: ChildStream.Inherit };
+        ChildOptions.streams(ChildStream.Inherit, ChildStream.Inherit, ChildStream.Inherit);
 
     /// No input and no output: the null device for all three.
-    public fn quiet() -> ChildOptions =>
-        ChildOptions { input: ChildStream.Null, output: ChildStream.Null, error: ChildStream.Null };
+    public fn quiet() -> ChildOptions => ChildOptions.streams(ChildStream.Null, ChildStream.Null, ChildStream.Null);
+
+    /// The three streams, each its own, and the parent's environment (ADR 0258: a literal can no longer be written).
+    public fn streams(input: ChildStream, output: ChildStream, error: ChildStream) -> ChildOptions =>
+        ChildOptions {
+            input: input,
+            output: output,
+            error: error,
+            changes: Vector<EnvironmentChange>.create(),
+            cleared: false,
+        };
+
+    /// The child has `name` with `value` (a literal or a `StringView` too), replacing what an earlier change or the
+    /// parent gave it. The name is checked when a child starts: empty, with `=` or a zero byte, it is `InvalidInput`.
+    public fn setEnvironment(borrow mut this, name: OsStringView, value: OsStringView) -> Result<void, AllocError> {
+        let change = EnvironmentChange { name: name.toOsString()?, value: value.toOsString()?, remove: false };
+        return this.changes.push(change);
+    }
+
+    /// The child does not have `name`.
+    public fn removeEnvironment(borrow mut this, name: OsStringView) -> Result<void, AllocError> {
+        let change = EnvironmentChange { name: name.toOsString()?, value: OsString.create(), remove: true };
+        return this.changes.push(change);
+    }
+
+    /// The child starts with an empty environment: the changes made before are forgotten, and the ones made after are
+    /// its only variables.
+    public fn clearEnvironment(borrow mut this) {
+        this.changes.clear();
+        this.cleared = true;
+    }
+}
+
+/// The changes of a `ChildOptions` as the runtime takes them: two texts (name, value) and one kind (0 set, 1 remove)
+/// each. The texts borrow the options' names, so this lives no longer than the call that hands them over.
+struct EnvironmentTexts {
+    texts: Vector<HostServicesText>;
+    kinds: Vector<u8>;
+    count: u64;
+    clear: u32;
 }
 
 /// How a child process ended (ADR 0169).
@@ -404,6 +468,27 @@ public struct Environment {
         }
         let bytes = unsafe { Slice.fromRaw(value, truncate<usize>(length)) };
         return StringView.fromUtf8(bytes);
+    }
+
+    /// The value of the variable `name` in the system's encoding (ADR 0257), or null if it is not set. On Windows
+    /// names compare without case.
+    /// Safety: as `variable`; on Windows the runtime's copy of the environment, made once, is kept for the process's
+    /// life.
+    public fn variableOs(name: OsStringView) -> OsStringView<static>? {
+        var value = 0 as *u8;
+        var length: u64 = 0;
+        let key = name.bytes();
+        let found = unsafe { ceesafe_host_env(
+            key.ptr,
+            key.length as u64,
+            borrow mut value as *mut (*u8),
+            borrow mut length as *mut u64,
+        ) };
+        if (found != 1) {
+            return null;
+        }
+        let bytes: Slice<static, u8> = unsafe { Slice.fromRaw(value, truncate<usize>(length)) };
+        return Some(OsStringView.fromBytes(bytes));
     }
 }
 
@@ -539,15 +624,17 @@ public struct VolumeSpace {
 public struct Directory {
     /// Makes one directory; `AlreadyExists` if something is there already.
     /// Safety: the runtime reads the path's bytes during the call only.
-    public fn create(path: StringView) -> Result<void, IoError> {
-        let result = unsafe { ceesafe_host_dir_create(path.ptr, path.length as u64) };
+    public fn create(path: OsStringView) -> Result<void, IoError> {
+        let bytes = path.bytes();
+        let result = unsafe { ceesafe_host_dir_create(bytes.ptr, bytes.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
     /// Removes an empty directory.
     /// Safety: the runtime reads the path's bytes during the call only.
-    public fn remove(path: StringView) -> Result<void, IoError> {
-        let result = unsafe { ceesafe_host_dir_remove(path.ptr, path.length as u64) };
+    public fn remove(path: OsStringView) -> Result<void, IoError> {
+        let bytes = path.bytes();
+        let result = unsafe { ceesafe_host_dir_remove(bytes.ptr, bytes.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
@@ -556,13 +643,14 @@ public struct Directory {
     /// `GetDiskFreeSpaceExA`. A storage engine stops writing before `available` runs out. The interpreter answers
     /// `Unsupported`.
     /// Safety: the runtime reads the path's bytes and writes the three values during the call only.
-    public fn space(path: StringView) -> Result<VolumeSpace, IoError> {
+    public fn space(path: OsStringView) -> Result<VolumeSpace, IoError> {
         var total: u64 = 0;
         var free: u64 = 0;
         var available: u64 = 0;
+        let bytes = path.bytes();
         let result = unsafe { ceesafe_host_space(
-            path.ptr,
-            path.length as u64,
+            bytes.ptr,
+            bytes.length as u64,
             borrow mut total as *mut u64,
             borrow mut free as *mut u64,
             borrow mut available as *mut u64,
@@ -577,8 +665,9 @@ public struct Directory {
     /// this returns (ADR 0075 §2.1). POSIX: `fsync` of the directory, `F_FULLFSYNC` on Apple systems. Windows journals
     /// directory entries and cannot flush a directory: there it checks the path is a directory and does nothing else.
     /// Safety: the runtime reads the path's bytes during the call only.
-    public fn sync(path: StringView) -> Result<void, IoError> {
-        let result = unsafe { ceesafe_host_dir_sync(path.ptr, path.length as u64) };
+    public fn sync(path: OsStringView) -> Result<void, IoError> {
+        let bytes = path.bytes();
+        let result = unsafe { ceesafe_host_dir_sync(bytes.ptr, bytes.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
@@ -586,16 +675,34 @@ public struct Directory {
     /// that is not valid UTF-8 is `InvalidInput`: skipping it could make a program miss a file without a word.
     /// Safety: the listing is closed on every path out (`defer`), and each name is copied before the next call
     /// reuses the runtime's buffer.
-    public fn list(path: StringView) -> Result<Vector<String>, IoError> {
+    public fn list(path: OsStringView) -> Result<Vector<String>, IoError> {
+        let all = Directory.listOs(path)?;
+        var names = Vector<String>.create();
+        for (name in all) {
+            let text = match (name.toUtf8()) {
+                Some(t) => t,
+                null => { return Err(IoError.InvalidInput); }
+            };
+            let copy = HostServices.stringOrIoError(HostServices.copyText(text))?;
+            HostServices.pushed(names.push(copy))?;
+        }
+        return Ok(names);
+    }
+
+    /// The names in a directory, as `list` gives them, in the system's encoding (ADR 0257): none is refused.
+    /// Safety: the listing is closed on every path out (`defer`), and each name is copied before the next call
+    /// reuses the runtime's buffer.
+    public fn listOs(path: OsStringView) -> Result<Vector<OsString>, IoError> {
         var error: i32 = 0;
-        let listing = unsafe { ceesafe_host_dir_open(path.ptr, path.length as u64, borrow mut error as *mut i32) };
+        let place = path.bytes();
+        let listing = unsafe { ceesafe_host_dir_open(place.ptr, place.length as u64, borrow mut error as *mut i32) };
         if (listing.isNull()) {
             return Err(HostServices.hostError(0 - (error as i64)));
         }
         defer {
             unsafe { ceesafe_host_dir_close(listing); }
         }
-        var names = Vector<String>.create();
+        var names = Vector<OsString>.create();
         loop {
             var name = 0 as *u8;
             var length: u64 = 0;
@@ -611,18 +718,17 @@ public struct Directory {
                 return Err(HostServices.hostError(next));
             }
             let bytes = unsafe { Slice.fromRaw(name, truncate<usize>(length)) };
-            let text = match (StringView.fromUtf8(bytes)) {
-                Some(t) => t,
-                null => { return Err(IoError.InvalidInput); }
+            let copy = match (OsString.copyOf(bytes)) {
+                Ok(c) => c,
+                Err(_) => { return Err(IoError.OutOfMemory); }
             };
-            let copy = HostServices.stringOrIoError(HostServices.copyText(text))?;
             HostServices.pushed(names.push(copy))?;
         }
         // An insertion sort rather than sortBy: an instance of lib/core's generic sort made here would be emitted in every
         // hosted program, used or not.
         for (i in 1..names.length) {
             var j = i;
-            while (j > 0 && HostServices.compareText(names[j - 1], names[j]) > 0) {
+            while (j > 0 && HostServices.compareBytes(names[j - 1].bytes(), names[j].bytes()) > 0) {
                 names.swap(j - 1, j);
                 j -= 1;
             }
@@ -645,11 +751,12 @@ public struct Directory {
     /// `%APPDATA%\<name>`; Android: `<name>` in the app's files folder; elsewhere `$XDG_DATA_HOME/<name>`, or
     /// `~/.local/share/<name>`. A phone's system may empty `Directory.temporary()`'s folder; this one it keeps.
     /// Safety: the runtime reads the name's bytes during the call only, and writes at most the buffer's length.
-    public fn appData(name: StringView) -> Result<String, IoError> {
+    public fn appData(name: OsStringView) -> Result<String, IoError> {
         var buffer = [0u8; 4096];
+        let bytes = name.bytes();
         let length = unsafe { ceesafe_host_app_data(
-            name.ptr,
-            name.length as u64,
+            bytes.ptr,
+            bytes.length as u64,
             borrow mut buffer[0] as *mut u8,
             4096,
         ) };
@@ -662,6 +769,14 @@ public struct Directory {
         var buffer = [0u8; 4096];
         let length = unsafe { ceesafe_host_current(borrow mut buffer[0] as *mut u8, 4096) };
         return HostServices.textOf(buffer, length);
+    }
+
+    /// The working directory, in the system's encoding (ADR 0257).
+    /// Safety: the runtime writes at most the buffer's length.
+    public fn currentOs() -> Result<OsString, IoError> {
+        var buffer = [0u8; 4096];
+        let length = unsafe { ceesafe_host_current(borrow mut buffer[0] as *mut u8, 4096) };
+        return HostServices.osOf(buffer, length);
     }
 }
 
@@ -679,63 +794,178 @@ public struct HostServices {
     /// standard output and standard error. The streams go through files in a private temporary directory, removed
     /// before this returns, so a program that writes much to both cannot block (ADR 0028).
     public fn capture(
-        program: StringView,
+        program: OsStringView,
         arguments: borrow Vector<StringView>,
         input: Slice<u8>?,
     ) -> Result<ProcessOutput, IoError> {
-        let directory = Directory.temporary()?;
-        let result = HostServices.captureIn(directory.view(), program, arguments, input);
-        HostServices.clean(directory.view());
-        return result;
+        let texts = HostServices.programTexts(program, arguments)?;
+        let none = ChildOptions.inherit();
+        return HostServices.captureTexts(texts, input, none);
+    }
+
+    /// `Process.capture` with arguments that are OS strings (ADR 0258 §2.4).
+    public fn captureOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+        input: Slice<u8>?,
+    ) -> Result<ProcessOutput, IoError> {
+        let texts = HostServices.programTextsOs(program, arguments)?;
+        let none = ChildOptions.inherit();
+        return HostServices.captureTexts(texts, input, none);
+    }
+
+    /// `Process.captureWith(program, arguments, input, options)` (ADR 0258): `capture`, the child having the
+    /// environment `options` gives. The streams are capture's own: the options' are not used.
+    public fn captureWith(
+        program: OsStringView,
+        arguments: borrow Vector<StringView>,
+        input: Slice<u8>?,
+        options: borrow ChildOptions,
+    ) -> Result<ProcessOutput, IoError> {
+        let texts = HostServices.programTexts(program, arguments)?;
+        return HostServices.captureTexts(texts, input, options);
+    }
+
+    /// `Process.captureWith` with arguments that are OS strings.
+    public fn captureWithOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+        input: Slice<u8>?,
+        options: borrow ChildOptions,
+    ) -> Result<ProcessOutput, IoError> {
+        let texts = HostServices.programTextsOs(program, arguments)?;
+        return HostServices.captureTexts(texts, input, options);
+    }
+
+    /// `Process.runWith(program, arguments, options)` (ADR 0258): `Process.run` with the options' streams and
+    /// environment. It waits, and returns the exit status, or 128 plus the signal that ended the child.
+    public fn runWith(
+        program: OsStringView,
+        arguments: borrow Vector<StringView>,
+        options: borrow ChildOptions,
+    ) -> Result<i32, IoError> {
+        let texts = HostServices.programTexts(program, arguments)?;
+        return HostServices.runTexts(texts, options);
+    }
+
+    /// `Process.runWith` with arguments that are OS strings.
+    public fn runWithOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+        options: borrow ChildOptions,
+    ) -> Result<i32, IoError> {
+        let texts = HostServices.programTextsOs(program, arguments)?;
+        return HostServices.runTexts(texts, options);
     }
 
     /// `Process.spawn(program, arguments, options)` (type-system.md §26.16, ADR 0169): starts `program`, found on
-    /// `PATH`, with `arguments`, and returns: the child runs beside this program, with its environment and working
-    /// directory, and the streams `options` says.
-    /// Safety: the runtime reads the views during the call only, and writes the handle it gives.
+    /// `PATH`, with `arguments`, and returns: the child runs beside this program, with its working directory, the
+    /// environment and the streams `options` gives.
     public fn spawn(
-        program: StringView,
+        program: OsStringView,
         arguments: borrow Vector<StringView>,
-        options: ChildOptions,
+        options: borrow ChildOptions,
     ) -> Result<ChildProcess, IoError> {
-        var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
-        for (argument in arguments) {
-            HostServices.pushed(
-                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
-            )?;
-        }
-        let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
-            (HostServices.streamBits(options.error) << 4);
-        var handle: u64 = 0;
-        let pid = unsafe { ceesafe_host_child_start(
-            texts.view().ptr as *void,
-            texts.length as u64,
-            streams,
-            borrow mut handle as *mut u64,
-        ) };
-        if (pid < 0) {
-            return Err(HostServices.hostError(pid));
-        }
-        return Ok(ChildProcess { handle: handle, pid: truncate<u64>(pid), ended: null });
+        let texts = HostServices.programTexts(program, arguments)?;
+        let nothing = Handover.create();
+        return HostServices.startTexts(texts, options, nothing);
+    }
+
+    /// `Process.spawn` with arguments that are OS strings (ADR 0258 §2.4).
+    public fn spawnOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+        options: borrow ChildOptions,
+    ) -> Result<ChildProcess, IoError> {
+        let texts = HostServices.programTextsOs(program, arguments)?;
+        let nothing = Handover.create();
+        return HostServices.startTexts(texts, options, nothing);
     }
 
     /// `Process.spawnWith(program, arguments, options, handover)` (type-system.md §26.18, ADR 0173): `spawn`, and
     /// the child has what `handover` lists, which `Process.inherited()` gives it.
-    /// Safety: as `spawn`; the runtime reads the handles and kinds during the call only.
     public fn spawnWith(
-        program: StringView,
+        program: OsStringView,
         arguments: borrow Vector<StringView>,
-        options: ChildOptions,
+        options: borrow ChildOptions,
         handover: borrow Handover,
     ) -> Result<ChildProcess, IoError> {
+        let texts = HostServices.programTexts(program, arguments)?;
+        return HostServices.startTexts(texts, options, handover);
+    }
+
+    /// `Process.spawnWith` with arguments that are OS strings.
+    public fn spawnWithOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+        options: borrow ChildOptions,
+        handover: borrow Handover,
+    ) -> Result<ChildProcess, IoError> {
+        let texts = HostServices.programTextsOs(program, arguments)?;
+        return HostServices.startTexts(texts, options, handover);
+    }
+
+    /// The program and its arguments as the runtime takes them: a view of each, which the caller's outlive.
+    /// Safety: each text is a view the caller keeps alive for the call that uses the vector.
+    fn programTexts(
+        program: OsStringView,
+        arguments: borrow Vector<StringView>,
+    ) -> Result<Vector<HostServicesText>, IoError> {
         var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
+        let name = program.bytes();
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: name.ptr, len: name.length } }))?;
         for (argument in arguments) {
             HostServices.pushed(
                 texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
             )?;
         }
+        return Ok(texts);
+    }
+
+    /// As `programTexts`, for arguments that are OS strings.
+    /// Safety: as `programTexts`.
+    fn programTextsOs(
+        program: OsStringView,
+        arguments: borrow Vector<OsStringView>,
+    ) -> Result<Vector<HostServicesText>, IoError> {
+        var texts = Vector<HostServicesText>.create();
+        let name = program.bytes();
+        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: name.ptr, len: name.length } }))?;
+        for (argument in arguments) {
+            let bytes = argument.bytes();
+            HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: bytes.ptr, len: bytes.length } }))?;
+        }
+        return Ok(texts);
+    }
+
+    /// The options' changes to the environment, as the runtime takes them.
+    /// Safety: each text views a name or value `options` owns, and the caller lends `options` for as long as it uses
+    /// the result.
+    fn environmentTexts(options: borrow ChildOptions) -> Result<EnvironmentTexts, IoError> {
+        var texts = Vector<HostServicesText>.create();
+        var kinds = Vector<u8>.create();
+        for (change in options.changes) {
+            let name = change.name.bytes();
+            let value = change.value.bytes();
+            HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: name.ptr, len: name.length } }))?;
+            HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: value.ptr, len: value.length } }))?;
+            HostServices.pushed(kinds.push(if (change.remove) 1u8 else 0u8))?;
+        }
+        let count = kinds.length as u64;
+        return Ok(
+            EnvironmentTexts { texts: texts, kinds: kinds, count: count, clear: if (options.cleared) 1u32 else 0u32 },
+        );
+    }
+
+    /// Starts the program of `texts` beside this one, with `options` and what `handover` lists.
+    /// Safety: the runtime reads the texts, the environment's texts and kinds, and the handover's handles and kinds
+    /// during the call only, and writes the handle it gives.
+    fn startTexts(
+        texts: Vector<HostServicesText>,
+        options: borrow ChildOptions,
+        handover: borrow Handover,
+    ) -> Result<ChildProcess, IoError> {
+        let environment = HostServices.environmentTexts(options)?;
         let streams = HostServices.streamBits(options.input) | (HostServices.streamBits(options.output) << 2) |
             (HostServices.streamBits(options.error) << 4);
         let handles = handover.held;
@@ -748,12 +978,39 @@ public struct HostServices {
             borrow handles[0] as *u64,
             borrow kinds[0] as *u8,
             handover.count,
+            environment.texts.view().ptr as *void,
+            environment.kinds.view().ptr,
+            environment.count,
+            environment.clear,
             borrow mut handle as *mut u64,
         ) };
         if (pid < 0) {
             return Err(HostServices.hostError(pid));
         }
         return Ok(ChildProcess { handle: handle, pid: truncate<u64>(pid), ended: null });
+    }
+
+    /// Runs the program of `texts` with `options` and waits for it: its status, or 128 plus the signal that ended it.
+    fn runTexts(texts: Vector<HostServicesText>, options: borrow ChildOptions) -> Result<i32, IoError> {
+        let nothing = Handover.create();
+        var child = HostServices.startTexts(texts, options, nothing)?;
+        return match (child.wait()?) {
+            ChildExit.Status(status) => Ok(status),
+            ChildExit.Signal(signal) => Ok(128 + signal),
+        };
+    }
+
+    /// Runs the program of `texts` with its streams in files of a private temporary directory, removed before this
+    /// returns (ADR 0028), and the environment `options` gives.
+    fn captureTexts(
+        texts: Vector<HostServicesText>,
+        input: Slice<u8>?,
+        options: borrow ChildOptions,
+    ) -> Result<ProcessOutput, IoError> {
+        let directory = Directory.temporary()?;
+        let result = HostServices.captureIn(directory.view(), texts, input, options);
+        HostServices.clean(directory.view());
+        return result;
     }
 
     /// `Process.inherited()` (type-system.md §26.18, ADR 0173): what this process was handed.
@@ -781,10 +1038,36 @@ public struct HostServices {
         return HostServices.textOf(buffer, length);
     }
 
+    /// `Process.executableOs()` (ADR 0257): `executable`, in the system's encoding.
+    /// Safety: as `executable`.
+    public fn executableOs() -> Result<OsString, IoError> {
+        var buffer = [0u8; 4096];
+        let length = unsafe { ceesafe_host_executable(borrow mut buffer[0] as *mut u8, 4096) };
+        return HostServices.osOf(buffer, length);
+    }
+
+    /// `Process.argumentOs(i)` (ADR 0257): argument `i` in the system's encoding, or null past the end.
+    /// Safety: the runtime gives a view of the argument it keeps for the process's life, never changed.
+    public fn argumentOs(index: usize) -> OsStringView<static>? {
+        var value = 0 as *u8;
+        var length: u64 = 0;
+        let found = unsafe { ceesafe_host_argument(
+            index as u64,
+            borrow mut value as *mut (*u8),
+            borrow mut length as *mut u64,
+        ) };
+        if (found != 1) {
+            return null;
+        }
+        let bytes: Slice<static, u8> = unsafe { Slice.fromRaw(value, truncate<usize>(length)) };
+        return Some(OsStringView.fromBytes(bytes));
+    }
+
     /// `File.kind(path)` (type-system.md §26.8): what is at `path`, following symbolic links, or null if nothing is.
     /// Safety: the runtime reads the path's bytes during the call only.
-    public fn kind(path: StringView) -> Result<PathKind?, IoError> {
-        let kind = unsafe { ceesafe_host_path_kind(path.ptr, path.length as u64) };
+    public fn kind(path: OsStringView) -> Result<PathKind?, IoError> {
+        let bytes = path.bytes();
+        let kind = unsafe { ceesafe_host_path_kind(bytes.ptr, bytes.length as u64) };
         return match (kind) {
             0 => Ok(null),
             1 => Ok(PathKind.File),
@@ -872,12 +1155,13 @@ public struct HostServices {
     /// `File.modified(path)` (ADR 0077): when the file or directory at `path` was last modified, as a `UnixTime`
     /// (`stat`'s `st_mtime`, with nanoseconds where the system keeps them). The interpreter answers `Unsupported`.
     /// Safety: the runtime reads the path's bytes and writes the two values during the call only.
-    public fn modified(path: StringView) -> Result<UnixTime, IoError> {
+    public fn modified(path: OsStringView) -> Result<UnixTime, IoError> {
         var seconds: i64 = 0;
         var nanoseconds: u32 = 0;
+        let bytes = path.bytes();
         let result = unsafe { ceesafe_host_modified(
-            path.ptr,
-            path.length as u64,
+            bytes.ptr,
+            bytes.length as u64,
             borrow mut seconds as *mut i64,
             borrow mut nanoseconds as *mut u32,
         ) };
@@ -892,8 +1176,9 @@ public struct HostServices {
     /// A file created by `File.createNew` and given its permissions before anything is written to it never holds data
     /// others could read. The interpreter answers `Unsupported`.
     /// Safety: the runtime reads the path's bytes during the call only.
-    public fn setPermissions(path: StringView, mode: u32) -> Result<void, IoError> {
-        let result = unsafe { ceesafe_host_set_permissions(path.ptr, path.length as u64, mode) };
+    public fn setPermissions(path: OsStringView, mode: u32) -> Result<void, IoError> {
+        let bytes = path.bytes();
+        let result = unsafe { ceesafe_host_set_permissions(bytes.ptr, bytes.length as u64, mode) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
@@ -901,8 +1186,10 @@ public struct HostServices {
     /// there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`). The new
     /// name is durable once its directory is synced (`Directory.sync`).
     /// Safety: the runtime reads both paths' bytes during the call only.
-    public fn rename(from: StringView, to: StringView) -> Result<void, IoError> {
-        let result = unsafe { ceesafe_host_rename(from.ptr, from.length as u64, to.ptr, to.length as u64) };
+    public fn rename(from: OsStringView, to: OsStringView) -> Result<void, IoError> {
+        let a = from.bytes();
+        let b = to.bytes();
+        let result = unsafe { ceesafe_host_rename(a.ptr, a.length as u64, b.ptr, b.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
@@ -922,9 +1209,9 @@ public struct HostServices {
     /// the call only.
     fn captureIn(
         directory: StringView,
-        program: StringView,
-        arguments: borrow Vector<StringView>,
+        texts: Vector<HostServicesText>,
         input: Slice<u8>?,
+        options: borrow ChildOptions,
     ) -> Result<ProcessOutput, IoError> {
         let inPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "in"))?;
         let outPath = HostServices.stringOrIoError(HostServices.pathIn(directory, "out"))?;
@@ -939,13 +1226,7 @@ public struct HostServices {
                 null => {}
             }
         }
-        var texts = Vector<HostServicesText>.create();
-        HostServices.pushed(texts.push(unsafe { HostServicesText { ptr: program.ptr, len: program.length } }))?;
-        for (argument in arguments) {
-            HostServices.pushed(
-                texts.push(unsafe { HostServicesText { ptr: argument.ptr, len: argument.length } }),
-            )?;
-        }
+        let environment = HostServices.environmentTexts(options)?;
         let status = unsafe { ceesafe_host_spawn(
             texts.view().ptr as *void,
             texts.length as u64,
@@ -955,6 +1236,10 @@ public struct HostServices {
             outPath.length as u64,
             errPath.view().ptr,
             errPath.length as u64,
+            environment.texts.view().ptr as *void,
+            environment.kinds.view().ptr,
+            environment.count,
+            environment.clear,
         ) };
         if (status < 0) {
             return Err(HostServices.hostError(status));
@@ -998,6 +1283,18 @@ public struct HostServices {
             null => { return Err(IoError.InvalidInput); }
         };
         return HostServices.stringOrIoError(HostServices.copyText(text));
+    }
+
+    /// The name a runtime call wrote into `buffer`, `length` bytes, or its error.
+    fn osOf(buffer: [u8; 4096], length: i64) -> Result<OsString, IoError> {
+        if (length < 0) {
+            return Err(HostServices.hostError(length));
+        }
+        let bytes = buffer;
+        return match (OsString.copyOf(bytes[..truncate<usize>(length)])) {
+            Ok(name) => Ok(name),
+            Err(_) => Err(IoError.OutOfMemory),
+        };
     }
 
     /// `directory/name`.
@@ -1046,8 +1343,8 @@ public struct HostServices {
         return Ok(bytes);
     }
 
-    /// Byte-wise order of two strings: negative, zero or positive.
-    fn compareText(a: borrow String, b: borrow String) -> i32 {
+    /// Byte-wise order of two byte runs: negative, zero or positive, a prefix first.
+    fn compareBytes(a: Slice<u8>, b: Slice<u8>) -> i32 {
         let n = if (a.length < b.length) a.length else b.length;
         for (i in 0..n) {
             if (a[i] != b[i]) {

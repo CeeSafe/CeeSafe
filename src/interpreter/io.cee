@@ -528,7 +528,10 @@ fn ioBuiltin(
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
         let path = bytesOf(it, pathValue)?;
-        let text = StringView.fromUtf8(path.view())!;
+        // An OsStringView's bytes may not be UTF-8 (ADR 0257): the compiler's own File takes text, so they are refused.
+        let text = StringView.fromUtf8(path.view()) ?? {
+            return Ok(interpIoResult(c, resultType, 0, errnoInvalid())?);
+        };
         if (b == bfFileOpenRegular()) {
             // ADR 0078 §3: only a regular file opens. The interpreter checks the path first; nothing else runs between
             // the check and the open, which the runtime makes from the open file instead.
@@ -557,7 +560,9 @@ fn ioBuiltin(
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
         let path = bytesOf(it, pathValue)?;
-        let text = StringView.fromUtf8(path.view())!;
+        let text = StringView.fromUtf8(path.view()) ?? {
+            return Ok(interpIoResult(c, resultType, 0, errnoInvalid())?);
+        };
         var exists = false;
         match (File.kind(text)) {
             Ok(found) => {
@@ -596,7 +601,10 @@ fn ioBuiltin(
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
         let path = bytesOf(it, pathValue)?;
-        return match (File.remove(StringView.fromUtf8(path.view())!)) {
+        let text = StringView.fromUtf8(path.view()) ?? {
+            return Ok(interpIoResult(c, resultType, 0, errnoInvalid())?);
+        };
+        return match (File.remove(text)) {
             Ok() => Ok(interpIoResult(c, resultType, 0, 0)?),
             Err(e) => Ok(interpIoResult(c, resultType, 0, errnoOf(e))?),
         };
@@ -1065,6 +1073,17 @@ fn appDataFolder(it: borrow mut Interp, arguments: borrow Vector<Value>, name: S
 }
 
 fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value, Stop> {
+    if (sameText(name, "ceesafe_host_argument")) {
+        // Process.argumentOs (ADR 0257): the program's argument as the interpreter was given it, as Process.argument.
+        let index = arguments[0].bits(0, 8)?;
+        if (index >= (it.runtime.argumentPointers.length as u64)) {
+            return Ok(hostResult(0));
+        }
+        let k = index as usize;
+        it.memory.storeBits(arguments[1].bits(0, 8)?, it.runtime.argumentPointers[k], 8)?;
+        it.memory.storeBits(arguments[2].bits(0, 8)?, it.runtime.argumentLengths[k], 8)?;
+        return Ok(hostResult(1));
+    }
     requireHostIo(it)?;
     if (sameText(name, "ceesafe_host_env")) {
         let key = hostBytes(it, arguments, 0, 1)?;
@@ -1311,7 +1330,11 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
     if (sameText(name, "ceesafe_host_shared_unmap")) {
         return Ok(hostResult(0));
     }
-    // ceesafe_host_spawn: argv as views, then the paths of standard input, output and error.
+    // ceesafe_host_spawn: argv as views, then the paths of standard input, output and error, then the changes to the
+    // child's environment (ADR 0258), which the compiler's own Process.capture cannot make: `Unsupported`.
+    if (arguments[10].bits(0, 8)? != 0 || arguments[11].bits(0, 4)? != 0) {
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130)));
+    }
     let count = arguments[1].bits(0, 8)?;
     if (count == 0 || count > 4097) {
         return Ok(hostFailure(errnoInvalid()));
@@ -1324,6 +1347,10 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
             if (b == 0) {
                 return Ok(hostFailure(errnoInvalid()));
             }
+        }
+        // An OS string that is not UTF-8 (ADR 0257): the compiler's own Process.capture takes text.
+        if (StringView.fromUtf8(text.view()) == null) {
+            return Ok(hostFailure(errnoInvalid()));
         }
         argv.push(text)!;
     }
@@ -1685,7 +1712,10 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
         return "Ps:l";
     }
     if (sameText(name, "ceesafe_host_spawn")) {
-        return "PsPsPsPs:l";
+        return "PsPsPsPsPPsu:l"; // and the child's environment (ADR 0258)
+    }
+    if (sameText(name, "ceesafe_host_argument")) {
+        return "sPP:l"; // ADR 0257
     }
     if (sameText(name, "ceesafe_budget_enter")) {
         return "s:P"; // ADR 0170
@@ -1709,7 +1739,7 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
         return "PsuP:l"; // ADR 0169
     }
     if (sameText(name, "ceesafe_host_child_start_with")) {
-        return "PsuPPuP:l"; // ADR 0173
+        return "PsuPPuPPsuP:l"; // ADR 0173, and the child's environment (ADR 0258)
     }
     if (sameText(name, "ceesafe_host_handover_hold")) {
         return "us:l";

@@ -1,10 +1,12 @@
 # ADR 0253 — Text of either kind: `TextView` and `TextBuffer`
 
 - Status: **Proposed — implemented** 2026-11-25 on the branch `fix/g5-text` (from 0.95.10), for the SQLite port's
-  `CEESAFE_FINDINGS.md` finding 41. Not released. §8's questions are the owner's.
+  `CEESAFE_FINDINGS.md` finding 41. Not released. The owner answered §8's six questions the same day (§8):
+  §2.6 to §2.8 and the change of `TextBuffer.append` (§2.1) follow from them.
 - Scope: lib/core `text_view.cee` (new: `TextView`, `TextBuffer`, `TextPair`, `TextPieces`, `TextChars`,
   `TextChar`) and `bytestring.cee` (`ByteStringView`'s and `ByteString`'s members through them); the checker
-  (`src/check/interfaces.cee`, `members.cee`, `same_name_methods.cee`, `references.cee`) and the C names of methods
+  (`src/check/interfaces.cee`, `members.cee`, `same_name_methods.cee`, `references.cee`, `text_view.cee` (new),
+  `equality.cee`, `arrays.cee`, `patterns.cee`, `bytes_text.cee`) and the C names of methods
   (`src/backend/c_names.cee`); type-system.md §21.1, §22.4, §22.5 (new), §25.6; guide/builtins.md;
   spec/api/core.md; the book's Appendix C. Amends ADR 0231 §2.4 (the searches' needles and results).
 
@@ -61,7 +63,8 @@ public interface TextView: Copy {
 }
 
 public interface TextBuffer {
-    fn append<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>;
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
     fn bytes(borrow this) -> Slice<u8>;
     fn clear(borrow mut this);
 }
@@ -92,8 +95,12 @@ one kind (§21.1, ADR 0131), and is written generically through `TextBuffer`.
   lost: `text.slice(c.offset, c.offset + c.length)` is the bytes. Bytes one at a time were not taken: they would
   split a valid character of a `ByteStringView` into pieces that are not characters, and differ from the lossy
   conversion that a printer of the same text uses.
-- **`TextBuffer.append`** appends the bytes. A `String` holds UTF-8 only (§23.2), so into a `String` a text that is
-  not UTF-8 is appended as `toUtf8Lossy` gives it, each maximal subpart as U+FFFD; a `ByteString` takes every byte.
+- **`TextBuffer.append`** appends the bytes and answers whether it did. A `ByteString` takes every byte (`true`). A
+  `String` holds UTF-8 only (§23.2): a text that is not UTF-8 is not appended, and the answer is `false`, as
+  `appendUtf8` answers (lib/core's `AppendText`). Nothing is replaced silently: **`appendLossy`** is the explicit
+  form, which appends the text with U+FFFD for each maximal subpart, as `toUtf8Lossy` gives it, into either buffer
+  (so a `ByteString` given `appendLossy` holds UTF-8 after it). `?` and `!` on `append` read as before; a function
+  that returned `b.append(t)` as its own `Result<void, …>` now writes `b.append(t)?; return Ok();`.
 
 ### 2.2 A view implements an interface
 
@@ -128,6 +135,23 @@ compiled before and now reads differently is a result of static views only (`fn 
 which was taken to borrow from nothing and now borrows what `t` holds: stricter for a caller whose `t` is a view,
 the same for any other `t`. The whole corpus is unchanged by it (§7).
 
+**Why it is sound, and only stricter** (kept at the owner's word, §8 answer 3). The rule adds a flow, result ←
+`t`, and removes none, so it can only turn an accepted program into a refused one, never the reverse:
+- *In the callee*, the body is checked against the flows its signature declares. With the new flow the body may
+  return what `t` holds. `t` is a by-value parameter, a local of the callee: a loan of `t` itself (a slice of an
+  owned field) is N0244, as for any local; what `t` holds was lent to it by the caller, so it outlives the call.
+  Static data was allowed before and is still.
+- *In the caller*, the result now holds the loans of the argument for `t`. For an argument that holds none (an
+  owned value, an integer) nothing changes. For a view, the result is kept no longer than the view's own loans,
+  which is what the callee's body may have returned, so a program that relied on the result outliving them was
+  accepted only because the old signature said too little; it is refused now, with N0243 or N0244 where it would
+  have read freed memory had the callee returned from `t`.
+- *In an instance*, flows are the declaration's (§25.6, ADR 0131 §2.9): an instance at a scoped type has the
+  elision it would have had for the view written out, and an instance at an unscoped type has a result that
+  borrows from nothing it was given, which its body can produce only from static data.
+- Where elision was ambiguous (two such parameters, or a scoped parameter beside one), nothing changes: N0245 as
+  before.
+
 **Elision in an instance.** An instance of `fn mk<T, N>(t: T, n: N) -> Pair<T, N>` at two views had two scoped
 parameters and a scoped result with no region written, so elision failed in the instance (N0245, reported as
 N0274 at the use) though the declaration's flows (result ← `t`, `n`) already said everything. A parameter scoped
@@ -145,10 +169,21 @@ only by its type argument is now no candidate for elision when the result's writ
   ADR 0237 §5 question 2) and a `Slice<u8>` as before;
 - `splitOnce` is a `TextPair<ByteStringView<r>>?` (fields `left`, `right`, as `ByteStringHalves`'s were) and `split`
   a `TextPieces<ByteStringView<r>, N>`. `ByteStringHalves` and `ByteStringSplit` are removed: nothing names them
-  outside lib/core (the SQLite port, cee-proxy and this repository were searched).
+  outside lib/core (the SQLite port, cee-proxy and this repository were searched). The owner accepted the removal
+  (§8 answer 2): both shipped in 0.95.2, have no users, and CeeSafe is before 1.0.
 
-`ByteString`'s `append`, `bytes` and `clear` come from `TextBuffer`; `append` takes any `TextView` (a literal, a
-`StringView` or a `ByteStringView`), so `b.append(other.view())` appends another byte string's bytes.
+**Source changes, for the release notes:**
+- `ByteStringHalves` and `ByteStringSplit` are gone: name `TextPair<ByteStringView>` and `TextPieces` instead (or let
+  `let` infer them); `left` and `right` keep their names.
+- `ByteString.append` and `TextBuffer.append` answer `Result<bool, AllocError>`: `?` and `!` are unchanged, a
+  `return b.append(t);` from a `Result<void, …>` function becomes `b.append(t)?; return Ok();`.
+- Through `TextBuffer`, a `String` no longer takes text that is not UTF-8: `append` answers `false`; `appendLossy`
+  replaces.
+- A function whose only possibly-scoped parameter is a type parameter and whose result is a static view
+  (`fn name<T>(t: T) -> StringView`) now ties the result to `t` (§2.3).
+
+`ByteString`'s `append`, `appendLossy`, `bytes` and `clear` come from `TextBuffer`; `append` takes any `TextView`
+(a literal, a `StringView` or a `ByteStringView`), so `b.append(other.view())` appends another byte string's bytes.
 
 ### 2.5 Dispatch and cost
 
@@ -157,6 +192,41 @@ calls are direct calls of that type's methods, which C inlines. `TextView` has g
 type (N0331), and needs none: there are three kinds of text, all known where the code is compiled. The defaults
 are written over `bytes()` and lib/core's byte searches (`ByteScan`), which `TextSearch` and `ByteSearch` use too;
 a `StringView`'s concrete calls are unchanged (§2.2).
+
+### 2.6 `==` between a `ByteStringView` and text
+
+`v == t` and `v != t`, with the `ByteStringView` on either side and a `StringView` (a string literal included) or
+another `ByteStringView` on the other, compare the bytes, as `v.equals(t)` does. The checker lowers it to the two
+operands' bytes (`v.bytes()`, the `StringView` as its `Slice<u8>`) compared as slices are (§16.2): no new HIR, no
+call per byte. Any other operand (`v == 3`) and the orderings (`v < "b"`) stay N0207. A `ByteString` compares with
+`==` as before (`@derive(Equal)`, with another `ByteString`); with text, through its `view()`.
+
+### 2.7 `v[i]` and `match` on a `ByteStringView`
+
+- `v[i]`, `i: usize`, is the byte at `i`, a `u8`: `v.byteAt(i)`, which panics past the end as `s[i]` does. It is a
+  value, not a place (`v[i] = b` is refused: a view is read-only). A range (`v[a..b]`) is not added: `v.slice(a, b)`.
+- `match (v)` where an arm's pattern is a string literal (or alternatives of them, or one under `@`) matches the
+  view's bytes as a `Slice<u8>` is matched (ADR 0085 §2.7): the literal's UTF-8 bytes, compared with the view's,
+  and coverage as for a byte slice. A binding arm then binds the bytes, a `Slice<u8>` (`x => x.length`). A match
+  on a `ByteStringView` without string patterns is a struct's match, as before.
+- A match on a type parameter bounded by `TextView` takes no string pattern (N0207, "cannot match on a value of type
+  'T'", as before): generic code matches `t.bytes()`. Making it work would need a match that dispatches through a
+  bound, which nothing else does; `.bytes()` is one call and the same code.
+
+### 2.8 Any needle on a concrete `StringView` or `String`
+
+The searches of a `StringView` and of a `String`'s text that take one text argument (`indexOf`, `lastIndexOf`,
+`contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`, `splitOnce`, `split`) take any `TextView`, not only
+through a bound:
+- a string literal or a `StringView` takes the built-in (`TextSearch`), unchanged in code and speed;
+- any other `TextView` (`ByteStringView`, `Slice<u8>`) takes `TextView`'s method of the name on the `StringView`,
+  with the needle's type: a match is whole characters, so `"café".indexOf(tail)` with the byte `A9` is null, and
+  `splitOnce` gives a `TextPair<StringView>?`, `split` a `TextPieces<StringView, N>` (their fields and pieces read
+  the same as `TextHalves`' and `TextSplit`'s);
+- another type is N0205, as before (`expected 'StringView'`).
+
+The argument is checked once, before the choice. A `Slice<u8>` receiver's built-in searches are unchanged (a literal
+needle, or a `Slice<u8>`).
 
 ## 3. Consequences
 
@@ -176,9 +246,18 @@ a `StringView`'s concrete calls are unchanged (§2.2).
 - `run-pass/adr0253-text-chars.cee`, written by `tools/oracles/gen_text_view_cases.py` from Python: the characters
   of fixed and 2,000 seeded byte strings (maximal subparts from Python's decoder error spans), and
   `compareIgnoreAsciiCase`, `indexOf` and `split` against Python's on the same strings.
+  Its buffers: `append` of bytes that are not UTF-8 into a `String` answers `false` and appends nothing,
+  `appendLossy` replaces, into a `String` and a `ByteString`.
+- `run-pass/adr0253-text-operators.cee` (§2.6 to §2.8): `==` and `!=` both ways with a literal, a `StringView` and a
+  `ByteStringView`; `v[i]` in a loop; a `match` with string patterns and alternatives, and a binding arm; a concrete
+  `StringView`'s and `String`'s searches with `ByteStringView` and `Slice<u8>` needles (a byte inside `é` not found,
+  `splitOnce`, `split`, `lastIndexOf`, case-insensitive equality) beside literal and `StringView` ones. By hand;
+  native with `--check-leaks`, and `--interp`.
 - `check-fail/adr0253-text-view-errors.cee`: a `borrow this` method of an interface used at a view (N0274), an impl
-  for `SliceMut<u8>` (N0267), and a `ByteStringView` given to a concrete `StringView`'s built-in `indexOf` (N0205,
-  unchanged) beside `TextView.indexOf`, which takes it.
+  for `SliceMut<u8>` (N0267), and a `bool` needle (N0205) beside a `ByteStringView` one, which a concrete
+  `StringView` and `TextView.indexOf` take.
+- `check-fail/adr0253-text-operators-errors.cee`: `v == 3` and `v < "b"` (N0207), a number as a needle (N0205), a
+  `match` on a `T: TextView` (N0207).
 - `check-fail/adr0253-text-view-loans.cee` (borrow checking runs on a program that type-checks, so apart): an impl
   for an owning type returning a loan of its by-value `this` (N0244), and bytes from a generic `bytes()` outliving
   the text (N0243).
@@ -199,7 +278,9 @@ a `StringView`'s concrete calls are unchanged (§2.2).
 ## 6. The SQLite port
 
 A scratch copy of the port, not committed there, was tried against this branch. It checks unchanged (its
-`ByteStringView` calls pass `Slice<u8>` needles, which `TextView` still takes). Its tokenizer, made generic over
+`ByteStringView` calls pass `Slice<u8>` needles, which `TextView` still takes), but for one line after §2.1's
+change of `append`: `src/valueops.cee:87` returns a `ByteString.append(…)` as its `Result<void, …>` (N0205; written
+`…?; return Ok();`). Its tokenizer, made generic over
 `T: TextView` with a `ByteString` as each token's text, checks with the same calls (`byteAt`, `slice`, `length()`,
 `equalsIgnoreAsciiCase`, `append`), for a `StringView` and a `ByteStringView` alike. The first layer of what that
 breaks is 51 errors: 20 `match`es on a token's text with string patterns (a `match` takes a `StringView` or a
@@ -207,17 +288,26 @@ breaks is 51 errors: 20 `match`es on a token's text with string patterns (a `mat
 where a token's text becomes a `String` name in the AST. Past them, names stay `String` in 144 fields and vectors
 (catalog, AST, plans, messages); when those are `ByteString`, `src/sqltext.cee`'s escaping goes: `sqlTextOf` and
 `sqlBytes` become copies or nothing, `hasEscapes` and the U+10FF80 mapping disappear, and its
-`startsWithIgnoreAsciiCase` is `TextView`'s.
+`startsWithIgnoreAsciiCase` is `TextView`'s. With §2.6 and §2.7 (the owner's answer 4), the 20 `match`es, 3
+indexings and 1 `==` of that first layer compile as they are written (measured: 27 errors left, all
+`String`/`ByteString` mismatches where names enter the AST), which remain the port's work.
 
 ## 7. Evidence
 
 Run on 2026-11-25 with the tree's `out/ceesafec`; ROADMAP §10 has the runs.
 
-## 8. Questions for the owner
+## 8. Questions for the owner, and the answers
 
-1. The names `TextView`, `TextBuffer`, `TextPair`, `TextPieces`, `TextChars`, `TextChar`.
-2. Removing `ByteStringHalves` and `ByteStringSplit` (§2.4) rather than keeping them unused. Recommended: remove.
-3. `==` between a `ByteStringView` and a literal, and `v[a..b]` on a `ByteStringView`: operators on a library type
-   are a language question of their own (§6). Recommended: a later ADR if the port's move asks for it.
-4. `TextBuffer.append` into a `String` replaces what is not UTF-8 (§2.1). Recommended: keep; a `Result<bool, …>`
-   would make every `ByteString` append answer a question it cannot fail.
+Asked in the first report; the owner answered on 2026-11-25, and the branch carries the answers out.
+
+1. The names `TextView`, `TextBuffer`, `TextPair`, `TextPieces`, `TextChars`, `TextChar`? **Kept.**
+2. Removing `ByteStringHalves` and `ByteStringSplit` (§2.4)? **Accepted**: they shipped in 0.95.2, have no users
+   outside lib/core, and CeeSafe is before 1.0. Listed among the source changes for the release notes (§2.4).
+3. The elision rule of §2.3, which makes `fn f<T>(t: T) -> StringView` borrow from `t`? **Kept**; §2.3 says why it
+   is sound and only stricter.
+4. `match` with string patterns, `==` with text, and indexing on a `ByteStringView`? **Implemented** (§2.6, §2.7);
+   on a generic `T: TextView` the `match` does not fall out (§2.7).
+5. A concrete `StringView`'s searches with any `TextView` needle, not only through a bound? **Implemented**, keeping
+   the whole-character rule (§2.8).
+6. `TextBuffer.append` into a `String` replacing what is not UTF-8? **Changed**: it answers `false` and appends
+   nothing, as `appendUtf8` does, and `appendLossy` replaces explicitly (§2.1).

@@ -1311,7 +1311,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
 - A read or write checks `at < length` and `at + size(T) - 1 < length` at the call, before anything is read or
   written, and **panics** "index out of bounds" there otherwise.
 
-**Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments; on byte slices with
+**Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments (or any other
+`TextView`, which finds whole characters only, §22.5, ADR 0253 §2.8); on byte slices with
 `Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it. On bytes, an argument
 that is a string literal is its UTF-8 bytes (`path.startsWith("/api")`; ADR 0237 §2.3); another `StringView` is N0205.
 - `s.indexOf(t)` and `s.lastIndexOf(t)`: `usize?`, where `t` first or last starts; an empty `t` is at `0`, and at
@@ -2506,7 +2507,9 @@ file name, SQLite's TEXT. Nothing is checked or replaced until UTF-8 is asked fo
   `lastIndexOf`, `indexOfByte`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase` and the other
   `…IgnoreAsciiCase` ones, `trim`, `trimStart`, `trimEnd`, `splitOnce` (`TextPair<ByteStringView<r>>?`) and `split`
   (`TextPieces`, an iterator of views). A `ByteString` has `length()` and `isEmpty()`, and the rest through `view()`.
-- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes. `v.equals(t)` compares with any
+- **Comparing.** Both are `@derive(Equal)` (§28.7): `==` and `!=` compare the bytes, and a view compares so with a
+  `StringView` or a string literal too, either side (`v == "select"`, §22.5). `v[i]` is a view's byte `i`, and a
+  `match` on a view takes string patterns (§22.5). `v.equals(t)` compares with any
   text, `v.compare(t)` orders bytewise (negative, zero, positive; a prefix first). `ByteString` implements
   lib/std's `HashKey` and `OrderKey`; a view, a scoped type, keys no map (N0274).
 - **Appending** to a `ByteString`, each `Result<…, AllocError>`, growing at most once and unchanged on failure:
@@ -2526,8 +2529,12 @@ fn keyword<T: TextView>(word: T) -> bool => word.equalsIgnoreAsciiCase("select")
 
 fn quoted<B: TextBuffer, T: TextView>(out: borrow mut B, name: T) -> Result<void, AllocError> {
     out.append("\"")?;
-    out.append(name)?;
-    return out.append("\"");
+    let whole = out.append(name)?; // false: a String does not take what is not UTF-8
+    if (!whole) {
+        out.appendLossy(name)?;
+    }
+    out.append("\"")?;
+    return Ok();
 }
 ```
 lib/core's interface `TextView: Copy` is implemented by `StringView` (UTF-8), `ByteStringView<r>` (any bytes) and
@@ -2552,14 +2559,31 @@ so it has no `dyn` type (N0331).
   scalar value and its bytes, or, where the bytes are not UTF-8, one maximal subpart of an ill-formed sequence (as
   `toUtf8Lossy` replaces, §22.4) with `value` U+FFFD and `valid` false. `slice(c.offset, c.offset + c.length)` is
   a character's bytes, so nothing is lost.
-- **On the concrete view** the built-in methods of §16.6 and §22.2 keep their names, signatures and code
-  (`s.indexOf(t)` on a `StringView` takes a `StringView`); `TextView`'s are reached there by the names the view does
-  not have (`s.slice(0, 2)`, `s.chars()`, `s.length()`), by `TextView.indexOf(s, v)`, and through a bound (§21.1).
-- **`TextBuffer`**: `append<N: TextView>(text)` (`Result<void, AllocError>`), `bytes()` and `clear()`. A
-  `ByteString` appends every byte; a `String` holds UTF-8 only, so text that is not UTF-8 is appended as
-  `toUtf8Lossy` gives it, each maximal subpart as U+FFFD.
+- **On the concrete view** the built-in methods of §16.6 and §22.2 keep their names and code; `TextView`'s are
+  reached there by the names the view does not have (`s.slice(0, 2)`, `s.chars()`, `s.length()`), by
+  `TextView.indexOf(s, v)`, and through a bound (§21.1).
+- **Any needle on a concrete `StringView` or `String`** (ADR 0253 §2.8): the searches with one text argument
+  (`indexOf`, `lastIndexOf`, `contains`, `startsWith`, `endsWith`, `equalsIgnoreAsciiCase`, `splitOnce`, `split`)
+  take a `StringView` or a string literal as the built-in, unchanged, and any other `TextView` (a `ByteStringView`,
+  a `Slice<u8>`) as `TextView`'s method of the name, so a match is whole characters: `"café".indexOf(b)` with the
+  byte `A9` is null. With such a needle `splitOnce` gives a `TextPair<StringView>?` and `split` a `TextPieces`; with
+  a `StringView`, `TextHalves` and `TextSplit` as before. Another type is N0205, as before.
+- **`ByteStringView` operators** (ADR 0253 §2.6, §2.7):
+  - `v == t` and `v != t`, either side, where the other is a `StringView` (a literal included) or a
+    `ByteStringView`: the bytes compared, as `v.equals(t)`. Other operands, and `<` and the rest, stay N0207.
+  - `v[i]` (`i: usize`) is the byte at `i`, a `u8`: `v.byteAt(i)`, panicking past the end as `s[i]` does. It is
+    read only; there is no `v[lo..hi]` (`v.slice(lo, hi)`).
+  - `match (v)` with a string pattern in an arm matches `v`'s bytes as a `Slice<u8>` is matched (ADR 0085 §2.7):
+    the patterns are byte strings, and a binding arm binds the bytes, a `Slice<u8>`. A match on a type parameter
+    bounded by `TextView` takes no string pattern (N0207): match `t.bytes()`.
+- **`TextBuffer`**: `append<N: TextView>(text) -> Result<bool, AllocError>`, `appendLossy<N: TextView>(text) ->
+  Result<void, AllocError>`, `bytes()` and `clear()`. A `ByteString`'s `append` takes every byte and answers
+  `true`. A `String` holds UTF-8 only: its `append` of text that is not UTF-8 appends nothing and answers `false`,
+  as `appendUtf8` does (§23.2). `appendLossy` appends the text with U+FFFD for each maximal subpart of an
+  ill-formed sequence (as `toUtf8Lossy`), into either buffer.
 
-Diagnostics: none new (N0274 for a `borrow this` method called through a bound at a view, N0267, N0331).
+Diagnostics: none new (N0274 for a `borrow this` method called through a bound at a view, N0267, N0331, N0205,
+N0207).
 
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 

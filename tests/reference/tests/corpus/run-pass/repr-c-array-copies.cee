@@ -1,0 +1,68 @@
+// Whole arrays into and out of a @repr(C) struct's array members (type-system.md §28.5, c-backend.md §1). In C those
+// members are C arrays, seen as the reference's array struct; a whole array copied there is copied as bytes, since an
+// access through the array struct's type is one strict aliasing forbids: gcc 14 at -O2 dropped the writes of a struct
+// literal's arrays (ffi/exported-c-state.cee on Debian 13), so the sums below came out with zeros.
+
+@repr(C)
+struct Grid {
+    tag: u8;
+    data: [u8; 3];
+    cells: [[u16; 2]; 2];
+}
+
+fn sum(g: borrow Grid) -> u32 {
+    var total = g.tag as u32;
+    for (v in g.data) {
+        total += v as u32;
+    }
+    for (row in g.cells) {
+        for (v in row) {
+            total += v as u32;
+        }
+    }
+    return total;
+}
+
+fn rowSum(row: [u16; 2]) -> u32 => row[0] as u32 + row[1] as u32;
+
+fn fill(g: borrow mut Grid, data: [u8; 3], row: [u16; 2]) {
+    g.data = data;
+    g.cells[1] = row;
+}
+
+static mut SHARED: Grid = Grid { tag: 2, data: [1, 1, 1], cells: [[5, 5], [5, 5]] };
+
+/// Safety: SHARED is changed only here, on the one thread.
+fn main() {
+    let made = Grid { tag: 1, data: [10, 20, 30], cells: [[1, 2], [3, 4]] };
+    Console.writeLine(sum(made)); // 71
+    // Whole reads: a member, and an inner array of a member.
+    let data = made.data;
+    let row = made.cells[1];
+    Console.writeLine(data[0] as u32 + data[1] as u32 + data[2] as u32); // 60
+    Console.writeLine(rowSum(row));                                      // 7
+    Console.writeLine(rowSum(made.cells[0]));                            // 3
+    // Whole writes: into a copy, through a borrow, and into a static.
+    var copy = made;
+    copy.data = [7, 8, 9];
+    copy.cells = [[100, 200], [300, 400]];
+    Console.writeLine(sum(copy)); // 1025
+    fill(mut copy, [0, 0, 1], [6, 6]);
+    Console.writeLine(sum(copy)); // 314
+    unsafe {
+        SHARED.data = made.data;
+        SHARED.cells[0] = made.cells[1];
+        Console.writeLine(sum(SHARED)); // 79
+    }
+    // The original is untouched.
+    Console.writeLine(sum(made)); // 71
+}
+
+// expect-stdout: 71
+// expect-stdout: 60
+// expect-stdout: 7
+// expect-stdout: 3
+// expect-stdout: 1025
+// expect-stdout: 314
+// expect-stdout: 79
+// expect-stdout: 71

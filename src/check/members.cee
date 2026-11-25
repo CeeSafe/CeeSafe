@@ -638,11 +638,37 @@ fn checkMethodCallVia(
             return checkFloatMethod(c, member, arguments, number, function, span);
         }
     }
+    // A receiver through more than one reference (`borrow borrow T`, as a pattern binds through a borrowed optional)
+    // reaches T's methods as `borrow T` does: the outer references are read through, and the one left is mutable
+    // only if every one was (ADR 0260 §2.1).
+    loop {
+        let outer = c.typeOf(receiver);
+        if (!c.types.is(outer, TypeKind.Reference) || c.types.isClosure(outer) || c.types.isSlice(outer) ||
+            c.types.isStringView(outer)) {
+            break;
+        }
+        let inner = c.types.info(outer).pointee;
+        if (!c.types.is(inner, TypeKind.Reference) || c.types.isClosure(inner) || c.types.isSlice(inner) ||
+            c.types.isStringView(inner)) {
+            break;
+        }
+        let mutable = c.types.info(outer).mutableReference && c.types.info(inner).mutableReference;
+        let through = c.types.referenceTo(c.types.info(inner).pointee, mutable)?;
+        let s = c.spanOf(receiver);
+        receiver = c.expr(HirExpr.Deref(receiver), through, s.start, s.end)?;
+    }
     let currentType = c.typeOf(receiver);
     let structType = if (c.types.is(
         currentType,
         TypeKind.Reference,
     )) c.types.info(currentType).pointee else currentType;
+    if (general && isByteStringViewType(c, structType) && isParseMethod(c.name(memberIdent.symbol))) {
+        // `v.parseInt<T>()` and the other parsers on a `ByteStringView` parse its bytes, as on a `Slice<u8>`
+        // (ADR 0260 §2.6).
+        let viewValue = autoDeref(c, receiver)?;
+        let bytes = textViewBytes(c, viewValue, span)?;
+        return checkBytesTextMethod(c, member, arguments, bytes, false, targetSpan, span);
+    }
     if (general && isTaskSet(c, structType) &&
         (sameText(c.name(memberIdent.symbol), "spawn") || sameText(c.name(memberIdent.symbol), "trySpawn") ||
             sameText(c.name(memberIdent.symbol), "spawnSend") ||

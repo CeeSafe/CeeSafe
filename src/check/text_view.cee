@@ -12,6 +12,38 @@ fn isByteStringViewType(c: borrow Checker, t: u32) -> bool {
         startsWithText(c.filePaths[file as usize].view(), "lib/core/") && sameText(c.typeName(t), "ByteStringView");
 }
 
+/// Is `t` lib/core's `ByteString`?
+fn isByteStringType(c: borrow Checker, t: u32) -> bool {
+    if (t == none() || !c.types.is(t, TypeKind.Struct) || c.types.info(t).structDef == none()) {
+        return false;
+    }
+    let file = c.types.structs[c.types.info(t).structDef as usize].file;
+    return file != none() && (file as usize) < c.filePaths.length &&
+        startsWithText(c.filePaths[file as usize].view(), "lib/core/") && sameText(c.typeName(t), "ByteString");
+}
+
+/// `v.length` on a `ByteStringView` or a `ByteString`, as on a `StringView` and a `String` (ADR 0260 §2.5): its
+/// `length()`, the count of bytes; the `ByteString` is lent, not moved. None for any other value.
+fn byteTextLength(c: borrow mut Checker, value: u32, span: Span) -> Result<u32, AllocError> {
+    let t = c.typeOf(value);
+    let view = isByteStringViewType(c, t);
+    if (!view && !isByteStringType(c, t)) {
+        return Ok(none());
+    }
+    let symbol = c.intern("length")?;
+    // The view's comes from `TextView`; the `ByteString`'s is declared in the struct itself.
+    let function = if (view) implMethodFor(c, t, symbol) else findStructFunction(c, c.types.info(t).structDef, symbol);
+    if (function == none()) {
+        return Ok(none());
+    }
+    let receiver = if (view) value else borrowReceiver(c, value, false, span)?;
+    if (c.isBottom(receiver)) {
+        return Ok(receiver);
+    }
+    let values = [receiver];
+    return libraryCall(c, function, values[..], span);
+}
+
 /// The `TextView` method `name` of `typ` (an impl's, or an inherited default), or none.
 fn textViewMethod(c: borrow mut Checker, typ: u32, name: StringView) -> Result<u32, AllocError> {
     let symbol = c.intern(name)?;
@@ -85,6 +117,26 @@ fn byteStringViewIndex(c: borrow mut Checker, target: u32, position: u32, span: 
     return libraryCall(c, function, values[..], span);
 }
 
+/// `v[low..high]` on a `ByteStringView` (ADR 0260 §2.4): its `slice(low, high)`, `sliceFrom(low)` or
+/// `sliceTo(high)`, a `ByteStringView` of the same bytes, panicking out of bounds as a slice's range does; `v[..]`
+/// is `v`.
+fn byteStringViewSlice(c: borrow mut Checker, target: u32, low: u32, high: u32, span: Span) -> Result<u32, AllocError> {
+    if (low == none() && high == none()) {
+        return Ok(target);
+    }
+    let name = if (low != none() && high != none()) "slice" else if (low != none()) "sliceFrom" else "sliceTo";
+    let function = textViewMethod(c, c.typeOf(target), name)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    if (low != none() && high != none()) {
+        let values = [target, low, high];
+        return libraryCall(c, function, values[..], span);
+    }
+    let values = [target, if (low != none()) low else high];
+    return libraryCall(c, function, values[..], span);
+}
+
 /// `"abc"` on a `ByteStringView` inside another pattern (`Some("abc")`, a field's, a payload's; ADR 0253 §2.7): the
 /// view's bytes, matched as a `Slice<u8>`'s are, through its field: `ByteStringView { data: "abc" }`. Coverage is a
 /// byte slice's.
@@ -143,6 +195,64 @@ fn textViewInterface(c: borrow mut Checker) -> Result<u32, AllocError> {
         Entity.Interface(entry) => entry,
         _ => none(),
     });
+}
+
+/// The interface `TextBuffer`'s entry in the checker, or none.
+fn textBufferInterface(c: borrow mut Checker) -> Result<u32, AllocError> {
+    let symbol = c.intern("TextBuffer")?;
+    return Ok(match (foundEntity(c.coreItems, Word { value: symbol as u64 })) {
+        Entity.Interface(entry) => entry,
+        _ => none(),
+    });
+}
+
+/// `s.append(t)` on a concrete `String` whose argument, already checked as `text`, is a `TextView` other than a
+/// `StringView` (ADR 0260 §2.2): `TextBuffer`'s `append` with the argument's type, which answers whether the text
+/// was appended (`false`, and nothing appended, for bytes that are not UTF-8). `string` is the `String` (or a
+/// reference to it), borrowed mutably here after the argument, as the built-in's two-phase receiver is. None when the
+/// argument is no such text: the caller then takes it as a `StringView`, as before.
+fn otherTextAppend(
+    c: borrow mut Checker,
+    name: u32,
+    string: u32,
+    text: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let textType = c.typeOf(text);
+    if (c.types.isStringView(textType) || c.isBottom(text)) {
+        return Ok(none());
+    }
+    let view = textViewInterface(c)?;
+    let buffer = textBufferInterface(c)?;
+    if (view == none() || buffer == none()) {
+        return Ok(none());
+    }
+    let none0 = Vector<u32>.create();
+    if (!implementsQualified(c, textType, view, none0.view())) {
+        return Ok(none());
+    }
+    let owner = c.typeOf(string);
+    let stringType = if (c.types.is(owner, TypeKind.Reference)) c.types.info(owner).pointee else owner;
+    let method = implMethodIn(c, stringType, name, buffer);
+    if (method == none()) {
+        return Ok(none());
+    }
+    let template = c.hir.functions[method as usize].methodTemplate;
+    if (template == none()) {
+        return Ok(none());
+    }
+    let arguments = [textType];
+    let instance = instantiateFunction(c, template, arguments[..], span)?;
+    if (instance == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let receiver = borrowReceiver(c, string, true, targetSpan)?;
+    if (c.isBottom(receiver)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [receiver, text];
+    return libraryCall(c, instance, values[..], span);
 }
 
 /// `s.indexOf(t)` and the other searches of a concrete `StringView` (or a `String`'s text, `view`) whose one

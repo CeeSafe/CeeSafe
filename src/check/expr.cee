@@ -138,6 +138,20 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
         }
         _ => {}
     }
+    // A string literal where a `ByteStringView` (or `ByteStringView?`) is expected is that view of its bytes, as
+    // `ByteStringView.fromText("…")` (ADR 0260 §2.3).
+    if (expected != none() && isStringLiteral(c, unparenthesized(c, e))) {
+        let payload = c.types.optionType(expected);
+        if (isByteStringViewType(c, expected) || isByteStringViewType(c, payload)) {
+            let view = c.types.stringView;
+            let text = synth(c, e, view)?;
+            if (c.isBottom(text)) {
+                return Ok(text);
+            }
+            let bytes = coreViewOfText(c, "ByteStringView", text, span)?;
+            return coerce(c, bytes, expected, span);
+        }
+    }
     var synthExpected = expected;
     if (expected != none()) {
         let t = c.types.info(expected);
@@ -2388,6 +2402,12 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
     let arrayValue = arrayMember(c, value, through, member, span)?;
     if (arrayValue != none()) {
         return Ok(arrayValue);
+    }
+    if (sameText(c.name(c.front.ast.idents[member as usize].symbol), "length")) {
+        let measured = byteTextLength(c, value, span)?; // ADR 0260 §2.5
+        if (measured != none()) {
+            return Ok(measured);
+        }
     }
     let field = resolveField(c, valueType, member)?;
     if (field == none()) {

@@ -106,3 +106,17 @@ fn printsAndFails() -> Result<void, TestFailure> {
 fn printsAndPasses() {
     Console.writeLine("printed by a passing test");
 }
+
+// ADR 0260 §2.7: text of any kind, compared by bytes; a byte past ASCII of text that is not UTF-8 is shown `\xHH`.
+@test
+fn failsTextOf() -> Result<void, TestFailure> {
+    var b = ByteString.fromText("ab")!;
+    b.appendBytes([0xffu8][..])!;
+    return Check.equalTextOf("abc", b.view());
+}
+
+@test
+fn passesTextOf() -> Result<void, TestFailure> {
+    let b = ByteString.fromText("abc")!;
+    return Check.equalTextOf("abc", b.view());
+}

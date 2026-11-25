@@ -307,11 +307,14 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
 }
 
 /// Whether `t` is lib/core's `OsStringView` (ADR 0257), not a program's struct of that name.
-fn isOsStringView(c: borrow mut Checker, t: u32) -> bool {
-    if (t == none() || !c.types.is(t, TypeKind.Struct) || !sameText(c.typeName(t), "OsStringView")) {
+fn isOsStringView(c: borrow mut Checker, t: u32) -> bool => isCoreStruct(c, t, "OsStringView");
+
+/// Whether `t` is the lib/core struct `name` (any instance of it), not a program's struct of that name.
+fn isCoreStruct(c: borrow mut Checker, t: u32, name: StringView) -> bool {
+    if (t == none() || !c.types.is(t, TypeKind.Struct) || !sameText(c.typeName(t), name)) {
         return false;
     }
-    let symbol = match (c.intern("OsStringView")) {
+    let symbol = match (c.intern(name)) {
         Ok(s) => s,
         Err(_) => { return false; }
     };
@@ -347,10 +350,15 @@ fn osNameArgument(c: borrow mut Checker, argument: u32, parameterType: u32, span
 }
 
 /// `OsStringView.fromText(text)`, for a checked `StringView` value (ADR 0257 §2.3).
-fn osNameOfText(c: borrow mut Checker, text: u32, span: Span) -> Result<u32, AllocError> {
+fn osNameOfText(c: borrow mut Checker, text: u32, span: Span) -> Result<u32, AllocError> =>
+    coreViewOfText(c, "OsStringView", text, span);
+
+/// `T.fromText(text)` of the lib/core view `T` (`OsStringView`, `ByteStringView`), for a checked `StringView` value:
+/// the same bytes, nothing copied.
+fn coreViewOfText(c: borrow mut Checker, typeName: StringView, text: u32, span: Span) -> Result<u32, AllocError> {
     let name = c.intern("fromText")?;
     let none0 = Vector<u32>.create();
-    let function = libraryFunction(c, "OsStringView", none0.view(), name, span)?;
+    let function = libraryFunction(c, typeName, none0.view(), name, span)?;
     if (function == none()) {
         return Ok(text);
     }

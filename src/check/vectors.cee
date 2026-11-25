@@ -706,7 +706,26 @@ fn checkVectorMethod(
             argument = checkExpr(c, argumentSyntax, element)?;
         } else if (sameText(text, "append")) {
             let view = c.types.stringView;
-            argument = checkArgument(c, argumentSyntax, view)?;
+            let plain = match (c.front.ast.exprs[argumentSyntax as usize]) {
+                ExprNode.MutArg(_) => false,
+                _ => !isStringLiteral(c, argumentSyntax),
+            };
+            if (isString && plain) {
+                // Text of another kind is appended by `TextBuffer`'s method (ADR 0260 §2.2); a `StringView` and a
+                // lent `String` keep the built-in, lent as `checkArgument` lends them.
+                let given = synth(c, argumentSyntax, none())?;
+                if (c.isBottom(given)) {
+                    return c.errorResult(span.start, span.end);
+                }
+                let other = otherTextAppend(c, ident.symbol, vector, given, targetSpan, span)?;
+                if (other != none()) {
+                    return Ok(other);
+                }
+                let argumentSpan = c.front.ast.exprSpans[argumentSyntax as usize];
+                argument = lendValue(c, given, view, argumentSpan)?;
+            } else {
+                argument = checkArgument(c, argumentSyntax, view)?;
+            }
         } else if (sameText(text, "appendNumber")) {
             argument = numberToFormat(c, argumentSyntax)?;
         } else if (sameText(text, "truncate")) {

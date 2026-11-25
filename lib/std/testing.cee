@@ -122,6 +122,39 @@ public struct Check {
         return Err(TestFailure.written(borrow w));
     }
 
+    /// `actual` is the text `expected`, each of any kind of text (a `StringView`, a `ByteStringView`, bytes; ADR 0260
+    /// §2.7), compared by their bytes. A failure shows both, as `equalText` does; text that is not UTF-8 has each of
+    /// its bytes past ASCII written `\xHH`.
+    public fn equalTextOf<E: TextView, A: TextView>(expected: E, actual: A) -> Result<void, TestFailure> {
+        if (expected.bytes() == actual.bytes()) {
+            return Ok();
+        }
+        var buffer = [0u8; 1024];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected \"");
+        Check.writeShown(mut w, expected.bytes());
+        w.text("\", got \"");
+        Check.writeShown(mut w, actual.bytes());
+        w.text("\"");
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `bytes` as text: itself when it is UTF-8, else ASCII as it is and every other byte as `\xHH`.
+    fn writeShown(w: borrow mut TextWriter, bytes: Slice<u8>) {
+        if (StringView.fromUtf8(bytes) is Some(text)) {
+            w.text(text);
+            return;
+        }
+        for (b in bytes) {
+            if (b < 0x80) {
+                w.byte(b);
+            } else {
+                w.text("\\x");
+                w.hex(b as u64, 2);
+            }
+        }
+    }
+
     /// `actual` has the bytes of `expected`; else where they first differ.
     public fn equalBytes(expected: Slice<u8>, actual: Slice<u8>) -> Result<void, TestFailure> {
         var at: usize = 0;

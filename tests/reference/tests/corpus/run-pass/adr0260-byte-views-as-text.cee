@@ -1,0 +1,89 @@
+// ADR 0260: a byte view used as a text view is. A method through two references (§2.1), `String.append` of a
+// `ByteStringView` (§2.2), a literal where a `ByteStringView` is expected (§2.3), `v[a..b]` (§2.4), `v.length` (§2.5)
+// and the parsers (§2.6) on a `ByteStringView`.
+struct Counter {
+    n: usize;
+}
+
+impl Counter {
+    fn get(borrow this) -> usize => this.n;
+}
+
+// `borrow target is Some(k)` binds `k: borrow borrow T`.
+fn countOf(target: borrow Counter?) -> usize {
+    if (borrow target is Some(k)) {
+        return k.get();
+    }
+    return 0;
+}
+
+fn nameLength(target: borrow ByteString?) -> usize {
+    if (borrow target is Some(name)) {
+        return name.view().length() + name.length();
+    }
+    return 0;
+}
+
+fn schema() -> ByteStringView<static> => "main";
+
+fn bytesOf(v: ByteStringView) -> usize => v.length;
+
+fn main() {
+    let c: Counter? = Counter { n: 7 };
+    Console.writeLine(countOf(borrow c));
+    let name: ByteString? = ByteString.fromText("abc")!;
+    Console.writeLine(nameLength(borrow name));
+    // §2.2: a ByteStringView that is UTF-8 is appended; one that is not is refused, and nothing is appended.
+    var s = String.from("x=")!;
+    let good = ByteString.fromText("é1")!;
+    let appended = s.append(good.view())!;
+    var bad = ByteString.fromText("y")!;
+    bad.appendBytes([0xffu8][..])!;
+    let refused = s.append(bad.view())!;
+    s.append("!")!;
+    Console.writeLine(s.view());
+    Console.writeLine(appended);
+    Console.writeLine(refused);
+    // §2.3
+    let main: ByteStringView = "main";
+    let temp: ByteStringView? = "temp";
+    Console.writeLine(main == schema());
+    Console.writeLine(temp == Some("temp"));
+    Console.writeLine(bytesOf("four"));
+    // §2.4 and §2.5
+    let pair = ByteString.fromText("key=1234")!;
+    let v = pair.view();
+    Console.writeLine(v.length);
+    Console.writeLine(pair.length);
+    Console.writeLine(v[..3] == "key");
+    Console.writeLine(v[4..] == "1234");
+    Console.writeLine(v[1..3] == "ey");
+    Console.writeLine(v[..] == v);
+    Console.writeLine(bad.view()[1..].length);
+    // §2.6
+    Console.writeLine(v[4..].parseInt<u32>() ?? 0);
+    Console.writeLine(v[..3].parseInt<u32>().isNull());
+    Console.writeLine(v[4..].parseIntRadix<u32>(16) ?? 0);
+    let f = ByteString.fromText("2.5")!;
+    Console.writeLine(f.view().parseFloat<f64>() ?? 0.0);
+}
+
+// expect-stdout: 7
+// expect-stdout: 6
+// expect-stdout: x=é1!
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 4
+// expect-stdout: 8
+// expect-stdout: 8
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 1
+// expect-stdout: 1234
+// expect-stdout: true
+// expect-stdout: 4660
+// expect-stdout: 2.5

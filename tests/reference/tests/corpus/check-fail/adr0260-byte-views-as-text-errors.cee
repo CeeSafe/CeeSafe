@@ -1,0 +1,29 @@
+// ADR 0260: what stays refused. A `borrow mut this` method through a shared outer reference (§2.1); a mutable range
+// of a byte view (§2.4); `v.length` is not a place (§2.5); a `StringView` value, not a literal, where a
+// `ByteStringView` is expected (§2.3).
+struct Counter {
+    n: usize;
+}
+
+impl Counter {
+    fn bump(borrow mut this) {
+        this.n += 1;
+    }
+}
+
+fn bumpThrough(target: borrow Counter?) {
+    if (borrow target is Some(k)) {
+        k.bump(); // error[N0248]
+    }
+}
+
+fn main() {
+    let b = ByteString.fromText("abc")!;
+    var v = b.view();
+    let s = sliceMut(mut v[..]); // error[N0205]
+    v.length = 1; // error[N0216]
+    let text: StringView = "abc";
+    let bytes: ByteStringView = text; // error[N0205]
+}
+
+fn sliceMut(s: SliceMut<u8>) -> usize => s.length;

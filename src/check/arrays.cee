@@ -599,6 +599,9 @@ fn sliceOfChecked(
         return Ok(target);
     }
     let t = c.typeOf(target);
+    if (!mutable && isByteStringViewType(c, t)) {
+        return byteStringViewSlice(c, target, low, high, span); // ADR 0260 §2.4
+    }
     if (!c.types.is(t, TypeKind.Array)) {
         var message = Vector<u8>.create();
         appendText(mut message, "only arrays and slices can be sliced; found ")?;

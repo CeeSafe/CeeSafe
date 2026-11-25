@@ -4,6 +4,7 @@
 # its variant; leaksSafely leaks without C, so --interp finds it; exits ends the process itself ("exited", not
 # "crashed"). 2026-11-19 (ADR 0175 amendment 1): an isolated child's trap is neither the test's panic nor its leak; amendment 2: nor what it captured.
 # 2026-11-19 (ADR 0185): printsAndPasses passes and prints; --show-output shows what it printed.
+# 2026-11-26 (ADR 0260 §2.7): failsTextOf and passesTextOf, Check.equalTextOf of a literal and a ByteStringView.
 adds	passed	passed	-
 allocates	passed	passed	-
 crashes	crashed	skipped	-
@@ -13,6 +14,7 @@ failsAsync	failed	failed	timed out
 failsIo	failed	failed	-
 failsOther	failed	failed	returned Err(Mine.Broke)
 failsText	failed	failed	expected "abc", got "abd"
+failsTextOf	failed	failed	expected "abc", got "ab\xff"
 hangs	timed out	timed out	-
 isolatedCapturesPass	passed	passed	-
 isolatedCapturesThenLeaks	leaked	leaked	-
@@ -24,6 +26,7 @@ isolatedWatchMadeInside	passed	passed	-
 leaks	leaked	skipped	-
 leaksSafely	leaked	leaked	-
 panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25
+passesTextOf	passed	passed	-
 passesVoid	passed	passed	-
 printsAndFails	failed	failed	on purpose
 printsAndPasses	passed	passed	-

@@ -2198,9 +2198,23 @@ fn reportConflict(
         appendText(mut second, "the borrow is used later here")?;
         notes.push(DiagnosticNote { file: b.file, start: later.start, end: later.end, message: second })?;
     }
+    let within = spanWithin(loanSpan, span) ||
+        (later.start != none() && spanWithin(loanSpan, later) && spanWithin(span, later));
+    if (kind == accessRead() && isMutable && within) {
+        // A read in an argument of the call that lent the place (lifetimes.md §5, ADR 0252): say which lending waits.
+        var third = Vector<u8>.create();
+        appendText(
+            mut third,
+            "the call lends it before its arguments are read: only a receiver or 'mut' argument that is a place, a slice of one or a variable's reference waits for them (two-phase, lifetimes.md §5), not a call's result or a reference held in a field; read the value into a local before the call",
+        )?;
+        notes.push(DiagnosticNote { file: b.file, start: span.start, end: span.end, message: third })?;
+    }
     noteRegionBounds(c, n, b, loan, mut notes)?; // a callee's region bound that keeps the borrow (§25.8)
     return c.front.diagnostics.errorWithNotes(code, b.file, span.start, span.end, message, notes);
 }
+
+/// Whether `inner` lies within `outer`.
+fn spanWithin(inner: Span, outer: Span) -> bool => inner.start >= outer.start && inner.end <= outer.end;
 
 /// The first use, strictly after the given position, of a reference that may hold the loan (FindLaterUse); a span
 /// whose start is none if there is none. A use by a statement that contains `within` (when its start is not none)

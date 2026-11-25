@@ -1,0 +1,50 @@
+// ADR 0252 §2.3: what two-phase receivers and slices still refuse. A source that borrows the destination into the
+// call, a later argument that would change a sliced place, a receiver that is a call's result, and a reference held
+// in a field (the N0242 cases carry a note naming the two-phase forms).
+struct Holder<region r> {
+    buf: SliceMut<r, u8>;
+}
+
+fn overlapSelf(d: SliceMut<u8>) {
+    d.copyFrom(d[0..2]); // error[N0241]
+}
+
+fn overlapRanges() {
+    var buf: [u8; 4] = [1, 2, 3, 4];
+    buf[0..2].copyFrom(buf[2..4]); // error[N0241]
+}
+
+fn popped(v: borrow mut Vector<u8>) -> u8 => v.pop() ?? 0;
+
+fn shrinkVector() {
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    v.push(2)!;
+    v[0..2].fill(popped(mut v)); // error[N0241]
+}
+
+fn poke(a: borrow mut [u8; 4]) -> u8 {
+    a[3] = 9;
+    return 1;
+}
+
+fn setAll(a: SliceMut<u8>, b: u8) { a.fill(b); }
+
+fn writeLater() {
+    var buf: [u8; 4] = [1, 2, 3, 4];
+    setAll(mut buf[0..2], poke(mut buf)); // error[N0241]
+}
+
+fn whole(v: borrow mut Vector<u8>) -> SliceMut<u8> => v.viewMut();
+
+fn callReceiver() {
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    whole(mut v).fill(truncate<u8>(v.length)); // error[N0242]
+}
+
+fn fieldReceiver(h: borrow mut Holder) {
+    h.buf.fill(h.buf[0]); // error[N0242] // error[N0242]
+}
+
+fn main() {}

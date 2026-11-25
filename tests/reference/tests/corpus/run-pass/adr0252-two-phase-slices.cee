@@ -1,0 +1,97 @@
+// ADR 0252: `copyFrom` and `fill` are two-phase in their receiver, and so is a slice lent mutably, `a[lo..hi]`, as a
+// receiver or a `mut` argument: the place and the bounds are found where they stand, the loan made at the call, so
+// the arguments may read what the call writes. Each expected line is worked out by hand.
+struct Acc {
+    n: i64;
+    fn add(borrow mut this, v: i64) { this.n += v; }
+}
+
+// The SQLite port's finding 43: the argument reads the receiver's length.
+fn copyInto(into: SliceMut<u8>, v: Slice<u8>, at: usize) {
+    into.copyFrom(v[at..at + into.length]);
+}
+
+fn fillFirst(s: SliceMut<u8>) {
+    s.fill(s[0]); // type-system.md §16.5's former example of N0242
+}
+
+fn setAll(a: SliceMut<u8>, b: u8) { a.fill(b); }
+
+fn bump(i: borrow mut usize) -> u8 {
+    i += 1;
+    return 7;
+}
+
+fn later() -> u8 => 5;
+
+fn main() {
+    var buf: [u8; 4] = [1, 2, 3, 4];
+    let src: [u8; 6] = [9, 8, 7, 6, 5, 4];
+    copyInto(mut buf[..], src[..], 1);
+    Console.writeLine(buf[0]);
+    Console.writeLine(buf[3]);
+    fillFirst(mut buf[..]);
+    Console.writeLine(buf[3]);
+
+    buf = [1, 2, 3, 4];
+    buf[..].fill(buf[1]); // a sliced receiver
+    Console.writeLine(buf[0]);
+    buf = [1, 2, 3, 4];
+    buf[1..3].copyFrom(src[buf[0] as usize..buf[3] as usize - 1]); // the source reads the destination's place
+    Console.writeLine(buf[1]);
+    Console.writeLine(buf[2]);
+    buf = [1, 2, 3, 4];
+    buf.fill(buf[3]); // an array's method is its slice's
+    Console.writeLine(buf[0]);
+
+    buf = [1, 2, 3, 4];
+    setAll(mut buf[0..2], buf[3]); // a `mut a[lo..hi]` argument
+    Console.writeLine(buf[0]);
+    Console.writeLine(buf[2]);
+    setAll(mut buf[2..], later()); // a later argument that calls: the slice is reserved, not written
+    Console.writeLine(buf[3]);
+
+    // The bounds are fixed where the receiver stands: `bump` changes `i` after the range is named.
+    buf = [1, 2, 3, 4];
+    var i: usize = 0;
+    buf[i..i + 2].fill(bump(mut i));
+    Console.writeLine(buf[0]);
+    Console.writeLine(buf[1]);
+    Console.writeLine(buf[2]);
+    Console.writeLine(i);
+
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    v.push(2)!;
+    v.viewMut().fill(truncate<u8>(v.length)); // the vector's slice, `v[..]`
+    Console.writeLine(v[0]);
+    v[0..1].copyFrom(src[..v.length - 1]); // a vector's slice as the receiver
+    Console.writeLine(v[0]);
+
+    var bytes: [u8; 6] = [1, 2, 3, 4, 5, 6];
+    bytes[0..4].writeLE(0, bytes[5]); // a `borrow mut this` method of a sliced receiver
+    Console.writeLine(bytes[0]);
+
+    var a = Acc { n: 2 };
+    let r = borrow mut a;
+    r.add(r.n); // a variable's reference: two-phase before ADR 0252 too
+    Console.writeLine(a.n);
+}
+// expect-stdout: 8
+// expect-stdout: 5
+// expect-stdout: 8
+// expect-stdout: 2
+// expect-stdout: 8
+// expect-stdout: 7
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 3
+// expect-stdout: 5
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 3
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 9
+// expect-stdout: 6
+// expect-stdout: 4

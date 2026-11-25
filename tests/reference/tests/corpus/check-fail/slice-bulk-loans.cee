@@ -1,8 +1,9 @@
-// Bulk slice operations hold loans like any slice (type-system.md §16.5): the receiver's loan is live while the
-// argument is evaluated (not two-phase), so a source or fill value cannot come from the destination.
+// Bulk slice operations hold loans like any slice (type-system.md §16.5). Their receiver is two-phase (ADR 0252), so
+// a fill value may be read from the destination, but a source that borrows it into the call conflicts, and so does a
+// live borrow of the place.
 
 fn params(m: SliceMut<u8>, s: Slice<u8>) {
-    m.fill(m[0]); // error[N0242] // error[N0242]
+    m.fill(m[0]);  // two-phase since ADR 0252
     m.copyFrom(m); // error[N0241]
     let v = m[0];
     m.fill(v);
@@ -12,7 +13,7 @@ fn params(m: SliceMut<u8>, s: Slice<u8>) {
 fn arrays() {
     var a = [1u8, 2, 3, 4];
     a[0..2].copyFrom(a[2..4]); // error[N0241]
-    a[1..].fill(a[0]); // error[N0242]
+    a[1..].fill(a[0]);         // two-phase since ADR 0252
     let first = borrow mut a[..2];
     a[2..].fill(1); // error[N0241]
     first.fill(2);
@@ -21,4 +22,4 @@ fn arrays() {
     a[..].copyFrom(b[..]);
 }
 
-fn main() { }
+fn main() {}

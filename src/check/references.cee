@@ -552,6 +552,16 @@ fn elidedFlowName(i: usize) -> u64 => (2u64 << 32) | i as u64;
 fn isRegionOrElided(name: u64) -> bool => (name >> 32) == 1 || (name >> 32) == 2;
 fn isElided(name: u64) -> bool => (name >> 32) == 2;
 fn isTypeFlowName(name: u64) -> bool => (name >> 32) == 3;
+
+/// Whether `names` has a type parameter's flow name (ADR 0253 §2.3).
+fn hasTypeFlowName(names: borrow Vector<u64>) -> bool {
+    for (n in names.view()) {
+        if (isTypeFlowName(n)) {
+            return true;
+        }
+    }
+    return false;
+}
 fn typeFlowName(symbol: u32) -> u64 => (3u64 << 32) | symbol as u64;
 
 /// A mutable flow (HirFunction.mutableFlows): `(target << 32) | source`, with `deepFlowBit` for a deep one.
@@ -1412,6 +1422,61 @@ fn resolveReturnSources(
         let local = c.hir.functions[function as usize].parameters[i];
         if (c.types.isScoped(c.hir.locals[local as usize].typ)) {
             referenceParameters.push(truncate<u32>(i))?;
+        }
+    }
+    if (referenceParameters.length > 1) {
+        // In an instance, a parameter scoped only by its type argument (`n: N` at `N = StringView`) is no candidate
+        // for elision when the result names a type parameter: the declaration's flows, which every instance has
+        // (§25.6), already say what the result holds (ADR 0253 §2.3). `fn mk<T, N>(t: T, n: N) -> P<T, N>`.
+        var resultNames = Vector<u64>.create();
+        collectFlowNames(c, decl.returnType, function, true, mut resultNames)?;
+        if (hasTypeFlowName(resultNames)) {
+            let receiverOffset = parameterCount - decl.parameters.count as usize;
+            var kept = Vector<u32>.create();
+            for (i in referenceParameters.view()) {
+                var byArgument = false;
+                if (i as usize >= receiverOffset) {
+                    let p = c.front.ast.parameters[c.front.ast.at(
+                        decl.parameters,
+                        truncate<u32>(i as usize - receiverOffset),
+                    ) as usize];
+                    var names = Vector<u64>.create();
+                    collectFlowNames(c, p.typ, function, false, mut names)?;
+                    byArgument = hasTypeFlowName(names);
+                    for (n in names.view()) {
+                        if ((n >> 32) == 1) {
+                            byArgument = false;
+                        }
+                    }
+                }
+                if (!byArgument) {
+                    kept.push(i)?;
+                }
+            }
+            if (kept.length == 0) {
+                return Ok();
+            }
+            referenceParameters = kept;
+        }
+    }
+    if (referenceParameters.length == 0) {
+        // ADR 0253 §2.3: with no scoped parameter, the single parameter whose declared type names a type parameter
+        // that may hold loans (one not bounded by Send or Share, so with a type flow name; `Self` for a receiver of an
+        // interface's method) is the source: `fn bytes(this) -> Slice<u8>` in an interface borrows what `this` holds,
+        // as it would for a view. The declaration decides, so an instance at an unscoped type (`Self` = a struct) has
+        // the same source, and its body may return no loan of that local.
+        var candidate: u32 = none();
+        var several = false;
+        for (i in 0..parameterCount) {
+            if (i < c.flowNames.length && hasTypeFlowName(c.flowNames[i])) {
+                if (candidate != none()) {
+                    several = true;
+                }
+                candidate = truncate<u32>(i);
+            }
+        }
+        if (candidate != none() && !several) {
+            referenceParameters.push(candidate)?;
         }
     }
     let sourceList = match (c.front.ast.types[decl.returnType as usize]) {

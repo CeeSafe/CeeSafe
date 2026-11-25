@@ -470,7 +470,8 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         appendText(mut message, "': implementing for a type parameter is not allowed")?;
         return c.error(implMismatch(), span.start, span.end, message);
     }
-    if (c.types.isScoped(forType) && !(regionSyntax.count > 0 && hasRegionParameters(c, forType))) {
+    let viewTarget = isViewImplTarget(c, forType); // ADR 0253 §2.2: `impl I for StringView`, `impl I for Slice<u8>`
+    if (c.types.isScoped(forType) && !viewTarget && !(regionSyntax.count > 0 && hasRegionParameters(c, forType))) {
         var message = Vector<u8>.create();
         appendText(mut message, "'impl … for ")?;
         appendBytes(mut message, c.typeName(forType))?;
@@ -847,6 +848,20 @@ fn typeHome(c: borrow Checker, typ: u32) -> u32 {
         return packageOfFile(c, c.types.structs[info.structDef as usize].file);
     }
     return packageOfFile(c, c.types.enums[info.enumDef as usize].file);
+}
+
+/// A view an interface may be implemented for (ADR 0253 §2.2): `StringView` or a shared slice of a Copy element
+/// type, with no region written (regions are erased, §25.5). Its methods take `this` by value: a `borrow this` of a
+/// view would be a reference to a reference (§25.4).
+fn isViewImplTarget(c: borrow Checker, typ: u32) -> bool {
+    if (c.types.isStringView(typ)) {
+        return true;
+    }
+    if (!c.types.isSlice(typ) || c.types.info(typ).mutableReference) {
+        return false;
+    }
+    let element = c.types.info(c.types.info(typ).pointee).element;
+    return element != none() && !c.types.isScoped(element);
 }
 
 fn hasRegionParameters(c: borrow Checker, typ: u32) -> bool {

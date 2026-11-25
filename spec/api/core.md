@@ -4058,7 +4058,8 @@ found inside a character is not found there, so every view a method returns is a
 
 ```ceesafe
 public interface TextBuffer {
-    fn append<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>;
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
     fn bytes(borrow this) -> Slice<u8>;
     fn clear(borrow mut this);
 }

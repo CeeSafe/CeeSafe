@@ -365,17 +365,21 @@ literal, either view, or bytes; an owned text is passed as its `view()`.
 | `toUtf8()`, `isUtf8()`, `isCharBoundary(i)` | `StringView?`; `bool`; `bool` |
 
 On a `StringView` a match must be whole characters, so a needle that is not UTF-8 is never found inside one, and
-every piece stays UTF-8. A `TextBuffer` has `append(t)`, `bytes()` and `clear()`; a `String` replaces what is not
-UTF-8 with U+FFFD as it appends. A `StringView` keeps its built-in methods (`s.indexOf(t)` takes a `StringView`);
-`TextView.indexOf(s, t)` and a bound reach the interface's.
+every piece stays UTF-8. A `TextBuffer` has `append(t)` (`Result<bool, AllocError>`), `appendLossy(t)`, `bytes()`
+and `clear()`: a `String` holds UTF-8 only, so its `append` of text that is not UTF-8 appends nothing and answers
+`false`, and `appendLossy` writes U+FFFD for each bad sequence. A `StringView`'s and a `String`'s own searches
+take any text as the needle too (`s.indexOf(b)` with a `ByteStringView`). A `ByteStringView` compares with `==`
+against a literal, a `StringView` or another view, `v[i]` is its byte `i`, and a `match` on it takes string
+patterns.
 
 ```ceesafe
 fn keyword<T: TextView>(word: T) -> bool => word.trim().equalsIgnoreAsciiCase("select");
 
 fn quoted<B: TextBuffer, T: TextView>(out: borrow mut B, name: T) -> Result<void, AllocError> {
     out.append("\"")?;
-    out.append(name)?;
-    return out.append("\"");
+    out.appendLossy(name)?;
+    out.append("\"")?;
+    return Ok();
 }
 
 fn main() {

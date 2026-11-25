@@ -398,6 +398,11 @@ TABLES.append(table(
         ("`t.appendUtf8(bytes: Slice<u8>) -> Result<bool, AllocError>`",
          "Adds `bytes` at the end of a string when they are UTF-8, checked once. `false`, adding nothing, when they are not.",
          OOM),
+        ("`TextBuffer.append(mut t, text) -> Result<bool, AllocError>`, `t.appendLossy(text) -> Result<void, AllocError>`",
+         "lib/core's `TextBuffer` (ADR 0253), for code generic over a `String` and a `ByteString`: `append` adds any "
+         "text when it is UTF-8 and answers `false`, adding nothing, when it is not; `appendLossy` adds it with "
+         "U+FFFD for each maximal subpart of a bad sequence.",
+         OOM),
         ("`t.add() -> TextAppender`",
          "An appender that holds the string borrowed mutably, whose steps add at its end and chain: "
          "`t.add().text(\"n = \").number(n).done()?`. A statement that starts such a chain and does not reach `done()` "
@@ -440,7 +445,7 @@ TABLES.append(table(
          "A view of the bytes of a text, or of a slice. Nothing is copied.", NO, []),
         ("`v.bytes() -> Slice<u8>`, `v.length() -> usize`, `v.isEmpty() -> bool`",
          "The bytes as a slice, their number, and whether there are none.", NO, []),
-        ("`v.byteAt(i: usize) -> u8`", "Byte `i`.", INDEX + " when `i` is not below the length", []),
+        ("`v.byteAt(i: usize) -> u8`, `v[i]`", "Byte `i`.", INDEX + " when `i` is not below the length", []),
         ("`v.slice(lo: usize, hi: usize) -> ByteStringView`, `v.sliceFrom(lo: usize) -> ByteStringView`, "
          "`v.sliceTo(hi: usize) -> ByteStringView`",
          "A view of part of the bytes. A bound may fall inside a UTF-8 sequence.",
@@ -459,7 +464,10 @@ TABLES.append(table(
          "An iterator over `Utf8Chunk`s: each a `valid` `StringView` and the `invalid` `Slice<u8>` after it, to print "
          "the bytes with escapes.", NO, []),
         ("`v.equals(t) -> bool`, `v.compare(t) -> i32`, `v == w`",
-         "Whether two texts have the same bytes; their bytewise order.", NO, []),
+         "Whether two texts have the same bytes; their bytewise order. `==` and `!=` take a `ByteStringView`, a "
+         "`StringView` or a string literal on the other side (ADR 0253).", NO, []),
+        ("`match (v) { \"select\" => … }`",
+         "String patterns match the view's bytes, as a `Slice<u8>`'s; a binding arm binds the bytes.", NO, []),
         ("`v.equalsIgnoreAsciiCase(t) -> bool`, `v.compareIgnoreAsciiCase(t) -> i32`",
          "The same, with `A`-`Z` taken as `a`-`z`.", NO, []),
         ("`v.indexOf(t) -> usize?`, `v.lastIndexOf(t) -> usize?`, `v.indexOfIgnoreAsciiCase(t) -> usize?`, "
@@ -510,10 +518,14 @@ TABLES.append(table(
         ("`b.toUtf8() -> StringView?`, `b.toUtf8Lossy() -> Result<String, AllocError>`",
          "As the view's: the text when the bytes are UTF-8, or the text with U+FFFD for bad sequences.",
          "`null` from `toUtf8` when the bytes are not UTF-8; " + OOM + " from `toUtf8Lossy`", []),
-        ("`b.append(text) -> Result<void, AllocError>` (any text: lib/core's `TextBuffer`, ADR 0253), "
+        ("`b.append(text) -> Result<bool, AllocError>` (any text: lib/core's `TextBuffer`, ADR 0253), "
          "`b.appendBytes(bytes: Slice<u8>) -> Result<void, AllocError>`, "
          "`b.appendByte(byte: u8) -> Result<void, AllocError>`",
-         "Adds a text, bytes, or one byte at the end.", OOM + "; the byte string is unchanged", []),
+         "Adds a text (and answers `true`: a byte string takes every byte), bytes, or one byte at the end.",
+         OOM + "; the byte string is unchanged", []),
+        ("`b.appendLossy(text) -> Result<void, AllocError>`",
+         "Adds a text with U+FFFD for each maximal subpart of an ill-formed sequence (`TextBuffer`, which a `String` "
+         "has too: there `append` of text that is not UTF-8 answers `false` and adds nothing).", OOM, []),
         ("`b.appendNumber(value: i64) -> Result<void, AllocError>`, "
          "`b.appendUnsigned(value: u64) -> Result<void, AllocError>`",
          "Adds an integer at the end, in decimal. A `ByteString` also has `AppendFormatted`'s and `AppendText`'s "

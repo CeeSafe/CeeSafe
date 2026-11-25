@@ -34,8 +34,8 @@
      `embedded.mobileprovision`, whose `aps-environment` says `development`; an App Store build carries none and is
      production. The app's signing must grant `aps-environment` (CeeUI's packer's `--push`), which only a profile of
      an explicit App ID with Push Notifications has.
-   - **Android** (FCM), **macOS**, Windows, Linux, FreeBSD, CosmoOS and `ceesafec run --interp`: `Unsupported` for now
-     (§6.1).
+   - **Android** (amended 2026-11-25): FCM, from the app's own Firebase, a later decision (ADR 0249).
+   - **macOS**, Windows, Linux, FreeBSD, CosmoOS and `ceesafec run --interp`: `Unsupported` for now (§6.1).
 4. **What is shown**: what the server sends. An alert push is shown by the system as it comes; a program that must
    change it before it is shown (a messenger's text is end-to-end encrypted) needs iOS's notification service
    extension, a later step (§6.2).

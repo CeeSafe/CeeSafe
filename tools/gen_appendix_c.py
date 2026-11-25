@@ -512,6 +512,52 @@ TABLES.append(table(
     ],
 ))
 
+OS_NAMES = "[OsStringView](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-osstringview)"
+TABLES.append(table(
+    "`OsStringView` and `OsString`",
+    "An `OsStringView` borrows, and an `OsString` owns, a name for the system: a file name, an argument or an "
+    "environment variable, in the system's encoding (ADR 0257): bytes on POSIX, WTF-8 on Windows. A function that "
+    "takes an `OsStringView` also takes a string literal, a `StringView` or a `String`, as every path of `File` and "
+    "`Directory` does. In the rows, `v` is an `OsStringView` and `o` an `OsString`; " + OS_NAMES + " documents them.",
+    [],
+    [
+        ("`OsStringView.fromText(text: StringView) -> OsStringView`, `OsStringView.fromBytes(bytes: Slice<u8>) -> OsStringView`, "
+         "`OsStringView.fromByteString(text: ByteStringView) -> OsStringView`",
+         "A view of the bytes of a text, a slice or a byte string. Nothing is copied or checked.", NO, []),
+        ("`OsString.fromString(text: String) -> OsString`, `OsString.fromBytes(bytes: Vector<u8>) -> OsString`, "
+         "`OsString.fromByteString(text: ByteString) -> OsString`, `o.intoBytes() -> Vector<u8>`, "
+         "`o.intoByteString() -> ByteString`",
+         "A name that takes the buffer, and the buffer given back. Nothing is copied.", NO, []),
+        ("`OsString.create() -> OsString`, `OsString.fromText(text: StringView) -> Result<OsString, AllocError>`, "
+         "`OsString.copyOf(bytes: Slice<u8>) -> Result<OsString, AllocError>`, `o.clone() -> Result<OsString, AllocError>`, "
+         "`v.toOsString() -> Result<OsString, AllocError>`",
+         "An empty name, or a new name with a copy of the bytes.", OOM, []),
+        ("`v.bytes() -> Slice<u8>`, `v.length() -> usize`, `v.isEmpty() -> bool`, `o.view() -> OsStringView`, "
+         "`v.toByteStringView() -> ByteStringView`",
+         "The bytes, their number, whether there are none; a view of an `OsString`; the bytes as a byte string.",
+         NO, []),
+        ("`v.toUtf8() -> StringView?`, `v.isUtf8() -> bool`, `o.intoString() -> Result<String, OsString>`",
+         "The name as text with no copy when its bytes are UTF-8.",
+         "`null`, or `Err` with the name unchanged, when they are not", []),
+        ("`v.toUtf8Lossy() -> Result<String, AllocError>`",
+         "The name as text, one U+FFFD for each encoded surrogate and each ill-formed sequence.", OOM, []),
+        ("`OsString.fromWide(units: Slice<u16>) -> Result<OsString, AllocError>`, "
+         "`v.toWide() -> Result<Vector<u16>?, AllocError>`, `v.isWtf8() -> bool`",
+         "Windows' conversion between UTF-16 and WTF-8, on every system.",
+         "`null` from `toWide` for bytes that are not well-formed WTF-8; " + OOM, []),
+        ("`o.append(name: OsStringView) -> Result<void, AllocError>`, "
+         "`o.appendBytes(bytes: Slice<u8>) -> Result<void, AllocError>`, `o.appendByte(b: u8) -> Result<void, AllocError>`, "
+         "`o.clear()`",
+         "Adds a name, bytes or one byte at the end; empties it.", OOM + "; the name is unchanged", []),
+        ("`v.equals(other: OsStringView) -> bool`, `v == w`", "Whether two names have the same bytes.", NO, []),
+        ("`Directory.listOs(path: OsStringView) -> Result<Vector<OsString>, IoError>`, "
+         "`Directory.currentOs() -> Result<OsString, IoError>`, "
+         "`Environment.variableOs(name: OsStringView) -> OsStringView?`",
+         "A directory's names sorted by byte value, the working directory, and a variable's value, none refused for "
+         "not being UTF-8.", "`Err(IoError)` as `Directory.list` and `current`; `null` when the variable is unset", []),
+    ],
+))
+
 TABLES.append(table(
     "Optionals: `T?`",
     "A `T?` is either `null` or `Some(value)`. In the rows, `o` is an optional of type `T?`.",
@@ -853,21 +899,32 @@ TABLES.append(table(
         ("`Process.run(program: StringView, arguments: borrow Vector<StringView>) -> Result<i32, IoError>`",
          "Starts a program found on `PATH`, waits for it, and returns its exit status.",
          "`Err(IoError)` when the program cannot be started", []),
-        ("`Process.capture(program: StringView, arguments: borrow Vector<StringView>, input: Slice<u8>?) -> Result<ProcessOutput, IoError>`",
+        ("`Process.argumentOs(i: usize) -> OsStringView?`",
+         "Command-line argument `i` in the system's encoding, UTF-8 or not (ADR 0257).",
+         "`null` when there is no argument `i`"),
+        ("`Process.capture(program: OsStringView, arguments: borrow Vector<StringView>, input: Slice<u8>?) -> Result<ProcessOutput, IoError>`",
          "Runs a program with `input` as its standard input, and returns its `status`, and its `stdout` and `stderr` as byte vectors.",
          "`Err(IoError)` when the program cannot be started", []),
-        ("`Process.spawn(program: StringView, arguments: borrow Vector<StringView>, options: ChildOptions) -> Result<ChildProcess, IoError>`",
+        ("`Process.runWith(program: OsStringView, arguments: borrow Vector<StringView>, options: borrow ChildOptions) -> Result<i32, IoError>`, "
+         "`Process.captureWith(program: OsStringView, arguments: borrow Vector<StringView>, input: Slice<u8>?, options: borrow ChildOptions) -> Result<ProcessOutput, IoError>`",
+         "`run` with the options' streams and environment, and `capture` with the options' environment (ADR 0258). "
+         "The arguments of these and of `capture`, `spawn` and `spawnWith` may be a `Vector<OsStringView>`.",
+         "`Err(IoError)` when the program cannot be started, `InvalidInput` for a bad change of the environment; "
+         "`Unsupported` from `runWith` in the interpreter", []),
+        ("`Process.spawn(program: OsStringView, arguments: borrow Vector<StringView>, options: borrow ChildOptions) -> Result<ChildProcess, IoError>`",
          "Starts a program found on `PATH` and returns: it runs beside this one. The `ChildProcess` has `id`, `poll`, `wait`, `terminate` and `kill`.",
          "`Err(IoError)` when the program cannot be started; `Unsupported` in the interpreter", []),
-        ("`Process.spawnWith(program: StringView, arguments: borrow Vector<StringView>, options: ChildOptions, handover: borrow Handover) -> Result<ChildProcess, IoError>`",
+        ("`Process.spawnWith(program: OsStringView, arguments: borrow Vector<StringView>, options: borrow ChildOptions, handover: borrow Handover) -> Result<ChildProcess, IoError>`",
          "`spawn`, and the child has the listeners, UDP sockets and shared memory that `handover` lists.",
          "`Err(IoError)` when the program cannot be started; `Unsupported` in the interpreter", []),
         ("`Process.inherited() -> Inherited`",
          "What this process was handed by the one that started it: `count`, `kind(place)`, and `listener(place)`, `datagrams(place)` and `memory(place)`, each of which takes its place once.",
          "empty where nothing was handed, and in the interpreter", []),
         ("`Process.id() -> u64`", "The system's id of this process.", "0 in the interpreter", []),
-        ("`Process.executable() -> Result<String, IoError>`",
-         "The path of the running program, to start it again.", "`Err(IoError)` when the system does not say", []),
+        ("`Process.executable() -> Result<String, IoError>`, `Process.executableOs() -> Result<OsString, IoError>`",
+         "The path of the running program, to start it again; as text, or in the system's encoding.",
+         "`Err(IoError)` when the system does not say; `InvalidInput` from `executable` for a path that is not UTF-8",
+         []),
     ],
     first="Function",
 ))

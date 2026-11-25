@@ -692,16 +692,18 @@ fn emitConstruction(
                 }
                 var operand = Vector<u8>.create();
                 appendOperand(e, c, n, sources, f, mut operand, o)?;
+                // Copied as bytes: an assignment of the array struct to the C array's storage would be an access of
+                // a type the object does not have, which gcc's strict aliasing may drop (c-backend.md §1).
                 e.t(indent)?;
-                e.t("(*(")?;
+                e.t("cee_write_unaligned(")?;
                 appendCTypeName(c, mut e.buf, c.types.fields[field as usize].typ)?;
-                e.t(" *)(uintptr_t)&")?;
+                e.t(", &")?;
                 e.b(target)?;
                 e.t(".")?;
                 appendFieldName(c, mut e.buf, field)?;
-                e.t(") = ")?;
+                e.t(", ")?;
                 e.b(operand.view())?;
-                e.t(";")?;
+                e.t(");")?;
                 e.emit()?;
             }
         }
@@ -1023,6 +1025,17 @@ fn emitStatement(
             // `x = x;` is a no-op in the reference; in C it trips -Wself-assign (c-backend.md §5).
             if (!sameBytes(value.view(), place.view())) {
                 e.t("    ")?;
+                if (isWholeCArrayPlace(c, n, f, target)) {
+                    // A whole array into a C array member's storage: as bytes (isWholeCArrayPlace).
+                    e.t("cee_write_unaligned(")?;
+                    appendCTypeName(c, mut e.buf, placeTypeIn(c, n, f, target))?;
+                    e.t(", &")?;
+                    e.b(place.view())?;
+                    e.t(", ")?;
+                    e.b(value.view())?;
+                    e.t(");")?;
+                    return e.emit();
+                }
                 e.b(place.view())?;
                 e.t(" = ")?;
                 e.b(value.view())?;
@@ -3133,6 +3146,15 @@ fn appendOperand(
                 let text = appendPlaceIn(e, c, n, sources, f, place)?;
                 return appendFromBoundary(c, out, placeTypeIn(c, n, f, place), text.view());
             }
+            if (isWholeCArrayPlace(c, n, f, place)) {
+                // A whole array out of a C array member's storage: as bytes (isWholeCArrayPlace).
+                let text = appendPlaceIn(e, c, n, sources, f, place)?;
+                appendText(out, "cee_read_unaligned(")?;
+                appendCTypeName(c, out, placeTypeIn(c, n, f, place))?;
+                appendText(out, ", &")?;
+                appendBytes(out, text.view())?;
+                return out.push(')');
+            }
             return appendPlace(e, c, n, sources, f, out, place);
         }
         NirOperand.Const(v) => { return appendConstant(c, out, v, n.operandTypes[o as usize]); }
@@ -3154,6 +3176,30 @@ fn appendOperand(
         }
         NirOperand.Zero => { return appendText(out, "?"); } // the reference throws
     }
+}
+
+/// A whole array reached through a C array member of an imported or `@repr(C)` struct (§31.3): the member itself, or
+/// an inner array of a C array of arrays. The place's C is the reference's array struct over the C array's storage,
+/// which is right for an element (`.e[i]` has the element's own type) but not for the whole value: a read or write
+/// of the array struct there accesses the object through a type it does not have, which C's strict aliasing makes
+/// undefined, and gcc 14 at -O2 dropped such writes (c-backend.md §1). Such a value is copied as bytes instead.
+fn isWholeCArrayPlace(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
+    let p = n.places[place as usize];
+    var owner = nirLocalType(n, f, p.local);
+    var through = false;
+    for (k in 0..p.projections.count) {
+        let projection = n.projections[(p.projections.start + k) as usize];
+        match (projection.kind) {
+            ProjectionKind.Field => {
+                if (isCArrayMember(c, owner, projection.field)) {
+                    through = true;
+                }
+            }
+            _ => {}
+        }
+        owner = applyNirProjection(c, owner, projection);
+    }
+    return through && c.types.is(owner, TypeKind.Array);
 }
 
 /// A field of an imported C type whose C type differs from the reference's C for it (IsBoundaryField, §31.3).

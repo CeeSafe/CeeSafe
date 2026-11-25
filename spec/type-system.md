@@ -1279,9 +1279,11 @@ fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {
   `SliceMut` argument. A `Slice<T>` receiver is N0211. Arrays and vectors are written through a slice:
   `a[..].fill(0)`, `v.viewMut().fill(0)`.
 - Evaluation is left to right: the receiver (its place, bounds and range check), then the argument, then
-  the length check, then the writes. The receiver's loan starts before the argument is evaluated: these
-  calls are not two-phase (B5 applies only to `borrow mut this` methods of a place). So the argument
-  cannot read the destination: `s.fill(s[0])` is N0242, and `let v = s[0]; s.fill(v);` is the fix.
+  the length check, then the writes. The receiver's loan starts after the argument is evaluated: these calls are
+  two-phase like a `borrow mut this` method of a place (B5, ADR 0252), and so is a receiver `a[lo..hi]`. So the
+  argument may read the destination, `s.fill(s[0])` and `into.copyFrom(v[at..at + into.length])`, but a source
+  that still borrows it at the call is N0241 (`d.copyFrom(d[0..2])`), and a later argument that would change a
+  sliced receiver's place is N0241 too (lifetimes.md §5).
 - The result is `void`.
 - Not provided in M9b: a copy within one slice whose ranges may overlap, comparisons, searches.
 - **`d.swap(i, j)`** (M11 G8c), with `i, j: usize`: exchanges elements `i` and `j` of a `SliceMut<T>` (or of a
@@ -1305,7 +1307,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
   elements, or a slicing expression taken mutably (N0211 for a `Slice<u8>`). `x`'s type gives the width: a type
   argument (`writeBE<u32>(at, 5)`) or the value's own type; a literal without a suffix and without a type argument
   is N0265. So is a character literal without one: it is a `u32` code point, so `'P'` alone would write four bytes
-  (`pushBE<u8>('P')` writes one; 0.15.2). They are not two-phase, like `copyFrom` (§16.5).
+  (`pushBE<u8>('P')` writes one; 0.15.2). Their receiver is two-phase (B5), a slicing expression too (ADR 0252), like
+  `copyFrom`'s (§16.5): `buf[0..4].writeLE(0, buf[5])` reads `buf` before the loan.
 - `v.pushBE(x)` and `v.pushLE(x)` on a `Vector<u8, A>` append `x`'s bytes with one growth: `Result<void, AllocError>`,
   the vector unchanged on failure. The width is chosen as for `writeBE`. They are two-phase (B5), like `push`.
 - A read or write checks `at < length` and `at + size(T) - 1 < length` at the call, before anything is read or
@@ -2358,7 +2361,18 @@ fn main() {
   - `a == b` and `a != b` on two optionals of one Copy type `T` whose values compare with `==` (ADR 0138 §3): equal
     when both are `null`, or both hold equal values (`T`'s own `==`, an optional's again for `T??`). The right
     operand is checked against the left's type, so `o == Some(5)` needs no annotation. Neither is consumed.
-  - Other comparisons of optionals, and `==` on optionals of a type that is not Copy, are not defined (N0207).
+  - **Optional borrows** (ADR 0251). `a == b` and `a != b` where one operand is an optional borrow of `T`,
+    `(borrow T)?` or `(borrow mut T)?`, compare through its references: equal when both are `null`, or both hold
+    referents equal by `T`'s `==` (§13.3: references compare their referents). `T` need not be Copy, and neither
+    operand is consumed. The other operand may be `null`; `Some(p)` with `p` a place of `T`, which is lent as an
+    argument for a `borrow T` parameter is (`m.get(k) == Some(name)` leaves `name` usable); `Some(e)` of a value (the
+    comparison's own optional: `m.get(k) == Some(10)`); another optional borrow of `T` (`m.get(a) == m.get(b)`); a
+    `T?`, copied if `T` is Copy and lent as by `asBorrow()` if it is a place of a `T` that is not; or a `borrow (T?)`,
+    lent as by `asBorrow()`. A `(borrow mut T)?` place is lent shared, not moved. A `borrow (T?)` of a `T` that is
+    not Copy is lent as by `asBorrow()` and compared so (`r == Some(x)`).
+  - Other comparisons of optionals, and `==` on two owned optionals of a type that is not Copy, are not defined
+    (N0207, whose message names `a.asBorrow() == b.asBorrow()`). The referents must have one type:
+    `m.get(k) == Some("a")` with `V = String` is N0205.
 - **Optional borrows** (ADR 0074 §2.5). `o.asBorrow()`, on a place of type `T?` or on a `borrow (T?)`, is a
   `borrow T?`: `Some` borrows the payload, and `null` is `null`. `o.asBorrowMut()`, on a mutable place of type `T?`
   or on a `borrow mut (T?)`, is a `(borrow mut T)?` (N0248 otherwise). Either is a shared or mutable loan of the place

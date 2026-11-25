@@ -155,6 +155,17 @@ argument may read the place (`fail(mut s, s.count)`) but a write, a move or a mu
 N0241), and so does a shared borrow still live at the call (`f(mut s, s.name.view())`). Reads in later arguments
 of what a reserved loan may cover are taken where they stand, before the loans are made.
 
+**Slices and bulk writes (ADR 0252).** The receiver of `d.copyFrom(s)` and `d.fill(v)` is two-phase as a `borrow mut
+this` receiver is: `into.copyFrom(v[at..at + into.length])` and `s.fill(s[0])` are accepted. So is a slice lent
+mutably, `a[lo..hi]` (and an array's or vector's writing methods, which are `a[..]`'s), as such a receiver, as the
+receiver of a `borrow mut this` method, or as a `mut a[lo..hi]` argument: its place is found, its bounds evaluated,
+copied and range-checked where it stands, and the loan (`Slice`) is made at the call. Because its bounds were checked
+there, the sliced place is reserved like a `mut p` argument's, a receiver's too, while a later argument does more than
+read (of its variable, when the place is a slice's elements): `v[0..2].fill(pop(mut v))` is N0241. A source that
+still borrows the destination at the call conflicts when the loan is made (N0241: `d.copyFrom(d[0..2])`). A receiver
+that is a call's result (`whole(mut v).fill(…)`) lends when the call runs, and a reference held in a field
+(`h.buf.fill(h.buf[0])`) is reborrowed where it stands: an argument that reads them is N0242, whose note says so.
+
 ## 6. Temporaries
 
 `f(makeValue())` with a `borrow T` parameter borrows a temporary that dies at the end of the

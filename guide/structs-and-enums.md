@@ -727,7 +727,9 @@ true
 ```
 
 - `o == null` and `o != null` test for absence; so do `o.isNull()` and `o.isSome()`. Two optionals of a Copy type
-  compare too: `o == Some(3)` is true when `o` holds 3, and two `null`s are equal.
+  compare too: `o == Some(3)` is true when `o` holds 3, and two `null`s are equal. An optional borrow compares what
+  it refers to, of any type with `==`: `m.get(k) == Some(x)` lends `x` and copies nothing, and `m.get(a) == m.get(b)`
+  compares the two values.
 - `o ?? fallback` is the value, or `fallback` when `o` is `null`. The fallback is evaluated only then, and a chain
   `a ?? b ?? c` takes the first value present. The fallback may be a block that leaves or ends in a value:
   `let n = parse(text) ?? { return Err(Bad); };`, `?? { continue; }`.

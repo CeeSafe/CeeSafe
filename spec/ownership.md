@@ -113,7 +113,8 @@ function. "At point p" means on entry to the NIR statement at p.
   `borrow mut this` receiver, the mutable loan of `recv` is *reserved* while
   `args` are evaluated (permitting shared reads) and *activated* at the call.
   Required for `v.push(v.length)`. ADR 0073 §2.2 extends it to every `mut p` argument, whose later arguments may
-  only read `p` (`lifetimes.md` §5).
+  only read `p` (`lifetimes.md` §5), and ADR 0252 to `copyFrom` and `fill` and to a slice lent mutably,
+  `a[lo..hi]`, as a receiver or a `mut` argument.
 
 ### Escape (lifetime) rules
 

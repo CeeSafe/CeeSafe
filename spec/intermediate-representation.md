@@ -160,7 +160,9 @@ Lowering rules (HIR → NIR, `NirBuilder`):
   - a use of a `borrow mut` variable becomes `Ref(Mut, (*r))` (reborrow);
   - a call-site borrow of a value spills it into a temporary, which gets `StorageDead` at the end of
     the statement;
-  - for a `borrow mut this` receiver, the receiver's `Ref` is emitted after the other arguments (B5);
+  - for a `borrow mut this` receiver, the receiver's `Ref` is emitted after the other arguments (B5); so is a mutable
+    `Slice` of a receiver or `mut a[lo..hi]` argument, whose bounds are copied to temporaries and range-checked where
+    it stands (ADR 0252);
   - every statement carries a source span for borrow diagnostics.
 - The **borrow checker** (`src/nir/borrow.cee`, `lifetimes.md`) runs on NIR inside
   `Compilation.Create`, so `ceesafec check` reports borrow errors too.
@@ -200,7 +202,9 @@ Lowering rules (HIR → NIR, `NirBuilder`):
     for `a[..]`), then `Slice`.
   - **Bulk operations (M9b).** `d.copyFrom(s)` lowers the receiver slice, then the source slice, each into a
     temporary, then `LengthCheck(Length(s), Length(d))`, then the built-in `SliceCopy(d, s)`, which copies
-    with `memmove` semantics. `d.fill(v)` is the built-in `SliceFill(d, v)`. Neither is two-phase.
+    with `memmove` semantics. `d.fill(v)` is the built-in `SliceFill(d, v)`. Both are two-phase in the receiver
+    (ADR 0252): its place, and a slice's bounds and `RangeCheck`, come first; its `Ref`/`Slice` is assigned after the
+    argument.
     `d.swap(i, j)` (M11 G8c) lowers the slice and both indices, then `BoundsCheck(i, Length(d))` and
     `BoundsCheck(j, Length(d))`, then the built-in `SliceSwap(d, i, j)`. `v.retain(keep)` lowers the vector
     reference and the closure, then a temporary `SliceMut` reborrowed from the vector's elements, a call of

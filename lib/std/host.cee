@@ -57,6 +57,8 @@ extern "C" {
     fn ceesafe_host_is_terminal(stream: u32) -> i64;
     @effects(sleep)
     fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_link(existing: *u8, existingLength: u64, made: *u8, madeLength: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_dir_open(path: *u8, length: u64, error: *mut i32) -> *mut void;
     @effects(sleep)
@@ -904,6 +906,18 @@ public struct HostServices {
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
+    /// `File.link(existing, new)` (ADR 0255): makes `new` a second name of the file `existing` names, a hard link
+    /// (POSIX `link`; Windows `CreateHardLinkW`): both names open the same file, and removing one leaves the other.
+    /// `new` is never replaced: `AlreadyExists` if it exists. `NotFound` if `existing` or a directory of either path
+    /// is missing, `IsDirectory` if `existing` is a directory, `Unsupported` where the file system has no hard links,
+    /// `Other` across volumes or past the file's limit of links. The new name is durable once its directory is synced
+    /// (`Directory.sync`).
+    /// Safety: the runtime reads both paths' bytes during the call only.
+    public fn link(existing: StringView, new: StringView) -> Result<void, IoError> {
+        let result = unsafe { ceesafe_host_link(existing.ptr, existing.length as u64, new.ptr, new.length as u64) };
+        return if (result < 0) Err(HostServices.hostError(result)) else Ok();
+    }
+
     /// Safety: `texts` holds a view per argument and outlives the call; the runtime reads it and the paths during
     /// the call only.
     fn captureIn(
@@ -1124,6 +1138,12 @@ public enum FileLock {
 /// releases its locks. Portable use: lock a range the `File` does not hold, and unlock exactly a range it locked
 /// (Windows neither converts nor splits a lock; POSIX does both, and a conversion that meets a conflict leaves the
 /// held lock as it was, ADR 0234 §2.3).
+///
+/// With `CEESAFE_LOCK_RULES=portable` or `strict` in the environment (ADR 0256), every host keeps that contract: a
+/// lock over a range the `File` holds panics (under `portable`, converting exactly a held range is allowed), so does
+/// an unlock of a range not locked as given and a `testLock` over the `File`'s own lock, and a lock the `File`'s
+/// access does not allow is `BadDescriptor`, POSIX's answer, on Windows too. A test suite set so on macOS or Linux
+/// fails where a Windows run would.
 public struct FileLocks {
     /// `f.lock(kind, start, length)`: waits until bytes `start` to `start + length - 1` are locked. A range may lie
     /// past the end of the file. `InvalidInput` for `length` 0 or a range that ends past 2^63 - 1; `BadDescriptor`
@@ -1135,6 +1155,10 @@ public struct FileLocks {
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
+        FileLocks.ruled(
+            result,
+            "FileLocks.lock: the File already holds a lock on bytes of this range, which Windows refuses (CEESAFE_LOCK_RULES)",
+        );
         return Ok();
     }
 
@@ -1153,6 +1177,10 @@ public struct FileLocks {
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
+        FileLocks.ruled(
+            result,
+            "FileLocks.tryLock: the File already holds a lock on bytes of this range, which Windows refuses (CEESAFE_LOCK_RULES)",
+        );
         return Ok(result == 0);
     }
 
@@ -1174,6 +1202,10 @@ public struct FileLocks {
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
+        FileLocks.ruled(
+            result,
+            "FileLocks.testLock: the File holds a lock on bytes of this range, which Windows counts and POSIX does not (CEESAFE_LOCK_RULES)",
+        );
         return match (result) {
             0 => Ok(null),
             1 => Ok(Some(FileLock.Shared)),
@@ -1181,7 +1213,8 @@ public struct FileLocks {
         };
     }
 
-    /// `f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+    /// `f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error (but see
+    /// `CEESAFE_LOCK_RULES` above).
     /// Safety: as `lock`.
     public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError> {
         FileLocks.check(start, length)?;
@@ -1189,7 +1222,22 @@ public struct FileLocks {
         if (result < 0) {
             return Err(HostServices.hostError(result));
         }
+        FileLocks.ruled(
+            result,
+            "FileLocks.unlock: the range is not one the File locked, and Windows releases only those (CEESAFE_LOCK_RULES)",
+        );
         return Ok();
+    }
+
+    /// The runtime's answers under `CEESAFE_LOCK_RULES` (ADR 0256): 3 when the rules refuse the call, with
+    /// `refused`'s message, and 4 when the variable's value is neither `portable` nor `strict`.
+    fn ruled(result: i64, refused: StringView) {
+        if (result == 3) {
+            panic(refused);
+        }
+        if (result == 4) {
+            panic("CEESAFE_LOCK_RULES is neither portable nor strict");
+        }
     }
 
     /// A range the systems can name: at least one byte, ending at or below 2^63 - 1 (POSIX's `off_t`).

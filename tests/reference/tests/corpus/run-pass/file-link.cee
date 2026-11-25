@@ -1,0 +1,106 @@
+// File.link (ADR 0255), the same output natively and in the interpreter: a second name opens the same file, a write
+// through one name is read through the other, removing the first name leaves the second; `new` is never replaced
+// (AlreadyExists, its content unchanged); NotFound for a missing file, for a missing directory of `new` and for an
+// empty path (as POSIX's link and every other call on a path answer), IsDirectory for a directory. That the two
+// names are one file and not a copy, by its inode and link count, is checked against Python's os.stat in
+// tools/file_lock_check.py.
+
+fn named(e: IoError) -> StringView => match (e) {
+    IoError.AlreadyExists => "AlreadyExists",
+    IoError.NotFound => "NotFound",
+    IoError.IsDirectory => "IsDirectory",
+    IoError.InvalidInput => "InvalidInput",
+    _ => e.message(),
+};
+
+fn shown(r: Result<void, IoError>) -> StringView => match (r) {
+    Ok() => "Ok",
+    Err(e) => named(e),
+};
+
+fn path(dir: StringView, name: StringView) -> String {
+    var p = String.create();
+    p.append(dir)!;
+    p.append("/")!;
+    p.append(name)!;
+    return p;
+}
+
+fn read(at: StringView) -> Result<String, IoError> {
+    var f = File.open(at)?;
+    var buffer = [0u8; 64];
+    let n = f.read(mut buffer[..])?;
+    var text = String.create();
+    text.append(StringView.fromUtf8(buffer[0..n]) ?? "?")!;
+    return Ok(text);
+}
+
+fn run(dir: StringView) -> Result<void, IoError> {
+    let first = path(dir, "first");
+    let second = path(dir, "second");
+    let other = path(dir, "other");
+    {
+        var f = File.create(first.view())?;
+        f.write("one name".bytes())?;
+    }
+    {
+        var f = File.create(other.view())?;
+        f.write("someone else".bytes())?;
+    }
+    Console.writeLine(shown(File.link(first.view(), second.view())));
+    Console.writeLine(read(second.view())?.view());
+    // A write through the second name is read through the first.
+    {
+        let f = File.openReadWrite(second.view())?;
+        f.writeAt("two".bytes(), 0)?;
+    }
+    Console.writeLine(read(first.view())?.view());
+    // `new` is never replaced.
+    Console.writeLine(shown(File.link(first.view(), other.view())));
+    Console.writeLine(read(other.view())?.view());
+    Console.writeLine(shown(File.link(first.view(), second.view())));
+    // What cannot be linked.
+    let missing = path(dir, "missing");
+    let third = path(dir, "third");
+    Console.writeLine(shown(File.link(missing.view(), third.view())));
+    let nowhere = path(dir, "no/such/dir");
+    Console.writeLine(shown(File.link(first.view(), nowhere.view())));
+    let sub = path(dir, "sub");
+    Directory.create(sub.view())?;
+    Console.writeLine(shown(File.link(sub.view(), third.view())));
+    Console.writeLine(shown(File.link("", third.view())));
+    Console.writeLine(shown(File.link(first.view(), "")));
+    // Removing the first name leaves the file under the second.
+    File.remove(first.view())?;
+    Console.writeLine(read(second.view())?.view());
+    match (File.kind(first.view())?) {
+        Some(_) => { Console.writeLine("the first name is still there"); }
+        null => { Console.writeLine("the first name is gone"); }
+    }
+    File.remove(second.view())?;
+    File.remove(other.view())?;
+    Directory.remove(sub.view())?;
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    match (run(dir.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: Ok
+// expect-stdout: one name
+// expect-stdout: two name
+// expect-stdout: AlreadyExists
+// expect-stdout: someone else
+// expect-stdout: AlreadyExists
+// expect-stdout: NotFound
+// expect-stdout: NotFound
+// expect-stdout: IsDirectory
+// expect-stdout: NotFound
+// expect-stdout: NotFound
+// expect-stdout: two name
+// expect-stdout: the first name is gone

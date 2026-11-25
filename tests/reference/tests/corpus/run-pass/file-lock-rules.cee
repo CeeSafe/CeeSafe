@@ -1,0 +1,81 @@
+// CEESAFE_LOCK_RULES=strict (ADR 0256): a program that keeps the portable contract runs as it does without the rules,
+// on every host and in the interpreter: os_win.c's steps from SHARED to EXCLUSIVE (unlock, then lock again),
+// adjacent ranges locked and unlocked one by one, a lock after its unlock, a range another File holds (the rules
+// count only the File's own locks), a test of a range the File does not hold. A lock the File's access does not
+// allow is BadDescriptor, POSIX's answer, on Windows and in the interpreter too. The breaches are run-fail's
+// file-lock-rules-*.cee; Windows' own answers are tools/file_lock_check.py's.
+// env: CEESAFE_LOCK_RULES=strict
+
+fn pending() -> u64 => 0x40000000;
+fn reserved() -> u64 => 0x40000001;
+fn sharedFirst() -> u64 => 0x40000002;
+
+fn shown(r: Result<void, IoError>) -> StringView => match (r) {
+    Ok() => "Ok",
+    Err(IoError.BadDescriptor) => "BadDescriptor",
+    Err(e) => e.message(),
+};
+
+fn run(path: StringView, other: StringView) -> Result<void, IoError> {
+    let a = File.createReadWrite(path)?;
+    // A reader's SHARED, then a writer's RESERVED, PENDING and EXCLUSIVE, as os_win.c takes them.
+    Console.writeLine(a.tryLock(FileLock.Shared, sharedFirst(), 510)?);
+    Console.writeLine(a.tryLock(FileLock.Exclusive, reserved(), 1)?);
+    Console.writeLine(a.tryLock(FileLock.Exclusive, pending(), 1)?);
+    a.unlock(sharedFirst(), 510)?;
+    Console.writeLine(a.tryLock(FileLock.Exclusive, sharedFirst(), 510)?);
+    // And back, each range unlocked as it was locked.
+    a.unlock(sharedFirst(), 510)?;
+    a.unlock(pending(), 1)?;
+    a.unlock(reserved(), 1)?;
+    // A lock after its unlock, of either kind.
+    a.lock(FileLock.Exclusive, 0, 10)?;
+    a.unlock(0, 10)?;
+    a.lock(FileLock.Shared, 0, 10)?;
+    a.unlock(0, 10)?;
+    // Another File's lock is not the File's own: a shared lock beside it is allowed, and a test sees no conflict.
+    let b = File.openReadWrite(path)?;
+    Console.writeLine(b.tryLock(FileLock.Shared, 100, 10)?);
+    Console.writeLine(a.tryLock(FileLock.Shared, 100, 10)?);
+    Console.writeLine(a.testLock(FileLock.Shared, 200, 10)?.isNull());
+    a.unlock(100, 10)?;
+    b.unlock(100, 10)?;
+    // The File's access: POSIX's rule everywhere.
+    let reader = File.open(path)?;
+    Console.writeLine(shown(reader.lock(FileLock.Exclusive, 300, 1)));
+    Console.writeLine(shown(reader.lock(FileLock.Shared, 300, 1)));
+    reader.unlock(300, 1)?;
+    let writer = File.create(other)?;
+    Console.writeLine(shown(writer.lock(FileLock.Shared, 300, 1)));
+    Console.writeLine(shown(writer.lock(FileLock.Exclusive, 300, 1)));
+    writer.unlock(300, 1)?;
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    var other = String.create();
+    other.append(dir.view())!;
+    other.append("/written")!;
+    match (run(path.view(), other.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())!;
+    File.remove(other.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: BadDescriptor
+// expect-stdout: Ok
+// expect-stdout: BadDescriptor
+// expect-stdout: Ok

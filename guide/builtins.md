@@ -132,6 +132,7 @@ no argument 1000
 | `f.syncData()`, `f.syncAll()` | durable on disk (`F_FULLFSYNC` on Apple systems); after a failed sync the file's durable contents are unknown |
 | `f.length()`, `f.setLength(n)` | `u64`; truncate or zero-extend |
 | `File.rename(from, to)`, `Directory.sync(path)` | atomic replace; make a directory's entries durable |
+| `File.link(existing, new)` | a second name (a hard link) for a file; `AlreadyExists` if `new` exists (ADR 0255) |
 | `Directory.space(path)` | the volume's `total`, `free` and `available` bytes (ADR 0077) |
 | `Console.flush()` | write standard output's buffer now, so it survives a kill |
 | `File.openAppend(path)` | write-only, created if missing, every write at the end |
@@ -174,6 +175,8 @@ A lock is advisory: it keeps out only programs that ask for one too. Lock bytes 
 from 0x40000000), take a range the `File` does not already hold, and unlock exactly the ranges taken: that is the
 same on every system. Dropping the `File` releases its locks. `testLock` asks whether a lock could be taken
 without taking it (SQLite's "is a writer here?"), and names the kind of lock in the way.
+Linux and macOS allow more than Windows does (converting or splitting a held lock); run a program's tests with
+`CEESAFE_LOCK_RULES=strict` in the environment and any host panics where Windows would refuse (ADR 0256).
 
 ```ceesafe
 fn main() {

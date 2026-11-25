@@ -1,0 +1,14 @@
+// CEESAFE_LOCK_RULES=strict (ADR 0256 §2.2, 1): os_unix.c's step from SHARED to EXCLUSIVE, a conversion of exactly a
+// held range, which Windows refuses and `portable` allows (tools/file_lock_check.py checks that).
+// env: CEESAFE_LOCK_RULES=strict
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    Console.writeLine(f.tryLock(FileLock.Shared, 0x40000002, 510)!);
+    Console.writeLine(f.tryLock(FileLock.Exclusive, 0x40000002, 510)!); // expect-library-panic: FileLocks.tryLock: the File already holds a lock on bytes of this range, which Windows refuses (CEESAFE_LOCK_RULES)
+    Console.writeLine("after");
+}
+// expect-stdout: true

@@ -3023,6 +3023,20 @@ there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | M
 name is durable once its directory is synced (`Directory.sync`).
 Safety: the runtime reads both paths' bytes during the call only.
 
+### HostServices.link
+
+```ceesafe
+public fn link(existing: StringView, new: StringView) -> Result<void, IoError>
+```
+
+`File.link(existing, new)` (ADR 0255): makes `new` a second name of the file `existing` names, a hard link
+(POSIX `link`; Windows `CreateHardLinkW`): both names open the same file, and removing one leaves the other.
+`new` is never replaced: `AlreadyExists` if it exists. `NotFound` if `existing` or a directory of either path
+is missing, `IsDirectory` if `existing` is a directory, `Unsupported` where the file system has no hard links,
+`Other` across volumes or past the file's limit of links. The new name is durable once its directory is synced
+(`Directory.sync`).
+Safety: the runtime reads both paths' bytes during the call only.
+
 ## struct FileMetadata
 
 ```ceesafe
@@ -3078,6 +3092,12 @@ releases its locks. Portable use: lock a range the `File` does not hold, and unl
 (Windows neither converts nor splits a lock; POSIX does both, and a conversion that meets a conflict leaves the
 held lock as it was, ADR 0234 §2.3).
 
+With `CEESAFE_LOCK_RULES=portable` or `strict` in the environment (ADR 0256), every host keeps that contract: a
+lock over a range the `File` holds panics (under `portable`, converting exactly a held range is allowed), so does
+an unlock of a range not locked as given and a `testLock` over the `File`'s own lock, and a lock the `File`'s
+access does not allow is `BadDescriptor`, POSIX's answer, on Windows too. A test suite set so on macOS or Linux
+fails where a Windows run would.
+
 ### FileLocks.lock
 
 ```ceesafe
@@ -3119,7 +3139,8 @@ Safety: as `lock`.
 public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError>
 ```
 
-`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error (but see
+`CEESAFE_LOCK_RULES` above).
 Safety: as `lock`.
 
 ## enum ConsoleStream

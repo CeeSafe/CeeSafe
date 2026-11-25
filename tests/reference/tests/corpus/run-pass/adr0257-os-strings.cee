@@ -1,0 +1,190 @@
+// ADR 0257: lib/core's OsString and OsStringView, names in the system's encoding, and a `StringView` or a lent
+// `String` accepted for an `OsStringView` parameter (type-system.md §22.5). Each member once; the files are UTF-8
+// names in a temporary directory, so the interpreter runs it too. The WTF-8 cases are os-string-wtf8.cee's, from
+// Python's codecs. Expectations written by hand.
+
+fn length(name: OsStringView) -> usize => name.length();
+
+fn hex(bytes: Slice<u8>) -> String {
+    var out = String.create();
+    if (bytes.length == 0) {
+        out.append("-")!;
+    }
+    for (b in bytes) {
+        out.appendHex(b as u64, 2, false)!;
+    }
+    return out;
+}
+
+struct Names {
+    all: Vector<OsString>;
+
+    fn add(borrow mut this, name: OsStringView) {
+        this.all.push(name.toOsString()!)!;
+    }
+}
+
+fn conversions() {
+    // A literal, a view and a lent String for an OsStringView parameter: no copy (§22.5).
+    Console.writeLine(length("abc"));
+    let view: StringView = "hello";
+    Console.writeLine(length(view));
+    var owned = String.create();
+    owned.append("xy")!;
+    Console.writeLine(length(owned));
+    var names = Names { all: Vector<OsString>.create() };
+    names.add("method");
+    names.add(view);
+    Console.writeLine(names.all.length);
+    Console.writeLine(names.all[0].toUtf8()!);
+}
+
+fn members() {
+    let raw = [0x61u8, 0xFF, 0x62];
+    let v = OsStringView.fromBytes(raw[..]);
+    Console.writeLine(v.length());
+    Console.writeLine(v.isEmpty());
+    Console.writeLine(v.isUtf8());
+    Console.writeLine(v.toUtf8().isNull());
+    Console.writeLine(v.isWtf8());
+    Console.writeLine(v.toUtf8Lossy()!);
+    Console.writeLine(hex(v.toByteStringView().bytes()).view());
+    let text = OsStringView.fromText("näme");
+    Console.writeLine(text.toUtf8()!);
+    Console.writeLine(text.equals(OsStringView.fromByteString(ByteStringView.fromText("näme"))));
+    Console.writeLine(text == OsStringView.fromText("näme"));
+    Console.writeLine(text == v);
+
+    var o = OsString.create();
+    Console.writeLine(o.isEmpty());
+    o.append("dir")!;
+    o.append("/")!;
+    o.appendBytes(raw[..])!;
+    o.appendByte(0x7A)!;
+    Console.writeLine(hex(o.bytes()).view());
+    Console.writeLine(o.length());
+    Console.writeLine(o.isUtf8());
+    let copy = o.clone()!;
+    Console.writeLine(copy == o);
+    match (copy.intoString()) {
+        Ok(_) => { Console.writeLine("text"); }
+        Err(back) => { Console.writeLine(hex(back.view().bytes()).view()); }
+    }
+    o.clear();
+    Console.writeLine(o.length());
+
+    let fromText = OsString.fromText("a/b")!;
+    Console.writeLine(fromText.toUtf8()!);
+    var s = String.create();
+    s.append("owned")!;
+    let taken = OsString.fromString(s);
+    Console.writeLine(taken.toUtf8Lossy()!);
+    let bytes = taken.intoBytes();
+    Console.writeLine(bytes.length);
+    let again = OsString.fromBytes(bytes);
+    let asBytes = again.intoByteString();
+    Console.writeLine(asBytes.toUtf8()!);
+    let fromBytes = OsString.fromByteString(asBytes);
+    Console.writeLine(fromBytes.view().toOsString()!.toUtf8()!);
+    match (OsString.copyOf(raw[..])!.intoString()) {
+        Ok(_) => { Console.writeLine("text"); }
+        Err(back) => { Console.writeLine(back.isWtf8()); }
+    }
+    match (OsString.fromText("ok")!.intoString()) {
+        Ok(t) => { Console.writeLine(t.view()); }
+        Err(_) => { Console.writeLine("bytes"); }
+    }
+}
+
+fn files() {
+    let directory = Directory.temporary()!;
+    var name = OsString.fromText(directory.view())!;
+    name.append("/f.txt")!;
+    {
+        var file = File.create(name.view())!;
+        file.write("hi".bytes())!;
+    }
+    var other = OsString.fromText(directory.view())!;
+    other.append("/g.txt")!;
+    File.rename(name.view(), other.view())!;
+    match (File.kind(other.view())!) {
+        Some(PathKind.File) => { Console.writeLine("file"); }
+        _ => { Console.writeLine("?"); }
+    }
+    var file = File.open(other.view())!;
+    var buffer = [0u8; 8];
+    let n = file.read(mut buffer[..])!;
+    Console.writeLine(n);
+    let listed = Directory.listOs(directory.view())!;
+    Console.writeLine(listed.length);
+    Console.writeLine(listed[0].toUtf8()!);
+    let texts = Directory.list(directory.view())!;
+    Console.writeLine(texts[0].view());
+    File.remove(other.view())!;
+    Directory.remove(directory.view())!;
+    Console.writeLine(Directory.currentOs()!.isEmpty());
+}
+
+fn process() {
+    Console.writeLine(Process.argumentOs(0).isSome());
+    Console.writeLine(Process.argumentOs(9999).isNull());
+    Console.writeLine(Environment.variableOs("CEESAFE_ADR0257_SURELY_UNSET").isNull());
+    // A child's environment (ADR 0258): recorded here, checked when a child starts (tools/child_check.py).
+    var options = ChildOptions.streams(ChildStream.Null, ChildStream.Inherit, ChildStream.Inherit);
+    options.setEnvironment("HOME", "/tmp")!;
+    options.removeEnvironment("LANG")!;
+    options.clearEnvironment();
+    options.setEnvironment(OsStringView.fromText("A"), "1")!;
+    Console.writeLine(match (options.input) {
+        ChildStream.Null => "null",
+        ChildStream.Inherit => "inherit",
+    });
+}
+
+fn main() {
+    conversions();
+    members();
+    files();
+    process();
+}
+
+// expect-stdout: 3
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: 2
+// expect-stdout: method
+// expect-stdout: 3
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: a�b
+// expect-stdout: 61ff62
+// expect-stdout: näme
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 6469722f61ff627a
+// expect-stdout: 8
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 6469722f61ff627a
+// expect-stdout: 0
+// expect-stdout: a/b
+// expect-stdout: owned
+// expect-stdout: 5
+// expect-stdout: owned
+// expect-stdout: owned
+// expect-stdout: false
+// expect-stdout: ok
+// expect-stdout: file
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: g.txt
+// expect-stdout: g.txt
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: null

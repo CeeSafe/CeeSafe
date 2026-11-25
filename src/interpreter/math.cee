@@ -3,6 +3,10 @@
 // ceesafec, so `run --interp` prints what the program's build prints on the same machine (testing.md, "Interpreter
 // agreement"). ceesafec links libm: the manifest's [target.linux] and [target.freebsd] name it, macOS's and Windows'
 // C libraries hold it. The arguments are never constants in C, so no C compiler folds a call here either.
+// On Windows (ADR 0248 §2.3) a build calls ucrtbase.dll's functions whatever compiles it, but these calls are of the
+// C library ceesafec was linked with: ucrtbase.dll's for a ceesafec built by a UCRT MinGW or `cl /MD`, the SDK's
+// static copy for one built by `cl` as the seed's commands do. They become the runtime's `ceesafe_math_*` when
+// stage 0 (0.94.5, bootstrap/reference.md) is a release that has ceesafe_rt_math.c; 0.94.5 would not link them.
 
 extern "C" {
     @cname("exp")

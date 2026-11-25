@@ -126,10 +126,14 @@ public interface TextView: Copy {
 /// A text that grows: `String` (UTF-8 only) and `ByteString` (any bytes). Generic code reads one through its view
 /// (`s.view()`) and writes it through this.
 public interface TextBuffer {
-    /// Appends `text` (a literal, either view, or bytes). A `ByteString` takes every byte, and a `String` UTF-8,
-    /// growing at most once and unchanged if that fails. A `String` holds UTF-8 only: into one, each maximal subpart
-    /// of an ill-formed sequence becomes U+FFFD, as `toUtf8Lossy` gives it (on failure it keeps what was appended).
-    fn append<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
+    /// Appends `text` (a literal, either view, or bytes), growing at most once and unchanged if that fails; true when
+    /// it was appended. A `ByteString` takes every byte. A `String` holds UTF-8 only: text that is not UTF-8 is not
+    /// appended and the result is false, as `appendUtf8` answers; `appendLossy` appends it with replacements.
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError>;
+
+    /// Appends `text` with each maximal subpart of an ill-formed UTF-8 sequence replaced by U+FFFD, as `toUtf8Lossy`
+    /// gives it: into a `String` and a `ByteString` alike, so the result is UTF-8. On failure what was appended stays.
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError>;
 
     /// The bytes, a loan of the text.
     fn bytes(borrow this) -> Slice<u8>;
@@ -336,13 +340,18 @@ impl TextView for Slice<u8> {
 }
 
 impl TextBuffer for String {
-    fn append<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError> {
-        let bytes = text.bytes();
-        match (StringView.fromUtf8(bytes)) {
-            Some(valid) => { return this.append(valid); }
-            null => { return ByteStringView.fromBytes(bytes).appendLossyTo(this); }
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError> {
+        match (StringView.fromUtf8(text.bytes())) {
+            Some(valid) => {
+                this.append(valid)?;
+                return Ok(true);
+            }
+            null => { return Ok(false); }
         }
     }
+
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError> =>
+        ByteStringView.fromBytes(text.bytes()).appendLossyTo(this);
 
     fn bytes(borrow this) -> Slice<u8> => this.bytes();
 

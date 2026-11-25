@@ -171,7 +171,22 @@ public struct ByteString {
 /// A byte string is a `TextBuffer` (ADR 0253): it appends any text, every byte as it is.
 impl TextBuffer for ByteString {
     /// Appends the bytes of `text`: a literal, a `StringView`, a `ByteStringView` or bytes.
-    fn append<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError> => this.data.extend(text.bytes());
+    fn append<N: TextView>(borrow mut this, text: N) -> Result<bool, AllocError> {
+        this.data.extend(text.bytes())?;
+        return Ok(true);
+    }
+
+    /// Appends `text` with U+FFFD for each maximal subpart of an ill-formed sequence: the bytes become UTF-8.
+    fn appendLossy<N: TextView>(borrow mut this, text: N) -> Result<void, AllocError> {
+        var pieces = ByteStringView.fromBytes(text.bytes()).chunks();
+        for (chunk in pieces) {
+            this.data.extend(chunk.valid.bytes())?;
+            if (chunk.invalid.length > 0) {
+                this.data.extend("\u{FFFD}".bytes())?;
+            }
+        }
+        return Ok();
+    }
 
     /// The bytes, a loan of the byte string.
     fn bytes(borrow this) -> Slice<u8> => this.data.view();

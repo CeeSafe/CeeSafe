@@ -694,16 +694,17 @@ fn emitConstruction(
                 appendOperand(e, c, n, sources, f, mut operand, o)?;
                 // Copied as bytes: an assignment of the array struct to the C array's storage would be an access of
                 // a type the object does not have, which gcc's strict aliasing may drop (c-backend.md §1).
+                // Through a typed copy, not rt.h's cee_write_unaligned: its `(T[1]){v}` is -Wmissing-braces for gcc.
                 e.t(indent)?;
-                e.t("cee_write_unaligned(")?;
+                e.t("{ ")?;
                 appendCTypeName(c, mut e.buf, c.types.fields[field as usize].typ)?;
-                e.t(", &")?;
+                e.t(" cee_v = ")?;
+                e.b(operand.view())?;
+                e.t("; ceesafe_mem_copy((char *)&")?;
                 e.b(target)?;
                 e.t(".")?;
                 appendFieldName(c, mut e.buf, field)?;
-                e.t(", ")?;
-                e.b(operand.view())?;
-                e.t(");")?;
+                e.t(", &cee_v, sizeof cee_v); }")?;
                 e.emit()?;
             }
         }
@@ -1026,14 +1027,15 @@ fn emitStatement(
             if (!sameBytes(value.view(), place.view())) {
                 e.t("    ")?;
                 if (isWholeCArrayPlace(c, n, f, target)) {
-                    // A whole array into a C array member's storage: as bytes (isWholeCArrayPlace).
-                    e.t("cee_write_unaligned(")?;
+                    // A whole array into a C array member's storage: as bytes (isWholeCArrayPlace), through a typed
+                    // copy (rt.h's cee_write_unaligned's `(T[1]){v}` is -Wmissing-braces for gcc).
+                    e.t("{ ")?;
                     appendCTypeName(c, mut e.buf, placeTypeIn(c, n, f, target))?;
-                    e.t(", &")?;
-                    e.b(place.view())?;
-                    e.t(", ")?;
+                    e.t(" cee_v = ")?;
                     e.b(value.view())?;
-                    e.t(");")?;
+                    e.t("; ceesafe_mem_copy((char *)&")?;
+                    e.b(place.view())?;
+                    e.t(", &cee_v, sizeof cee_v); }")?;
                     return e.emit();
                 }
                 e.b(place.view())?;

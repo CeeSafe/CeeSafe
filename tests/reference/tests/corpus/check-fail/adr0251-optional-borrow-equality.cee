@@ -1,0 +1,14 @@
+// ADR 0251 §2.5: what `==` on optionals still refuses: two owned optionals of a type that is not Copy (ADR 0138 §3),
+// and referents of different types.
+fn main() {
+    var s = HashMap<i64, String>.create();
+    let _ = s.put(1, String.from("a")!)!;
+    let one: i64 = 1;
+    let a: String? = Some(String.from("a")!);
+    let b: String? = Some(String.from("a")!);
+    Console.writeLine(a == b);                  // error[N0207]
+    Console.writeLine(s.get(one) == Some("a")); // error[N0205]
+    var n = HashMap<i64, i64>.create();
+    let _ = n.put(1, 10)!;
+    Console.writeLine(n.get(one) == Some(true)); // error[N0205]
+}

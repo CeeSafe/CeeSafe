@@ -1,0 +1,13 @@
+// ADR 0251 §2.5: an owned `Some(p)` on the left of `==` is a value, so `p` moves into it; only a `Some(p)` on the
+// right of an optional borrow lends `p`.
+fn main() {
+    var s = HashMap<i64, String>.create();
+    let _ = s.put(1, String.from("a")!)!;
+    let one: i64 = 1;
+    let name = String.from("a")!;
+    Console.writeLine(Some(name) == s.get(one));
+    Console.writeLine(name.length); // error[N0250]
+    let other = String.from("a")!;
+    Console.writeLine(s.get(one) == Some(other));
+    Console.writeLine(other.length);
+}

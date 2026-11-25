@@ -699,10 +699,12 @@ fn synthBinary(
         leftHir = checkExpr(c, leftSyntax, rightHint)?;
     } else {
         let l = synth(c, leftSyntax, none())?;
-        leftHir = autoDeref(c, l)?;
+        leftHir = if (index == 2 || index == 3) lentOptional(c, l)? else autoDeref(c, l)?;
         let leftType = c.typeOf(leftHir);
-        if ((index == 2 || index == 3) && c.types.optionType(leftType) != none()) {
-            rightHir = checkExpr(c, rightSyntax, leftType)?; // `o == Some(5)`: the right is an optional too (ADR 0138 §3)
+        if ((index == 2 || index == 3) && isOptionalBorrow(c, leftType)) {
+            rightHir = checkBorrowedOptionalOperand(c, rightSyntax, leftType)?; // `m.get(k) == Some(3)` (ADR 0251)
+        } else if ((index == 2 || index == 3) && c.types.optionType(leftType) != none()) {
+            rightHir = checkOptionalOperand(c, rightSyntax, leftType)?; // `o == Some(5)` (ADR 0138 §3, ADR 0251)
         } else {
             let r = synth(c, rightSyntax, none())?;
             rightHir = autoDeref(c, r)?;
@@ -736,8 +738,8 @@ fn synthBinary(
         }
         return c.expr(HirExpr.Binary(op, leftHir, rightHir), boolType, span.start, span.end); // compares the bytes
     }
-    if ((index == 2 || index == 3) && lt == rt && c.types.optionType(lt) != none()) {
-        return synthOptionalEquality(c, op, leftHir, rightHir, span); // ADR 0138 §3
+    if ((index == 2 || index == 3) && comparableOptionals(c, lt, rt)) {
+        return synthOptionalEquality(c, op, leftHir, rightHir, span); // ADR 0138 §3, ADR 0251
     }
     if (index == 2 || index == 3) {
         let compared = checkEquality(c, op, leftHir, rightHir, span)?;

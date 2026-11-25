@@ -1,0 +1,81 @@
+// ADR 0251: `==` and `!=` on optional borrows compare the referents, with `null`, `Some(…)`, another optional borrow,
+// a `T?` or a `borrow (T?)` on the other side; places are lent, never moved. Each expected line is worked out by hand
+// from the map's contents, not taken from a run.
+@derive(Equal)
+struct Point {
+    x: i64;
+    name: String;
+}
+
+fn find(m: borrow HashMap<i64, i64>, k: i64) -> borrow(m) i64? => m.get(k);
+
+fn main() {
+    var m = HashMap<i64, i64>.create();
+    let _ = m.put(1, 10)!;
+    let _ = m.put(2, 20)!;
+    let one: i64 = 1;
+    let ten: i64 = 10;
+    Console.writeLine(m.get(one) == Some(10)); // a literal checked as the referent's type
+    Console.writeLine(m.get(one) != Some(11));
+    Console.writeLine(m.get(one) == Some(ten)); // a place: lent
+    Console.writeLine(m.get(3i64) == null);
+    Console.writeLine(m.get(3i64) == Some(10));
+    Console.writeLine(m.get(one) == m.get(one)); // two optional borrows
+    Console.writeLine(m.get(one) == m.get(2i64));
+    Console.writeLine(m.get(3i64) == m.get(4i64)); // both null
+    Console.writeLine(find(m, 2) == Some(20));
+    let o: i64? = Some(20);
+    Console.writeLine(o == m.get(2i64)); // a Copy optional on either side
+    Console.writeLine(m.get(2i64) == o);
+    Console.writeLine(m.get(3i64) != o);
+
+    var s = HashMap<i64, String>.create();
+    let _ = s.put(1, String.from("a")!)!;
+    let a = String.from("a")!;
+    Console.writeLine(s.get(one) == Some(a)); // `a` is lent, not moved
+    Console.writeLine(a.length);
+    Console.writeLine(s.get(one) == Some(String.from("b")!)); // a value: the comparison's own
+    let names: String? = Some(String.from("a")!);
+    Console.writeLine(s.get(one) == names); // a place of a non-Copy optional: lent
+    Console.writeLine(names.asBorrow() == s.get(one));
+    let r = borrow names;
+    Console.writeLine(r == Some(a)); // a `borrow (String?)`: lent as `asBorrow()` lends it
+    Console.writeLine(r != null);
+
+    var points = HashMap<i64, Point>.create();
+    let _ = points.put(1, Point { x: 1, name: String.from("p")! })!;
+    let p = Point { x: 1, name: String.from("p")! };
+    let q = Point { x: 1, name: String.from("q")! };
+    Console.writeLine(points.get(one) == Some(p)); // derived equality on the referents
+    Console.writeLine(points.get(one) == Some(q));
+    Console.writeLine(points.getMut(one) == Some(p)); // a mutable optional borrow, held by the comparison
+    let g = points.getMut(one);
+    Console.writeLine(g == Some(p)); // lent: `g` is still usable
+    Console.writeLine(g != null);
+    Console.writeLine(p.name.length);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 1
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 1

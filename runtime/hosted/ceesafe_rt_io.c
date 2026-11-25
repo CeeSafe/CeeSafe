@@ -328,6 +328,66 @@ uint32_t ceesafe_io_kind(int32_t error) {
     }
 }
 
+/* The child's PATH when the options set it (ADR 0259 §2.4): the value of the last change that names PATH, if that change
+   sets it; NULL when none names it or the last one removes it, and the parent's PATH is searched. A cleared environment
+   forgets earlier changes in lib/std, so the list holds only those after it. Names compare as bytes, or on Windows
+   without ASCII case, as Windows compares "PATH". */
+static CEE_UNUSED const cee_str *cee_child_path(const cee_str *texts, const uint8_t *kinds, uint64_t changes) {
+    const cee_str *found = NULL;
+    for (uint64_t c = 0; c < changes; c++) {
+        cee_str name = texts[2u * c];
+        int same = name.len == 4u;
+        for (cee_usize i = 0; same && i < 4u; i++) {
+#ifdef _WIN32
+            same = (name.ptr[i] | 0x20u) == (uint8_t)"path"[i];
+#else
+            same = name.ptr[i] == (uint8_t)"PATH"[i];
+#endif
+        }
+        if (same) found = kinds[c] == 0u ? &texts[2u * c + 1u] : NULL;
+    }
+    return found;
+}
+
+#if !defined(_WIN32) && !defined(COSMO_AF_INET)
+/* A bare `name` on the child's PATH (ADR 0259 §2.4), as execvp searches a PATH: each entry in order, an empty one the
+   working directory as POSIX defines it, the first that holds an executable regular file. 0 with `*found` its path
+   (from the counted allocator; the caller frees it), or `*found` NULL when there is no child PATH or the name has a `/`,
+   and posix_spawnp searches as before; ENOENT when nothing is found, ENOMEM. */
+static CEE_UNUSED int cee_find_on_child_path(const char *name, const cee_str *path, char **found) {
+    *found = NULL;
+    if (path == NULL || strchr(name, '/') != NULL || name[0] == 0) return 0;
+    size_t name_length = strlen(name);
+    size_t capacity = (size_t)path->len + name_length + 3u;
+    char *candidate = (char *)ceesafe_alloc(capacity, CEE_ALLOC_SYSTEM);
+    if (candidate == NULL) return ENOMEM;
+    cee_usize start = 0;
+    for (;;) {
+        cee_usize end = start;
+        while (end < path->len && path->ptr[end] != ':') end++;
+        size_t at = 0;
+        if (end == start) {
+            candidate[at++] = '.';
+        } else {
+            memcpy(candidate, path->ptr + start, (size_t)(end - start));
+            at = (size_t)(end - start);
+        }
+        candidate[at++] = '/';
+        memcpy(candidate + at, name, name_length + 1u);
+        struct stat st;
+        if (memchr(candidate, 0, at) == NULL && stat(candidate, &st) == 0 && S_ISREG(st.st_mode) &&
+            access(candidate, X_OK) == 0) {
+            *found = candidate;
+            return 0;
+        }
+        if (end >= path->len) break;
+        start = end + 1u;
+    }
+    ceesafe_free(candidate, CEE_ALLOC_SYSTEM);
+    return ENOENT;
+}
+#endif
+
 static cee_io_result ceesafe_io_ok(int64_t value) { return (cee_io_result){ .value = value, .error = 0 }; }
 
 static cee_io_result ceesafe_io_errno(void) {
@@ -696,11 +756,11 @@ static bool cee_win_try_in(const wchar_t *directory, size_t directory_length, co
 
 /* The program to start (ADR 0259 §2.2), as CreateProcessW's application name, into `*found` (from the counted
  * allocator; the caller frees it). A name with a `\`, `/` or `:` is used as it is; a bare name is looked for in the
- * system directory, the Windows directory and each entry of this process's PATH, in order (empty entries skipped, quotes
- * removed), never the working directory or the program's own. A name whose last component has no extension has `.exe`
- * added. 0, or a negated errno: ENOENT when nothing is found, EINVAL for text that is not WTF-8, a quote in it or a batch
- * file, ENOMEM. */
-static int64_t cee_win_find_program(cee_str program, wchar_t **found) {
+ * system directory, the Windows directory and each entry of PATH, in order (empty entries skipped, quotes removed),
+ * never the working directory or the program's own. PATH is `child_path` when the options set the child's (ADR 0259
+ * §2.4, WTF-8), else this process's. A name whose last component has no extension has `.exe` added. 0, or a negated
+ * errno: ENOENT when nothing is found, EINVAL for text that is not WTF-8, a quote in it or a batch file, ENOMEM. */
+static int64_t cee_win_find_program(cee_str program, const cee_str *child_path, wchar_t **found) {
     *found = NULL;
     char name[4096];
     if (!ceesafe_c_path(program, name)) return -(int64_t)EINVAL;
@@ -737,7 +797,16 @@ static int64_t cee_win_find_program(cee_str program, wchar_t **found) {
         if (result != 0) {
             /* PATH: entries split at `;`, a quoted part of one taken as it is (so it may hold a `;`), quotes removed. */
             wchar_t *list = (wchar_t *)ceesafe_alloc(capacity * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
-            DWORD length = list != NULL ? GetEnvironmentVariableW(L"PATH", list, (DWORD)capacity) : 0u;
+            DWORD length = 0u;
+            if (list != NULL && child_path == NULL) {
+                length = GetEnvironmentVariableW(L"PATH", list, (DWORD)capacity);
+            } else if (list != NULL) {
+                /* The child's PATH, from WTF-8; one that is not text Windows takes, or too long, finds nothing. */
+                int32_t failed = 0;
+                char *text = child_path->len < capacity ? ceesafe_c_string(*child_path, &failed) : NULL;
+                if (text != NULL && cee_win_wide(text, list, (int)capacity)) length = (DWORD)wcslen(list);
+                if (text != NULL) ceesafe_free(text, CEE_ALLOC_SYSTEM);
+            }
             if (list == NULL) {
                 result = -(int64_t)ENOMEM;
             } else if (length > 0u && length < capacity) {
@@ -2727,7 +2796,7 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
         wchar_t *line = NULL;
         wchar_t *application = NULL;
         int64_t made_line = cee_win_command_line(program, arguments, count, &line);
-        if (made_line == 0) made_line = cee_win_find_program(program, &application); /* ADR 0259 §2.2 */
+        if (made_line == 0) made_line = cee_win_find_program(program, NULL, &application); /* ADR 0259 §2.2 */
         if (made_line < 0) {
             result = ceesafe_io_fail((int32_t)-made_line);
             if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
@@ -3692,7 +3761,7 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
         wchar_t *application = NULL;
         wchar_t *block = NULL;
         int64_t made_line = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide_line);
-        if (made_line == 0) made_line = cee_win_find_program(texts[0], &application); /* ADR 0259 §2.2 */
+        if (made_line == 0) made_line = cee_win_find_program(texts[0], cee_child_path(variables, environment_kinds, changes), &application); /* ADR 0259 §2.2 */
         if (made_line == 0 && (changes != 0u || clear != 0u)) {
             int failed = 0;
             block = cee_child_environment(NULL, variables, environment_kinds, changes, clear, &failed);
@@ -3795,7 +3864,11 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             if (started == 0) started = posix_spawnattr_init(&attributes);
             if (started == 0) {
                 started = cee_spawn_only(&actions, &attributes, 3);
-                if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, &attributes, argv, environment);
+                /* ADR 0259 §2.4: a bare name on the child's PATH when the options set it. */
+                char *found = NULL;
+                if (started == 0) started = cee_find_on_child_path(argv[0], cee_child_path(variables, environment_kinds, changes), &found);
+                if (started == 0) started = posix_spawnp(&pid, found != NULL ? found : argv[0], &actions, &attributes, argv, environment);
+                if (found != NULL) ceesafe_free(found, CEE_ALLOC_SYSTEM);
                 (void)posix_spawnattr_destroy(&attributes);
             }
             cee_child_environment_free(environment, owned);
@@ -4594,7 +4667,7 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
     wchar_t *wide = NULL;
     wchar_t *application = NULL;
     int64_t result = cee_win_command_line(texts[0], texts + 1, count - 1u, &wide);
-    if (result == 0) result = cee_win_find_program(texts[0], &application); /* ADR 0259 §2.2 */
+    if (result == 0) result = cee_win_find_program(texts[0], cee_child_path((const cee_str *)environment_texts, environment_kinds, changes), &application); /* ADR 0259 §2.2 */
     if (result == 0) {
         (void)fflush(stdout);
         SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
@@ -5030,7 +5103,14 @@ int64_t ceesafe_host_child_start_with(void const *arguments, uint64_t count, uin
                     started = posix_spawn_file_actions_adddup2(&actions, (int)handles[i], 3 + (int)i);
                 }
                 if (started == 0) started = cee_spawn_only(&actions, &attributes, 3 + (int)handed);
-                if (started == 0) started = posix_spawnp(&pid, argv[0], &actions, &attributes, argv, environment);
+                /* ADR 0259 §2.4: a bare name on the child's PATH when the options set it. */
+                char *found = NULL;
+                if (started == 0) {
+                    started = cee_find_on_child_path(
+                        argv[0], cee_child_path((const cee_str *)environment_texts, environment_kinds, changes), &found);
+                }
+                if (started == 0) started = posix_spawnp(&pid, found != NULL ? found : argv[0], &actions, &attributes, argv, environment);
+                if (found != NULL) ceesafe_free(found, CEE_ALLOC_SYSTEM);
                 (void)posix_spawnattr_destroy(&attributes);
             }
             (void)posix_spawn_file_actions_destroy(&actions);

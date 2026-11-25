@@ -35,6 +35,9 @@ Then, each against what Python's `os` sees:
   `spawn`; the child prints what `Environment.variableOs` gives for each name. A cleared environment with one set,
   and the names Windows and POSIX refuse (`A=B`, an empty name, `CEESAFE_HANDOVER`, a zero byte in a value), which
   must be `InvalidInput`.
+- **The child's PATH** (ADR 0259 §2.4): with the options' PATH set to a directory holding a copy of the program as
+  `ceesafe-onchild`, `runWith`, `captureWith` and `spawn` find it, and a copy only on this process's PATH
+  (`ceesafe-onparent`) is `NotFound`; without the option, or with PATH set and then removed, the reverse.
 - **Finding a program** (ADR 0259). A copy of the program is planted in its working directory as `ceesafe-planted`
   (and on Windows as `cmd.exe`): a bare `ceesafe-planted` is `NotFound` from `run`, `runWith` and `spawn`, `./` (`.\\`)
   runs it, and on Windows `cmd.exe` is System32's, not the planted one.
@@ -352,6 +355,26 @@ fn planted(windows: bool) {
     status("plant", "named", Process.run(if (windows) ".\\ceesafe-planted" else "./ceesafe-planted", word));
 }
 
+// The child's PATH (ADR 0259 §2.4): a bare name is looked up on it when the options set it, else on this process's.
+fn childPath() {
+    let bin = Environment.variableOs("CEESAFE_CHILD_BIN")!;
+    var word = Vector<StringView>.create();
+    word.push("planted")!;
+    var options = ChildOptions.inherit();
+    options.setEnvironment("PATH", bin)!;
+    status("path", "child runWith", Process.runWith("ceesafe-onchild", word, options));
+    status("path", "child captureWith", captured(Process.captureWith("ceesafe-onchild", word, null, options)));
+    status("path", "child spawn", waited(Process.spawn("ceesafe-onchild", word, options)));
+    status("path", "parent's under child", Process.runWith("ceesafe-onparent", word, options));
+    let plain = ChildOptions.inherit();
+    status("path", "parent runWith", Process.runWith("ceesafe-onparent", word, plain));
+    status("path", "child's under parent", Process.runWith("ceesafe-onchild", word, plain));
+    var removed = ChildOptions.inherit();
+    removed.setEnvironment("PATH", bin)!;
+    removed.removeEnvironment("PATH")!;
+    status("path", "removed", Process.runWith("ceesafe-onparent", word, removed));
+}
+
 fn main() {
     let first = Process.argument(1) ?? "";
     if (first == "child" || first == "osChild") {
@@ -420,6 +443,7 @@ fn main() {
     }
     environment(me.view());
     planted(windows);
+    childPath();
     Console.writeLine("done");
 }
 '''
@@ -543,6 +567,10 @@ def expected(names_made):
     lines.append("plant bare spawn error NotFound")
     lines.append("planted")
     lines.append("plant named status 7")
+    lines += ["planted", "path child runWith status 7", "planted", "path child captureWith status 7", "planted",
+              "path child spawn status 7", "path parent's under child error NotFound", "planted",
+              "path parent runWith status 7", "path child's under parent error NotFound", "planted",
+              "path removed status 7"]
     lines.append("done")
     return lines
 
@@ -638,14 +666,23 @@ def main():
             shutil.copy(exe, os.path.join(plant, "ceesafe-planted.exe" if WINDOWS else "ceesafe-planted"))
             if WINDOWS:
                 shutil.copy(exe, os.path.join(plant, "cmd.exe"))
+            # ADR 0259 §2.4: one copy only on the child's PATH (the options'), one only on this process's.
+            suffix = ".exe" if WINDOWS else ""
+            onchild = os.path.join(work, "onchild")
+            onparent = os.path.join(work, "onparent")
+            os.mkdir(onchild)
+            os.mkdir(onparent)
+            shutil.copy(exe, os.path.join(onchild, "ceesafe-onchild" + suffix))
+            shutil.copy(exe, os.path.join(onparent, "ceesafe-onparent" + suffix))
             environment = dict(os.environ)
             for name in list(environment):
                 if name.upper().startswith("CEESAFE_"):
                     del environment[name]
             environment.update(PARENT_ENVIRONMENT)
             # No entry of PATH may name the working directory, which POSIX's empty entry and `.` do.
-            environment["PATH"] = os.pathsep.join(p for p in environment.get("PATH", "").split(os.pathsep)
-                                                  if p not in ("", "."))
+            environment["PATH"] = os.pathsep.join([onparent] + [p for p in environment.get("PATH", "").split(os.pathsep)
+                                                                if p not in ("", ".")])
+            environment["CEESAFE_CHILD_BIN"] = onchild
             command = [exe, sys.executable, script, batches, "x" + INPUT.hex(), "x" + files.encode("utf-8").hex(),
                        "x" + encoded(NAME1).hex(), "x" + encoded(NAME2).hex(), RAW]
             command += ["x" + a.encode("utf-8").hex() for a in ARGUMENTS]

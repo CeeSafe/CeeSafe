@@ -3455,7 +3455,8 @@ ADR 0221's.
     own directory and the working directory first). The runtime finds it and gives `CreateProcessW` its full path. A
     name with a `\`, `/` or `:` is used as it is (relative to the working directory). A bare name is looked for in the
     system directory (`GetSystemDirectoryW`), then the Windows directory (`GetWindowsDirectoryW`), then each entry of
-    this process's `PATH` in order (empty entries skipped, `"`s removed); the first that holds a file, not a
+    `PATH` in order (empty entries skipped, `"`s removed), the child's `PATH` when the options set it, else this
+    process's (ADR 0259 §2.4); the first that holds a file, not a
     directory, of that name is the program. The working directory and the program's own directory are never searched:
     `.\tool` names a tool there. A name whose last component has no extension has `.exe` added; `PATHEXT` is not
     read. Nothing found is `NotFound`. The line's first word stays the name as given.
@@ -3468,8 +3469,16 @@ ADR 0221's.
     runs `cmd.exe` itself, and quotes the line for cmd.exe itself.
   - Before 0.95.8 (ADR 0245), `Process.run` passed its arguments to `_wspawnvp`, which joins them without
     quoting: an argument with a space reached the child as two.
-- **POSIX lookup.** `posix_spawnp` searches this process's `PATH`; a name with a `/` is used as it is. A bare name is
-  looked for in the working directory only where `PATH` has an empty entry or `.`, which POSIX defines so.
+- **POSIX lookup.** A bare name is searched on this process's `PATH` (`posix_spawnp`), or on the child's when the
+  options set it (ADR 0259 §2.4: each entry in order, the first executable regular file); a name with a `/` is used as
+  it is. A bare name is looked for in the working directory only where `PATH` has an empty entry or `.`, which POSIX
+  defines so.
+- **The child's `PATH`** (ADR 0259 §2.4). When the last change of a `ChildOptions` (§26.16) that names `PATH` (without
+  case on Windows) sets it, a bare program name is looked up on that value, on every host, as Rust does; with no such
+  change, or when the last one removes it or the environment is cleared without one, on this process's `PATH`. Windows
+  keeps its order: the system directory, the Windows directory, then that `PATH`, never the working directory or the
+  program's own. `Process.run` and `Process.capture` take no options: this process's `PATH`. The interpreter starts no
+  child with changes (`Unsupported`), so the rule does not arise there.
 - **`Process.runWith(program, arguments, options)`** (ADR 0258, lib/std, hosted): `Process.run` with
   `options: borrow ChildOptions` (§26.16): its streams (`Inherit` or `Null`) and its environment. `program` is an
   `OsStringView` and `arguments` a `borrow Vector<StringView>` or `borrow Vector<OsStringView>` (§26.16). It waits and
@@ -4330,7 +4339,7 @@ Diagnostics: none new.
     process's environment. At the start, an empty name, a name with `=` or a zero byte, a value with a zero byte, a
     change naming `CEESAFE_HANDOVER` (the runtime's, §26.18), and on Windows bytes that are not well-formed WTF-8, are
     `InvalidInput`. Names compare as the system compares them: bytes on POSIX, without case on Windows. The program is
-    looked up on this process's `PATH`, whatever the options set. CosmoOS: a change is `Unsupported`.
+    looked up on the child's `PATH` when the options set it (§26.5, ADR 0259 §2.4), else on this process's. CosmoOS: a change is `Unsupported`.
   - `ChildOptions` has a private field since ADR 0258: it is not Copy, and is made by its functions, not a literal
     (N0296).
 - `ChildProcess` (lib/std) is the parent's hold on the child: a move type that needs drop.

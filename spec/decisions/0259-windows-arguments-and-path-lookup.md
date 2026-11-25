@@ -54,7 +54,8 @@ runtime's `argv` is not read, and a program built as a windowed one (ADR 0151) g
 2. **A bare name** is looked for, in this order, in:
    1. the system directory (`GetSystemDirectoryW`: `C:\Windows\System32`);
    2. the Windows directory (`GetWindowsDirectoryW`: `C:\Windows`);
-   3. each directory of this process's `PATH`, in order, an empty entry skipped and the `"`s around an entry's text
+   3. each directory of `PATH` (the child's when the options set it, §2.4; else this process's), in order, an empty
+      entry skipped and the `"`s around an entry's text
       removed (`C:\a;"C:\b;c";D:\`).
 
    The first that holds a file of that name (not a directory) is the program. **The working directory and the
@@ -70,8 +71,28 @@ argument 0 is what it was.
 
 ### 2.3 POSIX
 
-Unchanged: `posix_spawnp` searches the parent's `PATH`, and a name with a `/` is used as it is. A bare name is never
-looked for in the working directory unless `PATH` has an empty entry or `.`, which POSIX defines to mean it.
+`posix_spawnp` searches the parent's `PATH` (or the runtime the child's, §2.4), and a name with a `/` is used as it
+is. A bare name is never looked for in the working directory unless `PATH` has an empty entry or `.`, which POSIX
+defines to mean it.
+
+### 2.4 The child's `PATH` (the owner's answer to §6 question 2, 2026-11-25)
+
+When a `ChildOptions` (ADR 0258) sets the child's `PATH`, a bare program name is looked up on the child's `PATH`, as
+Rust does, on every host; without such an option, on this process's, as before.
+
+- "Sets": the last change of the options that names `PATH` (bytes on POSIX; without ASCII case on Windows, as Windows
+  compares names) is `setEnvironment`. A last `removeEnvironment("PATH")`, or `clearEnvironment()` with no later set of
+  `PATH`, leaves the parent's `PATH` the one searched.
+- Windows keeps §2.2's order: the system directory, the Windows directory, then the child's `PATH`, never the working
+  directory or the program's own (`cee_win_find_program`).
+- POSIX: the runtime searches the child's `PATH` as `execvp` searches one (each entry in order, an empty entry the
+  working directory as POSIX defines it, the first executable regular file; `cee_find_on_child_path`) and gives
+  `posix_spawnp` the path found, with argument 0 as written; nothing found is `NotFound`.
+- `runWith`, `captureWith`, `spawn` and `spawnWith` take options; `Process.run` and `Process.capture` take none and
+  search this process's `PATH`.
+- The interpreter starts no child with a changed environment (`Unsupported`, ADR 0258 §2.5), so the rule does not
+  arise there; its `capture` without changes searches the compiler's own `PATH`, as before.
+- CosmoOS: a change of the environment is `Unsupported`.
 
 ## 3. Alternatives
 
@@ -91,7 +112,9 @@ looked for in the working directory unless `PATH` has an empty entry or `.`, whi
 
 ## 5. Tests
 
-`tools/process_check.py`: the CeeSafe child is given the non-ASCII arguments too, and the program a raw argument
+`tools/process_check.py`: (§2.4) with the options' `PATH` set to a directory that alone holds a copy of the
+program as `ceesafe-onchild`, `runWith`, `captureWith` and `spawn` find it and a copy only on the parent's `PATH`
+(`ceesafe-onparent`) is `NotFound`; without the option the reverse. The CeeSafe child is given the non-ASCII arguments too, and the program a raw argument
 that is not text (a lone surrogate on Windows, through Python's `subprocess` with a `str` holding `\udc81`; a byte
 `80` elsewhere), compared in hex; on Windows the splitter is run on 34 command lines (quotes, `""` inside and outside
 quotes, backslashes before quotes and at the end, tabs, a quote left open, non-ASCII text) against
@@ -102,5 +125,7 @@ quotes, backslashes before quotes and at the end, tabs, a quote left open, non-A
 
 ## 6. Questions for the owner
 
-1. The program's own directory is not searched (Rust searches it second). Keep it out?
-2. `PATH` is the parent's even when ADR 0258's options change the child's (Rust: the child's first).
+1. The program's own directory is not searched (Rust searches it second). Keep it out? **Answered 2026-11-25: keep it
+   out.**
+2. `PATH` is the parent's even when ADR 0258's options change the child's (Rust: the child's first). **Answered
+   2026-11-25: search the child's `PATH` when the options set it** (§2.4).

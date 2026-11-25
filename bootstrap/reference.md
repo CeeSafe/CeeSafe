@@ -13,7 +13,7 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 | sha256 | `b177ef522e3264fb6260f73bbb863e826e95e0b1843b0d6f9d8ff7ea06d44fb3` (linux-x64), `3419a1a58904c46939db326346fe12a648d56039de31150fc13b5bb5391b2aea` (osx-arm64) (v0.95.10's `SHA256SUMS`) |
 | Chain | none: 0.95.10 builds the tree directly (`tools/bootstrap_release.sh`) |
 | Workflows | `release.yml` and `checks.yml`, `windows.yml`, `freebsd.yml` and `linux32.yml`: every one builds the tree from this release's linux-x64 archive (before 2026-11-23, `freebsd.yml` used 0.51.1 and `linux32.yml` 0.82.0) |
-| Checked | 2026-11-23 at the commit that makes it stage 0: macOS arm64 (the released, notarized binary) and Ubuntu 24.04 x86-64 (its linux-x64 archive, with clang 18), `tools/bootstrap_release.sh` with no chain, fixed point reached on both, the same seed `main.c` on both (sha-256 `35e3eb3d7a9e011b…`) |
+| Checked | 2026-11-25 at the commit that makes it stage 0 (`da07985e`): macOS arm64 (the released, notarized binary, Apple clang 21), `tools/bootstrap_release.sh` with no chain and `tools/fixed_point.py`, fixed point reached (`main.c` sha-256 `39d9fdd84d2ff20b…`); on Linux, `checks.yml`, `linux32.yml`, `freebsd.yml` and `windows.yml` built the tree from the linux-x64 archive and passed (runs 45573724385, 45573740930, 45573735479, 45573729735) |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.

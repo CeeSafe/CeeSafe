@@ -99,10 +99,19 @@ numbers, one a line:
 | `Process.argumentCount()` | `usize`, including the program name |
 | `Process.argument(i)` | `StringView?`: `null` out of range or for bytes that are not UTF-8 |
 | `Process.exit(status)` | `status: i32`; never returns |
+| `Process.argumentOs(i)` | `OsStringView?`: the argument's bytes, UTF-8 or not (ADR 0257) |
 | `Process.run(program, arguments)` | `Result<i32, IoError>`; `arguments: borrow Vector<StringView>` |
 | `Process.capture(program, arguments, input)` | `Result<ProcessOutput, IoError>` (lib/std) |
+| `Process.runWith(program, arguments, options)`, `Process.captureWith(program, arguments, input, options)` | as `run` and `capture`, with a `ChildOptions`'s streams and environment (ADR 0258) |
+| `Process.spawn(program, arguments, options)` | `Result<ChildProcess, IoError>`: the child runs beside the program |
 
-Environment variables are lib/std's `Environment.variable(name)`, a `StringView?`.
+A program is found on `PATH`; on Windows a bare name is never looked for in the working directory (write `.\tool`),
+only in the system directories and `PATH` (ADR 0259). The `arguments` of `capture`, `captureWith`, `runWith`,
+`spawn` and `spawnWith` may be a `Vector<OsStringView>` too. `ChildOptions` sets a child's environment:
+`options.setEnvironment("HOME", home)`, `options.removeEnvironment(name)` and `options.clearEnvironment()`.
+
+Environment variables are lib/std's `Environment.variable(name)`, a `StringView?`, and `Environment.variableOs(name)`,
+an `OsStringView?` that also gives a value that is not UTF-8.
 
 ```ceesafe
 fn main() {
@@ -120,6 +129,9 @@ no argument 1000
 ```
 
 ## `File`, `TcpListener` and `TcpStream`
+
+Every path is an `OsStringView` (below), so a string literal, a `StringView` or a `String` serves, and so does a
+name that is not UTF-8.
 
 | Function | Type |
 |---|---|
@@ -345,6 +357,46 @@ id=7�
 id=7 then 1
 true
 0.50
+```
+
+### Names for the system: `OsString` and `OsStringView`
+
+A file name, a program's argument or an environment variable is bytes on Linux, macOS and FreeBSD, and UTF-16 on
+Windows; neither need be UTF-8. lib/core's `OsString` (owned) and `OsStringView` (borrowed) hold a name in the
+system's encoding: the bytes on POSIX, and WTF-8 on Windows (UTF-8, in which an unpaired surrogate keeps its three
+bytes). UTF-8 text is the same bytes in both, so text becomes a name with no copy (ADR 0257, type-system.md §22.5).
+
+A function that takes an `OsStringView` takes a string literal, a `StringView` or a `String` too, as every path of
+`File` and `Directory` does. Nothing converts a name to text silently:
+
+| Member | Type |
+|---|---|
+| `OsStringView.fromText(text)`, `fromBytes(bytes)`, `fromByteString(v)` | a view of the bytes, no copy |
+| `OsString.create()`, `fromString(s)`, `fromBytes(v)`, `fromByteString(b)`, `intoBytes()`, `intoByteString()` | the buffer taken or given back, no copy |
+| `OsString.fromText(text)`, `copyOf(bytes)`, `o.clone()`, `v.toOsString()` | `Result<OsString, AllocError>`, a copy |
+| `toUtf8()`, `isUtf8()`, `o.intoString()` | `StringView?` with no copy when the bytes are UTF-8; `Result<String, OsString>` |
+| `toUtf8Lossy()` | a `String`, U+FFFD for each surrogate and each bad sequence |
+| `OsString.fromWide(units)`, `toWide()`, `isWtf8()` | Windows' UTF-16, on every system |
+| `o.append(name)`, `appendBytes(bytes)`, `appendByte(b)`, `clear()` | build a path: `Result<void, AllocError>` |
+| `Directory.listOs(path)`, `Directory.currentOs()`, `Process.executableOs()` | the names as `OsString`s, none refused |
+
+```ceesafe
+fn main() {
+    let raw = [0x61u8, 0xFF, 0x62];
+    var name = OsString.fromText("dir/")!;
+    name.appendBytes(raw[..])!;
+    Console.writeLine(name.length());
+    Console.writeLine(name.toUtf8().isNull());
+    Console.writeLine(name.toUtf8Lossy()!.view());
+    Console.writeLine(OsStringView.fromText("plain").toUtf8()!);
+}
+```
+
+```text
+7
+true
+dir/a�b
+plain
 ```
 
 ## `Vector`, arrays and slices
@@ -687,7 +739,13 @@ fn everything() -> Result<void, IoError> {
     var arguments = Vector<StringView>.create();
     let status: Result<i32, IoError> = Process.run("true", borrow arguments);
     let captured: Result<ProcessOutput, IoError> = Process.capture("true", borrow arguments, "".bytes());
+    var options = ChildOptions.quiet();
+    let set: Result<void, AllocError> = options.setEnvironment("HOME", "/tmp");
+    let ran: Result<i32, IoError> = Process.runWith("true", borrow arguments, options);
     let home: StringView? = Environment.variable("HOME");
+    let homeOs: OsStringView? = Environment.variableOs("HOME");
+    let given: OsStringView? = Process.argumentOs(0);
+    let names: Result<Vector<OsString>, IoError> = Directory.listOs(".");
     return Ok();
 }
 fn collections() -> Result<void, AllocError> {

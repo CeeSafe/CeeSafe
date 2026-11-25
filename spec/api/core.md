@@ -54,6 +54,8 @@
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
 - [struct NumberParsing](#struct-numberparsing)
+- [struct OsStringView](#struct-osstringview)
+- [struct OsString](#struct-osstring)
 - [struct ResultMethods](#struct-resultmethods)
 - [struct ResultMapping](#struct-resultmapping)
 - [struct ResultErrorMapping](#struct-resulterrormapping)
@@ -3348,6 +3350,326 @@ public fn parseF32(s: Slice<u8>) -> f32?
 ```
 
 Text as an `f32`, correctly rounded (once: not through an `f64`), or null; the grammar of parseF64.
+
+## struct OsStringView
+
+```ceesafe
+@derive(Equal)
+public struct OsStringView<region r>
+```
+
+A borrowed name in the system's encoding, valid for region `r` as a `StringView<r>` is. Copy; `==` compares the
+bytes. A function that takes one also takes a string literal, a `StringView` or a lent `String` (type-system.md
+§22.5). A field of this type needs a region parameter, as a view's does.
+
+### OsStringView.fromText
+
+```ceesafe
+public fn fromText(text: StringView<r>) -> OsStringView<r>
+```
+
+The bytes of `text`, as a name: no copy.
+
+### OsStringView.fromBytes
+
+```ceesafe
+public fn fromBytes(bytes: Slice<r, u8>) -> OsStringView<r>
+```
+
+`bytes` as a name in the system's encoding: no copy, and no check.
+
+### OsStringView.fromByteString
+
+```ceesafe
+public fn fromByteString(text: ByteStringView<r>) -> OsStringView<r>
+```
+
+The bytes of a byte string, as a name: no copy.
+
+### OsStringView.bytes
+
+```ceesafe
+public fn bytes(borrow this) -> Slice<r, u8>
+```
+
+The bytes, in the system's encoding.
+
+### OsStringView.toByteStringView
+
+```ceesafe
+public fn toByteStringView(borrow this) -> ByteStringView<r>
+```
+
+The bytes as a byte string: no copy.
+
+### OsStringView.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The length in bytes.
+
+### OsStringView.isEmpty
+
+```ceesafe
+public fn isEmpty(borrow this) -> bool
+```
+
+Whether there are no bytes.
+
+### OsStringView.toUtf8
+
+```ceesafe
+public fn toUtf8(borrow this) -> StringView<r>?
+```
+
+The name as text, with no copy, when its bytes are UTF-8; null otherwise.
+
+### OsStringView.isUtf8
+
+```ceesafe
+public fn isUtf8(borrow this) -> bool
+```
+
+Whether the bytes are UTF-8.
+
+### OsStringView.toUtf8Lossy
+
+```ceesafe
+public fn toUtf8Lossy(borrow this) -> Result<String, AllocError>
+```
+
+A new string: each encoded surrogate is one U+FFFD, and every other ill-formed sequence is replaced as
+`ByteString.toUtf8Lossy` replaces it. The same on every system.
+
+### OsStringView.isWtf8
+
+```ceesafe
+public fn isWtf8(borrow this) -> bool
+```
+
+Whether the bytes are well-formed WTF-8: what a Windows call takes.
+
+### OsStringView.toWide
+
+```ceesafe
+public fn toWide(borrow this) -> Result<Vector<u16>?, AllocError>
+```
+
+The UTF-16 units of well-formed WTF-8 (Windows' encoding of the name), or null for other bytes.
+
+### OsStringView.toOsString
+
+```ceesafe
+public fn toOsString(borrow this) -> Result<OsString, AllocError>
+```
+
+A new `OsString` with a copy of the bytes.
+
+### OsStringView.equals
+
+```ceesafe
+public fn equals(borrow this, other: OsStringView) -> bool
+```
+
+Whether the two hold the same bytes (views of two regions).
+
+## struct OsString
+
+```ceesafe
+@derive(Equal)
+public struct OsString
+```
+
+An owned name in the system's encoding (type-system.md §22.5), in a growable buffer. A move type; `==` compares the
+bytes.
+
+### OsString.create
+
+```ceesafe
+public fn create() -> OsString
+```
+
+An empty name; no allocation.
+
+### OsString.fromBytes
+
+```ceesafe
+public fn fromBytes(bytes: Vector<u8>) -> OsString
+```
+
+The bytes of `bytes`, which it takes: no copy, and no check.
+
+### OsString.fromString
+
+```ceesafe
+public fn fromString(text: String) -> OsString
+```
+
+The bytes of `text`, which it takes: no copy.
+
+### OsString.fromByteString
+
+```ceesafe
+public fn fromByteString(text: ByteString) -> OsString
+```
+
+The bytes of a byte string, which it takes: no copy.
+
+### OsString.copyOf
+
+```ceesafe
+public fn copyOf(bytes: Slice<u8>) -> Result<OsString, AllocError>
+```
+
+A new name with a copy of `bytes`: one allocation, none for no bytes.
+
+### OsString.fromText
+
+```ceesafe
+public fn fromText(text: StringView) -> Result<OsString, AllocError>
+```
+
+A new name with a copy of `text`'s bytes.
+
+### OsString.fromWide
+
+```ceesafe
+public fn fromWide(units: Slice<u16>) -> Result<OsString, AllocError>
+```
+
+The WTF-8 of any UTF-16 units: a pair is the four bytes of its code point, an unpaired surrogate the three bytes
+UTF-8 would give its code point. Windows' encoding of a name, on every system.
+
+### OsString.clone
+
+```ceesafe
+public fn clone(borrow this) -> Result<OsString, AllocError>
+```
+
+A new name with a copy of the bytes.
+
+### OsString.view
+
+```ceesafe
+public fn view(borrow this) -> OsStringView
+```
+
+A view of the name, a loan of it.
+
+### OsString.bytes
+
+```ceesafe
+public fn bytes(borrow this) -> Slice<u8>
+```
+
+The bytes, a loan of the name.
+
+### OsString.intoBytes
+
+```ceesafe
+public fn intoBytes(this) -> Vector<u8>
+```
+
+The bytes, which the name gives up: no copy.
+
+### OsString.intoByteString
+
+```ceesafe
+public fn intoByteString(this) -> ByteString
+```
+
+The bytes as a byte string, which the name gives up: no copy.
+
+### OsString.intoString
+
+```ceesafe
+public fn intoString(this) -> Result<String, OsString>
+```
+
+The name as a `String`, which the name gives up, when its bytes are UTF-8: no copy. When they are not, the
+name back, unchanged.
+
+### OsString.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The length in bytes.
+
+### OsString.isEmpty
+
+```ceesafe
+public fn isEmpty(borrow this) -> bool
+```
+
+Whether there are no bytes.
+
+### OsString.toUtf8
+
+```ceesafe
+public fn toUtf8(borrow this) -> StringView?
+```
+
+The name as text, with no copy, when its bytes are UTF-8; null otherwise.
+
+### OsString.isUtf8
+
+```ceesafe
+public fn isUtf8(borrow this) -> bool
+```
+
+Whether the bytes are UTF-8.
+
+### OsString.toUtf8Lossy
+
+```ceesafe
+public fn toUtf8Lossy(borrow this) -> Result<String, AllocError>
+```
+
+As `OsStringView.toUtf8Lossy`.
+
+### OsString.isWtf8
+
+```ceesafe
+public fn isWtf8(borrow this) -> bool
+```
+
+Whether the bytes are well-formed WTF-8.
+
+### OsString.append
+
+```ceesafe
+public fn append(borrow mut this, name: OsStringView) -> Result<void, AllocError>
+```
+
+Appends `name` (a literal or a `StringView` too); unchanged on failure.
+
+### OsString.appendBytes
+
+```ceesafe
+public fn appendBytes(borrow mut this, bytes: Slice<u8>) -> Result<void, AllocError>
+```
+
+Appends bytes; unchanged on failure.
+
+### OsString.appendByte
+
+```ceesafe
+public fn appendByte(borrow mut this, b: u8) -> Result<void, AllocError>
+```
+
+Appends one byte.
+
+### OsString.clear
+
+```ceesafe
+public fn clear(borrow mut this)
+```
+
+Empties it, keeping its capacity.
 
 ## struct ResultMethods
 

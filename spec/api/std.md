@@ -5224,6 +5224,16 @@ public fn equalText(expected: StringView, actual: StringView) -> Result<void, Te
 
 `actual` is the text `expected`.
 
+### Check.equalTextOf
+
+```ceesafe
+public fn equalTextOf<E: TextView, A: TextView>(expected: E, actual: A) -> Result<void, TestFailure>
+```
+
+`actual` is the text `expected`, each of any kind of text (a `StringView`, a `ByteStringView`, bytes; ADR 0260
+§2.7), compared by their bytes. A failure shows both, as `equalText` does; text that is not UTF-8 has each of
+its bytes past ASCII written `\xHH`.
+
 ### Check.equalBytes
 
 ```ceesafe

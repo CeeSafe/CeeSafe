@@ -23,11 +23,13 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   -Wstrict-prototypes -Wvla -Wundef -Wimplicit-fallthrough`, `-Wframe-larger-than=2048`
   for the kernel; see `cosmoos/abi.md`). All non-exported functions are `static`, and every
   exported one has a prototype in the generated header.
-- Correct both with and without `-fno-strict-aliasing`. CosmoOS compiles with it,
-  but CeeSafe does not rely on it. A C array member of an imported or `@repr(C)` struct is reached as the reference's
-  array struct (type-system.md §31.3), which is right for its elements; a whole array copied into or out of it (the
-  member, or an inner array of a C array of arrays) is copied as bytes (`cee_read_unaligned`, `cee_write_unaligned`),
-  never assigned as the array struct, which gcc 14 at `-O2` dropped as an access of the wrong type.
+- **Compiled with `-fno-strict-aliasing`** (clang and gcc; MSVC has no type-based alias analysis). A C array member
+  of an imported or `@repr(C)` struct is reached as the reference's array struct (type-system.md §31.3, ADR 0029), an
+  access through a type the C array does not have: gcc 14 at `-O2` read and wrote such members as zeros (0.95.11, on
+  Debian 13). Until the backend reaches those members without the array struct, ceesafec passes the flag, and C a
+  user compiles from `--emit c` needs it too. CosmoOS compiles with it as well. Everything else is written to be
+  correct without it, and a whole array copied into or out of such a member (the member, or an inner array of a C
+  array of arrays) is copied as bytes already (`cee_read_unaligned`, `cee_write_unaligned`).
 - **No floating-point contraction or fast-math** (M11 G7, type-system.md §35.6). `rt.h` turns contraction off where
   a pragma can (clang, MSVC) and requires `FLT_EVAL_METHOD == 0`, in programs that use floats (`CEE_FLOATS`; a
   program without floats compiles under `-mgeneral-regs-only`); builds pass `-ffp-contract=off` to clang and gcc

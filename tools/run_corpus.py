@@ -66,6 +66,18 @@ ABORT_EXIT = 134  # 128 + SIGABRT
 # In a text, `\n`, `\r`, `\\` and `\xNN` (a byte) are escapes; `// stdin:` alone adds nothing.
 STDIN = re.compile(r"// stdin:(?: (.*))?$")
 STDIN_ESCAPE = re.compile(rb"\\(n|r|\\|x[0-9a-fA-F]{2})")
+# `// env: NAME=value` (ADR 0256): a variable in the program's environment, beside the runner's own.
+ENV = re.compile(r"// env: ([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def env_of(text):
+    """The variables of the file's `// env:` directives, as a dict (empty without one)."""
+    found = {}
+    for line in lines_of(text):
+        m = ENV.search(line)
+        if m:
+            found[m.group(1)] = m.group(2)
+    return found
 
 
 def stdin_of(text):
@@ -187,13 +199,15 @@ class Runner:
             env["CC"] = self.args.cc
         return env
 
-    def execute(self, exe, stdin=None):
+    def execute(self, exe, stdin=None, variables=None):
         """Runs a built program, or, given a list, that command (--interp's `ceesafec run --interp`); `stdin` is its
-        standard input's bytes (`// stdin:`), if the test gives one."""
+        standard input's bytes (`// stdin:`), if the test gives one, and `variables` what `// env:` adds to its
+        environment."""
         argv = exe if isinstance(exe, list) else [exe]
         start = time.monotonic()
         try:
             env = dict(os.environ)
+            env.update(variables or {})
             if self.args.check_leaks:
                 env["CEESAFE_ALLOC_REPORT"] = "1"
             given = {} if stdin is None else {"input": stdin}
@@ -314,8 +328,9 @@ def run_test(runner, family, path, work):
         else:
             # --interp: the same program in the interpreter, held to the same expectations (testing.md §1).
             given = stdin_of(text)
-            run = (runner.execute([runner.compiler, "run", "--interp"] + options + inputs, given) if interp
-                   else runner.execute(exe, given))
+            variables = env_of(text)
+            run = (runner.execute([runner.compiler, "run", "--interp"] + options + inputs, given, variables) if interp
+                   else runner.execute(exe, given, variables))
             outcomes.append(run)
             stdout, exit_code, panic, panic_line = expectations(text)
             if run.stdout.replace("\r\n", "\n") != stdout:

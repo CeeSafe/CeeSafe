@@ -103,6 +103,22 @@ jobs:
         run: |
           python tools/run_corpus.py --compiler seed/ceesafec.exe --corpus tests/reference/tests/corpus \
             --family run-pass --filter adr0247 --cc cl --check-leaks
+      - name: Hard links and portable lock rules (ADR 0255, ADR 0256), built with cl, natively and interpreted
+        if: always()
+        shell: bash
+        run: |
+          for f in file-link file-lock-rules; do
+            python tools/run_corpus.py --compiler seed/ceesafec.exe --corpus tests/reference/tests/corpus \
+              --family run-pass --family run-fail --filter $f --cc cl --check-leaks
+            python tools/run_corpus.py --compiler seed/ceesafec.exe --corpus tests/reference/tests/corpus \
+              --family run-pass --family run-fail --filter $f --interp
+          done
+      - name: File locks, links and the portable rules against LockFileEx (ADR 0220, 0255, 0256)
+        if: always()
+        shell: bash
+        env:
+          CC: cl
+        run: python tools/file_lock_check.py --compiler seed/ceesafec.exe
       - name: Child processes (ADR 0169)
         if: always()
         shell: bash

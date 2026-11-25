@@ -1,0 +1,16 @@
+// CEESAFE_LOCK_RULES=portable (ADR 0256 §2.2, 2): PENDING and RESERVED, locked one by one, unlocked as one range.
+// POSIX releases both; Windows releases neither, and the next connection waits.
+// env: CEESAFE_LOCK_RULES=portable
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    f.lock(FileLock.Exclusive, 0x40000000, 1)!;
+    f.lock(FileLock.Exclusive, 0x40000001, 1)!;
+    Console.writeLine("both locked");
+    f.unlock(0x40000000, 2)!; // expect-library-panic: FileLocks.unlock: the range is not one the File locked, and Windows releases only those (CEESAFE_LOCK_RULES)
+    Console.writeLine("after");
+}
+// expect-stdout: both locked

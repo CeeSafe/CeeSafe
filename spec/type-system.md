@@ -3376,6 +3376,12 @@ ADR 0221's.
   the data private under any umask. The interpreter answers `Unsupported` for this and `File.modified`.
 - `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.
+- `File.link(existing, new)` (ADR 0255, lib/std): `Result<void, IoError>`, `new` made a second name (a hard link) of
+  the file `existing` names: POSIX `link`, Windows `CreateHardLinkW`. `new` is never replaced (`AlreadyExists`);
+  `NotFound` for a missing file or directory on either path (and an empty path), `IsDirectory` when `existing` is a
+  directory, `Unsupported` where the file system has no hard links, `Other` across volumes or past the link limit.
+  The interpreter links through the system's call too; a failure it cannot foresee from the paths is
+  `PermissionDenied` there on POSIX hosts (ADR 0255 §2.3).
 - `File.createReadWrite(path)` (ADR 0221 §2.1): `Result<File, IoError>`, created if missing and emptied if present,
   for reading and writing (`O_RDWR | O_CREAT | O_TRUNC`, mode 0666 & ~umask). With `openReadWrite`, `openOrCreate` and
   `createNew` it names every open with read and write access.
@@ -3407,6 +3413,13 @@ ADR 0221's.
   - The interpreter keeps the locks among the program's own `File`s, with the open-file-description rules, and a
     `lock` that conflicts waits as for a mutex; other processes do not see them (ADR 0220 §2.4), and its `testLock`
     reports only the program's other `File`s' locks. It does not check the `File`'s access mode.
+  - **Portable rules** (ADR 0256): with `CEESAFE_LOCK_RULES` set to `portable` or `strict` in the environment, read
+    at the first lock call, natively and in the interpreter, every host keeps the portable contract: a `lock` or
+    `tryLock` of a range that overlaps one the `File` holds panics (under `portable`, a lock of exactly a held range
+    of the other kind converts it, as on POSIX); an `unlock` of a range that is not exactly one the `File` locked
+    panics; a `testLock` over the `File`'s own lock panics; a shared lock on a `File` not open for reading, or an
+    exclusive one on a `File` not open for writing, is `BadDescriptor`. Any other value makes every lock call panic.
+    Other holders' conflicts are unchanged.
 - **Shared mappings** (ADR 0232; lib/std's `SharedMapping`, hosted; `borrow this`): `f.mapShared(offset: u64,
   length: usize)` maps a region of the file shared, `Result<SharedMapping, IoError>` (§26.20);
   `f.mapSharedReadOnly(offset, length)` maps it for reading only, `Result<ReadOnlyMapping, IoError>` (ADR 0235).
@@ -4479,6 +4492,13 @@ Diagnostics: none new.
   `r.readAt(at, into)`, `r.load16(at, LoadOrdering)` and `r.load32(at, LoadOrdering)`, with `SharedMapping`'s bounds,
   alignment, atomicity and `fence`; no method writes, so a write is an error of the checker. It has no `load64` (a
   32-bit x86 host's 64-bit atomic load may write). It is a move type that needs drop, Send and Share.
+- **`MappedRead`** (ADR 0254; lib/std): the interface both mapping types implement, so code that only reads is
+  generic over them (`fn f<M: MappedRead>(m: borrow M)`, or `borrow dyn MappedRead`): `length()`, `offset()`,
+  `readAt(at, into)`, `load16(at, LoadOrdering)` and `load32(at, LoadOrdering)`, each `@effects()`. It has nothing
+  that writes and no `load64`. `SharedMapping`'s and `ReadOnlyMapping`'s five methods are those of their
+  `impl MappedRead` (§21.1: a type has one member of each name), and are called on either type as before. A type of
+  the program's own may implement it (a block kept in memory) with the same contract: `length` bytes standing for
+  the file's bytes from `offset`, and a panic for an access outside them or a load not aligned to its size.
 - `mapShared`, `mapSharedReadOnly` and `sync` have the `sleep` effect; the copies, atomics and the fence none.
 - **Where.** Hosted, on Linux, macOS, FreeBSD and the other BSDs, Android and Windows; `Unsupported` on CosmoOS.
   Under `ceesafec run --interp` a mapping is modelled by the file itself (ADR 0232 §2.5): each copy and atomic is a

@@ -1,0 +1,15 @@
+// CEESAFE_LOCK_RULES=strict (ADR 0256 §2.2, 3): a test of a range the File holds, which POSIX answers without the
+// File's own lock and Windows with it.
+// env: CEESAFE_LOCK_RULES=strict
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    f.lock(FileLock.Exclusive, 0x40000001, 1)!;
+    Console.writeLine(f.testLock(FileLock.Shared, 0x40000010, 1)!.isNull());
+    let _ = f.testLock(FileLock.Shared, 0x40000000, 2)!; // expect-library-panic: FileLocks.testLock: the File holds a lock on bytes of this range, which Windows counts and POSIX does not (CEESAFE_LOCK_RULES)
+    Console.writeLine("after");
+}
+// expect-stdout: true

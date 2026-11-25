@@ -928,7 +928,10 @@ static void cee_listener_forget(int32_t fd) {
 }
 #endif /* !CEE_NO_LISTENER_SHUTDOWN */
 
+static void cee_lock_rules_forget(int32_t fd); /* ADR 0256 */
+
 void ceesafe_fd_drop(int32_t *fd) {
+    if (*fd >= 0) cee_lock_rules_forget(*fd);
 #if !defined(CEE_NO_LISTENER_SHUTDOWN)
     if (*fd >= 0) cee_listener_forget(*fd);
 #endif
@@ -2631,6 +2634,40 @@ int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t co
 #endif
 }
 
+/* `File.link(existing, new)` (ADR 0255): `made` becomes a second name of the file `existing` names; an existing
+   `made` is never replaced (EEXIST). A refusal for a directory is EISDIR on every host (POSIX says EPERM, Windows
+   ERROR_ACCESS_DENIED), and a file system without hard links is EOPNOTSUPP. */
+int64_t ceesafe_host_link(uint8_t const *existing, uint64_t existingLength, uint8_t const *made, uint64_t madeLength) {
+    char source[4096];
+    char target[4096];
+    if (!ceesafe_c_path(ceesafe_host_text(existing, existingLength), source)) return -(int64_t)EINVAL;
+    if (!ceesafe_c_path(ceesafe_host_text(made, madeLength), target)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    wchar_t wide_source[4096];
+    wchar_t wide_target[4096];
+    if (!cee_win_path(source, wide_source) || !cee_win_path(target, wide_target)) return -(int64_t)EINVAL;
+    if (CreateHardLinkW(wide_target, wide_source, NULL)) return 0;
+    DWORD error = GetLastError();
+    if (error == ERROR_ACCESS_DENIED) {
+        DWORD attributes = GetFileAttributesW(wide_source);
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            return -(int64_t)EISDIR;
+        }
+    }
+    if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED) return -(int64_t)EOPNOTSUPP;
+    if (error == ERROR_TOO_MANY_LINKS) return -(int64_t)EMLINK;
+    return -(int64_t)cee_win_errno(error);
+#else
+    if (link(source, target) == 0) return 0;
+    int error = errno;
+    if (error == EPERM || error == EACCES) {
+        struct stat st;
+        if (stat(source, &st) == 0 && S_ISDIR(st.st_mode)) return -(int64_t)EISDIR;
+    }
+    return -(int64_t)error;
+#endif
+}
+
 /* `Directory.space(path)` (ADR 0077): the bytes of the volume holding `path`: total, free, and available to an
    unprivileged process. */
 int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available) {
@@ -2791,9 +2828,9 @@ int64_t ceesafe_host_file_kind(void const *file) {
    errno. POSIX: an open-file-description lock where the kernel has one, so the lock is the File's and conflicts with
    the program's other Files; on EINVAL (a kernel without them) a process-associated fcntl lock, which is what other
    processes see either way (SQLite's own locks are of this kind). Windows: LockFileEx and UnlockFileEx on the
-   descriptor's handle; a lock there never converts, and an unlock names exactly a range that was locked. */
-int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length) {
-    int fd = *(const int32_t *)file;
+   descriptor's handle; a lock there never converts, and an unlock names exactly a range that was locked.
+   CEESAFE_LOCK_RULES (ADR 0256) checks the call against the portable rules first: cee_lock_rules_begin below. */
+static int64_t cee_host_lock(int fd, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length) {
 #ifdef _WIN32
     HANDLE h = (HANDLE)_get_osfhandle(fd);
     if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
@@ -2845,15 +2882,236 @@ int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, u
 #endif
 }
 
+/* ---- Portable lock rules (ADR 0256) -----------------------------------------------------------------------------
+   With CEESAFE_LOCK_RULES set to `portable` or `strict`, the ranges each descriptor holds are kept here, and a call
+   that breaks the portable contract (ADR 0220 §2.2) is answered 3 before the host is asked: a lock over the File's
+   own (but, under `portable`, a conversion of exactly a held range), an unlock of a range not held as given, a test
+   over the File's own. An unknown value answers 4. A shared lock on a File not open for reading, or an exclusive one
+   on a File not open for writing, is EBADF, POSIX's answer, on Windows too. lib/std turns 3 and 4 into panics. */
+
+typedef struct {
+    uint64_t id;    /* this entry's number, which a call that reserved it names when it ends */
+    uint64_t start; /* bytes start .. end - 1 */
+    uint64_t end;
+    int32_t fd;
+    uint32_t kind;    /* 1 shared, 2 exclusive */
+    uint32_t pending; /* reserved by a lock call that has not ended */
+} cee_held_lock;
+
+static cee_held_lock *cee_held;
+static size_t cee_held_count;
+static size_t cee_held_capacity;
+static uint64_t cee_held_next = 1;
+static int cee_lock_rules_value = -1; /* -1 not read yet; 0 off; 1 portable; 2 strict; 3 an unknown value */
+
+#ifdef _WIN32
+static SRWLOCK cee_held_guard = SRWLOCK_INIT;
+static void cee_held_enter(void) { AcquireSRWLockExclusive(&cee_held_guard); }
+static void cee_held_leave(void) { ReleaseSRWLockExclusive(&cee_held_guard); }
+#else
+/* A spin lock: what it guards is a scan of a short table, with no call that blocks. */
+static char cee_held_guard;
+static void cee_held_enter(void) {
+    while (__atomic_test_and_set(&cee_held_guard, __ATOMIC_ACQUIRE)) {
+    }
+}
+static void cee_held_leave(void) { __atomic_clear(&cee_held_guard, __ATOMIC_RELEASE); }
+#endif
+
+/* The rules, read from the environment at the first call; under cee_held_guard. */
+static int cee_lock_rules_now(void) {
+    if (cee_lock_rules_value < 0) {
+        const char *text = getenv("CEESAFE_LOCK_RULES");
+        cee_lock_rules_value = text == NULL || text[0] == 0      ? 0
+                               : strcmp(text, "portable") == 0 ? 1
+                               : strcmp(text, "strict") == 0   ? 2
+                                                               : 3;
+    }
+    return cee_lock_rules_value;
+}
+
+static void cee_held_remove(size_t i) {
+    cee_held[i] = cee_held[cee_held_count - 1];
+    cee_held_count--;
+}
+
+/* Whether the descriptor may take a `kind` lock: 0, or -EBADF when its access does not allow it (POSIX's rule). A
+   descriptor whose access cannot be asked is left to the host. */
+#ifdef _WIN32
+typedef LONG(WINAPI *cee_nt_query_file)(HANDLE, void *, void *, ULONG, int);
+#endif
+static int64_t cee_lock_access(int fd, uint32_t kind) {
+#ifdef _WIN32
+    static cee_nt_query_file query;
+    if (query == NULL) {
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        FARPROC found = ntdll != NULL ? GetProcAddress(ntdll, "NtQueryInformationFile") : NULL;
+        if (found == NULL) return 0;
+        memcpy(&query, &found, sizeof query);
+    }
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;
+    struct {
+        void *status;
+        ULONG_PTR information;
+    } io; /* IO_STATUS_BLOCK */
+    ULONG access = 0;
+    if (query(h, &io, &access, sizeof access, 8 /* FileAccessInformation */) != 0) return 0;
+    if (kind == 1u && (access & 0x1u /* FILE_READ_DATA */) == 0) return -(int64_t)EBADF;
+    if (kind == 2u && (access & 0x6u /* FILE_WRITE_DATA | FILE_APPEND_DATA */) == 0) return -(int64_t)EBADF;
+    return 0;
+#elif defined(F_GETFL) && defined(O_ACCMODE)
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) return 0;
+    int mode = flags & O_ACCMODE;
+    if (kind == 1u && mode == O_WRONLY) return -(int64_t)EBADF;
+    if (kind == 2u && mode == O_RDONLY) return -(int64_t)EBADF;
+    return 0;
+#else
+    (void)fd;
+    (void)kind;
+    return 0;
+#endif
+}
+
+/* Checks a lock (kind 1 or 2), unlock (0) or test (3 + kind) call against the rules. 0 go on: `*token` is 0 when the
+   rules are off or for a test, else the entry a lock reserved or converts (to be ended by cee_lock_rules_end) or 0
+   for an unlock, whose entry is gone; 3 refused; 4 an unknown value; or -EBADF (§2.2, 4). */
+static int64_t cee_lock_rules_begin(int fd, uint32_t kind, uint64_t start, uint64_t length, uint64_t *token) {
+    uint64_t end = start + length;
+    *token = 0;
+    cee_held_enter();
+    int rules = cee_lock_rules_now();
+    if (rules == 0 || rules == 3) {
+        cee_held_leave();
+        return rules == 0 ? 0 : 4;
+    }
+    if (kind == 0u) {
+        for (size_t i = 0; i < cee_held_count; i++) {
+            if (cee_held[i].fd == fd && cee_held[i].start == start && cee_held[i].end == end && !cee_held[i].pending) {
+                cee_held_remove(i);
+                cee_held_leave();
+                return 0;
+            }
+        }
+        cee_held_leave();
+        return 3;
+    }
+    size_t same = SIZE_MAX;
+    for (size_t i = 0; i < cee_held_count; i++) {
+        if (cee_held[i].fd != fd || cee_held[i].end <= start || end <= cee_held[i].start) continue;
+        if (kind <= 2u && rules == 1 && same == SIZE_MAX && cee_held[i].start == start && cee_held[i].end == end &&
+            cee_held[i].kind != kind && !cee_held[i].pending) {
+            same = i; /* a conversion, under `portable`, if nothing else overlaps */
+            continue;
+        }
+        cee_held_leave();
+        return 3;
+    }
+    if (kind > 2u) {
+        cee_held_leave();
+        return 0; /* a test that overlaps none of the File's own locks */
+    }
+    if (same != SIZE_MAX) {
+        cee_held[same].pending = 1;
+        *token = cee_held[same].id;
+        cee_held_leave();
+        int64_t access = cee_lock_access(fd, kind);
+        if (access < 0) {
+            cee_held_enter();
+            for (size_t i = 0; i < cee_held_count; i++) {
+                if (cee_held[i].id == *token) cee_held[i].pending = 0;
+            }
+            cee_held_leave();
+        }
+        return access;
+    }
+    if (cee_held_count == cee_held_capacity) {
+        size_t capacity = cee_held_capacity == 0 ? 16 : cee_held_capacity * 2;
+        cee_held_lock *grown = (cee_held_lock *)realloc(cee_held, capacity * sizeof *grown);
+        if (grown == NULL) {
+            cee_held_leave();
+            return -(int64_t)ENOMEM;
+        }
+        cee_held = grown;
+        cee_held_capacity = capacity;
+    }
+    uint64_t id = cee_held_next++;
+    cee_held[cee_held_count++] = (cee_held_lock){ .id = id, .start = start, .end = end, .fd = fd, .kind = 0,
+                                                  .pending = 1 };
+    cee_held_leave();
+    int64_t access = cee_lock_access(fd, kind);
+    if (access < 0) {
+        cee_held_enter();
+        for (size_t i = 0; i < cee_held_count; i++) {
+            if (cee_held[i].id == id) {
+                cee_held_remove(i);
+                break;
+            }
+        }
+        cee_held_leave();
+        return access;
+    }
+    *token = id;
+    return 0;
+}
+
+/* Ends a lock call that cee_lock_rules_begin let through with `token`: the entry is held with `kind` if the host
+   granted the lock, else a new entry is dropped and a converted one keeps its kind. */
+static void cee_lock_rules_end(uint64_t token, uint32_t kind, int granted) {
+    if (token == 0) return;
+    cee_held_enter();
+    for (size_t i = 0; i < cee_held_count; i++) {
+        if (cee_held[i].id != token) continue;
+        if (granted) {
+            cee_held[i].kind = kind;
+            cee_held[i].pending = 0;
+        } else if (cee_held[i].kind == 0u) {
+            cee_held_remove(i);
+        } else {
+            cee_held[i].pending = 0;
+        }
+        break;
+    }
+    cee_held_leave();
+}
+
+/* A File's drop: its descriptor's ranges go, so a later File given the same number starts with none. */
+static void cee_lock_rules_forget(int32_t fd) {
+    cee_held_enter();
+    for (size_t i = 0; i < cee_held_count;) {
+        if (cee_held[i].fd == fd) {
+            cee_held_remove(i);
+        } else {
+            i++;
+        }
+    }
+    cee_held_leave();
+}
+
+int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length) {
+    int fd = *(const int32_t *)file;
+    uint64_t token = 0;
+    int64_t rules = cee_lock_rules_begin(fd, kind, start, length, &token);
+    if (rules != 0) return rules;
+    int64_t result = cee_host_lock(fd, kind, wait, start, length);
+    if (kind != 0u) cee_lock_rules_end(token, kind, result == 0);
+    return result;
+}
+
 /* `f.testLock(kind, start, length)` (ADR 0234): whether another holder's lock conflicts with a `kind` lock (1 shared,
    2 exclusive) on bytes start .. start + length - 1, which lib/std has checked. 0 none, 1 a shared lock conflicts, 2
    an exclusive one, or a negated errno. POSIX: F_OFD_GETLK where ceesafe_host_file_lock takes open-file-description
    locks (the File's own locks do not count, the program's other Files' do), falling back to F_GETLK on EINVAL as it
    does; nothing is taken. Windows has no such query: the lock is tried without waiting and, when taken, released at
    once (os_win.c's winCheckReservedLock), and for an exclusive request that fails a shared try tells a shared holder
-   from an exclusive one; the File's own locks count there, since Windows never merges them. */
+   from an exclusive one; the File's own locks count there, since Windows never merges them. Under
+   CEESAFE_LOCK_RULES (ADR 0256), a test over the File's own lock is 3. */
 int64_t ceesafe_host_file_test_lock(void const *file, uint32_t kind, uint64_t start, uint64_t length) {
     int fd = *(const int32_t *)file;
+    uint64_t token = 0;
+    int64_t rules = cee_lock_rules_begin(fd, 3u + kind, start, length, &token);
+    if (rules != 0) return rules;
 #ifdef _WIN32
     HANDLE h = (HANDLE)_get_osfhandle(fd);
     if (h == INVALID_HANDLE_VALUE) return -(int64_t)EBADF;

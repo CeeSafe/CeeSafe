@@ -1704,6 +1704,10 @@ cee_io_result ceesafe_fd_length(int32_t fd);
 cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length);
 uint64_t ceesafe_clock_monotonic(void);
 int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength);
+/* ADR 0255: `File.link(existing, new)`, a second name for a file (link; CreateHardLinkW on Windows); never replaces
+   `new`. 0, or a negated errno: EISDIR when `existing` is a directory, EOPNOTSUPP where the file system has no hard
+   links. */
+int64_t ceesafe_host_link(uint8_t const *existing, uint64_t existingLength, uint8_t const *made, uint64_t madeLength);
 int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length);
 int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available);
 /* ADR 0104: the open-file limit (soft and hard; UINT64_MAX when unlimited), and raising the soft one. */
@@ -1717,11 +1721,14 @@ int64_t ceesafe_host_file_kind(void const *file);
 /* ADR 0220: an advisory lock on bytes start .. start + length - 1 of an open File (its first field is the descriptor):
    kind 0 unlocks, 1 is shared, 2 exclusive; wait 1 waits for a conflicting lock to go. Open-file-description locks
    (F_OFD_SETLK) where the kernel has them, else process-associated fcntl locks; LockFileEx on Windows. 0 when done,
-   1 when a lock that does not wait met a conflict, or a negated errno. lib/std checks the range first. */
+   1 when a lock that does not wait met a conflict, or a negated errno. lib/std checks the range first. Under
+   CEESAFE_LOCK_RULES (ADR 0256), also 3 when the portable rules refuse the call (a lock over the File's own, an
+   unlock of a range not locked as given) and 4 when the variable's value is unknown. */
 int64_t ceesafe_host_file_lock(void const *file, uint32_t kind, uint32_t wait, uint64_t start, uint64_t length);
 /* ADR 0234: whether another holder's lock conflicts with a `kind` (1 shared, 2 exclusive) lock on the range: 0 none,
    1 a shared lock does, 2 an exclusive one, or a negated errno. F_OFD_GETLK, else F_GETLK, which take nothing;
-   Windows tries the lock without waiting and releases it at once. lib/std checks the range first. */
+   Windows tries the lock without waiting and releases it at once. lib/std checks the range first. Under
+   CEESAFE_LOCK_RULES (ADR 0256), 3 for a test over the File's own lock and 4 for an unknown value. */
 int64_t ceesafe_host_file_test_lock(void const *file, uint32_t kind, uint64_t start, uint64_t length);
 /* ADR 0221 §2.3: 1 if standard input (0), output (1) or error (2) is a terminal (isatty; GetConsoleMode on
    Windows), else 0. */

@@ -132,6 +132,7 @@ no argument 1000
 | `f.syncData()`, `f.syncAll()` | durable on disk (`F_FULLFSYNC` on Apple systems); after a failed sync the file's durable contents are unknown |
 | `f.length()`, `f.setLength(n)` | `u64`; truncate or zero-extend |
 | `File.rename(from, to)`, `Directory.sync(path)` | atomic replace; make a directory's entries durable |
+| `File.link(existing, new)` | a second name (a hard link) for a file; `AlreadyExists` if `new` exists (ADR 0255) |
 | `Directory.space(path)` | the volume's `total`, `free` and `available` bytes (ADR 0077) |
 | `Console.flush()` | write standard output's buffer now, so it survives a kill |
 | `File.openAppend(path)` | write-only, created if missing, every write at the end |
@@ -146,6 +147,7 @@ no argument 1000
 | `f.testLock(kind, start, length)` | `Result<FileLock?, IoError>`: null if the lock could be taken now, else the kind of another holder's conflicting lock; takes nothing on POSIX (`F_GETLK`), tries and releases at once on Windows (ADR 0234) |
 | `f.mapShared(offset, length)` | `Result<SharedMapping, IoError>`: a region of the file mapped shared with every other mapping of it, in any process (SQLite's `-shm`); read and written by copies (`readAt`, `writeAt`) and atomics (`load32`, `store32`, `compareExchange32`, `fetchAdd32` and the `16` and `64` forms, with lib/core's orderings), with `SharedMapping.fence()`; the file is extended to cover it (ADR 0232, ADR 0235) |
 | `f.mapSharedReadOnly(offset, length)` | `Result<ReadOnlyMapping, IoError>`: the same, for reading only, from a `File` open for reading (`File.open` too); `readAt`, `load16`, `load32`, and no method that writes; the file must already hold the range (ADR 0235) |
+| `MappedRead` | the interface of both mappings' reads (`length`, `offset`, `readAt`, `load16`, `load32`), for code generic over them (ADR 0254) |
 | `ProcessLimits.openFiles()`, `ProcessLimits.raiseOpenFiles(n)` | the open-file limit's `current` and `maximum`; raise the soft limit, once, at a server's start (ADR 0104) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `listener.shutdown()` | every `accept` on the listener, one another thread waits in and every later one, returns `Err(IoError.ConnectionAborted)`; the socket closes when the listener is destroyed ([Threads](threads.md), ADR 0126) |
@@ -173,6 +175,8 @@ A lock is advisory: it keeps out only programs that ask for one too. Lock bytes 
 from 0x40000000), take a range the `File` does not already hold, and unlock exactly the ranges taken: that is the
 same on every system. Dropping the `File` releases its locks. `testLock` asks whether a lock could be taken
 without taking it (SQLite's "is a writer here?"), and names the kind of lock in the way.
+Linux and macOS allow more than Windows does (converting or splitting a held lock); run a program's tests with
+`CEESAFE_LOCK_RULES=strict` in the environment and any host panics where Windows would refuse (ADR 0256).
 
 ```ceesafe
 fn main() {
@@ -201,7 +205,8 @@ A shared mapping is memory that other processes may write at any moment, so it i
 out and in, and integers are atomics, which are atomic between processes too. An access outside the region, or an
 atomic not aligned to its size in the file, panics. To reach more of the file, map another region; regions of the
 same bytes are one memory. A file the program may only read is mapped with `mapSharedReadOnly`, whose
-`ReadOnlyMapping` has copies out and loads but nothing that writes.
+`ReadOnlyMapping` has copies out and loads but nothing that writes. Code that only reads takes either through
+their interface, `MappedRead` (`fn f<M: MappedRead>(m: borrow M)`), which a block kept in memory may implement too.
 
 ```ceesafe
 fn main() {

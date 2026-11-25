@@ -75,6 +75,7 @@
 - [struct Random](#struct-random)
 - [struct IsolationReport](#struct-isolationreport)
 - [struct Isolation](#struct-isolation)
+- [interface MappedRead](#interface-mappedread)
 - [struct SharedMapping](#struct-sharedmapping)
 - [struct ReadOnlyMapping](#struct-readonlymapping)
 - [enum SocketAddress](#enum-socketaddress)
@@ -2344,6 +2345,77 @@ Text appended to a `String` a step at a time, each step returning the appender s
 `line.add().text("status ").number(code).done()?`. A step whose allocation fails appends nothing more and marks the
 appender, so one `done()` at the end reports it; what earlier steps appended stays (ADR 0217).
 
+### TextAppender.text
+
+```ceesafe
+public fn text(borrow mut this, s: StringView) -> borrow mut TextAppender
+```
+
+`s`, as `append(s)`.
+
+### TextAppender.char
+
+```ceesafe
+public fn char(borrow mut this, c: u32) -> borrow mut TextAppender
+```
+
+The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+not a failure.
+
+### TextAppender.number
+
+```ceesafe
+public fn number(borrow mut this, n: u64) -> borrow mut TextAppender
+```
+
+`n` in decimal, as `appendNumber(n)`.
+
+### TextAppender.signed
+
+```ceesafe
+public fn signed(borrow mut this, n: i64) -> borrow mut TextAppender
+```
+
+`n` in decimal with its sign, as `appendNumber(n)`.
+
+### TextAppender.hex
+
+```ceesafe
+public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut TextAppender
+```
+
+`value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+
+### TextAppender.padded
+
+```ceesafe
+public fn padded(
+    borrow mut this,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> borrow mut TextAppender
+```
+
+`text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+
+### TextAppender.fixed
+
+```ceesafe
+public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut TextAppender
+```
+
+`value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+
+### TextAppender.done
+
+```ceesafe
+public fn done(borrow mut this) -> Result<void, AllocError>
+```
+
+Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
+
 ## struct ByteAppend
 
 ```ceesafe
@@ -2366,6 +2438,77 @@ public struct ByteAppender<region r>
 
 Text appended to a `Vector<u8>` a step at a time, as TextAppender appends to a `String` (ADR 0217): each step
 returns the appender, a failed allocation marks it, and `done()` reports it.
+
+### ByteAppender.text
+
+```ceesafe
+public fn text(borrow mut this, s: StringView) -> borrow mut ByteAppender
+```
+
+The bytes of `s`.
+
+### ByteAppender.char
+
+```ceesafe
+public fn char(borrow mut this, c: u32) -> borrow mut ByteAppender
+```
+
+The character `c` in UTF-8, as `appendChar(c)`: nothing for a value that is not a Unicode scalar value, which is
+not a failure.
+
+### ByteAppender.number
+
+```ceesafe
+public fn number(borrow mut this, n: u64) -> borrow mut ByteAppender
+```
+
+`n` in decimal.
+
+### ByteAppender.signed
+
+```ceesafe
+public fn signed(borrow mut this, n: i64) -> borrow mut ByteAppender
+```
+
+`n` in decimal with its sign.
+
+### ByteAppender.hex
+
+```ceesafe
+public fn hex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> borrow mut ByteAppender
+```
+
+`value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`, as `appendHex`.
+
+### ByteAppender.padded
+
+```ceesafe
+public fn padded(
+    borrow mut this,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> borrow mut ByteAppender
+```
+
+`text` in a field `width` characters wide, filled with `fill` where `align` puts it, as `appendPadded`.
+
+### ByteAppender.fixed
+
+```ceesafe
+public fn fixed(borrow mut this, value: f64, digits: u32) -> borrow mut ByteAppender
+```
+
+`value` with `digits` digits after the point, rounded half to even, as `appendFixed`.
+
+### ByteAppender.done
+
+```ceesafe
+public fn done(borrow mut this) -> Result<void, AllocError>
+```
+
+Whether every step appended: `Err(AllocError.OutOfMemory)` if one could not allocate.
 
 ## enum PathKind
 
@@ -3022,6 +3165,20 @@ there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | M
 name is durable once its directory is synced (`Directory.sync`).
 Safety: the runtime reads both paths' bytes during the call only.
 
+### HostServices.link
+
+```ceesafe
+public fn link(existing: StringView, new: StringView) -> Result<void, IoError>
+```
+
+`File.link(existing, new)` (ADR 0255): makes `new` a second name of the file `existing` names, a hard link
+(POSIX `link`; Windows `CreateHardLinkW`): both names open the same file, and removing one leaves the other.
+`new` is never replaced: `AlreadyExists` if it exists. `NotFound` if `existing` or a directory of either path
+is missing, `IsDirectory` if `existing` is a directory, `Unsupported` where the file system has no hard links,
+`Other` across volumes or past the file's limit of links. The new name is durable once its directory is synced
+(`Directory.sync`).
+Safety: the runtime reads both paths' bytes during the call only.
+
 ## struct FileMetadata
 
 ```ceesafe
@@ -3077,6 +3234,12 @@ releases its locks. Portable use: lock a range the `File` does not hold, and unl
 (Windows neither converts nor splits a lock; POSIX does both, and a conversion that meets a conflict leaves the
 held lock as it was, ADR 0234 §2.3).
 
+With `CEESAFE_LOCK_RULES=portable` or `strict` in the environment (ADR 0256), every host keeps that contract: a
+lock over a range the `File` holds panics (under `portable`, converting exactly a held range is allowed), so does
+an unlock of a range not locked as given and a `testLock` over the `File`'s own lock, and a lock the `File`'s
+access does not allow is `BadDescriptor`, POSIX's answer, on Windows too. A test suite set so on macOS or Linux
+fails where a Windows run would.
+
 ### FileLocks.lock
 
 ```ceesafe
@@ -3118,7 +3281,8 @@ Safety: as `lock`.
 public fn unlock(file: borrow File, start: u64, length: u64) -> Result<void, IoError>
 ```
 
-`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error.
+`f.unlock(start, length)`: releases the file's locks on the range; bytes it does not hold are no error (but see
+`CEESAFE_LOCK_RULES` above).
 Safety: as `lock`.
 
 ## enum ConsoleStream
@@ -3273,6 +3437,35 @@ fit is counted (`set.missedCrashes()`). The set keeps a handle of the channel un
 is no memory for it.
 Safety: the runtime takes a count of the channel, which it gives back when the set ends.
 
+## interface MappedRead
+
+```ceesafe
+public interface MappedRead {
+    @effects()
+    fn length(borrow this) -> usize;
+    @effects()
+    fn offset(borrow this) -> u64;
+    @effects()
+    fn readAt(borrow this, at: usize, into: SliceMut<u8>);
+    @effects()
+    fn load16(borrow this, at: usize, order: LoadOrdering) -> u16;
+    @effects()
+    fn load32(borrow this, at: usize, order: LoadOrdering) -> u32;
+}
+```
+
+What a mapped region of a file gives a reader (ADR 0254): `SharedMapping` and `ReadOnlyMapping` implement it, so
+code that only reads, such as SQLite's wal-index lookups, is written once for both:
+
+```
+fn walVersion<M: MappedRead>(block: borrow M) -> u32 => block.load32(0, LoadOrdering.Acquire);
+```
+
+It has nothing that writes, and no `load64`, which `ReadOnlyMapping` lacks. A type of the program's own may
+implement it too (a block kept in memory): `length` bytes, the region's `offset` in its file, copies and loads of
+those bytes, and a panic for an access outside them or a load not aligned to its size in the file. No method has
+an effect.
+
 ## struct SharedMapping
 
 ```ceesafe
@@ -3314,33 +3507,6 @@ writing; a shorter file is first extended with zero bytes (never shortened). `In
 range that ends past 2^63 - 1; `BadDescriptor` for a file not open for reading and writing.
 Safety: the runtime reads the file's descriptor during the call, and writes the four words of `out`.
 
-### SharedMapping.length
-
-```ceesafe
-public fn length(borrow this) -> usize
-```
-
-Its length in bytes.
-
-### SharedMapping.offset
-
-```ceesafe
-public fn offset(borrow this) -> u64
-```
-
-Where it starts in the file.
-
-### SharedMapping.readAt
-
-```ceesafe
-public fn readAt(borrow this, at: usize, into: SliceMut<u8>)
-```
-
-Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
-bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
-it. Panics if the bytes are not all inside the region.
-Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
-
 ### SharedMapping.writeAt
 
 ```ceesafe
@@ -3349,16 +3515,6 @@ public fn writeAt(borrow this, at: usize, bytes: Slice<u8>)
 
 Copies `bytes` to byte `at` of the region. Panics if they do not all fit inside it.
 Safety: as readAt; the runtime reads `bytes` only.
-
-### SharedMapping.load32
-
-```ceesafe
-public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
-```
-
-The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
-inside the region or `offset() + at` is not a multiple of 4.
-Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
 
 ### SharedMapping.store32
 
@@ -3392,16 +3548,6 @@ public fn fetchAdd32(borrow this, at: usize, value: u32, order: Ordering) -> u32
 ```
 
 Adds `value` to the u32 at byte `at`, wrapping, atomically with `order`; the value before. Panics as load32.
-Safety: as load32.
-
-### SharedMapping.load16
-
-```ceesafe
-public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
-```
-
-The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
-inside the region or `offset() + at` is odd.
 Safety: as load32.
 
 ### SharedMapping.store16
@@ -3500,6 +3646,55 @@ Writes the region's changed pages to the file and waits for them (`msync`); on W
 which `f.syncAll()` makes the file durable. A change is the file's without it; `sync` is for durability.
 Safety: the runtime is given what it mapped.
 
+### SharedMapping.length
+
+```ceesafe
+fn length(borrow this) -> usize
+```
+
+Its length in bytes.
+
+### SharedMapping.offset
+
+```ceesafe
+fn offset(borrow this) -> u64
+```
+
+Where it starts in the file.
+
+### SharedMapping.readAt
+
+```ceesafe
+fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+```
+
+Copies `into.length` bytes from byte `at` of the region into `into`. While another process writes the same
+bytes, the copy may hold some of the old and some of the new: a protocol (SQLite's two header copies) detects
+it. Panics if the bytes are not all inside the region.
+Safety: the bytes are inside the mapping, which lives as long as this value; the runtime writes `into` only.
+
+### SharedMapping.load32
+
+```ceesafe
+fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+```
+
+The u32 at byte `at`, loaded atomically with `order` (AtomicU32.loadWith). Panics if its four bytes are not
+inside the region or `offset() + at` is not a multiple of 4.
+Safety: the word is inside the mapping and aligned, and is only ever reached atomically here.
+
+### SharedMapping.load16
+
+```ceesafe
+fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+```
+
+The u16 at byte `at`, as load32 (ADR 0235: SQLite's wal-index hash slots). Panics if its two bytes are not
+inside the region or `offset() + at` is odd.
+Safety: as load32.
+
+Implements `MappedRead`.
+
 ## struct ReadOnlyMapping
 
 ```ceesafe
@@ -3543,7 +3738,7 @@ Safety: the runtime reads the file's descriptor during the call, and writes the 
 ### ReadOnlyMapping.length
 
 ```ceesafe
-public fn length(borrow this) -> usize
+fn length(borrow this) -> usize
 ```
 
 Its length in bytes.
@@ -3551,7 +3746,7 @@ Its length in bytes.
 ### ReadOnlyMapping.offset
 
 ```ceesafe
-public fn offset(borrow this) -> u64
+fn offset(borrow this) -> u64
 ```
 
 Where it starts in the file.
@@ -3559,7 +3754,7 @@ Where it starts in the file.
 ### ReadOnlyMapping.readAt
 
 ```ceesafe
-public fn readAt(borrow this, at: usize, into: SliceMut<u8>)
+fn readAt(borrow this, at: usize, into: SliceMut<u8>)
 ```
 
 Copies `into.length` bytes from byte `at` of the region into `into`, as SharedMapping.readAt. Panics if the
@@ -3569,7 +3764,7 @@ Safety: the bytes are inside the mapping, which lives as long as this value; the
 ### ReadOnlyMapping.load16
 
 ```ceesafe
-public fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
+fn load16(borrow this, at: usize, order: LoadOrdering) -> u16
 ```
 
 The u16 at byte `at`, loaded atomically with `order`. Panics if its two bytes are not inside the region or
@@ -3579,12 +3774,14 @@ Safety: the word is inside the mapping and aligned; the runtime's load never wri
 ### ReadOnlyMapping.load32
 
 ```ceesafe
-public fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
+fn load32(borrow this, at: usize, order: LoadOrdering) -> u32
 ```
 
 The u32 at byte `at`, loaded atomically with `order`. Panics if its four bytes are not inside the region or
 `offset() + at` is not a multiple of 4.
 Safety: as load16.
+
+Implements `MappedRead`.
 
 ## enum SocketAddress
 
@@ -3597,6 +3794,36 @@ public enum SocketAddress {
 
 An IPv4 or IPv6 endpoint: the address bytes in network order and the port; an IPv6 address also has its scope id
 (0: none), which a link-local address needs to say which interface it is on.
+
+### SocketAddress.port
+
+```ceesafe
+fn port(borrow this) -> u16
+```
+
+### SocketAddress.withPort
+
+```ceesafe
+fn withPort(borrow this, p: u16) -> SocketAddress
+```
+
+### SocketAddress.isLoopback
+
+```ceesafe
+fn isLoopback(borrow this) -> bool
+```
+
+### SocketAddress.isUnspecified
+
+```ceesafe
+fn isUnspecified(borrow this) -> bool
+```
+
+### SocketAddress.write
+
+```ceesafe
+fn write(borrow this, w: borrow mut TextWriter)
+```
 
 Implements `SocketEndpoint`.
 

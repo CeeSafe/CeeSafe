@@ -1,0 +1,14 @@
+// CEESAFE_LOCK_RULES set to a value that is neither `portable` nor `strict` (ADR 0256 §2.1): every lock call panics,
+// so a misspelt value never turns the checks off.
+// env: CEESAFE_LOCK_RULES=Strict
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    Console.writeLine("opened");
+    let _ = f.tryLock(FileLock.Shared, 0, 1)!; // expect-library-panic: CEESAFE_LOCK_RULES is neither portable nor strict
+    Console.writeLine("after");
+}
+// expect-stdout: opened

@@ -25,7 +25,7 @@ fn checkResourceFunction(
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
     if (owner == builtinFile() && (sameText(text, "kind") || sameText(text, "rename") || sameText(text, "modified") ||
-        sameText(text, "setPermissions")) && !c.freestanding) {
+        sameText(text, "setPermissions") || sameText(text, "link")) && !c.freestanding) {
         return checkHostService(c, member, arguments, span); // lib/std's HostServices.kind (§26.8, ADR 0028)
     }
     var function = none();

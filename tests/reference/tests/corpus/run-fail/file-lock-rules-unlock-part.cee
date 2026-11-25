@@ -1,0 +1,17 @@
+// CEESAFE_LOCK_RULES=strict (ADR 0256 §2.2, 2): an unlock of part of a held range. POSIX splits the lock; Windows
+// releases nothing.
+// env: CEESAFE_LOCK_RULES=strict
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    f.lock(FileLock.Shared, 0x40000002, 510)!;
+    f.unlock(0x40000002, 510)!;
+    f.lock(FileLock.Shared, 0x40000002, 510)!;
+    Console.writeLine("locked again");
+    f.unlock(0x40000002, 10)!; // expect-library-panic: FileLocks.unlock: the range is not one the File locked, and Windows releases only those (CEESAFE_LOCK_RULES)
+    Console.writeLine("after");
+}
+// expect-stdout: locked again

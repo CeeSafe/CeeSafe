@@ -1,0 +1,14 @@
+// CEESAFE_LOCK_RULES=strict (ADR 0256 §2.2, 1): a shared lock over part of a range the File holds shared. POSIX
+// merges them; Windows stacks them, and each needs its own unlock.
+// env: CEESAFE_LOCK_RULES=strict
+fn main() {
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/db")!;
+    let f = File.createReadWrite(path.view())!;
+    Console.writeLine(f.tryLock(FileLock.Shared, 0x40000002, 510)!);
+    Console.writeLine(f.tryLock(FileLock.Shared, 0x40000100, 1)!); // expect-library-panic: FileLocks.tryLock: the File already holds a lock on bytes of this range, which Windows refuses (CEESAFE_LOCK_RULES)
+    Console.writeLine("after");
+}
+// expect-stdout: true

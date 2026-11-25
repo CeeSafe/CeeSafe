@@ -12,6 +12,7 @@ struct DocItem {
     line: u32;
     parent: u32;                    // the type's entry for a method, or none
     implements: Vector<Vector<u8>>; // the interfaces of the `impl` blocks for this type, as written
+    fromInterface: bool;            // a method of an `impl I for T` block, whose interface documents it too
 }
 
 /// 0 fn, 1 const, 2 static, 3 struct, 4 enum, 5 interface.
@@ -214,6 +215,7 @@ fn docEntry(
             line: line,
             parent: parent,
             implements: Vector<Vector<u8>>.create(),
+            fromInterface: false,
         },
     );
 }
@@ -283,30 +285,42 @@ fn docImplements(entry: borrow mut DocItem, impls: borrow Vector<DocImpl>) -> Re
     return Ok();
 }
 
-/// The public functions that the file's `impl E { … }` blocks give the type named by `nameIdent` (ADR 0107), as
-/// members of the entry `parent`.
-fn docInherentFunctions(
-    file: borrow DocFile,
-    index: u32,
-    nameIdent: u32,
+/// The methods that the `impl` blocks of every file give the type named `name`, as members of the entry `parent`:
+/// the public functions of its inherent blocks (`impl S { … }`, ADR 0064 §1; an enum's, ADR 0107), and every method of
+/// its `impl I for T` blocks, which are the type's methods (type-system.md §21.1), with their own doc comments.
+fn docImplFunctions(
+    files: borrow Vector<DocFile>,
+    name: Slice<u8>,
     parent: u32,
     out: borrow mut Vector<DocItem>,
 ) -> Result<void, AllocError> {
-    let ast = borrow file.front.ast;
-    let unit = borrow ast.units[0];
-    for (k in 0..unit.items.count) {
-        match (ast.items[ast.at(unit.items, k) as usize].kind) {
-            ItemKind.InherentImpl(forType, functions, _, _, _) => {
-                if (sameBytes(docTypeName(file, forType), identName(file, nameIdent))) {
-                    for (m in 0..functions.count) {
-                        let f = ast.at(functions, m);
-                        if (isPublic(ast.functions[f as usize].visibility)) {
-                            out.push(docFunction(file, index, f, parent)?)?;
+    for (index in 0..files.length) {
+        let file = borrow files[index];
+        let ast = borrow file.front.ast;
+        let unit = borrow ast.units[0];
+        for (k in 0..unit.items.count) {
+            match (ast.items[ast.at(unit.items, k) as usize].kind) {
+                ItemKind.InherentImpl(forType, functions, _, _, _) => {
+                    if (sameBytes(docTypeName(file, forType), name)) {
+                        for (m in 0..functions.count) {
+                            let f = ast.at(functions, m);
+                            if (isPublic(ast.functions[f as usize].visibility)) {
+                                out.push(docFunction(file, truncate<u32>(index), f, parent)?)?;
+                            }
                         }
                     }
                 }
+                ItemKind.Impl(_, forType, functions, _, _) => {
+                    if (sameBytes(docTypeName(file, forType), name)) {
+                        for (m in 0..functions.count) {
+                            var entry = docFunction(file, truncate<u32>(index), ast.at(functions, m), parent)?;
+                            entry.fromInterface = true;
+                            out.push(entry)?;
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     return Ok();
@@ -314,11 +328,12 @@ fn docInherentFunctions(
 
 /// The file's public items, in order, with their methods after them (FileEntries.Entries).
 fn docEntries(
-    file: borrow DocFile,
+    files: borrow Vector<DocFile>,
     index: u32,
     impls: borrow Vector<DocImpl>,
     out: borrow mut Vector<DocItem>,
 ) -> Result<void, AllocError> {
+    let file = borrow files[index as usize];
     let ast = borrow file.front.ast;
     let unit = borrow ast.units[0];
     for (k in 0..unit.items.count) {
@@ -385,6 +400,7 @@ fn docEntries(
                         out.push(docFunction(file, index, f, parent)?)?;
                     }
                 }
+                docImplFunctions(files, identName(file, item.name), parent, out)?; // its `impl` blocks' methods
             }
             ItemKind.Enum(variants, _, _) => {
                 let header = docTextOf(
@@ -403,7 +419,7 @@ fn docEntries(
                 docImplements(mut entry, impls)?;
                 let parent = truncate<u32>(out.length);
                 out.push(entry)?;
-                docInherentFunctions(file, index, item.name, parent, out)?; // an enum's `impl E { … }` (ADR 0107)
+                docImplFunctions(files, identName(file, item.name), parent, out)?; // `impl E { … }` (ADR 0107) too
             }
             ItemKind.Interface(methods, _) => {
                 let header = docTextOf(
@@ -588,7 +604,8 @@ fn missingDocs(
             lines.push(k)?;
         }
         for (m in k + 1..entries.length) {
-            if (entries[m].parent == truncate<u32>(k) && !entries[m].hasDoc) {
+            // A method of an `impl I for T` block without a comment of its own has the interface's.
+            if (entries[m].parent == truncate<u32>(k) && !entries[m].hasDoc && !entries[m].fromInterface) {
                 lines.push(m)?;
             }
         }
@@ -906,7 +923,7 @@ fn documentSources(sources: Vector<SourceText>, title: Slice<u8>, missing: bool)
     }
     var entries = Vector<DocItem>.create();
     for (k in 0..docFiles.length) {
-        docEntries(docFiles[k], truncate<u32>(k), impls, mut entries)?;
+        docEntries(docFiles, truncate<u32>(k), impls, mut entries)?;
     }
     if (missing) {
         made.missingCount = missingDocs(entries, docFiles, mut made.text)?;

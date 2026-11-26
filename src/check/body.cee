@@ -199,6 +199,7 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
         c.error(statementNotCall(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
+    c.statementCall = span;
     let reported = c.front.diagnostics.items.length;
     let value = synth(c, e, none())?;
     if (!c.isBottom(value) && isResultType(c, c.typeOf(value)) && c.front.diagnostics.items.length == reported) {

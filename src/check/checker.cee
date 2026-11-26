@@ -282,6 +282,7 @@ struct Checker {
     // Instances whose functions wait for a use (type-system.md §20.4, src/check/lazy_instances.cee).
     memberOwner: u32;                 // the instance whose members' types are being resolved, or none
     inSignature: bool;                // and they are a function's signature's, not a field's or a payload's
+    statementCall: Span;              // the call that is the statement being checked: its value is not used
     instanceParents: Map<Word, Word>; // by instance type: the memberOwner it was made under, or none
     pendingMembers: Map<Word, Word>;  // by instance type: its entry (an enum's with bit 32); bit 33 once it has them
     pendingCount: usize;              // how many still wait

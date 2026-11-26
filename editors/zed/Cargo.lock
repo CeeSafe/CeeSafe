@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "zed_ceesafe"
-version = "0.95.13"
+version = "0.95.14"
 dependencies = [
  "zed_extension_api",
 ]

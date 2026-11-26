@@ -131,6 +131,32 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             let value = checkClosure(c, closure, expected, span)?;
             return coerce(c, value, expected, span);
         }
+        ExprNode.Name(name, typeArguments) => {
+            let symbol = c.front.ast.idents[name as usize].symbol;
+            if (typeArguments.count == 0 && sameText(
+                c.name(symbol),
+                "None",
+            ) && expected != none() && c.types.optionType(expected) != none()) {
+                let undeclared = match (c.lookup(symbol)?) {
+                    Entity.None => true,
+                    _ => false,
+                };
+                if (undeclared) {
+                    // `None` where an optional is expected: the sure fix is `null` (tooling.md §5.2).
+                    var message = Vector<u8>.create();
+                    appendText(
+                        mut message,
+                        "cannot find 'None' in this scope: an optional without a value is 'null'",
+                    )?;
+                    var title = Vector<u8>.create();
+                    appendText(mut title, "write 'null'")?;
+                    var text = Vector<u8>.create();
+                    appendText(mut text, "null")?;
+                    c.errorWithFix(undefinedName(), span.start, span.end, message, title, span.start, span.end, text)?;
+                    return c.errorResult(span.start, span.end);
+                }
+            }
+        }
         ExprNode.ArrayLiteral(elements) => {
             if (elements.count == 0) {
                 return emptySlice(c, expected, span); // `[]` (ADR 0075 §2.9)
@@ -159,7 +185,10 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             expected,
             TypeKind.Vector,
         ) || c.types.is(expected, TypeKind.StableVector) || c.types.isDynBox(expected) ||
-            (c.types.is(expected, TypeKind.Box) && (isBoxFromRaw(c, e)? || unwrapsMemberCall(c, e))) ||
+            (c.types.is(
+                expected,
+                TypeKind.Box,
+            ) && (isBoxFromRaw(c, e)? || isBoxNew(c, e)? || unwrapsMemberCall(c, e))) ||
             (c.types.is(expected, TypeKind.RawPointer) && isNullLiteral(c, e)); // N0260 names the pointer type
         if (!keep && t.pointee != none()) {
             synthExpected = t.pointee;
@@ -1274,6 +1303,24 @@ fn synthCall(
                     let namedType = if (typeArguments.count == 0) typeNamedInExpression(c, targetSymbol) else none();
                     if (namedType != none()) {
                         return checkTypeCall(c, namedType, target, member, arguments, expected, calleeSpan, span);
+                    }
+                    if (sameText(c.name(targetSymbol), "Vec") && isNoItem(c, targetSymbol) &&
+                        (typeArguments.count > 0 || (expected != none() && c.types.is(expected, TypeKind.Vector)))) {
+                        let undeclared = match (c.lookup(targetSymbol)?) {
+                            Entity.None => true,
+                            _ => false,
+                        };
+                        if (undeclared) {
+                            // Rust's `Vec<T>.new()`, or `Vec.new()` where a vector is expected (tooling.md §5.2).
+                            let ident = c.front.ast.idents[targetName as usize];
+                            var message = Vector<u8>.create();
+                            appendText(mut message, "cannot find 'Vec' in this scope")?;
+                            appendTypeDidYouMean(c, mut message, targetSymbol)?;
+                            let targetSpan = c.front.ast.exprSpans[target as usize];
+                            vecIsVector(c, undefinedName(), targetSpan, ident.start, ident.end, message)?;
+                            checkArgumentsLoosely(c, arguments)?;
+                            return c.errorResult(span.start, span.end);
+                        }
                     }
                     if (c.asyncScopes.length > 0 && typeArguments.count == 0) {
                         // `s.spawn(…)` in an `Async.scope` body: `s` is not a local (§40.5).
@@ -2476,4 +2523,20 @@ fn isHarnessFunction(name: Slice<u8>, entry: Slice<u8>) -> bool {
     if (sameBytes(name, entry)) { return true; }
     let head = "ceesafeTest".bytes();
     return name.length > head.length && name[0..head.length] == head;
+}
+
+/// An error at an undeclared `Vec`, whose sure fix is `Vector` (tooling.md §5.2).
+fn vecIsVector(
+    c: borrow mut Checker,
+    code: u32,
+    span: Span,
+    start: u32,
+    end: u32,
+    message: Vector<u8>,
+) -> Result<void, AllocError> {
+    var title = Vector<u8>.create();
+    appendText(mut title, "write 'Vector'")?;
+    var text = Vector<u8>.create();
+    appendText(mut text, "Vector")?;
+    return c.errorWithFix(code, span.start, span.end, message, title, start, end, text);
 }

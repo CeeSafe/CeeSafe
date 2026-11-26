@@ -123,7 +123,27 @@ fn checkVectorCreate(
                 ", or for raw parts 'Vector.intoRaw(v)', 'Vector.fromRaw(p, n, c)', 'Vector.intoForeign(v)' or 'Vector.fromForeign(p, n, c)'",
             )?;
         }
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        let known = isString || typeArguments.count > 0 ||
+            (expected != none() && c.types.is(expected, TypeKind.Vector));
+        if (known && arguments.count == 0 && sameText(c.name(ident.symbol), "new")) {
+            // Rust's `Vec::new()`, with the element type known (tooling.md §5.2).
+            var title = Vector<u8>.create();
+            appendText(mut title, "write 'create'")?;
+            var name = Vector<u8>.create();
+            appendText(mut name, "create")?;
+            c.errorWithFix(
+                undefinedName(),
+                ident.start,
+                ident.end,
+                message,
+                title,
+                ident.start,
+                ident.end,
+                name,
+            )?;
+        } else {
+            c.error(undefinedName(), ident.start, ident.end, message)?;
+        }
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -646,7 +666,7 @@ fn checkVectorMethod(
             ),
             ident.symbol,
         )?;
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        noSuchMethod(c, member, arguments, message, span)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -835,7 +855,7 @@ fn checkViewMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         let viewType = c.typeOf(view);
         appendEveryMethodChoice(c, mut message, viewType, viewMethodNames(), ident.symbol)?; // ADR 0071, 0144
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        noSuchMethod(c, member, arguments, message, span)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -893,7 +913,7 @@ fn checkSliceMethod(
             sliceMethodNames(c.types.info(c.types.info(sliceType).pointee).element == c.types.u8),
             ident.symbol,
         )?;
-        c.error(undefinedName(), ident.start, ident.end, message)?;
+        noSuchMethod(c, member, arguments, message, span)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -1241,4 +1261,26 @@ fn checkVectorClone(
     }
     let values = [view];
     return libraryCall(c, function, values[..], span);
+}
+
+/// N0200 for a method a vector, slice or text does not have. `x.len()` has a sure fix (tooling.md §5.2): `x.length`.
+fn noSuchMethod(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    message: Vector<u8>,
+    span: Span,
+) -> Result<void, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    // `len()` with nothing inside or before its parentheses, so no comment is lost; not as a statement, which `x.length;`
+    // is not (N0225).
+    if (arguments.count == 0 && sameText(c.name(ident.symbol), "len") && span.end == ident.end + 2 &&
+        (span.start != c.statementCall.start || span.end != c.statementCall.end)) {
+        var title = Vector<u8>.create();
+        appendText(mut title, "write 'length'")?;
+        var text = Vector<u8>.create();
+        appendText(mut text, "length")?;
+        return c.errorWithFix(undefinedName(), ident.start, ident.end, message, title, ident.start, span.end, text);
+    }
+    return c.error(undefinedName(), ident.start, ident.end, message);
 }

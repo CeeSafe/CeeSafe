@@ -56,6 +56,8 @@ public final class Picker extends Fragment {
     private static final int PRINT = 5;
     private static final int MEDIA = 6;
     private static final int CAPTURE = 7;
+    private static final int SHARE = 8;
+    private static final int OPEN_LINK = 10;
     private static final int PERMISSIONS = 100;
     /** No camera's app: the runtime's Unsupported (FAILED, -1, is its Resources). */
     private static final int UNSUPPORTED = -2;
@@ -87,6 +89,10 @@ public final class Picker extends Fragment {
         try {
             if (kind == PRINT) {
                 Printing.start(activity, name, file);
+                return;
+            }
+            if (kind >= SHARE && kind <= OPEN_LINK) {
+                Sharing.start(activity, kind, extensions, name, file); // ADR 0268
                 return;
             }
             FragmentManager manager = activity.getFragmentManager();

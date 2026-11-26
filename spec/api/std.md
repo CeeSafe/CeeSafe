@@ -150,6 +150,8 @@
 - [enum MediaKind](#enum-mediakind)
 - [struct PickedMedia](#struct-pickedmedia)
 - [struct MediaPicker](#struct-mediapicker)
+- [struct ShareSheet](#struct-sharesheet)
+- [struct Launcher](#struct-launcher)
 
 ## struct AsyncConsole
 
@@ -6567,3 +6569,68 @@ public fn canCapture(kind: MediaKind) -> bool
 
 Whether this device can capture a photo or a video with its camera: false on the desktops and in a simulator.
 Safety: the runtime takes a number and answers one.
+
+## struct ShareSheet
+
+```ceesafe
+public struct ShareSheet
+```
+
+The system's share sheet (§26.13, ADR 0268): another app takes the program's files and text. On iOS the share sheet
+(UIActivityViewController), on Android the chooser for a send, each file handed as a `content:` URI of the app's
+provider with a grant to read it (the packer declares `org.ceesafe.Files`), on macOS the sharing picker beside the
+window. Windows, Linux and FreeBSD have no share sheet: `Unsupported`.
+
+```
+ShareSheet.share(mut window, ["photo.jpg"][0..1], "")?;
+```
+
+### ShareSheet.share
+
+```ceesafe
+public fn share(
+    window: borrow mut Window,
+    paths: Slice<StringView>,
+    text: StringView,
+) -> Result<void, WindowError>
+```
+
+Offers the files at `paths` and `text` (either may be empty, not both) to the other apps; returns when the sheet
+is closed on iOS, at once where the system does not say. Whether the user shared is not answered. `Unsupported`
+with nothing to share or a path holding a line break; `Resources` when a file is not there or the system
+refused.
+
+## struct Launcher
+
+```ceesafe
+public struct Launcher
+```
+
+Opening a file or a link with the system (§26.13, ADR 0268): the app the system has for it. iOS previews a file
+(UIDocumentInteractionController) or offers the apps that open it, and opens a link with UIApplication; Android
+views either (a file as a `content:` URI of the app's provider, as ShareSheet hands it); macOS NSWorkspace, Windows
+ShellExecuteW, Linux and FreeBSD `xdg-open`.
+
+```
+Launcher.openFile(mut window, "report.pdf")?;
+Launcher.openLink(mut window, "https://example.com")?;
+```
+
+### Launcher.openFile
+
+```ceesafe
+public fn openFile(window: borrow mut Window, path: StringView) -> Result<void, WindowError>
+```
+
+Opens the file at `path` in the system's app for its type; returns once it is handed over (on iOS when the
+preview is closed). `Unsupported` when no app opens it; `Resources` when it is not there or the system refused.
+
+### Launcher.openLink
+
+```ceesafe
+public fn openLink(window: borrow mut Window, url: StringView) -> Result<void, WindowError>
+```
+
+Opens `url` in the system's app for it (the browser, mail, the phone), once handed over. Only `http:`, `https:`,
+`mailto:` and `tel:` links are opened: any other scheme (`file:`, an app's own) is `Unsupported`, so that a link
+from a message neither opens the app's files nor starts another app by its scheme.

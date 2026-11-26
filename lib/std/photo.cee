@@ -1,0 +1,60 @@
+// Making a photo smaller (ADR 0266; type-system.md §26.24): with the system's own codecs, before a photo is sent.
+
+extern "C" {
+    @effects(sleep, alloc)
+    fn ceesafe_image_shrink(
+        from: *u8,
+        fromLength: u64,
+        to: *u8,
+        toLength: u64,
+        longest: u32,
+        quality: u32,
+        w: *mut u32,
+        h: *mut u32,
+    ) -> i32;
+}
+
+/// A photo's size in pixels, as `PhotoFile.shrink` wrote it.
+public struct PhotoSize {
+    public w: u32;
+    public h: u32;
+}
+
+/// Photos as files (ADR 0266).
+///
+/// ```
+/// // A camera's 12 megapixels made a chat photo: 1600 pixels at most, JPEG at 0.82, upright, no metadata.
+/// let size = PhotoFile.shrink("IMG_0042.HEIC", "photo.jpg", 1600, 0.82)?;
+/// ```
+public struct PhotoFile {
+    /// Reads the photo at `from` (JPEG, PNG, HEIC: what the system decodes), turns it upright (its EXIF orientation
+    /// applied to the pixels), scales it so its longest side is at most `longest` pixels (never larger), and writes it
+    /// to `to` as a JPEG at `quality` (0 to 1), without the photo's metadata (where it was taken, the camera). The new
+    /// size. macOS and iOS: ImageIO; Android: BitmapFactory and Bitmap.compress. `Unsupported` where the system has no
+    /// codec CeeSafe uses (Linux, FreeBSD, Windows for now, a program on Android with no window, the interpreter);
+    /// `NotFound` when `from` is not there; `InvalidInput` when it is no photo the system reads, or `longest` is 0;
+    /// `Other(5)` when the JPEG could not be written.
+    /// Safety: the runtime reads the two paths during the call and writes the two sizes.
+    public fn shrink(from: StringView, to: StringView, longest: u32, quality: f32) -> Result<PhotoSize, IoError> {
+        let q = if (quality <= 0.0) 0u32 else if (quality >= 1.0) 1000u32 else truncate<u32>(quality * 1000.0 + 0.5);
+        var w: u32 = 0;
+        var h: u32 = 0;
+        let code = unsafe { ceesafe_image_shrink(
+            from.ptr,
+            from.length as u64,
+            to.ptr,
+            to.length as u64,
+            longest,
+            q,
+            borrow mut w as *mut u32,
+            borrow mut h as *mut u32,
+        ) };
+        return match (code) {
+            0 => Ok(PhotoSize { w: w, h: h }),
+            -1 => Err(IoError.Unsupported),
+            -2 => Err(IoError.NotFound),
+            -3 => Err(IoError.InvalidInput),
+            _ => Err(IoError.Other(5)),
+        };
+    }
+}

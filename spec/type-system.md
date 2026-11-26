@@ -4741,6 +4741,21 @@ Diagnostics: none new.
   share; on Android, which has no groups, the app's files folder, which its processes share (ADR 0263); null where
   there is none.
 
+### 26.24 Making a photo smaller (ADR 0266)
+
+- **`PhotoFile.shrink(from: StringView, to: StringView, longest: u32, quality: f32)`** is `Result<PhotoSize,
+  IoError>`: the photo at `from` (whatever the system decodes: JPEG, PNG, HEIC) turned upright (its EXIF orientation
+  applied to the pixels), scaled so its longest side is at most `longest` pixels and never enlarged, written to `to`
+  as a JPEG at `quality` (0 to 1, in thousandths) with none of its metadata. A `PhotoSize` is the result's `w` and
+  `h`.
+- **Errors**: `Unsupported` where CeeSafe uses no codec of the system's (Linux, FreeBSD, Windows for now, a program
+  on Android with no window, `ceesafec run --interp`); `NotFound` for a `from` that is not there; `InvalidInput` for
+  a file that is no photo the system reads, or `longest` of 0; `Other(5)` when the JPEG could not be written.
+- **Systems**: macOS and iOS, ImageIO (`CGImageSourceCreateThumbnailAtIndex` with the transform, decoding no more than
+  it needs; `CGImageDestination`), loaded with dlopen; Android, `org.ceesafe.window.Photos` in the runtime's dex
+  (`BitmapFactory` at a power-of-two fraction, `ExifInterface`'s orientation, `Bitmap.compress`). The runtime file is
+  `ceesafe_rt_image.c`, linked into a program that calls it.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

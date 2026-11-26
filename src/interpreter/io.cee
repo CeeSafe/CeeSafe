@@ -1861,6 +1861,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_push_token")) {
         return "Ps:l"; // ADR 0244
     }
+    if (sameText(name, "ceesafe_image_shrink")) {
+        return "PsPsuuPP:i"; // ADR 0266
+    }
     if (sameText(name, "ceesafe_push_extension_next")) {
         return "uPsP:l"; // ADR 0246
     }
@@ -2337,6 +2340,10 @@ fn callC(
     if (sameText(n0, "ceesafe_push_extension_deliver") || sameText(n0, "ceesafe_secrets_group_write") ||
         sameText(n0, "ceesafe_secrets_group_remove")) {
         return Ok(valueOf(0xFFFFFFFE, 4)); // -2 as an i32
+    }
+    if (sameText(n0, "ceesafe_image_shrink")) {
+        // Making a photo smaller (ADR 0266): the interpreter has no system codec, so IoError.Unsupported (-1).
+        return Ok(valueOf(0xFFFFFFFF, 4));
     }
     if (sameText(n0, "ceesafe_push_token")) {
         // Push tokens (ADR 0244): the interpreter has no push service, so PushError.Unsupported (-2),

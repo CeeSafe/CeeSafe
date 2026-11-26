@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.16
+## Releases 0.25.0 to 0.95.17
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.17 | 2026-11-26 | `out-of-memory = "panic"` in `[package]` (and `--out-of-memory=panic`): in that package a call that allocates gives its value, with no `!`, and stops the program with `out of memory` if it fails; `?`, `!`, `let _ =` and a declared `Result` type keep the `Result`, and each package follows its own manifest (ADR 0261). N0205 for an allocation used as its value names the setting, and `ceesafec fix` adds the `!` in an executable | [9.3](./ch09-03-allocation-failure) |
 | 0.95.16 | 2026-11-26 | A borrowed array, `borrow [T; N]`, is in C a pointer to its first element, and a C array member is reached without the array struct, so the generated C is correct without `-fno-strict-aliasing`, which is no longer passed (ADR 0250); `--emit c` output of a program's own functions changes, and exported functions and their header are unchanged. A mutable slice of what a `SliceMut` field holds no longer lends the whole struct while the call's later arguments run: 0.95.13 to 0.95.15 refused `f(mut l.marks[0..n], mut l.scratch)` (N0241), which CeeUI uses (ADR 0252 §2.2.4) | — |
 | 0.95.15 | 2026-11-26 | Byte views as text (ADR 0260): a method called through two references (`borrow borrow T`, as a pattern binds through a borrowed optional) reaches `T`'s methods, mutably only if both references are; a `String`'s `append` takes any `TextView`, answering whether it was appended; a string literal is a `ByteStringView` where one is expected; `v[a..b]`, `v.length` and `v.parseInt<T>()` on a `ByteStringView` (`v.length` on a `ByteString` too); lib/std's `Check.equalTextOf` compares texts of any kinds | [Built-in types](./appendix-c-built-in-types) |
 | 0.95.14 | 2026-11-26 | `ceesafec fix` rewrites forms from Rust where it is sure of CeeSafe's: `let mut` to `var`, `None` to `null` where an optional is expected, `a.len()` to `a.length` (not as a whole statement), `Vec` to `Vector`, `Vector.new()` and `String.new()` to `create()`, and `Box.new(x)` to `Box.create(x)!` where a box is expected (tooling.md §5.2) | — |

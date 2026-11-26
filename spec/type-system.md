@@ -1480,7 +1480,13 @@ error's `@into` method), N0262 (`?` or `!` on a non-`Result`, or a misused `@fro
   1. it is the operand of `?` or `!` (§17.4), which mean what they mean in any package;
   2. its expected type is a `Result` (a declared type, a `return` in a function that returns one, a `Result`
      parameter);
-  3. it is the operand of `let _ =`, which discards the `Result` (§17.5).
+  3. it is the operand of `let _ =`, which discards the `Result` (§17.5);
+  4. it is the scrutinee of a `match` or the operand of `is` (§17.3, §15.6): `match (Ui.create(n)) { Ok(u) => …,
+     Err(_) => … }`;
+  5. it is the receiver of a method of `Result` (§17.6): `out.push(0).isErr()`, `String.from(t).ok()`.
+- A `let` without a type whose initializer was unwrapped so holds the value. Using that local as a `Result` (a `match`
+  with an `Ok` or `Err` arm, `is Ok`/`is Err`, a `Result` method) is N0205, whose sure fix declares the local's
+  `Result` type (rule 2); so is a `let` of a `Result<void, AllocError>` unwrapped to nothing.
 - The call is then unwrapped as `e!` would unwrap it, with the call's expected type as the hint `e!` would give it
   (§17.4: `let b: Box<i64> = Box.create(5);` holds an `i64`). A failure panics with "out of memory" at the call, not
   "unwrapped an Err value"; a panic is abort, exit status 134.

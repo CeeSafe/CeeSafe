@@ -61,6 +61,14 @@ CASES = [
     ('Box.create with ! for Box.new', "N0100",
      'fn main() {\n    let b: Box<i32> = Box::new(1);\n    Console.writeLine(b + 0);\n}\n',
      'fn main() {\n    let b: Box<i32> = Box.create(1)!;\n    Console.writeLine(b + 0);\n}\n'),
+    ('the Result type for a let a stopping package unwrapped, then matched (ADR 0261 §2.2)', "N0205",
+     'fn make() -> Result<i32, AllocError> => Ok(1);\n\nfn main() {\n    let r = make();\n    match (r) {\n        Ok(n) => { Console.writeLine(n); }\n        Err(_) => {}\n    }\n}\n',
+     'fn make() -> Result<i32, AllocError> => Ok(1);\n\nfn main() {\n    let r: Result<i32, AllocError> = make();\n    match (r) {\n        Ok(n) => { Console.writeLine(n); }\n        Err(_) => {}\n    }\n}\n',
+     ["--out-of-memory=panic"]),
+    ('the Result type for a let of Result<void> calls a stopping package unwrapped (ADR 0261 §2.2)', "N0205",
+     'fn step(n: i32) -> Result<void, AllocError> {\n    var v = Vector<i32>.create();\n    v.push(n)?;\n    return Ok();\n}\n\nfn main() {\n    let done = if (true) step(1) else step(2);\n    Console.writeLine(done.isOk());\n}\n',
+     'fn step(n: i32) -> Result<void, AllocError> {\n    var v = Vector<i32>.create();\n    v.push(n)?;\n    return Ok();\n}\n\nfn main() {\n    let done: Result<void, AllocError> = if (true) step(1) else step(2);\n    Console.writeLine(done.isOk());\n}\n',
+     ["--out-of-memory=panic"]),
     ('! for an allocation used as its value (ADR 0261 §2.4)', "N0205",
      'fn main() {\n    let s: String = String.from("ada");\n    Console.writeLine(s.view());\n}\n',
      'fn main() {\n    let s: String = String.from("ada")!;\n    Console.writeLine(s.view());\n}\n'),
@@ -94,22 +102,25 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ceesafe-fixes-") as work:
         path = os.path.join(work, "main.cee")
 
-        def run(*command):
-            return subprocess.run([compiler, *command, "main.cee"], cwd=work, capture_output=True, text=True, timeout=120)
+        def run(command, *flags):
+            return subprocess.run([compiler, command, *flags, "main.cee"], cwd=work, capture_output=True, text=True,
+                                  timeout=120)
 
-        for row, code, fault, fixed in CASES:
+        for case in CASES:
+            row, code, fault, fixed = case[:4]
+            flags = case[4] if len(case) > 4 else []
             with open(path, "w", encoding="utf-8") as f:
                 f.write(fault)
-            before = run("check")
+            before = run("check", *flags)
             if f"error[{code}]" not in before.stderr + before.stdout:
                 problems.append(f"{row}: the program does not get {code}")
                 continue
-            run("fix")
+            run("fix", *flags)
             with open(path, encoding="utf-8") as f:
                 after = f.read()
             if after != fixed:
                 problems.append(f"{row}: fixed to\n{after}expected\n{fixed}")
-            checked = run("check")
+            checked = run("check", *flags)
             if checked.returncode != 0:
                 problems.append(f"{row}: the fixed program does not check: {(checked.stderr + checked.stdout)[:300]}")
         for row, fault in NO_FIX:

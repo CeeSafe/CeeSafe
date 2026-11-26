@@ -399,7 +399,21 @@ fn checkMatch(
     branches: borrow mut BranchType,
     span: Span,
 ) -> Result<u32, AllocError> {
+    c.keptCall = unparenthesized(c, scrutineeSyntax); // a scrutinee keeps a call's `Result` (ADR 0261 §2.2)
     var scrutinee = synth(c, scrutineeSyntax, none())?;
+    if (stopsOnNoMemory(c) && !c.isBottom(scrutinee)) {
+        var result = false;
+        for (k in 0..arms.count) {
+            if (namesResultVariant(c, armPattern(c, arms, k, isValue))) {
+                result = true;
+            }
+        }
+        let local = if (result) localNamedBy(c, unparenthesized(c, scrutineeSyntax))? else none();
+        let scrutineeSpan = c.front.ast.exprSpans[scrutineeSyntax as usize];
+        if (local != none() && reportUnwrappedLocal(c, local, scrutineeSpan)?) {
+            scrutinee = c.errorResult(scrutineeSpan.start, scrutineeSpan.end)?; // the arms are not checked against it
+        }
+    }
     var scrutineeType = c.typeOf(scrutinee);
     if (isByteStringViewType(c, scrutineeType) || (c.types.is(scrutineeType, TypeKind.Reference) &&
         isByteStringViewType(c, c.types.info(scrutineeType).pointee))) {

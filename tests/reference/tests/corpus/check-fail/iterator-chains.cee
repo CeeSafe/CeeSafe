@@ -1,0 +1,9 @@
+// ADR 0264: a chain starts with `iter()` or `values()`; `values()` copies, so its elements are Copy; `filter` and the
+// other adapters that test a value take Copy values.
+fn main() {
+    let total = [1, 2, 3].map((x) => x * 2); // error[N0200]
+    var names = Vector<String>.create();
+    let n = names.values().count(); // error[N0205]
+    let parts = ["a", "bb"];
+    let owned = parts.values().map((p) => String.from(p)!).filter((s) => s.length > 1).count(); // error[N0268]
+}

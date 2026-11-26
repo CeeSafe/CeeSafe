@@ -1,0 +1,351 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: iterator chains (ADR 0264): `s.iter()`, `s.values()` and `Chain.of(it)`, the adapters and the consumers.
+// Bundled with ceesafec and part of every package.
+
+/// An iterator's values, with the adapters that make another chain of them and the consumers that run it (ADR 0264).
+/// A chain is lazy: nothing runs until a consumer or a `for` asks for values. Its closures are borrowed, so a chain
+/// lives in the statement or block that makes it.
+public struct Chain<T, I: Iterator<T>> {
+    inner: I;
+
+    /// A chain over any iterator: `Chain.of(text.split(","))`.
+    public fn of(it: I) -> Chain<T, I> => Chain { inner: it };
+
+    /// `f(x)` for each value.
+    public fn map<region r, U>(this, f: borrow(r) fn(T) -> U) -> Chain<U, Mapped<r, T, U, I>> =>
+        Chain { inner: Mapped { inner: this.inner, f: f } };
+
+    /// The first `n` values.
+    public fn take(this, n: usize) -> Chain<T, Taken<T, I>> => Chain { inner: Taken { inner: this.inner, left: n } };
+
+    /// The values after the first `n`.
+    public fn skip(this, n: usize) -> Chain<T, Skipped<T, I>> =>
+        Chain { inner: Skipped { inner: this.inner, left: n } };
+
+    /// Each value with its position, from 0.
+    public fn enumerate(this) -> Chain<Indexed<T>, Enumerated<T, I>> =>
+        Chain { inner: Enumerated { inner: this.inner, at: 0 } };
+
+    /// Each value with the value of `other` in the same position, until either ends.
+    public fn zip<U, J: Iterator<U>>(this, other: J) -> Chain<Paired<T, U>, Zipped<T, U, I, J>> =>
+        Chain { inner: Zipped { first: this.inner, second: other } };
+
+    /// The values, in a new vector.
+    public fn collect(this) -> Result<Vector<T>, AllocError> {
+        var out = Vector<T>.create();
+        var it = this.inner;
+        for (x in it) {
+            out.push(x)?;
+        }
+        return Ok(out);
+    }
+
+    /// How many values there are.
+    public fn count(this) -> usize {
+        var n: usize = 0;
+        var it = this.inner;
+        for (x in it) {
+            n += 1;
+        }
+        return n;
+    }
+
+    /// `f(…f(f(init, x0), x1)…, xn)`: the values folded into one, left to right.
+    public fn fold<A: Send>(this, init: A, f: borrow mut fn(A, T) -> A) -> A {
+        var acc = init;
+        var it = this.inner;
+        for (x in it) {
+            acc = f(acc, x);
+        }
+        return acc;
+    }
+
+    /// Calls `f` on each value, in order.
+    public fn forEach(this, f: borrow mut fn(T) -> void) {
+        var it = this.inner;
+        for (x in it) {
+            f(x);
+        }
+    }
+}
+
+impl<T, I: Iterator<T>> Iterator<T> for Chain<T, I> {
+    fn next(borrow mut this) -> T? => this.inner.next();
+}
+
+/// The adapters and consumers that test a value and then keep or give it: the values are Copy (a lent element, a
+/// number), since the test takes one and the chain still has it.
+impl<T: Copy, I: Iterator<T>> Chain<T, I> {
+    /// The values that pass `keep`.
+    public fn filter<region r>(this, keep: borrow(r) fn(T) -> bool) -> Chain<T, Filtered<r, T, I>> =>
+        Chain { inner: Filtered { inner: this.inner, keep: keep } };
+
+    /// The values until the first that fails `keep`.
+    public fn takeWhile<region r>(this, keep: borrow(r) fn(T) -> bool) -> Chain<T, TakenWhile<r, T, I>> =>
+        Chain { inner: TakenWhile { inner: this.inner, keep: keep, done: false } };
+
+    /// The values from the first that fails `skip` on.
+    public fn skipWhile<region r>(this, skip: borrow(r) fn(T) -> bool) -> Chain<T, SkippedWhile<r, T, I>> =>
+        Chain { inner: SkippedWhile { inner: this.inner, skip: skip, started: false } };
+
+    /// Whether a value passes `test`, stopping at the first that does.
+    public fn any(this, test: borrow mut fn(T) -> bool) -> bool {
+        var it = this.inner;
+        for (x in it) {
+            if (test(x)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether every value passes `test`, stopping at the first that does not.
+    public fn all(this, test: borrow mut fn(T) -> bool) -> bool {
+        var it = this.inner;
+        for (x in it) {
+            if (!test(x)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// The first value that passes `test`, or null.
+    public fn find(this, test: borrow mut fn(T) -> bool) -> T? {
+        var it = this.inner;
+        for (x in it) {
+            if (test(x)) {
+                return x;
+            }
+        }
+        return null;
+    }
+
+    /// The position of the first value that passes `test`, or null.
+    public fn position(this, test: borrow mut fn(T) -> bool) -> usize? {
+        var at: usize = 0;
+        var it = this.inner;
+        for (x in it) {
+            if (test(x)) {
+                return at;
+            }
+            at += 1;
+        }
+        return null;
+    }
+}
+
+/// A value and its position in a chain (`enumerate`).
+public struct Indexed<T> {
+    public index: usize;
+    public value: T;
+}
+
+/// Two values in the same position of two chains (`zip`).
+public struct Paired<A, B> {
+    public first: A;
+    public second: B;
+}
+
+/// `map`'s stage.
+public struct Mapped<region r, T, U, I: Iterator<T>> {
+    inner: I;
+    f: borrow(r) fn(T) -> U;
+}
+
+impl<region r, T, U, I: Iterator<T>> Iterator<U> for Mapped<r, T, U, I> {
+    fn next(borrow mut this) -> U? {
+        match (this.inner.next()) {
+            Some(v) => { return this.f(v); }
+            null => { return null; }
+        }
+    }
+}
+
+/// `filter`'s stage.
+public struct Filtered<region r, T: Copy, I: Iterator<T>> {
+    inner: I;
+    keep: borrow(r) fn(T) -> bool;
+}
+
+impl<region r, T: Copy, I: Iterator<T>> Iterator<T> for Filtered<r, T, I> {
+    fn next(borrow mut this) -> T? {
+        loop {
+            match (this.inner.next()) {
+                Some(v) => {
+                    if (this.keep(v)) {
+                        return v;
+                    }
+                }
+                null => { return null; }
+            }
+        }
+    }
+}
+
+/// `take`'s stage.
+public struct Taken<T, I: Iterator<T>> {
+    inner: I;
+    left: usize;
+}
+
+impl<T, I: Iterator<T>> Iterator<T> for Taken<T, I> {
+    fn next(borrow mut this) -> T? {
+        if (this.left == 0) {
+            return null;
+        }
+        this.left -= 1;
+        return this.inner.next();
+    }
+}
+
+/// `skip`'s stage.
+public struct Skipped<T, I: Iterator<T>> {
+    inner: I;
+    left: usize;
+}
+
+impl<T, I: Iterator<T>> Iterator<T> for Skipped<T, I> {
+    fn next(borrow mut this) -> T? {
+        while (this.left > 0) {
+            this.left -= 1;
+            if (this.inner.next().isNull()) {
+                return null;
+            }
+        }
+        return this.inner.next();
+    }
+}
+
+/// `takeWhile`'s stage.
+public struct TakenWhile<region r, T: Copy, I: Iterator<T>> {
+    inner: I;
+    keep: borrow(r) fn(T) -> bool;
+    done: bool;
+}
+
+impl<region r, T: Copy, I: Iterator<T>> Iterator<T> for TakenWhile<r, T, I> {
+    fn next(borrow mut this) -> T? {
+        if (this.done) {
+            return null;
+        }
+        match (this.inner.next()) {
+            Some(v) => {
+                if (this.keep(v)) {
+                    return v;
+                }
+                this.done = true;
+                return null;
+            }
+            null => { return null; }
+        }
+    }
+}
+
+/// `skipWhile`'s stage.
+public struct SkippedWhile<region r, T: Copy, I: Iterator<T>> {
+    inner: I;
+    skip: borrow(r) fn(T) -> bool;
+    started: bool;
+}
+
+impl<region r, T: Copy, I: Iterator<T>> Iterator<T> for SkippedWhile<r, T, I> {
+    fn next(borrow mut this) -> T? {
+        if (this.started) {
+            return this.inner.next();
+        }
+        loop {
+            match (this.inner.next()) {
+                Some(v) => {
+                    if (!this.skip(v)) {
+                        this.started = true;
+                        return v;
+                    }
+                }
+                null => { return null; }
+            }
+        }
+    }
+}
+
+/// `enumerate`'s stage.
+public struct Enumerated<T, I: Iterator<T>> {
+    inner: I;
+    at: usize;
+}
+
+impl<T, I: Iterator<T>> Iterator<Indexed<T>> for Enumerated<T, I> {
+    fn next(borrow mut this) -> Indexed<T>? {
+        match (this.inner.next()) {
+            Some(v) => {
+                let index = this.at;
+                this.at += 1;
+                return Indexed { index: index, value: v };
+            }
+            null => { return null; }
+        }
+    }
+}
+
+/// `zip`'s stage.
+public struct Zipped<A, B, I: Iterator<A>, J: Iterator<B>> {
+    first: I;
+    second: J;
+}
+
+impl<A, B, I: Iterator<A>, J: Iterator<B>> Iterator<Paired<A, B>> for Zipped<A, B, I, J> {
+    fn next(borrow mut this) -> Paired<A, B>? {
+        let a = this.first.next();
+        if (a.isNull()) {
+            return null;
+        }
+        match (this.second.next()) {
+            Some(b) => { return Paired { first: a!, second: b }; }
+            null => { return null; }
+        }
+    }
+}
+
+/// A slice's elements, lent one at a time (`s.iter()`).
+public struct SliceItems<region r, T> {
+    items: Slice<r, T>;
+    at: usize;
+}
+
+impl<region r, T> Iterator<borrow(r) T> for SliceItems<r, T> {
+    fn next(borrow mut this) -> (borrow(r) T)? {
+        if (this.at == this.items.length) {
+            return null;
+        }
+        this.at += 1;
+        return borrow this.items[this.at - 1];
+    }
+}
+
+/// A slice's elements, copied one at a time (`s.values()`).
+public struct SliceValues<region r, T: Copy> {
+    items: Slice<r, T>;
+    at: usize;
+}
+
+impl<region r, T: Copy> Iterator<T> for SliceValues<r, T> {
+    fn next(borrow mut this) -> T? {
+        if (this.at == this.items.length) {
+            return null;
+        }
+        this.at += 1;
+        return this.items[this.at - 1];
+    }
+}
+
+/// `s.iter()` is `SliceIteration<T>.iter(s)`: the struct's region ties the chain to the slice; it has no fields and is
+/// never made.
+public struct SliceIteration<region r, T> {
+    public fn iter(s: Slice<r, T>) -> Chain<borrow(r) T, SliceItems<r, T>> =>
+        Chain { inner: SliceItems { items: s, at: 0 } };
+}
+
+/// `s.values()` is `SliceValueIteration<T>.values(s)`, for Copy elements.
+public struct SliceValueIteration<region r, T: Copy> {
+    public fn values(s: Slice<r, T>) -> Chain<T, SliceValues<r, T>> => Chain { inner: SliceValues { items: s, at: 0 } };
+}

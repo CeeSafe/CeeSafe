@@ -34,6 +34,21 @@
 - [struct CellRef](#struct-cellref)
 - [struct CellRefMut](#struct-cellrefmut)
 - [struct OnceCell](#struct-oncecell)
+- [struct Chain](#struct-chain)
+- [struct Indexed](#struct-indexed)
+- [struct Paired](#struct-paired)
+- [struct Mapped](#struct-mapped)
+- [struct Filtered](#struct-filtered)
+- [struct Taken](#struct-taken)
+- [struct Skipped](#struct-skipped)
+- [struct TakenWhile](#struct-takenwhile)
+- [struct SkippedWhile](#struct-skippedwhile)
+- [struct Enumerated](#struct-enumerated)
+- [struct Zipped](#struct-zipped)
+- [struct SliceItems](#struct-sliceitems)
+- [struct SliceValues](#struct-slicevalues)
+- [struct SliceIteration](#struct-sliceiteration)
+- [struct SliceValueIteration](#struct-slicevalueiteration)
 - [struct CStr](#struct-cstr)
 - [interface DerivedEqual](#interface-derivedequal)
 - [struct DerivedEqualElements](#struct-derivedequalelements)
@@ -2509,6 +2524,371 @@ public fn intoInner(this) -> T?
 ```
 
 The value, the cell consumed.
+
+## struct Chain
+
+```ceesafe
+public struct Chain<T, I: Iterator<T>>
+```
+
+An iterator's values, with the adapters that make another chain of them and the consumers that run it (ADR 0264).
+A chain is lazy: nothing runs until a consumer or a `for` asks for values. Its closures are borrowed, so a chain
+lives in the statement or block that makes it.
+
+### Chain.of
+
+```ceesafe
+public fn of(it: I) -> Chain<T, I>
+```
+
+A chain over any iterator: `Chain.of(text.split(","))`.
+
+### Chain.map
+
+```ceesafe
+public fn map<region r, U>(this, f: borrow(r) fn(T) -> U) -> Chain<U, Mapped<r, T, U, I>>
+```
+
+`f(x)` for each value.
+
+### Chain.take
+
+```ceesafe
+public fn take(this, n: usize) -> Chain<T, Taken<T, I>>
+```
+
+The first `n` values.
+
+### Chain.skip
+
+```ceesafe
+public fn skip(this, n: usize) -> Chain<T, Skipped<T, I>>
+```
+
+The values after the first `n`.
+
+### Chain.enumerate
+
+```ceesafe
+public fn enumerate(this) -> Chain<Indexed<T>, Enumerated<T, I>>
+```
+
+Each value with its position, from 0.
+
+### Chain.zip
+
+```ceesafe
+public fn zip<U, J: Iterator<U>>(this, other: J) -> Chain<Paired<T, U>, Zipped<T, U, I, J>>
+```
+
+Each value with the value of `other` in the same position, until either ends.
+
+### Chain.collect
+
+```ceesafe
+public fn collect(this) -> Result<Vector<T>, AllocError>
+```
+
+The values, in a new vector.
+
+### Chain.count
+
+```ceesafe
+public fn count(this) -> usize
+```
+
+How many values there are.
+
+### Chain.fold
+
+```ceesafe
+public fn fold<A: Send>(this, init: A, f: borrow mut fn(A, T) -> A) -> A
+```
+
+`f(…f(f(init, x0), x1)…, xn)`: the values folded into one, left to right.
+
+### Chain.forEach
+
+```ceesafe
+public fn forEach(this, f: borrow mut fn(T) -> void)
+```
+
+Calls `f` on each value, in order.
+
+### Chain.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+### Chain.filter
+
+```ceesafe
+public fn filter<region r>(this, keep: borrow(r) fn(T) -> bool) -> Chain<T, Filtered<r, T, I>>
+```
+
+The values that pass `keep`.
+
+### Chain.takeWhile
+
+```ceesafe
+public fn takeWhile<region r>(this, keep: borrow(r) fn(T) -> bool) -> Chain<T, TakenWhile<r, T, I>>
+```
+
+The values until the first that fails `keep`.
+
+### Chain.skipWhile
+
+```ceesafe
+public fn skipWhile<region r>(this, skip: borrow(r) fn(T) -> bool) -> Chain<T, SkippedWhile<r, T, I>>
+```
+
+The values from the first that fails `skip` on.
+
+### Chain.any
+
+```ceesafe
+public fn any(this, test: borrow mut fn(T) -> bool) -> bool
+```
+
+Whether a value passes `test`, stopping at the first that does.
+
+### Chain.all
+
+```ceesafe
+public fn all(this, test: borrow mut fn(T) -> bool) -> bool
+```
+
+Whether every value passes `test`, stopping at the first that does not.
+
+### Chain.find
+
+```ceesafe
+public fn find(this, test: borrow mut fn(T) -> bool) -> T?
+```
+
+The first value that passes `test`, or null.
+
+### Chain.position
+
+```ceesafe
+public fn position(this, test: borrow mut fn(T) -> bool) -> usize?
+```
+
+The position of the first value that passes `test`, or null.
+
+Implements `Iterator<T>`.
+
+## struct Indexed
+
+```ceesafe
+public struct Indexed<T> {
+    public index: usize;
+    public value: T;
+}
+```
+
+A value and its position in a chain (`enumerate`).
+
+## struct Paired
+
+```ceesafe
+public struct Paired<A, B> {
+    public first: A;
+    public second: B;
+}
+```
+
+Two values in the same position of two chains (`zip`).
+
+## struct Mapped
+
+```ceesafe
+public struct Mapped<region r, T, U, I: Iterator<T>>
+```
+
+`map`'s stage.
+
+### Mapped.next
+
+```ceesafe
+fn next(borrow mut this) -> U?
+```
+
+Implements `Iterator<U>`.
+
+## struct Filtered
+
+```ceesafe
+public struct Filtered<region r, T: Copy, I: Iterator<T>>
+```
+
+`filter`'s stage.
+
+### Filtered.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct Taken
+
+```ceesafe
+public struct Taken<T, I: Iterator<T>>
+```
+
+`take`'s stage.
+
+### Taken.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct Skipped
+
+```ceesafe
+public struct Skipped<T, I: Iterator<T>>
+```
+
+`skip`'s stage.
+
+### Skipped.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct TakenWhile
+
+```ceesafe
+public struct TakenWhile<region r, T: Copy, I: Iterator<T>>
+```
+
+`takeWhile`'s stage.
+
+### TakenWhile.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct SkippedWhile
+
+```ceesafe
+public struct SkippedWhile<region r, T: Copy, I: Iterator<T>>
+```
+
+`skipWhile`'s stage.
+
+### SkippedWhile.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct Enumerated
+
+```ceesafe
+public struct Enumerated<T, I: Iterator<T>>
+```
+
+`enumerate`'s stage.
+
+### Enumerated.next
+
+```ceesafe
+fn next(borrow mut this) -> Indexed<T>?
+```
+
+Implements `Iterator<Indexed<T>>`.
+
+## struct Zipped
+
+```ceesafe
+public struct Zipped<A, B, I: Iterator<A>, J: Iterator<B>>
+```
+
+`zip`'s stage.
+
+### Zipped.next
+
+```ceesafe
+fn next(borrow mut this) -> Paired<A, B>?
+```
+
+Implements `Iterator<Paired<A, B>>`.
+
+## struct SliceItems
+
+```ceesafe
+public struct SliceItems<region r, T>
+```
+
+A slice's elements, lent one at a time (`s.iter()`).
+
+### SliceItems.next
+
+```ceesafe
+fn next(borrow mut this) -> (borrow(r) T)?
+```
+
+Implements `Iterator<borrow(r) T>`.
+
+## struct SliceValues
+
+```ceesafe
+public struct SliceValues<region r, T: Copy>
+```
+
+A slice's elements, copied one at a time (`s.values()`).
+
+### SliceValues.next
+
+```ceesafe
+fn next(borrow mut this) -> T?
+```
+
+Implements `Iterator<T>`.
+
+## struct SliceIteration
+
+```ceesafe
+public struct SliceIteration<region r, T>
+```
+
+`s.iter()` is `SliceIteration<T>.iter(s)`: the struct's region ties the chain to the slice; it has no fields and is
+never made.
+
+### SliceIteration.iter
+
+```ceesafe
+public fn iter(s: Slice<r, T>) -> Chain<borrow(r) T, SliceItems<r, T>>
+```
+
+## struct SliceValueIteration
+
+```ceesafe
+public struct SliceValueIteration<region r, T: Copy>
+```
+
+`s.values()` is `SliceValueIteration<T>.values(s)`, for Copy elements.
+
+### SliceValueIteration.values
+
+```ceesafe
+public fn values(s: Slice<r, T>) -> Chain<T, SliceValues<r, T>>
+```
 
 ## struct CStr
 

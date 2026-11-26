@@ -398,8 +398,12 @@ c
 
 lib/core's `Iterator<T>` names that shape as an interface, so generic code and `dyn` can iterate too:
 `fn total<I: Iterator<u32>>(it: I) -> u32 { … for (x in it) { … } … }`, and `for (x in boxed)` over a
-`Box<dyn Iterator<u32>>` in a `var`. Rust's iterator chains (`map`, `filter`, `collect`, …) become the loop's body:
-there is no adapter library.
+`Box<dyn Iterator<u32>>` in a `var`. A chain starts with `iter()` (the elements lent) or `values()` (copied, for
+Copy elements), or `Chain.of(it)` for any iterator:
+`names.iter().filter((s) => s.length > 2).map((s) => s.length).collect()?`. It has `map`, `filter`, `take`,
+`skip`, `takeWhile`, `skipWhile`, `enumerate`, `zip`, `collect`, `count`, `fold`, `any`, `all`, `find`, `position`
+and `forEach`. `filter` and the tests take Copy values, there is no `sum` (`fold(0, (a, x) => a + x)`), and a loop is
+faster where the closures are the work.
 
 ### A function that always exits returns `never`
 

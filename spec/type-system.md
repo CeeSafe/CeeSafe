@@ -6338,6 +6338,37 @@ fn main() {
   `SliceAlgorithms<T>` and `VectorAlgorithms<T, A>`, which the method calls name (so `SliceAlgorithms<i32>.sortBy(s,
   cmp)` is the same call). They use only safe CeeSafe and `swap` (§16.5).
 
+### 36.4a Iterator chains (ADR 0264)
+```ceesafe
+let long = names.iter().filter((s) => s.length > 2).map((s) => s.length).collect()?;
+let total = levels.values().fold(0, (a, x) => a + x);
+let parts = Chain.of(text.split(",")).map((p) => p.length).collect()?;
+```
+- **Chains.** lib/core's `Chain<T, I: Iterator<T>>` (`lib/core/chains.cee`) holds an iterator of `T` and implements
+  `Iterator<T>`, so `for (x in chain)` works. It is lazy: values are computed when a consumer or a `for` asks.
+- **Where one starts.** `s.iter()` on a slice, an array or a vector: `Chain<borrow T, SliceItems<T>>`, the elements
+  lent in index order. `s.values()`: `Chain<T, SliceValues<T>>`, the elements copied, for a Copy `T` (else N0205,
+  which names `iter()`). `Chain.of(it)`: any iterator. A slicing expression is a receiver as for `any`: `a[1..].iter()`.
+  They are `SliceIteration<T>.iter(s)` and `SliceValueIteration<T>.values(s)`; the chain borrows the slice.
+- **Adapters**, each a method that consumes the chain and returns another: `map(f)` (`borrow(r) fn(T) -> U`, `U` from
+  `f`), `take(n)`, `skip(n)`, `enumerate()` (`Indexed<T>`, fields `index: usize` and `value: T`), `zip(other)` (any
+  `Iterator<U>`; `Paired<T, U>`, fields `first` and `second`; ends with the shorter); and, for a Copy `T`, `filter(p)`,
+  `takeWhile(p)` and `skipWhile(p)` (`borrow(r) fn(T) -> bool`). An adapter's closure is borrowed for the region `r`
+  of the chain it returns, so a chain lives where its closures do.
+- **Consumers**: `collect()` (`Result<Vector<T>, AllocError>`; a `T` where a failure stops the program, §17.7),
+  `count()` (`usize`), `fold(init, f)` (`A: Send`, `borrow mut fn(A, T) -> A`), `forEach(f)`; and, for a Copy `T`,
+  `any(p)`, `all(p)` (stopping at the first value that decides), `find(p)` (`T?`) and `position(p)` (`usize?`).
+- **Copy values.** The adapters and consumers that test a value give or keep it afterwards, so they take the value
+  itself and need `T: Copy` (a lent element, a number). On a chain of another type they are N0268.
+- **Not provided**: `sum`, `min` and `max` (no numeric bound; `fold` does them); `copied()` (an impl cannot name
+  `Chain<borrow T, I>`, N0267; `values()`, or `map((x) => *x)`); the adapters as default methods of `Iterator<T>`
+  (an interface method cannot declare a region, §25.1).
+- **Cost.** A chain's closures are called through its stages' fields, which closure specialisation does not reach
+  (optimisations.md §5.1), so a chain whose closures are the work is slower than the loop: 3.3 times in ADR 0264's
+  measurement.
+- **N0200** on a slice or a vector for a chain's method (`[1, 2, 3].map(f)`) says to start one with `iter()` or
+  `values()`.
+
 ### 36.5 Owning closures: `move` literals and `dyn fn` (M13 G3; ADR 0015 §3.6)
 ```ceesafe
 fn adder(n: u64) -> Box<dyn fn(u64) -> u64> {

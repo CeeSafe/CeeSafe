@@ -93,13 +93,25 @@ fn checkSliceAlgorithm(
         let shared = c.types.sliceOf(element, false)?;
         receiver = coerce(c, slice, shared, targetSpan)?;
     }
+    if (sameText(text, "values") && !c.types.isCopy(element)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'values' copies the elements, and ")?;
+        appendQuotedType(mut message, c, element)?;
+        appendText(mut message, " is not Copy: 'iter()' lends them instead (ADR 0264)")?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     let holder = if (sameText(
         text,
         "splitAt",
     ) || sameText(
         text,
         "splitAtMut",
-    )) "SliceSplitting" else (if (sameText(text, "copyWithin")) "SliceCopying" else "SliceAlgorithms");
+    )) "SliceSplitting" else (if (sameText(text, "copyWithin")) "SliceCopying" else (if (sameText(
+        text,
+        "iter",
+    )) "SliceIteration" else (if (sameText(text, "values")) "SliceValueIteration" else "SliceAlgorithms")));
     let elements = [element];
     let function = libraryFunction(c, holder, elements[..], ident.symbol, span)?;
     if (function == none()) {

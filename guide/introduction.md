@@ -72,9 +72,6 @@ CeeSafe is **pre-1.0**. Its compiler, `ceesafec`, is written in CeeSafe and comp
 work end to end, and are tested against a corpus of about 550 programs. But nobody has used it in production. What is
 done and what is next are in the repository's `ROADMAP.md`.
 
-Some things it does not have yet: iterator adapters (`map`, `filter` and the like; loops do their work), which are
-planned, or recorded as an open decision.
-
 ## Where to go next
 
 - [Install the compiler](installation.md) and [write a first program](getting-started.md).

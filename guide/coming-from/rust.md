@@ -85,7 +85,7 @@ fn main() {
 brownish
 ```
 
-The CeeSafe version loops over the `split` iterator where Rust would call `map_or` (there are no adapters), tests
+The CeeSafe version loops over the `split` iterator where Rust would call `map_or`, tests
 with a guard, returns explicitly, and its signature says the result views the input through the region `r`. With a
 single borrowed parameter, as here, the region could also be left out:
 `fn longestWord(text: StringView) -> StringView?` means the same.
@@ -147,11 +147,13 @@ fn main() {
 atomics share state, and `Send` and `Share` are Rust's `Send` and `Sync`. `async fn` and `await` run tasks on lib/std's
 executor, on one thread or several (type-system.md §38, §40).
 
-**No macros, no iterator chains.** `for` walks ranges, arrays, slices, vectors and iterators: lib/core's
+**No macros; chains start with `iter()`.** `for` walks ranges, arrays, slices, vectors and iterators: lib/core's
 `Iterator<T>` (`fn next(borrow mut this) -> T?`), through a bound `I: Iterator<T>` or a `dyn Iterator<T>`, and any
 struct with such a `next`. The item is an interface parameter, not an associated type: `Iterator<u8>`, not
-`Iterator<Item = u8>`. There are no adapters: a chain of `map`, `filter` and `collect` is the loop's body, and slices
-and vectors have `sortBy`, `forEach`, `any`, `all`, `partitionPoint` (Rust's `partition_point`) and `retain`.
+`Iterator<Item = u8>`. Chains are lib/core's: `v.iter()` (Rust's `iter()`), `v.values()` (`iter().copied()`) or `Chain.of(it)`,
+then `map`, `filter`, `take`, `skip`, `enumerate`, `zip`, `collect`, `count`, `fold`, `any`, `all`, `find` and
+`position` (type-system.md §36.4a). `filter` and the tests take Copy values, and there is no `sum`. Slices and vectors
+also have `sortBy`, `forEach`, `any`, `all`, `partitionPoint` (Rust's `partition_point`) and `retain`.
 
 **Through C.** CeeSafe compiles to C11, which any C toolchain or kernel build can take, including MSVC and compilers for
 targets LLVM does not support. The generated C is readable and maps back to CeeSafe lines.
@@ -163,5 +165,5 @@ calls, at compile time. Rust has no equivalent in the language.
 
 `Rc` (CeeSafe has `Arc`, and lib/core's `Cell` and `RefCell`, whose `read()` and `write()` are Rust's `borrow()` and
 `borrow_mut()`: type-system.md §41; `OnceCell` and `OnceLock` are there too, with `getOrInit` for `get_or_init`),
-macros, iterator adapters, blanket impls, `impl Trait`, shadowing, the
+macros, default methods that every iterator gets (CeeSafe's chains start with `iter()`), blanket impls, `impl Trait`, shadowing, the
 standard library's breadth, and crates.io. Several are planned or recorded as open decisions.

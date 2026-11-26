@@ -265,6 +265,10 @@ TABLES.append(table(
         ("`s.partitionPoint(test: borrow mut fn(borrow T) -> bool) -> usize`",
          "A binary search: the index of the first element for which the closure is `false`, in a slice where every `true` element comes before every `false` one.",
          NO),
+        ("`s.iter() -> Chain<borrow T, SliceItems<T>>`",
+         "A chain of the elements, lent in order, for `map`, `filter`, `collect`, `fold` and the rest (ADR 0264).", NO),
+        ("`s.values() -> Chain<T, SliceValues<T>>`",
+         "A chain of the elements, copied in order; the element type is Copy.", NO),
     ],
 ))
 
@@ -684,7 +688,7 @@ TABLES.append(table(
     "`Vector<T>`",
     "A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A "
     "vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, "
-    "`v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a "
+    "`v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`, `v.iter`, `v.values`), a `Vector<u8>` those of the byte slice table, and a "
     "vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with "
     "[VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), "
     "[VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and "

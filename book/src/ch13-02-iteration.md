@@ -1,16 +1,16 @@
 ---
 title: Iteration
-summary: Everything a for loop accepts - ranges, arrays, slices, vectors and iterators - how to write an iterator with a next method, iterators in generic code, and the slice and vector methods that take a closure, since there is no adapter library.
+summary: Everything a for loop accepts - ranges, arrays, slices, vectors and iterators - how to write an iterator with a next method, iterators in generic code, the slice and vector methods that take a closure, and chains started with iter or values.
 assumes: [ch03-05-control-flow, ch06-03-optionals, ch08-01-vectors, ch10-02-interfaces, ch13-01-closures]
-keywords: [for, iteration, iterator, next, Iterator, range, split, sortBy, forEach, any, all, partitionPoint, retain]
+keywords: [for, iteration, iterator, next, Iterator, range, split, sortBy, forEach, any, all, partitionPoint, retain, iter, values, Chain, map, filter, collect, fold]
 diagnostics: [N0200, N0205, N0241, N0251]
-specification: ["type-system.md §16.4", "type-system.md §36.4"]
+specification: ["type-system.md §16.4", "type-system.md §36.4", "type-system.md §36.4a"]
 ---
 
 # Iteration
 
 **This section teaches** what a `for` loop can run over, how to make a type of your own work in a `for` loop,
-and which library methods visit a sequence with a closure. It assumes the `for` loop of
+which library methods visit a sequence with a closure, and how a chain (`iter().map(…)`) does it in a line. It assumes the `for` loop of
 [Control flow](./ch03-05-control-flow), optionals ([Optionals](./ch06-03-optionals)), vectors
 ([Vectors](./ch08-01-vectors)), interfaces and bounds ([Interfaces](./ch10-02-interfaces)) and
 [Closures](./ch13-01-closures).
@@ -211,9 +211,12 @@ fn main() {
 9
 ```
 
-`Filter.next` asks `inner` for values until one passes the closure in its `keep` field. The library has two
-iterators, both made by `split`: `TextSplit` for a `StringView` and `ByteSplit` for a `Slice<u8>`. It has no
-adapters such as `Filter`: you write the ones you need, or you write the loop.
+`Filter.next` asks `inner` for values until one passes the closure in its `keep` field. lib/core's chains are built
+the same way: `s.iter()` lends a slice's or a vector's elements, `s.values()` copies them when they are Copy, and
+`Chain.of(it)` takes any iterator, such as the `TextSplit` that `split` makes. Each then has `map`, `filter`, `take`,
+`skip`, `enumerate`, `zip`, `collect`, `count`, `fold`, `any`, `all`, `find` and `position`. `filter` and the
+methods that test a value take Copy values, and a chain's closures are called through its fields, so a loop is
+faster where they are the work.
 
 ## Methods that take a closure
 
@@ -276,9 +279,10 @@ vector.
 
 ::: tip Rule
 The library's closure-taking methods are `sortBy`, `sortStableBy`, `forEach`, `any`, `all` and `partitionPoint` on
-slices and vectors, and `retain` on vectors. There are no others: no `map`, `filter`, `fold` or `sum`.
+slices and vectors, and `retain` on vectors. `map`, `filter`, `fold` and the rest belong to a chain, which `iter()` or
+`values()` starts. There is no `sum`: `fold(0, (a, x) => a + x)`.
 
-*Specification: `type-system.md` §36.4.*
+*Specification: `type-system.md` §36.4 and §36.4a.*
 :::
 
 ## Mistakes
@@ -351,8 +355,8 @@ main.cee:12:15: error[N0205]: 'for' iterates over an array, a slice, a vector, a
 The same code, with "has no method 'next'", reports a `for` over a value that is not iterable, such as a
 `HashMap`.
 
-::: warning Mistake: a chain of adapters
-`map`, `filter` and `sum` do not exist.
+::: warning Mistake: a chain without `iter()`
+A slice or a vector has no `map`: a chain starts with `iter()` or `values()`. And there is no `sum`.
 :::
 
 <span class="listing-caption"><strong>Listing 13-16</strong>, <code>main.cee</code>: A chain as another language writes it. This does not compile.</span>
@@ -366,13 +370,26 @@ fn main() {
 ```
 
 ```text
-main.cee:2:27: error[N0200]: 'Slice<i32>' has no method 'map'; it has 'copyFrom', 'fill', 'copyWithin', 'swap', 'sortBy', 'sortStableBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt' and 'splitAtMut'
+main.cee:2:27: error[N0200]: 'Slice<i32>' has no method 'map'; it has 'copyFrom', 'fill', 'copyWithin', 'swap', 'sortBy', 'sortStableBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt', 'splitAtMut', 'iter' and 'values'; 'map' is a chain's: start one with 'iter()', which lends the elements, or 'values()', which copies them (ADR 0264): 's.iter().map(…)'
   |
 2 |     let total = [1, 2, 3].map((x) => x * 2).filter((x) => x > 2).sum();
   |                           ^^^
 ```
 
-Write the loop. The steps of the chain become the lines of its body:
+Start the chain with `values()`, since the elements are numbers, and `fold` the sum:
+
+```ceesafe
+fn main() {
+    let total = [1, 2, 3].values().map((x) => x * 2).filter((x) => x > 2).fold(0, (a, x) => a + x);
+    Console.writeLine(total);
+}
+```
+
+```text
+10
+```
+
+Or write the loop, whose body has the chain's steps as its lines. It is faster where the closures are the work:
 
 ```ceesafe
 fn main() {
@@ -444,6 +461,7 @@ no generators and no `yield`: an iterator is a struct that keeps its own positio
   it is used up; passed as `borrow mut` it keeps its state.
 - `impl Iterator<T> for …` lets generic code take it with a bound `I: Iterator<T>`.
 - The closure-taking methods are `sortBy`, `sortStableBy`, `forEach`, `any`, `all`, `partitionPoint` and
-  `retain`. There is no adapter library (`N0200`): write the loop, or an iterator of your own.
+  `retain`. A chain starts with `iter()`, `values()` or `Chain.of(it)` (`N0200` without one) and has `map`,
+  `filter`, `collect`, `fold` and the rest; `filter` and the tests take Copy values.
 
 Next: [The project improved](./ch13-03-project-improved) uses a closure and an iterator in `lookfor`.

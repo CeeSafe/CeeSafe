@@ -23,15 +23,39 @@ fn isSearchMethod(name: Slice<u8>) -> bool =>
 // The methods N0200 lists for a slice, a vector, a `StringView` and a `String` (ADR 0144): the built-in ones, then on
 // bytes and text those of lib/core above, so that a close name (`trimmed`) finds `trim`. Kept with the names above.
 
+/// Whether `name` is a chain's adapter or consumer (ADR 0264), which a slice or a vector reaches through `iter()`.
+fn isChainMethod(name: Slice<u8>) -> bool =>
+    sameText(name, "map") || sameText(name, "filter") || sameText(name, "collect") || sameText(name, "fold") ||
+        sameText(name, "take") || sameText(name, "skip") || sameText(name, "enumerate") || sameText(name, "zip") ||
+        sameText(name, "count") || sameText(name, "find") || sameText(name, "position") ||
+        sameText(name, "takeWhile") || sameText(name, "skipWhile");
+
+/// After N0200's "… has no method 'm'": for a chain's method on a slice or a vector, where to start the chain.
+fn appendChainHint(message: borrow mut Vector<u8>, name: Slice<u8>) -> Result<void, AllocError> {
+    if (!isChainMethod(name)) {
+        return Ok();
+    }
+    let asked = message.length > 0 && message[message.length - 1] == 63u8; // after "did you mean 'iter'?"
+    appendText(message, if (asked) " '" else "; '")?;
+    appendBytes(message, name)?;
+    appendText(
+        message,
+        "' is a chain's: start one with 'iter()', which lends the elements, or 'values()', which copies",
+    )?;
+    appendText(message, " them (ADR 0264): 's.iter().")?;
+    appendBytes(message, name)?;
+    return appendText(message, "(…)'");
+}
+
 /// A slice's methods; with `bytes`, a byte slice's.
 fn sliceMethodNames(bytes: bool) -> StringView =>
-    if (bytes) "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
-        else "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut";
+    if (bytes) "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut iter values readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
+        else "copyFrom fill copyWithin swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut iter values";
 
 /// A vector's built-in methods; with `bytes`, a `Vector<u8>`'s.
 fn vectorMethodNames(bytes: bool) -> StringView =>
-    if (bytes) "add push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
-        else "push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone";
+    if (bytes) "add push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone iter values pushBE pushLE readBE readLE writeBE writeLE indexOf lastIndexOf indexOfByte contains startsWith endsWith equalsIgnoreAsciiCase trim trimStart trimEnd splitOnce split parseInt parseIntRadix parseFloat"
+        else "push pop clear view viewMut retain truncate swap sortBy sortStableBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove drain clone iter values";
 
 /// A `String`'s built-in methods.
 fn stringMethodNames() -> StringView =>

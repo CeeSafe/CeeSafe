@@ -666,6 +666,9 @@ fn checkVectorMethod(
             ),
             ident.symbol,
         )?;
+        if (!isString) {
+            appendChainHint(mut message, text)?;
+        }
         noSuchMethod(c, member, arguments, message, span)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -694,7 +697,7 @@ fn checkVectorMethod(
             text,
             "all",
         ) || sameText(text, "splitAt") || sameText(text, "splitAtMut") || sameText(text, "retain") ||
-        sameText(text, "copyWithin"))) {
+        sameText(text, "copyWithin") || isChainStart(text))) {
         if (sameText(text, "retain")) {
             return checkVectorRetain(c, member, arguments, vector, targetSpan, span);
         }
@@ -809,7 +812,7 @@ fn vectorMethodArity(isString: bool, text: Slice<u8>) -> i32 {
         return 1;
     }
     if (sameText(text, "pop") || sameText(text, "clear") || sameText(text, "view") || sameText(text, "viewMut") ||
-        sameText(text, "drain")) {
+        sameText(text, "drain") || isChainStart(text)) {
         return 0;
     }
     if (sameText(text, "swap")) {
@@ -893,7 +896,7 @@ fn checkSliceMethod(
         "forEach",
     ) || sameText(text, "partitionPoint") || sameText(text, "any") || sameText(text, "all") ||
         sameText(text, "swap") || sameText(text, "splitAt") || sameText(text, "splitAtMut") ||
-        sameText(text, "copyWithin")) {
+        sameText(text, "copyWithin") || isChainStart(text)) {
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
     if (isBytesTextMethod(text)) {
@@ -913,6 +916,7 @@ fn checkSliceMethod(
             sliceMethodNames(c.types.info(c.types.info(sliceType).pointee).element == c.types.u8),
             ident.symbol,
         )?;
+        appendChainHint(mut message, text)?;
         noSuchMethod(c, member, arguments, message, span)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);

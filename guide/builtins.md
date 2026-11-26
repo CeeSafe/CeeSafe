@@ -475,6 +475,7 @@ plain
 | `v.clear()`, `v.truncate(n)`, `v.swap(i, j)` | |
 | `v.insert(at, x)`, `v.remove(at)`, `v.swapRemove(at)` | `Result<void, AllocError>`; `T`; `T` (the last element fills the gap); the index is checked at the call |
 | `v.drain()` | an iterator that moves the elements out first to last, `for (x in v.drain())`; `v` is borrowed until it ends, then empty with its capacity |
+| `s.iter()`, `s.values()` | a chain of the elements, lent or (for Copy elements) copied, for `map`, `filter`, `collect` and the rest (type-system.md §36.4a, ADR 0264) |
 | `s.sortBy(cmp)`, `s.sortStableBy(cmp)` | on a `SliceMut<T>` or a vector: `cmp(a, b)` is negative, zero or positive; `sortStableBy` keeps equal elements in their order |
 | `[]` | the empty `Slice<T>` or `SliceMut<T>`, where one is expected |
 | `a.writeLE(0, x)` on an array | an array's methods are its slice's: `a[..].writeLE(0, x)` |

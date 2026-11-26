@@ -1,0 +1,67 @@
+// ADR 0264: chains over a slice's or a vector's elements (`iter()` lends them, `values()` copies them) and over any
+// iterator (`Chain.of`): each adapter and each consumer, with closures that capture locals.
+struct Reading {
+    sensor: u32;
+    level: i32;
+}
+
+fn main() {
+    var names = Vector<String>.create();
+    names.push(String.from("ada")!)!;
+    names.push(String.from("grace")!)!;
+    names.push(String.from("al")!)!;
+    let shortest: usize = 2;
+    let long = names.iter().filter((s) => s.length > shortest).map((s) => s.length).collect()!;
+    Console.writeLine(long.length);
+    Console.writeLine(long[1]);
+
+    let levels = [62, 17, 88, 45, 30];
+    Console.writeLine(levels.values().fold(0, (a, x) => a + x));
+    Console.writeLine(levels[..].values().filter((x) => x > 40).count());
+    Console.writeLine(levels.values().any((x) => x > 80));
+    Console.writeLine(levels.values().all((x) => x > 20));
+    Console.writeLine(levels.values().find((x) => x < 40) ?? -1);
+    Console.writeLine(levels.values().position((x) => x > 80) ?? 99);
+    Console.writeLine(levels.values().skip(1).take(3).count());
+    Console.writeLine(levels.values().takeWhile((x) => x != 45).count());
+    Console.writeLine(levels.values().skipWhile((x) => x != 45).count());
+    for (p in levels.values().enumerate().filter((p) => p.index % 2 == 0)) {
+        Console.writeLine(p.value);
+    }
+    let pairs = names.iter().zip(levels.values()).collect()!;
+    Console.writeLine(pairs[1].first.view());
+    Console.writeLine(pairs[1].second);
+
+    var readings = Vector<Reading>.create();
+    readings.push(Reading { sensor: 1, level: 5 })!;
+    readings.push(Reading { sensor: 2, level: 9 })!;
+    Console.writeLine(readings.iter().map((r) => r.level).fold(0, (a, x) => a + x));
+    var seen: u32 = 0;
+    readings.iter().forEach((r) => { seen += r.sensor; });
+    Console.writeLine(seen);
+
+    let parts = Chain.of("a,bb,ccc".split(",")).map((p) => p.length).collect()!;
+    Console.writeLine(parts[2]);
+    let empty = Vector<i32>.create();
+    Console.writeLine(empty.values().count());
+}
+// expect-stdout: 2
+// expect-stdout: 5
+// expect-stdout: 242
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 17
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: 2
+// expect-stdout: 62
+// expect-stdout: 88
+// expect-stdout: 30
+// expect-stdout: grace
+// expect-stdout: 17
+// expect-stdout: 14
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: 0

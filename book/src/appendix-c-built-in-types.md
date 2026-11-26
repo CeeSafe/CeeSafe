@@ -155,6 +155,8 @@ A slice borrows a run of elements of an array, a vector or another slice: `Slice
 | `s.any(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for some element of a slice; `false` for an empty slice. | No | [8.1](./ch08-01-vectors) |
 | `s.all(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for every element of a slice; `true` for an empty slice. | No | [8.1](./ch08-01-vectors) |
 | `s.partitionPoint(test: borrow mut fn(borrow T) -> bool) -> usize` | A binary search: the index of the first element for which the closure is `false`, in a slice where every `true` element comes before every `false` one. | No | [8.1](./ch08-01-vectors) |
+| `s.iter() -> Chain<borrow T, SliceItems<T>>` | A chain of the elements, lent in order, for `map`, `filter`, `collect`, `fold` and the rest (ADR 0264). | No | [13.2](./ch13-02-iteration) |
+| `s.values() -> Chain<T, SliceValues<T>>` | A chain of the elements, copied in order; the element type is Copy. | No | [13.2](./ch13-02-iteration) |
 
 ## Byte slices: `Slice<u8>` and `SliceMut<u8>`
 
@@ -346,7 +348,7 @@ A `Box<T>` owns one value on the heap. It is a move type, and destroying it dest
 
 ## `Vector<T>`
 
-A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
+A `Vector<T>` owns a growable list of values on the heap. It is a move type. In the rows, `v` is a vector. A vector also has the members of the slice table on its elements (`v.swap`, `v.sortBy`, `v.sortStableBy`, `v.forEach`, `v.any`, `v.all`, `v.partitionPoint`, `v.splitAt`, `v.splitAtMut`, `v.iter`, `v.values`), a `Vector<u8>` those of the byte slice table, and a vector argument is accepted where a `Slice<T>` parameter is. The library's part is documented with [VectorEditing](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorediting), [VectorCopying](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorcopying) and [VectorBytes](https://ceesafe.github.io/CeeSafe/reference/api/core#struct-vectorbytes).
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|

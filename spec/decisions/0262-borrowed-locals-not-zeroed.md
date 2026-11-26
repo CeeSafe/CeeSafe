@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-26 ("Go ahead with real fix for finding 55", the SQLite port's
   `CEESAFE_FINDINGS.md` finding 55, after its benchmark's profile). **Implemented** on the branch `perf/f55-locals`
-  (from 0.95.17, with 0.95.18 merged), released in 0.95.19.
+  (from 0.95.17, with 0.95.18 and 0.95.19 merged), released in 0.95.20.
 - Scope: the C backend's rule for which aggregate locals start zeroed (`partlyWritten`, `src/backend/c_body.cee`,
   which sync and async functions share); c-backend.md §5; 16 `emit-c` snapshots. No language, library or runtime
   change.

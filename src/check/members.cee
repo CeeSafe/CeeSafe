@@ -458,7 +458,7 @@ fn checkMethodCallVia(
                     name,
                     "forEach",
                 ) || sameText(name, "partitionPoint") || sameText(name, "any") || sameText(name, "all") ||
-                    sameText(name, "splitAt"));
+                    sameText(name, "splitAt") || isChainStart(name));
                 let slice = synthSlice(c, sliced, low, high, mutable, targetSpan)?;
                 return checkSliceMethod(c, member, arguments, slice, targetSpan, span);
             }
@@ -1031,7 +1031,10 @@ fn isSliceMethodName(name: Slice<u8>) -> bool =>
         name,
         "partitionPoint",
     ) || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
-        sameText(name, "splitAtMut") || sameText(name, "copyWithin") || isByteWriter(name);
+        sameText(name, "splitAtMut") || sameText(name, "copyWithin") || isByteWriter(name) || isChainStart(name);
+
+/// `s.iter()` and `s.values()`: a chain of a slice's elements, lent or copied (ADR 0264).
+fn isChainStart(name: Slice<u8>) -> bool => sameText(name, "iter") || sameText(name, "values");
 
 /// A string literal for a `[u8; N]` member of an imported struct's literal (ADR 0042 §3.4): its bytes, which C's
 /// initialiser zero-pads to N, as a constant of the array type; none if `value` is not a string literal or the member

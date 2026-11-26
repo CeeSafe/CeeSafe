@@ -3989,6 +3989,20 @@ Diagnostics: none new.
     10 `WRITE_EXTERNAL_STORAGE`, asked first; refused is `Resources`). Desktops and scripted windows: `pick` is the
     open dialog for the photos' and videos' extensions, `capture` is `Unsupported` and `canCapture` false (a scripted
     window's `dialog` item answers `capture` too).
+  - **Sharing and opening** (ADR 0268): `ShareSheet.share(window, paths: Slice<StringView>, text: StringView)`,
+    `Launcher.openFile(window, path: StringView)` and `Launcher.openLink(window, url: StringView)` are each
+    `Result<void, WindowError>`. `share` offers the files and the text (either may be empty, not both) to other apps,
+    returning when the sheet closes on iOS and at once elsewhere; whether the user shared is not answered. `openFile`
+    opens the file with the system's app for its type; `openLink` opens an `http:`, `https:`, `mailto:` or `tel:` link
+    (any other scheme is `Unsupported`, checked by lib/std, as are an empty path, a path holding a line break, and a
+    share of nothing). `Unsupported` also when no app opens it, and for `share` on Windows, Linux and FreeBSD;
+    `Resources` when a file is not there or the system refused. iOS: `UIActivityViewController`,
+    `UIDocumentInteractionController` (a preview, or the apps that open the file) and `UIApplication`'s `openURL:`.
+    Android: `ACTION_SEND` (`ACTION_SEND_MULTIPLE`) through the chooser and `ACTION_VIEW`, through `Sharing`, each file
+    as `content://<package>.ceesafe.files/<path>` with a read grant for that URI; the provider, `org.ceesafe.Files`, is
+    the APK's (its packer declares it), and an app without it is `Unsupported`. macOS: `NSSharingServicePicker` beside
+    the window and `NSWorkspace`'s `openURL:`. Windows: `ShellExecuteW`. Linux and FreeBSD: `xdg-open`, started in the
+    background (`Unsupported` when it is not on `PATH`). A scripted window's `dialog` item answers each, as `Ok`.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

@@ -94,6 +94,8 @@
 - [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
+- [struct PhotoSize](#struct-photosize)
+- [struct PhotoFile](#struct-photofile)
 - [enum PushError](#enum-pusherror)
 - [enum PushService](#enum-pushservice)
 - [struct PushToken](#struct-pushtoken)
@@ -4500,6 +4502,45 @@ public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
 ```
 
 The value at `at`, to change it. Changing a value does not change the map's version.
+
+## struct PhotoSize
+
+```ceesafe
+public struct PhotoSize {
+    public w: u32;
+    public h: u32;
+}
+```
+
+A photo's size in pixels, as `PhotoFile.shrink` wrote it.
+
+## struct PhotoFile
+
+```ceesafe
+public struct PhotoFile
+```
+
+Photos as files (ADR 0266).
+
+```
+// A camera's 12 megapixels made a chat photo: 1600 pixels at most, JPEG at 0.82, upright, no metadata.
+let size = PhotoFile.shrink("IMG_0042.HEIC", "photo.jpg", 1600, 0.82)?;
+```
+
+### PhotoFile.shrink
+
+```ceesafe
+public fn shrink(from: StringView, to: StringView, longest: u32, quality: f32) -> Result<PhotoSize, IoError>
+```
+
+Reads the photo at `from` (JPEG, PNG, HEIC: what the system decodes), turns it upright (its EXIF orientation
+applied to the pixels), scales it so its longest side is at most `longest` pixels (never larger), and writes it
+to `to` as a JPEG at `quality` (0 to 1), without the photo's metadata (where it was taken, the camera). The new
+size. macOS and iOS: ImageIO; Android: BitmapFactory and Bitmap.compress. `Unsupported` where the system has no
+codec CeeSafe uses (Linux, FreeBSD, Windows for now, a program on Android with no window, the interpreter);
+`NotFound` when `from` is not there; `InvalidInput` when it is no photo the system reads, or `longest` is 0;
+`Other(5)` when the JPEG could not be written.
+Safety: the runtime reads the two paths during the call and writes the two sizes.
 
 ## enum PushError
 

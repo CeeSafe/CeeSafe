@@ -1,10 +1,13 @@
 # ADR 0266 — Making a photo smaller before it is sent, with the system's own codecs
 
-- Status: **Proposed** 2026-11-26, for Marivil's CeeUI port, after the owner found a camera's photo slow to reach the
-  chat ("I felt slow in loading from camera to chat window"). Its questions for the owner are §6.
-- Scope: `lib/std` (a new `PhotoFile`), `runtime/hosted/ceesafe_rt_image.c` (new: ImageIO on Apple's systems, the
-  Android runtime's dex elsewhere through JNI), `runtime/android/org/ceesafe/window/Photos.java` (new),
-  type-system.md §26, `tools/image_check.py` (new).
+- Status: **Accepted** by the owner 2026-11-26, with §6 answered as recommended (MAUI's 1600 pixels at 0.82; the photo
+  sent whole where there is no codec; its metadata dropped), for Marivil's CeeUI port, after the owner found a
+  camera's photo slow to reach the chat ("I felt slow in loading from camera to chat window"). Implemented the same
+  day (§7).
+- Scope: `lib/std/photo.cee` (new: `PhotoFile`, `PhotoSize`), `runtime/hosted/ceesafe_rt_image.c` (new: ImageIO on
+  Apple's systems, the Android runtime's dex through JNI), `runtime/android/org/ceesafe/window/Photos.java` (new), the
+  backend's choice of runtime files, `tools/gen_runtime.py`, `tools/gen_android_dex.py`, the interpreter,
+  type-system.md §26.24, `spec/api/std.md`, `tools/image_check.py` (new; contract step `image`).
 
 ## 1. Context
 
@@ -24,7 +27,7 @@
 - **A photo's metadata** (EXIF: the place it was taken, the camera, the time) goes with the photo when it is sent
   as it is. Re-encoding drops it unless it is copied.
 
-## 2. Decision (proposed)
+## 2. Decision
 
 ```
 // Result<PhotoInfo, IoError>: the new file's size in pixels
@@ -34,8 +37,8 @@ PhotoFile.shrink(from: "IMG_0042.jpg", to: "photo.jpg", longest: 1600, quality: 
 - **`PhotoFile.shrink(from, to, longest, quality)`** reads the photo at `from` (JPEG, PNG, HEIC, whatever the system
   decodes), turns it upright (its EXIF orientation applied to the pixels), scales it so its longest side is at most
   `longest` (never larger), and writes it to `to` as a JPEG at `quality` (0 to 1). It answers the new size.
-  Metadata is not copied (§6.3). `Unsupported` where the system has no codec (§2.2); `NotFound` or `InvalidData`
-  for a file it cannot read as a photo.
+  Metadata is not copied (§6.3). `Unsupported` where the system has no codec (§2.2); `NotFound` for a file that is
+  not there, `InvalidInput` for one it cannot read as a photo (`IoError` has no `InvalidData`).
 - A thumbnail is the same call with other numbers (MAUI's 640 at 0.6).
 - **Systems**: ImageIO on macOS and iOS; on Android a runtime class (`Photos`, in the embedded dex) through JNI;
   Windows through WIC (later, as ADR 0146's dialogs came); Linux, FreeBSD and `ceesafec run --interp`:
@@ -58,17 +61,38 @@ PhotoFile.shrink(from: "IMG_0042.jpg", to: "photo.jpg", longest: 1600, quality: 
   elsewhere (a document, a received file) could not be shrunk, and the picker's job would be two.
 - **Keeping the metadata** (§6.3).
 
-## 5. Tests (proposed)
+## 5. Tests
 
 - `tools/image_check.py` on macOS: a 4032 by 3024 JPEG with orientation 6 becomes 1200 by 1600, upright, JPEG, no EXIF;
   a small PNG is not enlarged; a file that is no photo is `InvalidData`; Linux answers `Unsupported`.
 - The Moto and the iPhone in Marivil's port: a camera's photo sent as about 1600 pixels and a few hundred kB, shown at
   once, received by the MAUI client upright.
 
-## 6. Questions for the owner
+Done (2026-11-26):
+- `tools/image_check.py` on macOS: 7 cases, 0 problems (a 4032 by 3024 JPEG with orientation 6 and a camera's make in
+  its EXIF became a 1200 by 1600 JPEG, its green corner at the top right, no orientation, make or GPS left; a 300 by
+  200 PNG a 300 by 200 JPEG; junk InvalidInput; a missing file NotFound; 0 InvalidInput; the interpreter
+  Unsupported). The runtime compiled for iOS, macOS and Android with the corpus's warnings as errors.
+- The owner's iPhone 14 Plus, by his hands, in Marivil's port with the three fixes (the message shown at once, the
+  bubble decoded at an eighth, this): "Fast now".
+- Not yet: Android on the Moto (built, the phone was not connected), a HEIC from the library, Windows.
 
-1. **The numbers**: MAUI's, 1600 pixels at 0.82 for a chat photo (recommended), or others?
+## 6. Questions for the owner (answered 2026-11-26)
+
+1. **The numbers**: MAUI's, 1600 pixels at 0.82 for a chat photo (recommended), or others? *MAUI's.*
 2. **Where there is no codec** (Linux, FreeBSD; Windows until WIC is done): send the photo whole (recommended for
-   now), or write CeeSafe's own encoder first?
+   now), or write CeeSafe's own encoder first? *Send it whole for now.*
 3. **Metadata**: dropped (recommended: the place a photo was taken stays with the sender, as most messengers do), or
-   kept?
+   kept? *Dropped.*
+
+## 7. Implementation (2026-11-26)
+
+- `lib/std/photo.cee`: `PhotoFile.shrink` and `PhotoSize`, over `ceesafe_image_shrink` (the quality in thousandths).
+- `runtime/hosted/ceesafe_rt_image.c` (new; runtime file 16, chosen by `ceesafe_image_`): ImageIO through dlopen and
+  CoreFoundation's dictionaries (the thumbnail's largest size, from the image always, with the transform; the
+  destination's lossy quality, no properties); on Android `Photos.shrink` through the window runtime's VM and class
+  loader (`ceesafe_android_photos`, weak), its paths as standard UTF-8 where the window runtime converts them.
+- `runtime/android/org/ceesafe/window/Photos.java` (new), in the dex.
+- The interpreter answers `Unsupported`.
+- Marivil's port: a photo picked or captured is made 1600 pixels at 0.82 in a folder of its own in the temporary
+  folder, under its own name with `.jpg`, then sent; a GIF, a video, and a photo where `shrink` fails go as they are.

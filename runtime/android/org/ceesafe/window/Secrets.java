@@ -2,14 +2,14 @@
 // embedded dex as InputView by tools/gen_android_dex.py. Edit it here, then run the generator.
 //
 // The runtime calls these from the program's thread that makes the call (attached to the VM), never from the
-// activity's. Each value is sealed with an AES-256-GCM key kept in the Android Keystore under the alias
+// activity's; the Context is the activity's, or a notification extension's service's (ADR 0263). Each value is sealed with an AES-256-GCM key kept in the Android Keystore under the alias
 // "ceesafe.secrets.<app>" (made at the first write, in StrongBox where the device has one; never exportable), with
 // a nonce of the Keystore's choosing and "<app>/<name>" as associated data, and kept in the app's no-backup folder as
 // ceesafe-secrets/<app>/<name>: the nonce's length (one byte), the nonce, then the sealed bytes. Answers are a read's
 // length, 0 for a write or a remove, or ceesafe_rt_secrets.c's codes: -1 none, -5 Denied, -6 Failed.
 package org.ceesafe.window;
 
-import android.app.Activity;
+import android.content.Context;
 import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -31,7 +31,7 @@ final class Secrets {
 
     private Secrets() {}
 
-    private static File folder(Activity activity, String app) {
+    private static File folder(Context activity, String app) {
         return new File(new File(activity.getNoBackupFilesDir(), "ceesafe-secrets"), app);
     }
 
@@ -76,7 +76,7 @@ final class Secrets {
         throw last != null ? last : new IllegalStateException("no key");
     }
 
-    static int read(Activity activity, String app, String name, byte[] out) {
+    static int read(Context activity, String app, String name, byte[] out) {
         synchronized (LOCK) {
             try {
                 File file = new File(folder(activity, app), name);
@@ -124,7 +124,7 @@ final class Secrets {
         }
     }
 
-    static int write(Activity activity, String app, String name, byte[] value) {
+    static int write(Context activity, String app, String name, byte[] value) {
         synchronized (LOCK) {
             try {
                 File dir = folder(activity, app);
@@ -154,7 +154,7 @@ final class Secrets {
         }
     }
 
-    static int remove(Activity activity, String app, String name, byte[] unused) {
+    static int remove(Context activity, String app, String name, byte[] unused) {
         synchronized (LOCK) {
             File file = new File(folder(activity, app), name);
             return !file.exists() || file.delete() ? 0 : FAILED;

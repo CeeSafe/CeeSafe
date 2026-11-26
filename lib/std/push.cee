@@ -111,9 +111,9 @@ public struct PushRequest {
 /// `PlugIns/<name>.appex` (CeeUI's packer's `--extension`) runs its `main` while the extension lives and is handed each
 /// push that carries `mutable-content` before the system shows it; it shows what `deliver` gives, or the push as it
 /// came when the system's time (about 30 seconds) runs out. On Android (ADR 0263) the same program, packed beside the
-/// app's (`--extension` with `--firebase`), is started by the app's Firebase service in a process of its own for a push
-/// while the app is not running, and handed each push (its payload: the data as JSON); one not delivered within 8
-/// seconds is shown as it came. Elsewhere, and in an app, `Unsupported`.
+/// app's (`--extension` with `--firebase`), runs in a process of its own, to which the app's Firebase service hands
+/// each push while the app is not running (its payload: the data as JSON); one not delivered within 8 seconds is shown
+/// as it came. Elsewhere, and in an app, `Unsupported`.
 /// `CEESAFE_PUSH_REQUEST=<file>` is one push instead, on every system (its title, body and payload JSON on three
 /// lines); a delivery is appended to `CEESAFE_NOTIFICATIONS_DUMP` as `deliver TITLE<TAB>BODY`.
 ///

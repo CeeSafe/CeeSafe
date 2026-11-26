@@ -13121,8 +13121,8 @@ jstring ceesafe_android_string(JNIEnv *env, const char *utf8, size_t length) {
 }
 
 /* ---- A notification extension on Android (ADR 0263) ----
-   The APK's Firebase service, in its own process (":push"), loads the extension's library (System.loadLibrary, which
-   calls JNI_OnLoad here) and calls the natives of its class org.ceesafe.Extension: start(Context) once, which runs the
+   The APK's ExtensionHost, a service in a process of its own (":push") to which the Firebase service (in the app's
+   process) sends each push, loads the extension's library (System.loadLibrary, which calls JNI_OnLoad here) and calls the natives of its class org.ceesafe.Extension: start(Context) once, which runs the
    program's main on a thread of its own, and push(title, body, json, tag, milliseconds) for each push, which queues
    it for the program (NotificationExtension.next) and waits until the program delivers it (true) or the time runs
    out (false: the service shows it as it came). A delivery shows the program's text through Notify, under the tag
@@ -13429,34 +13429,6 @@ int32_t ceesafe_android_push_extension_deliver(uint64_t id, const uint8_t *title
     return result;
 }
 
-/* That the program runs (ADR 0263 §2.4), seen from the extension's process: an exclusive lock on the file
-   ceesafe-program.lock in the app's files folder, held from the activity's first start until the process ends (the
-   descriptor is never closed). A process lock, so another process's test (the service's FileChannel.tryLock) meets
-   it on every ABI. */
-static void cee_android_hold_presence(ANativeActivity *activity) {
-    const char *files = activity->internalDataPath;
-    char path[1024];
-    if (files == NULL || (size_t)snprintf(path, sizeof path, "%s/ceesafe-program.lock", files) >= sizeof path) {
-        return;
-    }
-    (void)mkdir(files, 0700);
-    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        return;
-    }
-    struct flock lock;
-    memset(&lock, 0, sizeof lock);
-    lock.l_type = F_WRLCK;
-    lock.l_whence = SEEK_SET;
-    int result;
-    do {
-        result = fcntl(fd, F_SETLKW, &lock); /* the service's test holds it for a moment at most */
-    } while (result < 0 && errno == EINTR);
-    if (result < 0) {
-        (void)close(fd);
-    }
-}
-
 /* The library's entry, which a NativeActivity calls on its thread (ADR 0154 §2.1). */
 __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActivity *activity, void *saved,
                                                                      size_t saved_size) {
@@ -13490,7 +13462,6 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     }
     started = 1;
     cee_android_mark_running(activity);
-    cee_android_hold_presence(activity);
     if (pipe(cee_android_output) == 0) {
         setvbuf(stdout, NULL, _IOLBF, 0);
         setvbuf(stderr, NULL, _IONBF, 0);

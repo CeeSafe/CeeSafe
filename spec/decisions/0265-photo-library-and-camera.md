@@ -1,7 +1,8 @@
 # ADR 0265 — The photo library and the camera: picking photos and videos, and capturing them
 
-- Status: **Proposed** 2026-11-26, for Marivil's CeeUI port (phase 3: "pickers and camera"). Its questions for the
-  owner are §6.
+- Status: **Accepted** by the owner 2026-11-26, for Marivil's CeeUI port (phase 3: "pickers and camera"), with §6
+  answered: several at once, photos always JPEG, the storage permission on Android 7.1 to 9, and a capture **kept in
+  the gallery** (not the recommendation; §2 says how).
 - Scope: `lib/std/window.cee` (`MediaPicker`), `runtime/hosted/ceesafe_rt_window.c` (iOS and Android; the desktop's
   through `FileDialog`), `runtime/android/org/ceesafe/window/Picker.java`, type-system.md §26.13, `tools/window_check.py`;
   CeeUI's packer (`--camera`, `--microphone`). Follows ADR 0158 (file dialogs on phones), which left "the photo
@@ -27,11 +28,11 @@
     `NSMicrophoneUsageDescription` for a video, which records sound).
   - Android: `ACTION_IMAGE_CAPTURE` and `ACTION_VIDEO_CAPTURE`, which write to a `content://` URI the app gives
     (`EXTRA_OUTPUT`). A CeeSafe app has no Java of its own for a `FileProvider`; a pending item in `MediaStore` is
-    such a URI with no permission from Android 10, and is deleted once copied. If the app's manifest declares
+    such a URI with no permission from Android 10, and is the gallery's item once published. If the app's manifest declares
     `CAMERA` (for its own scanning, later), the intent is refused until that permission is granted.
 - **Not here**: making JPEG and scaling (a library's: CeeUI decodes JPEG with its EXIF orientation, nothing encodes
   it yet), video re-encoding and poster frames, the camera's frames for scanning, the share sheet and opening a file
-  in the system's viewer, saving to the gallery. Each is its own decision when the port reaches it.
+  in the system's viewer, saving a received photo to the gallery. Each is its own decision when the port reaches it.
 
 ## 2. Decision
 
@@ -47,7 +48,8 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 ```
 
 - **`pick`** shows the system's photo library with photos, videos or both, and lets the user choose up to `limit`
-  items (1: one); empty at a cancel. **`capture`** opens the camera for a photo or a video; null at a cancel.
+  items (1: one); empty at a cancel. **`capture`** opens the camera for a photo or a video; null at a cancel. A
+  capture is also **kept in the system's gallery** (§6.4), as the camera app's own photos are.
   **`canCapture`** says whether this device and system have a camera for it (false on a desktop, in a simulator).
 - **Modal, and copies**, as ADR 0158's dialogs: the call returns when the user has answered, with paths of files in
   the app's temporary folder that the program reads with `File` and may delete; events that come meanwhile are queued
@@ -61,22 +63,29 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 - **iOS**: `pick` is `PHPickerViewController` (a `PHPickerConfiguration` with the filter, `selectionLimit` and the
   compatible representation mode), each result's file copied with `loadFileRepresentationForTypeIdentifier:` (an
   item in iCloud only is downloaded then). `capture` is `UIImagePickerController` (camera, the photo or movie type):
-  a photo from its `UIImage` as JPEG at 0.9, a video from its media URL. Both presented by the window's controller as
+  a photo from its `UIImage` as JPEG at 0.9, a video from its media URL; then the photo or video is added to the
+  library (`UIImageWriteToSavedPhotosAlbum`, `UISaveVideoAtPathToSavedPhotosAlbum`; iOS asks once to add to Photos),
+  when the app's Info.plist has `NSPhotoLibraryAddUsageDescription` (without it iOS would end the app; the capture is
+  then the app's only). Both presented by the window's controller as
   the document picker is (ADR 0158 §2.4, its fix for a late second answer included).
 - **Android**: `Picker.java` gains the kinds. `pick`: `ACTION_PICK_IMAGES` where it exists (with
   `EXTRA_PICK_IMAGES_MAX` above 1, the image or video type), else `ACTION_GET_CONTENT` with `EXTRA_MIME_TYPES` and
   `EXTRA_ALLOW_MULTIPLE`; each URI copied to `cache/ceesafe-picked` as the documents are, a HEIF made JPEG through
-  `ImageDecoder` (API 28 and later). `capture`: a pending `MediaStore` item as `EXTRA_OUTPUT`, the result copied to
-  the cache and the item deleted; the `CAMERA` permission asked first when the app declares it.
+  `ImageDecoder` (API 28 and later). `capture`: a pending `MediaStore` item (in Pictures or Movies, under the app's
+  name) as `EXTRA_OUTPUT`; after the camera, the item is published (no longer pending), so it is in the gallery, and
+  copied to the cache for the program; at a cancel it is deleted. The `CAMERA` permission is asked first when the
+  app declares it; on Android 7.1 to 9 (API 25 to 28) `WRITE_EXTERNAL_STORAGE` is asked first (§2.3).
 - **Desktops**: `pick` is `FileDialog.openFiles` (or `openFile` for a limit of 1) with the photo and video
   extensions, so a desktop program picks the same way; `capture` is `Unsupported` and `canCapture` false.
 - **Scripted windows** (ADR 0146): `dialog:PATH|PATH…` answers `pick` and `capture` as it answers the file dialogs.
 
 ### 2.3 Building
 
-- CeeUI's packer: `--camera TEXT` (iOS's `NSCameraUsageDescription`) and `--microphone TEXT`
-  (`NSMicrophoneUsageDescription`, for video capture); a picker needs nothing. An app that captures without them is
-  ended by iOS at the first `capture`, so `capture` checks the Info.plist first and answers `Denied` instead.
+- CeeUI's packer: `--camera TEXT` (iOS's `NSCameraUsageDescription`; on Android, `WRITE_EXTERNAL_STORAGE` with
+  `maxSdkVersion="28"`), `--microphone TEXT` (`NSMicrophoneUsageDescription`, for video capture) and
+  `--save-photos TEXT` (`NSPhotoLibraryAddUsageDescription`, for keeping captures in Photos); a picker needs nothing.
+  An app that captures without the camera's text is ended by iOS at the first `capture`, so `capture` checks the
+  Info.plist first and answers `Denied` instead.
 
 ## 3. Consequences
 
@@ -85,7 +94,9 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 - A program gets JPEG for every photo, which CeeUI decodes; scaling and re-encoding remain the app's until a library
   does them (§1).
 - No permission dialog for picking on either system; capturing asks for the camera (and microphone) as the system
-  requires.
+  requires, and on iOS once to add to Photos.
+- A capture is in the user's gallery as well as the app's: a photo taken for a chat stays on the phone, as the camera
+  app's own do.
 
 ## 4. Options not taken
 
@@ -95,7 +106,8 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
   other clients may not either (MAUI's client converts too).
 - **The camera in-app** (AVFoundation, Camera2): a viewfinder of the app's own, needed for scanning and calls; a far
   larger piece, for its own ADR. The system's camera app is what MAUI uses for capture.
-- **A `FileProvider` in every APK** for the camera's output: Java in each app, which the `MediaStore` item avoids.
+- **A `FileProvider` in every APK** for the camera's output: Java in each app, which the `MediaStore` item avoids
+  (and the item is the gallery's copy the owner wants kept).
 
 ## 5. Tests (proposed)
 
@@ -107,12 +119,13 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 - The owner's iPhone: `pick` and `capture`, by his hands.
 - Marivil's port: a photo and a video sent from the library and from the camera, received by the MAUI app.
 
-## 6. Questions for the owner
+## 6. Questions for the owner (answered 2026-11-26)
 
 1. **Several at once**: `limit` lets the user choose several photos or videos (recommended: the systems offer it and
-   a chat sends several); MAUI's client picks one. Or one only?
+   a chat sends several); MAUI's client picks one. Or one only? *Several.*
 2. **Photos as JPEG** always (recommended, as MAUI's client does), or the original HEIC/HEIF where the system has one?
+   *Always JPEG.*
 3. **Android 7.1 to 9** (API 25 to 28), where a `MediaStore` item needs the storage permission: capture asks for
    `WRITE_EXTERNAL_STORAGE` there (recommended; declared up to API 28 only), or capture is `Unsupported` below
-   Android 10?
-4. **A captured photo or video in the gallery**: not kept (recommended, as MAUI's client), or kept?
+   Android 10? *Ask for it.*
+4. **A captured photo or video in the gallery**: not kept (recommended, as MAUI's client), or kept? *Kept.*

@@ -84,7 +84,8 @@ Done (2026-11-26):
 - Windows 11 x64 (the owner's laptop, MinGW-w64 gcc 16 with -Wall -Wextra -Werror): the runtime file with a harness
   calling `ceesafe_image_shrink` on image_check's fixtures, every case as on macOS (1200 by 1600, the green corner at
   the top right, no EXIF, 31 kB; the PNG 300 by 200; junk and a longest side of 0 InvalidInput; a missing file
-  NotFound).
+  NotFound). Then `tools/image_check.py` itself there, with the release branch's compiler built from its C seed by
+  that gcc and Pillow 13: 7 cases, 0 problems.
 - Not yet: a HEIC from the library.
 
 ## 6. Questions for the owner (answered 2026-11-26)

@@ -1,0 +1,54 @@
+// ADR 0252 §2.2.4, amended: a slice lent mutably of what a `SliceMut` field holds, `mut l.marks[0..n]`, is reserved
+// through that field, `l.marks`, not through all of `l`, so a later argument may lend another field of `l` mutably.
+// 0.95.10 accepted these calls (the slice's loan was made where it stood), and §5 says what was accepted stays so;
+// 0.95.13 to 0.95.15 refused them (N0241, "while 'l' is borrowed"), CeeUI's layout_engine.cee among them.
+struct Layout<region r> {
+    bytes: Vector<u8>;
+    marks: SliceMut<r, u8>;
+    scratch: SliceMut<r, u32>;
+}
+
+fn layoutOf<region r>(marks: SliceMut<r, u8>, scratch: SliceMut<r, u32>) -> Layout<r> =>
+    Layout { bytes: Vector<u8>.create(), marks: marks, scratch: scratch };
+
+fn mark(text: Slice<u8>, marks: SliceMut<u8>, scratch: SliceMut<u32>) -> bool {
+    for (i in 0..marks.length) {
+        marks[i] = text[i] + 1;
+        scratch[i] = text[i] as u32 * 10;
+    }
+    return true;
+}
+
+fn bump(n: borrow mut usize) -> usize {
+    n += 1;
+    return n;
+}
+
+struct Counter {
+    n: usize;
+}
+
+fn breaks(l: borrow mut Layout, c: borrow mut Counter) -> u32 {
+    // CeeUI's call: a shared slice of one field, a mutable slice of a second, the whole third lent mutably.
+    if (!mark(l.bytes[0..2], mut l.marks[0..2], mut l.scratch)) {
+        return 0;
+    }
+    // A later argument that calls and lends another place mutably: the slice is reserved, the call still compiles.
+    fill(mut l.marks[2..], bump(mut c.n));
+    return l.marks[0] as u32 + l.marks[1] as u32 + l.marks[2] as u32 + l.scratch[0] + l.scratch[1];
+}
+
+fn fill(s: SliceMut<u8>, n: usize) { s.fill(truncate<u8>(n)); }
+
+fn main() {
+    var marks = [0u8; 3];
+    var scratch = [0u32; 3];
+    var l = layoutOf(mut marks[..], mut scratch[..]);
+    l.bytes.push(4)!;
+    l.bytes.push(6)!;
+    var c = Counter { n: 1 };
+    Console.writeLine(breaks(mut l, mut c)); // 5 + 7 + 2 + 40 + 60
+    Console.writeLine(c.n);
+}
+// expect-stdout: 114
+// expect-stdout: 2

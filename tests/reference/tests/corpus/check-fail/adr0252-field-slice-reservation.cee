@@ -1,0 +1,29 @@
+// ADR 0252 §2.2.4, amended: a mutable slice of what a `SliceMut` field holds is reserved through that field. What
+// could change the field, or the struct holding it, still conflicts with the reservation; so does a second slice of it.
+// A call can write the field only by lending the struct (there are no references to references, N0246), so lending
+// all of `l`, by a function or a method, is how an argument would change `l.marks`.
+struct Layout<region r> {
+    marks: SliceMut<r, u8>;
+    scratch: SliceMut<r, u8>;
+    fn reset(borrow mut this) -> u8 => 0;
+}
+
+fn setAll(s: SliceMut<u8>, b: u8) { s.fill(b); }
+
+fn both(s: SliceMut<u8>, t: SliceMut<u8>) { s.fill(1); t.fill(2); }
+
+fn whole(l: borrow mut Layout) -> u8 => 0;
+
+fn lendsAllOfIt(l: borrow mut Layout) {
+    setAll(mut l.marks[0..1], whole(mut l)); // error[N0241]
+}
+
+fn callsAMethodOfIt(l: borrow mut Layout) {
+    setAll(mut l.marks[0..1], l.reset()); // error[N0241]
+}
+
+fn twiceTheSameField(l: borrow mut Layout) {
+    both(mut l.marks[0..1], mut l.marks[..]); // error[N0241]
+}
+
+fn main() {}

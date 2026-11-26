@@ -82,6 +82,14 @@ The rule is ADR 0073 §2.2's, applied to two more forms. It holds because each o
    v))`, `buf[0..2].fill(poke(mut buf))`) is N0241, so the loan made at the call is the slice that was checked. A
    receiver that is not sliced (`into`, `v` in `v.push`) keeps B5's rule: it is not reserved, and `copyFrom`'s length
    check is made at the call, after the loan, on the slice the loan gives.
+
+   *Amended 2026-11-26:* when the place is a slice's elements, the reservation is a loan of the reference they are
+   reached through, which is the place without its last dereference: `s` for `mut s[0..2]`, and the field `(*l).marks`
+   for `mut l.marks[0..2]` with `l: borrow mut L`. It is not a loan of the root variable `l`. 0.95.13 to 0.95.15 lent
+   all of `l`, so `f(mut l.marks[0..n], mut l.scratch)` was N0241 though 0.95.10 accepted it (CeeUI's
+   `layout_engine.cee`), against §5. A later argument that lends `l` (`whole(mut l)`, `l.reset()`), and so could
+   change `l.marks`, still conflicts. So does a second mutable slice of `l.marks` (check-fail
+   `adr0252-field-slice-reservation`, run-pass `adr0252-field-slice-reservation`).
 5. **Regions.** The loan is the same loan, of the same place and region, made later; it ends where it ended before
    (the call returns `void`, or the method's result is derived from it as before). Nothing a region bound or a result
    carries is changed, so §25's rules see the same loans.

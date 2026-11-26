@@ -4449,6 +4449,22 @@ fn fixedOperand(
     return readPlace(c, n, b, tempPlace);
 }
 
+/// The place a reservation of the unsized place `place` lends (ADR 0252 §2.2.4): the reference its elements are reached
+/// by, `place` without its last `Deref`; the variable it is reached from when it ends otherwise.
+fn unsizedGuard(n: borrow mut NirProgram, place: u32) -> Result<u32, AllocError> {
+    let p = n.places[place as usize];
+    if (p.projections.count > 0) {
+        let isDeref = match (n.projections[(p.projections.start + p.projections.count - 1) as usize].kind) {
+            ProjectionKind.Deref => true,
+            _ => false,
+        };
+        if (isDeref) {
+            return parentPlace(n, place);
+        }
+    }
+    return localPlace(n, p.local);
+}
+
 /// A call's operands with two-phase `mut` arguments (ADR 0073 §2.2, B5): each argument is evaluated where it stands,
 /// left to right, but a mutable borrow of a place (`mut p`, a `borrow mut this` receiver, a reborrowed `borrow mut`
 /// local) only has its place found there, its indexes copied and checked; its loan is made after the last argument.
@@ -4497,8 +4513,10 @@ fn lowerTwoPhaseOperands(
                     return Ok(false);
                 }
                 slice = fixedSlice(c, n, b, made)?;
+                // A slice's elements `(*s)` are reserved through the reference they are reached by: `s`, or the field
+                // `(*l).f` holding it, never more of what holds it, so a later `mut l.g` still compiles as before.
                 let lentType = placeType(c, n, b, place);
-                guard = if (c.types.isUnsized(lentType)) localPlace(n, n.places[place as usize].local)? else place;
+                guard = if (c.types.isUnsized(lentType)) unsizedGuard(n, place)? else place;
                 reserveSlice = true;
             }
             HirExpr.Reborrow(true, reference) => {

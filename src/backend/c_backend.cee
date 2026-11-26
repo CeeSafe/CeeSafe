@@ -231,6 +231,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_push_")) {
             out.push(runtimeFile(15, "")?)?; // push tokens (type-system.md §26.23, ADR 0244)
         }
+        if (containsBytes(mainText.view(), "ceesafe_image_")) {
+            out.push(runtimeFile(16, "")?)?; // making a photo smaller (type-system.md §26.24, ADR 0266)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

@@ -292,8 +292,8 @@ dependency of kind `executable` is N0321: only a library's items are used. Error
 syntax) and N0321 (a missing, unknown or invalid field), with the line.
 
 **Out of memory** (ADR 0261). `out-of-memory = "panic"` makes a call of the package's own whose type is
-`Result<T, AllocError>` a `T` that stops the program if the allocation fails, unless `?`, `!`, `let _ =` or an
-expected `Result` keeps it a `Result` (type-system.md §17.7). `"result"`, the default, is the rule everywhere else.
+`Result<T, AllocError>` a `T` that stops the program if the allocation fails, unless `?`, `!`, `let _ =`, an expected
+`Result`, a `match` or `is` on it, or a `Result` method keeps it a `Result` (type-system.md §17.7). `"result"`, the default, is the rule everywhere else.
 - It is the package's own: a dependency follows its own manifest, so a library's `v.push(x)` means the same whoever
   depends on it. A library or an object may say `"panic"`; it then stops its host when memory runs out.
 - `out-of-memory = "panic"` with `profile = "freestanding"`, and a value that is neither, are N0321 at the value. It
@@ -747,6 +747,7 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0204, N0200 | `Vec`, undeclared, as a type with arguments (`Vec<T>`, `Vec<T>.f()`), or `Vec.f()` where a vector is expected | `Vec` → `Vector` |
 | N0200 | `String.new()`, and `Vector<T>.new()` or `Vector.new()` where a vector is expected | `new` → `create` |
 | N0200 | `Box.new(x)` where a box is expected | `Box.create(x)!`, which panics when memory runs out, as Rust's does |
+| N0205 | in a package that says `out-of-memory = "panic"`, a `let` without a type that holds an unwrapped allocating call's value, used as a `Result` (a `match` on `Ok` or `Err`, `is Ok`/`is Err`, a `Result` method), or a `Result<void, AllocError>` it unwrapped to nothing (type-system.md §17.7, ADR 0261 §8) | insert `: Result<T, AllocError>` after the local's name, which keeps the call a `Result` |
 | N0205 | a `Result<T, AllocError>` where its `T` is expected, in an executable or files given alone, not a library or an object (ADR 0261 §2.4) | insert `!` after the value, which stops the program when memory runs out |
 | N0200 | `x.len()`, without arguments and not a statement by itself, on a vector, a `String`, a slice, an array or a `StringView` | `len()` → `length` |
 | N0100 | `::` (`grammar.md` §1.7), wherever it stands and whatever else the file has | `::` → `.`; before `<` (`f::<T>()`), remove it |

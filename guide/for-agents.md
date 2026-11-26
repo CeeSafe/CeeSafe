@@ -768,8 +768,9 @@ out-of-memory = "panic"
 ```
 
 Its own calls then need neither: `names.push(String.from("ada"));` stops the program with "out of memory" if a
-failure comes. `?`, `!`, `let _ =` and a declared `Result` type still keep a call's `Result`, so code written for
-either setting means the same in this one. A dependency follows its own manifest, and a library should keep the
+failure comes. `?`, `!`, `let _ =`, a declared `Result` type, a `match` or `is` on the call and a `Result` method
+(`v.push(x).isErr()`) still keep its `Result`. A `let r = make();` without a type holds the value, so a later
+`match (r)` on `Ok` and `Err` is N0205; `ceesafec fix` declares `r`'s `Result` type. A dependency follows its own manifest, and a library should keep the
 default, so that its callers decide. Files checked alone take `--out-of-memory=panic`. Code copied from such a
 package into one without the setting gets N0205 or N0402 at each call; `ceesafec fix` adds the `!` in an executable.
 

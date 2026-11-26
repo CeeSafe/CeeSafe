@@ -5,4 +5,9 @@ fn main() {
     let r = v.push(1);
     Console.writeLine(r.isOk());   // error[N0234]
     let s: i32 = String.from("a"); // error[N0205]
+    let made = Vector<i32>.withCapacity(2);
+    match (made) {                                // error[N0205]
+        Ok(w) => { Console.writeLine(w.length); } // error[N0200]
+        Err(_) => {}
+    }
 }

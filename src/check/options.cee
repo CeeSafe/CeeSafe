@@ -46,6 +46,87 @@ fn fallibleHint(c: borrow Checker, expected: u32) -> u32 {
     return if (stopsOnNoMemory(c)) expected else none();
 }
 
+/// The local that the expression `e` names (a bare name), or none.
+fn localNamedBy(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Name(name, typeArguments) => {
+            if (typeArguments.count != 0) {
+                return Ok(none());
+            }
+            match (c.lookup(c.front.ast.idents[name as usize].symbol)?) {
+                Entity.Local(local) => { return Ok(local); }
+                _ => { return Ok(none()); }
+            }
+        }
+        _ => { return Ok(none()); }
+    }
+}
+
+/// Whether a variant pattern `pattern` names `Ok` or `Err`, alone or as one of an or-pattern's alternatives.
+fn namesResultVariant(c: borrow Checker, pattern: u32) -> bool {
+    match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Variant(path, _, _) => {
+            if (path.parts.count != 1) {
+                return false;
+            }
+            let text = c.name(c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol);
+            return sameText(text, "Ok") || sameText(text, "Err");
+        }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (namesResultVariant(c, c.front.ast.at(alternatives, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        _ => { return false; }
+    }
+}
+
+/// N0205 where `local`, a `let` without a type, holds the value of an allocating call that ADR 0261 unwrapped, and
+/// the code uses it as a `Result` (a match or `is` on `Ok`/`Err`, a `Result` method). Whether it was reported.
+fn reportUnwrappedLocal(c: borrow mut Checker, local: u32, span: Span) -> Result<bool, AllocError> {
+    let note = match (c.unwrappedLocals.get(borrow Word { value: local as u64 })) {
+        Some(found) => found.value,
+        null => { return Ok(false); }
+    };
+    let name = c.hir.locals[local as usize].name;
+    reportUnwrappedResult(c, name, truncate<u32>(note >> 32), truncate<u32>(note & 0xFFFFFFFF), span)?;
+    return Ok(true);
+}
+
+/// The N0205 of reportUnwrappedLocal for the local named `name`, whose name ends at `nameEnd`, given the value of a
+/// call of type `resultType`: the sure fix declares that type, which keeps the call a `Result` (§2.2).
+fn reportUnwrappedResult(
+    c: borrow mut Checker,
+    name: u32,
+    resultType: u32,
+    nameEnd: u32,
+    span: Span,
+) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendQuotedName(mut message, c, name)?;
+    appendText(
+        mut message,
+        " holds the value of an allocating call, not its 'Result': its package says out-of-memory = \"panic\", which unwraps the call (ADR 0261); declare the type, ",
+    )?;
+    appendQuotedType(mut message, c, resultType)?;
+    appendText(mut message, ", to keep the 'Result'")?;
+    var title = Vector<u8>.create();
+    appendText(mut title, "declare the 'Result' type")?;
+    var text = Vector<u8>.create();
+    appendText(mut text, ": ")?;
+    appendBytes(mut text, c.typeName(resultType))?;
+    c.errorWithFix(typeMismatch(), span.start, span.end, message, title, nameEnd, nameEnd, text)?;
+    return Ok();
+}
+
+/// The methods of `Result<T, E>` (type-system.md §17.6): a call of one keeps its receiver a `Result` (ADR 0261 §2.2).
+fn isResultMethodName(name: Slice<u8>) -> bool =>
+    sameText(name, "isOk") || sameText(name, "isErr") || sameText(name, "ok") || sameText(name, "err") ||
+        sameText(name, "map") || sameText(name, "mapErr");
+
 /// A call `e` in a package that stops when memory runs out (ADR 0261 §2.2): checked as any call, then, if its type is
 /// `Result<T, AllocError>` and nothing keeps it a `Result` (`?`, `!`, `let _ =`, or an expected `Result`), unwrapped
 /// to `T`; the unwrap panics with "out of memory" (§2.3).
@@ -58,6 +139,19 @@ fn synthCallStoppingOnNoMemory(
     span: Span,
 ) -> Result<u32, AllocError> {
     let kept = c.keptCall == e || (expected != none() && isResultType(c, expected));
+    match (c.front.ast.exprs[callee as usize]) {
+        ExprNode.Member(target, member) => {
+            if (isResultMethodName(c.name(c.front.ast.idents[member as usize].symbol))) {
+                c.keptCall = unparenthesized(c, target); // `f().isErr()`: the receiver stays a `Result` (§2.2)
+                let local = localNamedBy(c, unparenthesized(c, target))?;
+                if (local != none() && reportUnwrappedLocal(c, local, c.front.ast.exprSpans[target as usize])?) {
+                    checkArgumentsLoosely(c, arguments)?;
+                    return c.errorResult(span.start, span.end);
+                }
+            }
+        }
+        _ => {}
+    }
     let value = synthCall(c, callee, arguments, expected, span)?;
     if (kept || c.isBottom(value)) {
         return Ok(value);
@@ -68,6 +162,8 @@ fn synthCallStoppingOnNoMemory(
     }
     let unwrapped = c.expr(HirExpr.Unwrap(value), resultOk(c, t), span.start, span.end)?;
     c.outOfMemoryUnwraps.put(Word { value: unwrapped as u64 }, Word { value: 0 })?;
+    c.outOfMemoryCount += 1;
+    c.lastOutOfMemoryResult = t;
     return Ok(unwrapped);
 }
 

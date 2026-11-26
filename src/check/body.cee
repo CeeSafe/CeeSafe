@@ -285,6 +285,7 @@ fn checkLocalDecl(
     }
     var initializer = none();
     var localType = if (declared == none()) c.types.error else declared;
+    let unwrapsBefore = c.outOfMemoryCount;
     if (initializerSyntax != none()) {
         initializer = checkExpr(c, initializerSyntax, declared)?;
         if (declared == none()) {
@@ -304,7 +305,13 @@ fn checkLocalDecl(
                 declareUnitBinding(c, name)?;
                 return Ok(statement);
             }
-            if (c.types.is(localType, TypeKind.Void)) {
+            if (c.types.is(localType, TypeKind.Void) && c.outOfMemoryCount != unwrapsBefore &&
+                c.types.is(resultOk(c, c.lastOutOfMemoryResult), TypeKind.Void)) {
+                // `let ok = if (b) f() else g();` of `Result<void, AllocError>` calls where a failure stops the program
+                // (ADR 0261 §2.2): the branches were unwrapped to nothing. Declaring the type keeps the `Result`.
+                reportUnwrappedResult(c, id.symbol, c.lastOutOfMemoryResult, id.end, initializerSpan)?;
+                localType = c.types.error;
+            } else if (c.types.is(localType, TypeKind.Void)) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "this expression has no value (its type is 'void')")?;
                 c.error(voidValue(), initializerSpan.start, initializerSpan.end, message)?;
@@ -355,6 +362,13 @@ fn checkLocalDecl(
     c.hir.locals[local as usize].cLocal = isCLocal;
     if (isLet) {
         c.letKeywords.push(LetKeyword { local: local, start: span.start })?;
+    }
+    if (declared == none() && c.outOfMemoryCount != unwrapsBefore &&
+        resultOk(c, c.lastOutOfMemoryResult) == localType) {
+        // `let r = create(n);` where a failure stops the program: `r` holds the value (ADR 0261 §2.2), noted so that
+        // using `r` as a `Result` says how to keep one (reportUnwrappedLocal).
+        let note = ((c.lastOutOfMemoryResult as u64) << 32) | (id.end as u64);
+        c.unwrappedLocals.put(Word { value: local as u64 }, Word { value: note })?;
     }
     c.bind(id.symbol, local)?;
     return c.hir.addStmt(HirStmt.LocalDecl(local, initializer), span.start, span.end);

@@ -135,7 +135,15 @@ fn checkPatternTest(
     span: Span,
 ) -> Result<u32, AllocError> {
     let boolType = c.types.boolType;
-    let scrutinee = synth(c, operandSyntax, none())?;
+    c.keptCall = unparenthesized(c, operandSyntax); // `is` keeps a call's `Result` (ADR 0261 §2.2)
+    var scrutinee = synth(c, operandSyntax, none())?;
+    if (stopsOnNoMemory(c) && !c.isBottom(scrutinee) && namesResultVariant(c, patternSyntax)) {
+        let local = localNamedBy(c, unparenthesized(c, operandSyntax))?;
+        let operandSpan = c.front.ast.exprSpans[operandSyntax as usize];
+        if (local != none() && reportUnwrappedLocal(c, local, operandSpan)?) {
+            scrutinee = c.errorResult(operandSpan.start, operandSpan.end)?; // `r is Ok(_)` with `r` the value
+        }
+    }
     let scrutineeType = c.typeOf(scrutinee);
     let reference = if (c.types.is(scrutineeType, TypeKind.Reference)) scrutineeType else none();
     let typ = if (reference != none()) c.types.info(reference).pointee else scrutineeType;

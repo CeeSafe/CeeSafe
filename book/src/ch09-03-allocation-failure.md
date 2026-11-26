@@ -142,9 +142,11 @@ fn main() {
 names: 2
 ```
 
-`?`, `!` and `let _ =` still mean what they mean everywhere, and so does a declared `Result` type:
-`let r: Result<Vector<u8>, AllocError> = Vector<u8>.withCapacity(n);` is the one allocation such a program can
-still survive. The setting is the package's own. A library it depends on follows its own `ceesafe.toml`, so a
+`?`, `!` and `let _ =` still mean what they mean everywhere, and so do a declared `Result` type, a `match` or `is`
+on the call, and a method of `Result` such as `v.push(x).isErr()`. So
+`let r: Result<Vector<u8>, AllocError> = Vector<u8>.withCapacity(n);`, or a `match` on the call itself, is how such
+a program still survives the allocation it means to. A `let r = …` without the type holds the value, not the
+`Result`. The setting is the package's own. A library it depends on follows its own `ceesafe.toml`, so a
 library's `v.push(x)` means the same whoever uses it, and a library should keep the default, to leave the decision
 to its callers. This book's listings keep the default, so that each compiles in any package.
 

@@ -3,7 +3,8 @@
 - Status: **Accepted** by the owner, 2026-11-26 ("Go ahead I accept your recommendation": §6's six questions as
   recommended). Proposed the same day at the owner's instruction ("Tackle 1": the first gap of `ceesafegaps.md`, the
   `!` or `?` after every call that allocates), in the direction the owner chose: a setting for a package's own code.
-  **Implemented** on the branch `adr/0261-out-of-memory` (§7), not released.
+  **Implemented** on the branch `adr/0261-out-of-memory` (§7), **released in 0.95.17**. **Amended** 2026-11-26 (§8),
+  at the owner's choice "Keep where used as Result", after CeeUI's packages failed to compile with the setting.
 - Scope: the manifest (tooling.md §4.1) and a command-line option (§12); type-system.md §17.4 and §17.5; the
   checker's typing of calls (`src/check/expr.cee`, `src/check/packages.cee`); the panic message (NIR, the C runtime,
   the interpreter); `--sweep alloc`'s counts (`src/host/test_runner.cee`); diagnostics.md N0262, N0321 and N0402; the
@@ -65,7 +66,11 @@ unless one of these keeps it a `Result`:
 1. it is the operand of `?` or `!` (`v.push(x)?`, `String.from(t)!`), which then mean what they mean today;
 2. its expected type is a `Result` (type-system.md §17.4's expected type): `let r: Result<Box<Big>, AllocError> =
    Box.create(b);`, a `return` in a function that returns one, an argument for a `Result` parameter;
-3. it is the operand of `let _ =`, which keeps today's meaning: the value is discarded, whatever it was.
+3. it is the operand of `let _ =`, which keeps today's meaning: the value is discarded, whatever it was;
+4. it is the scrutinee of a `match`, or the operand of `is` (amended, §8): `match (Ui.create(n)) { Ok(u) => …, Err(_)
+   => … }`, `if (finish(mut v) is Err(_))`;
+5. it is the receiver of a method of `Result` (type-system.md §17.6; amended, §8): `if (out.push(0).isErr())`,
+   `String.from(t).ok()`.
 
 ```ceesafe
 // out-of-memory = "panic"
@@ -85,7 +90,12 @@ fn main() {
 }
 ```
 
-So existing code means the same after the switch: every call it has is written with `?`, `!` or `let _ =`. A call
+Existing code that writes each call with `?`, `!` or `let _ =`, or uses it in one of rules 4 and 5, means the same after
+the switch. One form does not: a `Result` bound by a `let` without a type and used as a `Result` later (`let r =
+create(n); match (r) { … }`), whose local now holds the value. It is a compile error, not a change of meaning: N0205
+says so, and its sure fix declares the type (`let r: Result<Big, AllocError> = create(n);`), which keeps the call a
+`Result` by rule 2 (§8). (As released in 0.95.17, without rules 4 and 5, this paragraph said that all existing code
+means the same; it was wrong, §8.) A call
 whose error type is not `AllocError` (`Result<T, IoError>`, an enum with an `@from` variant for `AllocError`) is not
 affected: its error is the program's to handle.
 
@@ -192,3 +202,33 @@ marker, and they were stops already. A caller in a `"result"` package keeps gett
   which `tools/fault_injection.py` also builds with the option; `tools/package_tests.py` §47 (the field, a
   dependency's `Result`, the option both ways, N0321, no fix in a library); `tools/fix_kinds_check.py`'s new fix and
   its no-fix case.
+
+## 8. Amendment: a `Result` used as one is kept (2026-11-26)
+
+- **What was wrong.** §2.2 as released in 0.95.17 kept a `Result` only for `?`, `!`, `let _ =` and an expected
+  `Result`, and said that existing code would mean the same after the switch. It missed code that uses an allocating
+  call's `Result` as a value on purpose. clay-ea put `out-of-memory = "panic"` on CeeUI's 13 hosted packages (CeeUI
+  `877b8de`) and changed nothing else: `ceesafec check` gave 164 errors in 12 of them. The forms: a `match` on
+  `Ui.create(mem, cap)` with `Ok` and `Err` arms (`ceeui-hosts/gpu/src/main.cee:144`), on `String.withCapacity(n)`
+  (`ceeui-fonts/src/fonts.cee:130`) and on a `Result<void, AllocError>` (`ceeui-tests/tests/access_test.cee:44`);
+  `out.push(0).isErr()` (`ceeui-fonts/src/fonts.cee:70`); then N0364 in every dependent package. Each was a compile
+  error, not a silent change.
+- **The owner's choice** of three (keep the `Result` where it is used as one; unwrap only where the `Result` would be a
+  type mismatch; withdraw the setting): "Keep where used as Result". The rules 4 and 5 of §2.2.
+- **What still needs an edit**: a `Result` bound by a `let` without a type and used as one later. N0205 at the use
+  says that the local holds the value and why, and its sure fix (tooling.md §5.2) declares the local's `Result` type
+  at its name; for a `Result<void, AllocError>`, where the local would hold nothing, the N0205 is at the `let`.
+- **As built.** `Checker.keptCall` is set for a `match`'s scrutinee (`checkMatch`), an `is` test's operand
+  (`checkIsTest`) and the receiver of `isOk`, `isErr`, `ok`, `err`, `map` and `mapErr`
+  (`synthCallStoppingOnNoMemory`). A `let` without a type whose initializer added an implicit unwrap of the local's
+  type notes the local in `Checker.unwrappedLocals`, with the `Result` type and the end of its name; a `match` with an
+  `Ok` or `Err` arm, an `is Ok`/`is Err` and a `Result` method on that local report N0205 with the fix
+  (`reportUnwrappedLocal`), and a `let` of a `Result<void, AllocError>` unwrapped to nothing reports it in place of
+  N0224.
+- **Tested.** clay-ea's repro (six forms): 0.95.17 gave 11 errors; amended, one N0205 for the sixth (the `let`) and the
+  N0200 of its arm's binding, and after `ceesafec fix` none, with the output clay-ea gave for its `!` form (`4 ok 1
+  true 5 bare`). CeeUI at `877b8de` with clay-ea's manifest patch, in a worktree: the 13 packages check with no error
+  but one, `ceeui-tests/src/main.cee:479` (`let laidOut = if (…) t.endLayout(raster) else t.endLayout(measure);`, then
+  `match (laidOut)`), which the fix declares; then `ceesafec test` in `ceeui-tests`: 213 passed, 0 failed. Marivil's
+  tests, which need its server, were not run. The corpus's `out-of-memory-panic` tests have each form;
+  `tools/fix_kinds_check.py` has both fixes.

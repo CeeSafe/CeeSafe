@@ -4718,11 +4718,15 @@ Diagnostics: none new.
   runs its `main` on a thread of its own while the extension lives; `NotificationExtension.next(milliseconds)` is
   `Result<PushRequest?, PushError>`, the next push (`title`, `body`, `payload`: its `userInfo` as JSON) or null in
   the time; `NotificationExtension.deliver(request, title, body)` shows it so (an empty title keeps the push's); one
-  not delivered in iOS's time is shown as it came. Elsewhere `Unsupported`. `CEESAFE_PUSH_REQUEST=<file>` (title,
+  not delivered in iOS's time is shown as it came. On Android (ADR 0263) the extension is a program the APK's Firebase
+  service starts in a process of its own (`:push`) for a push while the app's program is not running (a lock the
+  program holds on `files/ceesafe-program.lock` says so), and hands it each push (`payload`: the data as JSON); one
+  not delivered within 8 seconds is shown as it came. Elsewhere `Unsupported`. `CEESAFE_PUSH_REQUEST=<file>` (title,
   body, payload on three lines) is one push instead, on every system, a delivery appended to
   `CEESAFE_NOTIFICATIONS_DUMP` as `deliver TITLE<TAB>BODY`.
 - **`AppGroup.folder(group)`**: `String?`, an App Group's folder on Apple's systems, which an app and its extensions
-  share; null where there is none.
+  share; on Android, which has no groups, the app's files folder, which its processes share (ADR 0263); null where
+  there is none.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 

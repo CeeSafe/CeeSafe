@@ -15,7 +15,9 @@
  * the extension (its title NUL body NUL payload JSON) and ceesafe_push_extension_deliver shows it rewritten; the window
  * runtime does the work (ceesafe_ios_push_extension_*, weak here). CEESAFE_PUSH_REQUEST=<file> is one push instead, on
  * every system (its title, body and payload JSON on three lines), and a delivery appends `deliver TITLE<TAB>BODY` to
- * CEESAFE_NOTIFICATIONS_DUMP. ceesafe_push_group_folder is an App Group's folder (Apple's systems), else -2.
+ * CEESAFE_NOTIFICATIONS_DUMP. ceesafe_push_group_folder is an App Group's folder (Apple's systems), the app's files
+ * folder on Android (ADR 0263), else -2. On Android the extension is the program the APK's Firebase service starts in
+ * its own process (ceesafe_android_push_extension_*, the window runtime's, weak here).
  */
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS /* getenv */
@@ -35,6 +37,9 @@ int64_t ceesafe_push_extension_next(uint32_t milliseconds, uint8_t *out, uint64_
 int32_t ceesafe_push_extension_deliver(uint64_t id, const uint8_t *title, uint64_t title_length, const uint8_t *body,
                                        uint64_t body_length);
 int64_t ceesafe_push_group_folder(const uint8_t *group, uint64_t group_length, uint8_t *out, uint64_t capacity);
+#if defined(__ANDROID__)
+int64_t ceesafe_host_android_files(uint8_t *out, uint64_t capacity); /* ceesafe_rt_io.c */
+#endif
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -91,7 +96,7 @@ static int64_t cee_push_system(char *out, size_t capacity) {
         jobject activity = NULL;
         jclass push = ceesafe_android_push(env, &activity);
         jmethodID m = push != NULL ? (*env)->GetStaticMethodID(env, push, "token",
-                                                               "(Landroid/app/Activity;)Ljava/lang/String;")
+                                                               "(Landroid/content/Context;)Ljava/lang/String;")
                                    : NULL;
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
@@ -125,13 +130,32 @@ static int64_t cee_push_system(char *out, size_t capacity) {
     }
     return result;
 }
+
+/* A notification extension (ADR 0263): the program the APK's Firebase service started in its own process; the window
+   runtime keeps the pushes the service hands over (weak here, as on iOS). */
+int64_t ceesafe_android_push_extension_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id)
+    __attribute__((weak));
+int32_t ceesafe_android_push_extension_deliver(uint64_t id, const uint8_t *title, uint64_t title_length,
+                                               const uint8_t *body, uint64_t body_length) __attribute__((weak));
+
+static int64_t cee_push_system_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id) {
+    return ceesafe_android_push_extension_next != NULL
+               ? ceesafe_android_push_extension_next(milliseconds, out, capacity, id)
+               : CEE_PUSH_UNSUPPORTED;
+}
+
+static int32_t cee_push_system_deliver(uint64_t id, const uint8_t *title, uint64_t title_length, const uint8_t *body,
+                                       uint64_t body_length) {
+    return ceesafe_android_push_extension_deliver != NULL
+               ? ceesafe_android_push_extension_deliver(id, title, title_length, body, body_length)
+               : CEE_PUSH_UNSUPPORTED;
+}
 #else
 static int64_t cee_push_system(char *out, size_t capacity) {
     (void)out;
     (void)capacity;
     return CEE_PUSH_UNSUPPORTED;
 }
-#endif
 
 static int64_t cee_push_system_next(uint32_t milliseconds, uint8_t *out, uint64_t capacity, uint64_t *id) {
     (void)milliseconds;
@@ -150,6 +174,7 @@ static int32_t cee_push_system_deliver(uint64_t id, const uint8_t *title, uint64
     (void)body_length;
     return CEE_PUSH_UNSUPPORTED;
 }
+#endif
 #endif
 
 /* ---- CEESAFE_PUSH_REQUEST: one push from a file, for tests ---- */
@@ -285,6 +310,11 @@ int64_t ceesafe_push_group_folder(const uint8_t *group, uint64_t group_length, u
     name[group_length] = 0;
 #if defined(__APPLE__)
     return cee_push_apple_group(name, out, capacity);
+#elif defined(__ANDROID__)
+    /* Android has no groups: the app's processes (its program and a notification extension's, ADR 0263 §2.5) share
+       its files folder, which stands for any group. */
+    (void)name;
+    return ceesafe_host_android_files(out, capacity);
 #else
     (void)out;
     (void)capacity;

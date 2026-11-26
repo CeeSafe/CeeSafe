@@ -3797,8 +3797,9 @@ static int64_t ceesafe_host_copy_out(const char *text, uint8_t *buffer, uint64_t
 
 #if defined(__ANDROID__)
 /* An Android app's own folder: "/data/data/<package>" then `leaf` ("/cache", "/files"), the package being the
-   process's name (/proc/self/cmdline's first string). False for a process that is not an app's (a program run from a
-   shell, a service's process named with ':') or a path that does not fit. */
+   process's name (/proc/self/cmdline's first string) up to a ':', which names another process of the same app (a
+   notification extension's ":push", ADR 0263). False for a process that is not an app's (a program run from a shell)
+   or a path that does not fit. */
 static bool cee_android_folder(const char *leaf, char *out, size_t capacity) {
     char package[256];
     int command = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
@@ -3806,6 +3807,8 @@ static bool cee_android_folder(const char *leaf, char *out, size_t capacity) {
     if (command >= 0) (void)close(command);
     if (read_count <= 0) return false;
     package[read_count] = 0; /* the first string ends at its own zero byte */
+    char *colon = strchr(package, ':');
+    if (colon != NULL) *colon = 0; /* another process of the app: its package */
     size_t length = strlen(package);
     if (length == 0u || 11u + length + strlen(leaf) + 1u > capacity) return false;
     for (size_t k = 0; k < length; k++) {
@@ -3818,6 +3821,17 @@ static bool cee_android_folder(const char *leaf, char *out, size_t capacity) {
     memcpy(out + 11u, package, length);
     memcpy(out + 11u + length, leaf, strlen(leaf) + 1u);
     return true;
+}
+
+/* The app's files folder, for ceesafe_rt_push.c (an App Group's folder on Android, ADR 0263 §2.5): its length, or -2
+   for a process that is not an app's, -6 when it does not fit. */
+int64_t ceesafe_host_android_files(uint8_t *out, uint64_t capacity);
+
+int64_t ceesafe_host_android_files(uint8_t *out, uint64_t capacity) {
+    char path[512];
+    if (!cee_android_folder("/files", path, sizeof path)) return -2;
+    int64_t n = ceesafe_host_copy_out(path, out, capacity);
+    return n < 0 ? -6 : n;
 }
 #endif
 

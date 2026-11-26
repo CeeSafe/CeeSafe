@@ -1688,3 +1688,69 @@ public struct MediaPicker {
             e == "webp".bytes() || e == "heic".bytes() || e == "heif".bytes();
     }
 }
+
+/// The system's share sheet (§26.13, ADR 0268): another app takes the program's files and text. On iOS the share sheet
+/// (UIActivityViewController), on Android the chooser for a send, each file handed as a `content:` URI of the app's
+/// provider with a grant to read it (the packer declares `org.ceesafe.Files`), on macOS the sharing picker beside the
+/// window. Windows, Linux and FreeBSD have no share sheet: `Unsupported`.
+///
+/// ```
+/// ShareSheet.share(mut window, ["photo.jpg"][0..1], "")?;
+/// ```
+public struct ShareSheet {
+    /// Offers the files at `paths` and `text` (either may be empty, not both) to the other apps; returns when the sheet
+    /// is closed on iOS, at once where the system does not say. Whether the user shared is not answered. `Unsupported`
+    /// with nothing to share or a path holding a line break; `Resources` when a file is not there or the system
+    /// refused.
+    public fn share(window: borrow mut Window, paths: Slice<StringView>, text: StringView) -> Result<void, WindowError> {
+        if (paths.length == 0 && text.length == 0) {
+            return Err(WindowError.Unsupported);
+        }
+        var joined = String.create();
+        for (k in 0..paths.length) {
+            let path = paths[k];
+            if (path.length == 0 || path.contains("\n")) {
+                return Err(WindowError.Unsupported);
+            }
+            if ((k > 0 && joined.append("\n") is Err(_)) || joined.append(path) is Err(_)) {
+                return Err(WindowError.Resources);
+            }
+        }
+        var answer = Vector<String>.create();
+        return FileDialog.run(window, 8, text, "", joined.view(), mut answer);
+    }
+}
+
+/// Opening a file or a link with the system (§26.13, ADR 0268): the app the system has for it. iOS previews a file
+/// (UIDocumentInteractionController) or offers the apps that open it, and opens a link with UIApplication; Android
+/// views either (a file as a `content:` URI of the app's provider, as ShareSheet hands it); macOS NSWorkspace, Windows
+/// ShellExecuteW, Linux and FreeBSD `xdg-open`.
+///
+/// ```
+/// Launcher.openFile(mut window, "report.pdf")?;
+/// Launcher.openLink(mut window, "https://example.com")?;
+/// ```
+public struct Launcher {
+    /// Opens the file at `path` in the system's app for its type; returns once it is handed over (on iOS when the
+    /// preview is closed). `Unsupported` when no app opens it; `Resources` when it is not there or the system refused.
+    public fn openFile(window: borrow mut Window, path: StringView) -> Result<void, WindowError> {
+        if (path.length == 0 || path.contains("\n")) {
+            return Err(WindowError.Unsupported);
+        }
+        var answer = Vector<String>.create();
+        return FileDialog.run(window, 9, "", path, "", mut answer);
+    }
+
+    /// Opens `url` in the system's app for it (the browser, mail, the phone), once handed over. Only `http:`, `https:`,
+    /// `mailto:` and `tel:` links are opened: any other scheme (`file:`, an app's own) is `Unsupported`, so that a link
+    /// from a message neither opens the app's files nor starts another app by its scheme.
+    public fn openLink(window: borrow mut Window, url: StringView) -> Result<void, WindowError> {
+        let allowed = url.startsWithIgnoreAsciiCase("https://") || url.startsWithIgnoreAsciiCase("http://") ||
+            url.startsWithIgnoreAsciiCase("mailto:") || url.startsWithIgnoreAsciiCase("tel:");
+        if (!allowed || url.contains("\n") || url.contains(" ")) {
+            return Err(WindowError.Unsupported);
+        }
+        var answer = Vector<String>.create();
+        return FileDialog.run(window, 10, "", url, "", mut answer);
+    }
+}

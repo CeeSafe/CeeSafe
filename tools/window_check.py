@@ -83,6 +83,10 @@ that opened a window would open one on the developer's screen:
    answer, one item for a limit of 1 and several above it, each a photo or a video by its extension (a HEIC is a
    photo), none at a cancel; capture takes one, null at a cancel; asking for neither photos nor videos is
    Unsupported; canCapture is false on a desktop.
+17. sharing and opening (ADR 0268): on a scripted window ShareSheet.share, Launcher.openFile and Launcher.openLink each
+   take their script's `dialog` answer and are Ok; the library refuses, without the runtime, a share of nothing, a
+   path holding a line break, an empty path, and a link whose scheme is not http, https, mailto or tel (file:,
+   javascript:, an app's own), each Unsupported.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1881,6 +1885,38 @@ fn main() -> i32 {
         Err(_) => { Console.writeLine("capture error"); }
     }
     Console.writeLine(if (MediaPicker.canCapture(MediaKind.Photo)) "can capture" else "no camera");
+    return 0;
+}
+"""
+
+# Sharing and opening (ADR 0268): three answered calls, then refusals the library makes before the runtime (a call
+# that reached it would take no answer and be Ok).
+SHARE = r"""
+fn show(what: StringView, r: Result<void, WindowError>) {
+    Console.write(what);
+    Console.writeLine(match (r) {
+        Ok() => " ok",
+        Err(WindowError.Unsupported) => " Unsupported",
+        Err(_) => " another error",
+    });
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check share", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    show("share", ShareSheet.share(mut window, ["/s/a.jpg", "/s/b.pdf"][0..2], "look"));
+    show("file", Launcher.openFile(mut window, "/s/b.pdf"));
+    show("link", Launcher.openLink(mut window, "HTTPS://example.com/a?b=c"));
+    show("nothing", ShareSheet.share(mut window, [""][0..0], ""));
+    show("line break", ShareSheet.share(mut window, ["/s/a\nb.jpg"][0..1], ""));
+    show("empty path", Launcher.openFile(mut window, ""));
+    show("file link", Launcher.openLink(mut window, "file:///etc/passwd"));
+    show("script link", Launcher.openLink(mut window, "javascript:alert(1)"));
+    show("app link", Launcher.openLink(mut window, "intent://x#Intent;end"));
+    show("spaced link", Launcher.openLink(mut window, "https://a b"));
+    show("mail", Launcher.openLink(mut window, "mailto:someone@example.com"));
     return 0;
 }
 """
@@ -4047,6 +4083,19 @@ def main():
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +
                             r.stderr)
 
+        _, share = build(compiler, SHARE, work, "window_check_share")
+        share_script = os.path.join(work, "share_script.txt")
+        with open(share_script, "w", encoding="utf-8") as f:
+            f.write("0:dialog;0:dialog;0:dialog")
+        r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
+        want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
+                "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
+                "spaced link Unsupported", "mail ok"]
+        if r.returncode != 0 or r.stdout.splitlines() != want:
+            problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
+                            f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +
+                            r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -4058,7 +4107,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 5 + 1 + 1 + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 5 + 1 + 1 + 1 + 8)
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1

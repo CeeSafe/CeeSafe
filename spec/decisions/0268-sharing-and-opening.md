@@ -72,6 +72,18 @@ Launcher.openLink(mut window, "https://example.com")?;      // the browser (http
 - The Moto and the owner's iPhone in Marivil's port: a photo shared to another app, a PDF opened, a link opened.
 - macOS: a file and a link opened, the sharing picker shown; Windows (the laptop): a file and a link opened.
 
+Done (2026-11-27):
+- `tools/window_check.py`: 70 checks, 0 problems (sharing and opening: the three answered, and eight refusals the
+  library makes before the runtime). The window runtime compiles with `-Wall -Wextra -Werror` for macOS, iOS
+  (arm64), Android (aarch64), Linux (gcc 14 and clang 19, Debian 13) and Windows (MinGW-w64 gcc 16, x64).
+- The owner's Moto (Android 15), in Marivil's port with CeeUI's packer declaring `org.ceesafe.Files`: a chosen photo's
+  Open started Google Photos with `content://com.murshisoft.marivil.ceeui.ceesafe.files/…` as `image/jpeg`, which
+  showed it; Share opened the system's sheet, "Sharing image", its preview read through the provider (no app was
+  chosen, so nothing was sent).
+- macOS (arm64): `Launcher.openFile` opened a text file in TextEdit; a file not there was `Resources`.
+- Not yet: the iPhone (the share sheet, a preview, a link), a link on Android and macOS, Windows' and Linux's opening on
+  a desktop, macOS's sharing picker.
+
 ## 6. Questions for the owner (answered 2026-11-27)
 
 1. **Scope**: files and links (recommended), or files only? *Files and links.*

@@ -136,7 +136,9 @@ Done (2026-11-26):
   He found the camera's photo slow to reach the chat: a full-size photo is uploaded before the message exists, and
   its bubble decodes all 12 megapixels (about 470 ms on an M-series Mac, longer on a phone) — the making smaller that
   §1 left for later.
-- Not yet: the iOS simulator; several items at once; a HEIF photo on Android; Android
+- The Moto again (20:11): two photos chosen at once in the photo picker came as two copies and were sent as two
+  messages.
+- Not yet: the iOS simulator; several items at once on the iPhone; a HEIF photo on Android; Android
   before 13 (the content chooser); the storage permission on Android 7.1 to 9.
 
 ## 6. Questions for the owner (answered 2026-11-26)

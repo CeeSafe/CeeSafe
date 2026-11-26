@@ -328,8 +328,9 @@ public final class Picker extends Fragment {
             values.put(MediaStore.MediaColumns.DISPLAY_NAME, file);
             values.put(MediaStore.MediaColumns.MIME_TYPE, photo ? "image/jpeg" : "video/mp4");
             if (Build.VERSION.SDK_INT >= 29) {
+                // Not pending: only the item's owner may write a pending one, and the camera's app writes this one
+                // (found on the Moto: the camera's app ended at its confirm). It is deleted again at a cancel.
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH, folder + "/" + label);
-                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
             } else {
                 File where = new File(Environment.getExternalStoragePublicDirectory(folder), label);
                 where.mkdirs();
@@ -356,7 +357,7 @@ public final class Picker extends Fragment {
         }
     }
 
-    /** The camera's answer: the gallery's item published and copied to the cache, or deleted at a cancel. */
+    /** The camera's answer: the gallery's item, now holding the capture, copied to the cache; or deleted at a cancel. */
     private void captured(final Activity activity, final boolean taken, final Intent data) {
         final Uri item = capturing;
         capturing = null;
@@ -378,11 +379,6 @@ public final class Picker extends Fragment {
                         resolver.delete(item, null, null);
                         nativePicked(CANCELLED, null);
                         return;
-                    }
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        ContentValues published = new ContentValues();
-                        published.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                        resolver.update(item, published, null, null);
                     }
                     if (!from.equals(item)) {
                         resolver.delete(item, null, null);

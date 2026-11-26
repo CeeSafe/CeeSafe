@@ -4748,12 +4748,13 @@ Diagnostics: none new.
   applied to the pixels), scaled so its longest side is at most `longest` pixels and never enlarged, written to `to`
   as a JPEG at `quality` (0 to 1, in thousandths) with none of its metadata. A `PhotoSize` is the result's `w` and
   `h`.
-- **Errors**: `Unsupported` where CeeSafe uses no codec of the system's (Linux, FreeBSD, Windows for now, a program
-  on Android with no window, `ceesafec run --interp`); `NotFound` for a `from` that is not there; `InvalidInput` for
+- **Errors**: `Unsupported` where CeeSafe uses no codec of the system's (Linux, FreeBSD, a program on Android with no
+  window, `ceesafec run --interp`); `NotFound` for a `from` that is not there; `InvalidInput` for
   a file that is no photo the system reads, or `longest` of 0; `Other(5)` when the JPEG could not be written.
 - **Systems**: macOS and iOS, ImageIO (`CGImageSourceCreateThumbnailAtIndex` with the transform, decoding no more than
   it needs; `CGImageDestination`), loaded with dlopen; Android, `org.ceesafe.window.Photos` in the runtime's dex
-  (`BitmapFactory` at a power-of-two fraction, `ExifInterface`'s orientation, `Bitmap.compress`). The runtime file is
+  (`BitmapFactory` at a power-of-two fraction, `ExifInterface`'s orientation, `Bitmap.compress`); Windows, WIC through
+  COM (its scaler, flip-rotator from the EXIF orientation, and JPEG encoder), ole32.dll loaded at first use. The runtime file is
   `ceesafe_rt_image.c`, linked into a program that calls it.
 
 ## 27. Raw pointers and `unsafe` (M8a)

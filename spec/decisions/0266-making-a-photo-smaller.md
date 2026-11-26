@@ -5,7 +5,8 @@
   camera's photo slow to reach the chat ("I felt slow in loading from camera to chat window"). Implemented the same
   day (§7).
 - Scope: `lib/std/photo.cee` (new: `PhotoFile`, `PhotoSize`), `runtime/hosted/ceesafe_rt_image.c` (new: ImageIO on
-  Apple's systems, the Android runtime's dex through JNI), `runtime/android/org/ceesafe/window/Photos.java` (new), the
+  Apple's systems, the Android runtime's dex through JNI,
+  WIC on Windows), `runtime/android/org/ceesafe/window/Photos.java` (new), the
   backend's choice of runtime files, `tools/gen_runtime.py`, `tools/gen_android_dex.py`, the interpreter,
   type-system.md §26.24, `spec/api/std.md`, `tools/image_check.py` (new; contract step `image`).
 
@@ -41,7 +42,8 @@ PhotoFile.shrink(from: "IMG_0042.jpg", to: "photo.jpg", longest: 1600, quality: 
   not there, `InvalidInput` for one it cannot read as a photo (`IoError` has no `InvalidData`).
 - A thumbnail is the same call with other numbers (MAUI's 640 at 0.6).
 - **Systems**: ImageIO on macOS and iOS; on Android a runtime class (`Photos`, in the embedded dex) through JNI;
-  Windows through WIC (later, as ADR 0146's dialogs came); Linux, FreeBSD and `ceesafec run --interp`:
+  Windows through WIC (ole32.dll loaded at first use, as ADR 0146's dialogs do); Linux, FreeBSD and
+  `ceesafec run --interp`:
   `Unsupported`, and a program sends the photo as it is.
 - **Marivil's port**: a photo picked or captured is shrunk to MAUI's numbers before it is staged; the original stays
   the user's (in the gallery or the library); a GIF is sent as it is (it may move).
@@ -79,7 +81,11 @@ Done (2026-11-26):
   phone offline was in the chat at once, upright, "sending…" (the 2.9 MB original in the gallery); the phone was
   restarted to reach Wi-Fi, and when Marivil started again its upload went at once (the server's log at 19:50:25)
   and the message became "sent" (the port's staged message, retried on reconnecting).
-- Not yet: a HEIC from the library, Windows.
+- Windows 11 x64 (the owner's laptop, MinGW-w64 gcc 16 with -Wall -Wextra -Werror): the runtime file with a harness
+  calling `ceesafe_image_shrink` on image_check's fixtures, every case as on macOS (1200 by 1600, the green corner at
+  the top right, no EXIF, 31 kB; the PNG 300 by 200; junk and a longest side of 0 InvalidInput; a missing file
+  NotFound).
+- Not yet: a HEIC from the library.
 
 ## 6. Questions for the owner (answered 2026-11-26)
 
@@ -97,6 +103,10 @@ Done (2026-11-26):
   destination's lossy quality, no properties); on Android `Photos.shrink` through the window runtime's VM and class
   loader (`ceesafe_android_photos`, weak), its paths as standard UTF-8 where the window runtime converts them.
 - `runtime/android/org/ceesafe/window/Photos.java` (new), in the dex.
+- Windows: WIC through COM, ole32.dll loaded at first use (`CoInitializeEx` multithreaded, or the thread's own
+  apartment), the GUIDs written in the runtime: the frame scaled by WIC's scaler (Fant), turned by its flip-rotator
+  from the EXIF orientation (the metadata query reader's `/app1/ifd/{ushort=274}`), converted to 24-bit BGR, and
+  written by the JPEG encoder at `ImageQuality`, with no metadata.
 - The interpreter answers `Unsupported`.
 - Marivil's port: a photo picked or captured is made 1600 pixels at 0.82 in a folder of its own in the temporary
   folder, under its own name with `.jpg`, then sent; a GIF, a video, and a photo where `shrink` fails go as they are.

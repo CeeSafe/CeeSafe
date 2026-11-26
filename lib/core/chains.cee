@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
-// lib/core: iterator chains (ADR 0264): `s.iter()`, `s.values()` and `Chain.of(it)`, the adapters and the consumers.
+// lib/core: iterator chains (ADR 0264): `s.iter()`, `s.values()` and `Chain.of(it)`, the adapters and the consumers;
+// `Number<T>`, for `sum`, `min` and `max` (ADR 0269).
 // Bundled with ceesafec and part of every package.
 
 /// An iterator's values, with the adapters that make another chain of them and the consumers that run it (ADR 0264).
@@ -133,6 +134,138 @@ impl<T: Copy, I: Iterator<T>> Chain<T, I> {
         }
         return null;
     }
+}
+
+/// The consumers that add and compare the values (ADR 0269): the values are numbers, or a program's own type that is
+/// a `Number<T>`.
+impl<T: Number<T> + Copy, I: Iterator<T>> Chain<T, I> {
+    /// The values added, left to right, from zero: `zero()` for an empty chain. An integer sum that overflows panics,
+    /// as `+` does.
+    public fn sum(this) -> T {
+        var total = T.zero();
+        var it = this.inner;
+        for (x in it) {
+            total = total.plus(x);
+        }
+        return total;
+    }
+
+    /// The first of the smallest values, or null for an empty chain.
+    public fn min(this) -> T? {
+        var best: T? = null;
+        var it = this.inner;
+        for (x in it) {
+            let better = match (best) {
+                Some(b) => x.less(b),
+                null => true,
+            };
+            if (better) {
+                best = x;
+            }
+        }
+        return best;
+    }
+
+    /// The first of the largest values, or null for an empty chain.
+    public fn max(this) -> T? {
+        var best: T? = null;
+        var it = this.inner;
+        for (x in it) {
+            let better = match (best) {
+                Some(b) => b.less(x),
+                null => true,
+            };
+            if (better) {
+                best = x;
+            }
+        }
+        return best;
+    }
+}
+
+/// What `sum`, `min` and `max` need of a chain's values (ADR 0269): lib/core's number types are numbers, and a
+/// program may make a type of its own one.
+public interface Number<T> {
+    /// Zero: what the sum of no values is.
+    fn zero() -> T;
+
+    /// `this + other`; for an integer, a sum that overflows panics, as `+` does.
+    fn plus(this, other: T) -> T;
+
+    /// `this < other`; for a float, IEEE's, so a NaN is less than nothing and nothing is less than a NaN.
+    fn less(this, other: T) -> bool;
+}
+
+impl Number<i8> for i8 {
+    fn zero() -> i8 => 0;
+    fn plus(this, other: i8) -> i8 => this + other;
+    fn less(this, other: i8) -> bool => this < other;
+}
+
+impl Number<i16> for i16 {
+    fn zero() -> i16 => 0;
+    fn plus(this, other: i16) -> i16 => this + other;
+    fn less(this, other: i16) -> bool => this < other;
+}
+
+impl Number<i32> for i32 {
+    fn zero() -> i32 => 0;
+    fn plus(this, other: i32) -> i32 => this + other;
+    fn less(this, other: i32) -> bool => this < other;
+}
+
+impl Number<i64> for i64 {
+    fn zero() -> i64 => 0;
+    fn plus(this, other: i64) -> i64 => this + other;
+    fn less(this, other: i64) -> bool => this < other;
+}
+
+impl Number<isize> for isize {
+    fn zero() -> isize => 0;
+    fn plus(this, other: isize) -> isize => this + other;
+    fn less(this, other: isize) -> bool => this < other;
+}
+
+impl Number<u8> for u8 {
+    fn zero() -> u8 => 0;
+    fn plus(this, other: u8) -> u8 => this + other;
+    fn less(this, other: u8) -> bool => this < other;
+}
+
+impl Number<u16> for u16 {
+    fn zero() -> u16 => 0;
+    fn plus(this, other: u16) -> u16 => this + other;
+    fn less(this, other: u16) -> bool => this < other;
+}
+
+impl Number<u32> for u32 {
+    fn zero() -> u32 => 0;
+    fn plus(this, other: u32) -> u32 => this + other;
+    fn less(this, other: u32) -> bool => this < other;
+}
+
+impl Number<u64> for u64 {
+    fn zero() -> u64 => 0;
+    fn plus(this, other: u64) -> u64 => this + other;
+    fn less(this, other: u64) -> bool => this < other;
+}
+
+impl Number<usize> for usize {
+    fn zero() -> usize => 0;
+    fn plus(this, other: usize) -> usize => this + other;
+    fn less(this, other: usize) -> bool => this < other;
+}
+
+impl Number<f32> for f32 {
+    fn zero() -> f32 => 0.0;
+    fn plus(this, other: f32) -> f32 => this + other;
+    fn less(this, other: f32) -> bool => this < other;
+}
+
+impl Number<f64> for f64 {
+    fn zero() -> f64 => 0.0;
+    fn plus(this, other: f64) -> f64 => this + other;
+    fn less(this, other: f64) -> bool => this < other;
 }
 
 /// A value and its position in a chain (`enumerate`).

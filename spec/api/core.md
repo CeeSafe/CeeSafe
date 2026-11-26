@@ -35,6 +35,7 @@
 - [struct CellRefMut](#struct-cellrefmut)
 - [struct OnceCell](#struct-oncecell)
 - [struct Chain](#struct-chain)
+- [interface Number](#interface-number)
 - [struct Indexed](#struct-indexed)
 - [struct Paired](#struct-paired)
 - [struct Mapped](#struct-mapped)
@@ -2677,7 +2678,45 @@ public fn position(this, test: borrow mut fn(T) -> bool) -> usize?
 
 The position of the first value that passes `test`, or null.
 
+### Chain.sum
+
+```ceesafe
+public fn sum(this) -> T
+```
+
+The values added, left to right, from zero: `zero()` for an empty chain. An integer sum that overflows panics,
+as `+` does.
+
+### Chain.min
+
+```ceesafe
+public fn min(this) -> T?
+```
+
+The first of the smallest values, or null for an empty chain.
+
+### Chain.max
+
+```ceesafe
+public fn max(this) -> T?
+```
+
+The first of the largest values, or null for an empty chain.
+
 Implements `Iterator<T>`.
+
+## interface Number
+
+```ceesafe
+public interface Number<T> {
+    fn zero() -> T;
+    fn plus(this, other: T) -> T;
+    fn less(this, other: T) -> bool;
+}
+```
+
+What `sum`, `min` and `max` need of a chain's values (ADR 0269): lib/core's number types are numbers, and a
+program may make a type of its own one.
 
 ## struct Indexed
 

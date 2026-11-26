@@ -115,7 +115,8 @@ so it lives in the statement or the block that makes it, as a loop over the same
 | `forEach(f)` | `void` |
 
 No `sum`, `min` or `max`: a generic `T` has no `+` or `<` (no numeric interface); `fold` does them
-(`fold(0, (a, x) => a + x)`).
+(`fold(0, (a, x) => a + x)`). Amended by ADR 0269: `sum`, `min` and `max` through `Number<T>`, since `fold(0, …)` is an
+`i32` accumulator and does not compile over other number types.
 
 ### 2.5 What stays
 

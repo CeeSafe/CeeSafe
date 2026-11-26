@@ -280,7 +280,7 @@ vector.
 ::: tip Rule
 The library's closure-taking methods are `sortBy`, `sortStableBy`, `forEach`, `any`, `all` and `partitionPoint` on
 slices and vectors, and `retain` on vectors. `map`, `filter`, `fold` and the rest belong to a chain, which `iter()` or
-`values()` starts. There is no `sum`: `fold(0, (a, x) => a + x)`.
+`values()` starts; a chain of numbers also has `sum`, `min` and `max`.
 
 *Specification: `type-system.md` §36.4 and §36.4a.*
 :::
@@ -356,7 +356,7 @@ The same code, with "has no method 'next'", reports a `for` over a value that is
 `HashMap`.
 
 ::: warning Mistake: a chain without `iter()`
-A slice or a vector has no `map`: a chain starts with `iter()` or `values()`. And there is no `sum`.
+A slice or a vector has no `map`: a chain starts with `iter()` or `values()`.
 :::
 
 <span class="listing-caption"><strong>Listing 13-16</strong>, <code>main.cee</code>: A chain as another language writes it. This does not compile.</span>
@@ -376,11 +376,11 @@ main.cee:2:27: error[N0200]: 'Slice<i32>' has no method 'map'; it has 'copyFrom'
   |                           ^^^
 ```
 
-Start the chain with `values()`, since the elements are numbers, and `fold` the sum:
+Start the chain with `values()`, since the elements are numbers:
 
 ```ceesafe
 fn main() {
-    let total = [1, 2, 3].values().map((x) => x * 2).filter((x) => x > 2).fold(0, (a, x) => a + x);
+    let total = [1, 2, 3].values().map((x) => x * 2).filter((x) => x > 2).sum();
     Console.writeLine(total);
 }
 ```

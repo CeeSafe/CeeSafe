@@ -6374,7 +6374,7 @@ fn main() {
 ### 36.4a Iterator chains (ADR 0264)
 ```ceesafe
 let long = names.iter().filter((s) => s.length > 2).map((s) => s.length).collect()?;
-let total = levels.values().fold(0, (a, x) => a + x);
+let total = levels.values().sum();
 let parts = Chain.of(text.split(",")).map((p) => p.length).collect()?;
 ```
 - **Chains.** lib/core's `Chain<T, I: Iterator<T>>` (`lib/core/chains.cee`) holds an iterator of `T` and implements
@@ -6391,9 +6391,15 @@ let parts = Chain.of(text.split(",")).map((p) => p.length).collect()?;
 - **Consumers**: `collect()` (`Result<Vector<T>, AllocError>`; a `T` where a failure stops the program, §17.7),
   `count()` (`usize`), `fold(init, f)` (`A: Send`, `borrow mut fn(A, T) -> A`), `forEach(f)`; and, for a Copy `T`,
   `any(p)`, `all(p)` (stopping at the first value that decides), `find(p)` (`T?`) and `position(p)` (`usize?`).
+- **Numbers** (ADR 0269). lib/core's `Number<T>` (`zero()`, `plus(other)`, `less(other)`) is implemented for the
+  integer and float types, and a program may implement it for its own. On a chain of a `T: Number<T> + Copy`:
+  `sum()` (`T`, the values added left to right from `T.zero()`, which is the sum of an empty chain; an integer
+  overflow panics, as `+` does), `min()` and `max()` (`T?`, the first of equal values, null when empty; a float NaN is
+  less than nothing). A `fold` that starts from an integer literal takes the literal's type (§20.2): `fold(0, …)` is
+  an `i32` accumulator, so another type is written `fold(0usize, …)`.
 - **Copy values.** The adapters and consumers that test a value give or keep it afterwards, so they take the value
   itself and need `T: Copy` (a lent element, a number). On a chain of another type they are N0268.
-- **Not provided**: `sum`, `min` and `max` (no numeric bound; `fold` does them); `copied()` (an impl cannot name
+- **Not provided**: `copied()` (an impl cannot name
   `Chain<borrow T, I>`, N0267; `values()`, or `map((x) => *x)`); the adapters as default methods of `Iterator<T>`
   (an interface method cannot declare a region, §25.1).
 - **Cost.** A chain's closures are called through its stages' fields, which closure specialisation reaches when they

@@ -152,7 +152,7 @@ executor, on one thread or several (type-system.md §38, §40).
 struct with such a `next`. The item is an interface parameter, not an associated type: `Iterator<u8>`, not
 `Iterator<Item = u8>`. Chains are lib/core's: `v.iter()` (Rust's `iter()`), `v.values()` (`iter().copied()`) or `Chain.of(it)`,
 then `map`, `filter`, `take`, `skip`, `enumerate`, `zip`, `collect`, `count`, `fold`, `any`, `all`, `find` and
-`position` (type-system.md §36.4a). `filter` and the tests take Copy values, and there is no `sum`. Slices and vectors
+`position`, and on numbers `sum`, `min` and `max` (type-system.md §36.4a). `filter` and the tests take Copy values. Slices and vectors
 also have `sortBy`, `forEach`, `any`, `all`, `partitionPoint` (Rust's `partition_point`) and `retain`.
 
 **Through C.** CeeSafe compiles to C11, which any C toolchain or kernel build can take, including MSVC and compilers for

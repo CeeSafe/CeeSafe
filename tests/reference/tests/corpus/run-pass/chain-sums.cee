@@ -1,0 +1,45 @@
+// ADR 0269: `sum`, `min` and `max` on a chain of numbers, through lib/core's `Number<T>`: lengths (`usize`), `i64`,
+// floats, an empty chain, ties (the first is kept), and a program's own type that is a `Number<T>`.
+struct Money {
+    cents: i64;
+    tag: u8;
+}
+
+impl Number<Money> for Money {
+    fn zero() -> Money => Money { cents: 0, tag: 0 };
+    fn plus(this, other: Money) -> Money => Money { cents: this.cents + other.cents, tag: 0 };
+    fn less(this, other: Money) -> bool => this.cents < other.cents;
+}
+
+fn main() {
+    let words = ["a", "bb", "ccc"];
+    let total = words.values().map((w) => w.length).sum();
+    Console.writeLine(total);
+    Console.writeLine(words.values().map((w) => w.length).max() ?? 0);
+    let levels: [i64; 4] = [5, -3, 9, -3];
+    Console.writeLine(levels.values().sum());
+    Console.writeLine(levels.values().min() ?? 0);
+    let weights = [0.5, 1.25, 0.25];
+    Console.writeLine(weights.values().sum());
+    Console.writeLine(weights.values().max() ?? 0.0);
+    let none = Vector<u32>.create();
+    Console.writeLine(none.values().sum());
+    Console.writeLine(none.values().min().isNull());
+    let prices = [Money { cents: 250, tag: 1 }, Money { cents: 199, tag: 2 }, Money { cents: 199, tag: 3 }];
+    Console.writeLine(prices.values().sum().cents);
+    let cheapest = prices.values().min() ?? Money { cents: 0, tag: 0 };
+    Console.writeLine(cheapest.tag); // the first of the equal ones
+    let dearest = prices.values().max() ?? Money { cents: 0, tag: 0 };
+    Console.writeLine(dearest.tag);
+}
+// expect-stdout: 6
+// expect-stdout: 3
+// expect-stdout: 8
+// expect-stdout: -3
+// expect-stdout: 2
+// expect-stdout: 1.25
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 648
+// expect-stdout: 2
+// expect-stdout: 1

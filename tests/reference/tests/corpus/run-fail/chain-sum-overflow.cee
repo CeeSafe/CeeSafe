@@ -1,0 +1,7 @@
+// ADR 0269: an integer `sum` adds with `+`, so a sum that overflows its type panics, in lib/core's `plus`.
+fn main() {
+    let bytes: [u8; 3] = [200, 50, 10];
+    Console.writeLine(bytes.values().take(2).sum());
+    Console.writeLine(bytes.values().sum()); // expect-library-panic: integer overflow
+}
+// expect-stdout: 250

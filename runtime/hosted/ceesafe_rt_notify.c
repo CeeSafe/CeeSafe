@@ -405,6 +405,7 @@ static int32_t cee_note_system_clear(const char *id) {
 
 JavaVM *ceesafe_android_vm(void) __attribute__((weak));
 jclass ceesafe_android_notify(JNIEnv *env, jobject *activity) __attribute__((weak));
+jstring ceesafe_android_string(JNIEnv *env, const char *utf8, size_t length) __attribute__((weak));
 
 /* One call of Notify's `method` (`signature`: the activity, then `strings` of its Strings): its int answer, or a
    code. */
@@ -435,7 +436,9 @@ static int32_t cee_note_call(const char *method, const char *signature, int stri
         const char *texts[3] = {a, b, c};
         int made = 1;
         for (int k = 0; k < strings; k++) {
-            s[k] = (*env)->NewStringUTF(env, texts[k]);
+            /* Standard UTF-8, which NewStringUTF (modified UTF-8) refuses for a character beyond the BMP (an emoji). */
+            s[k] = ceesafe_android_string != NULL ? ceesafe_android_string(env, texts[k], strlen(texts[k]))
+                                                  : (*env)->NewStringUTF(env, texts[k]);
             made = made && s[k] != NULL;
         }
         if (m != NULL && made && !(*env)->ExceptionCheck(env)) {
@@ -463,16 +466,16 @@ static int32_t cee_note_call(const char *method, const char *signature, int stri
 }
 
 static int32_t cee_note_system_permission(void) {
-    return cee_note_call("permission", "(Landroid/app/Activity;)I", 0, NULL, NULL, NULL);
+    return cee_note_call("permission", "(Landroid/content/Context;)I", 0, NULL, NULL, NULL);
 }
 
 static int32_t cee_note_system_show(const char *id, const char *title, const char *body) {
-    return cee_note_call("show", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", 3,
+    return cee_note_call("show", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", 3,
                          id, title, body);
 }
 
 static int32_t cee_note_system_clear(const char *id) {
-    return cee_note_call("clear", "(Landroid/app/Activity;Ljava/lang/String;)I", 1, id, NULL, NULL);
+    return cee_note_call("clear", "(Landroid/content/Context;Ljava/lang/String;)I", 1, id, NULL, NULL);
 }
 
 #else

@@ -740,7 +740,7 @@ static int64_t cee_sec_call(const char *method, const char *signature, const cha
 static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
                                    uint64_t capacity) {
     (void)group;
-    return cee_sec_call("read", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app, name, NULL, 0,
+    return cee_sec_call("read", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;[B)I", app, name, NULL, 0,
                         out, capacity);
 }
 
@@ -748,13 +748,13 @@ static int32_t cee_sec_system_write(const char *group, const char *app, const ch
                                     uint64_t length) {
     (void)group;
     static const uint8_t nothing = 0;
-    return (int32_t)cee_sec_call("write", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
+    return (int32_t)cee_sec_call("write", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;[B)I", app,
                                  name, value != NULL ? value : &nothing, length, NULL, 0);
 }
 
 static int32_t cee_sec_system_remove(const char *group, const char *app, const char *name) {
     (void)group;
-    return (int32_t)cee_sec_call("remove", "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;[B)I", app,
+    return (int32_t)cee_sec_call("remove", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;[B)I", app,
                                  name, NULL, 0, NULL, 0);
 }
 

@@ -5,7 +5,7 @@
 // program's thread, never the activity's: the token may take a round trip to Google.
 package org.ceesafe.window;
 
-import android.app.Activity;
+import android.content.Context;
 import android.util.Log;
 
 import java.lang.reflect.Method;
@@ -15,7 +15,7 @@ final class Push {
     private Push() {}
 
     /** The token as "fcm:TOKEN"; null when the app has no Firebase Messaging; "" when it has but no token came. */
-    static String token(Activity activity) {
+    static String token(Context activity) {
         ClassLoader loader = activity.getClassLoader();
         Class<?> messaging;
         Class<?> tasks;

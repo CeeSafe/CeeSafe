@@ -2,7 +2,8 @@
 // embedded dex as InputView by tools/gen_android_dex.py. Edit it here, then run the generator.
 //
 // The runtime calls these from the program's thread that makes the call (attached to the VM), never from the
-// activity's, whose looper the permission dialog needs. One channel, "ceesafe", named after the app, high importance.
+// activity's, whose looper the permission dialog needs. The Context is the activity's, or a notification
+// extension's service's (ADR 0263), which shows and clears but cannot ask for the permission. One channel, "ceesafe", named after the app, high importance.
 // A notification's tag is its id, so showing an id again replaces it. Answers: 0, or ceesafe_rt_notify.c's codes:
 // -5 Denied, -6 Failed.
 package org.ceesafe.window;
@@ -12,6 +13,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -25,8 +27,8 @@ final class Notify {
 
     private Notify() {}
 
-    private static NotificationManager manager(Activity activity) {
-        return (NotificationManager) activity.getSystemService(Activity.NOTIFICATION_SERVICE);
+    private static NotificationManager manager(Context context) {
+        return (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
     }
 
     /**
@@ -34,7 +36,11 @@ final class Notify {
      * the system's dialog, waited for as Bluetooth's are (two seconds for it to come, a minute for the answer). Never
      * on the activity's thread, which the dialog needs.
      */
-    static int permission(final Activity activity) {
+    static int permission(Context context) {
+        if (!(context instanceof Activity)) {
+            return DENIED; // a notification extension (ADR 0263) has no activity to ask from
+        }
+        final Activity activity = (Activity) context;
         try {
             if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(PERMISSION) != PackageManager.PERMISSION_GRANTED) {
                 if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -64,7 +70,7 @@ final class Notify {
         }
     }
 
-    static int show(Activity activity, String id, String title, String body) {
+    static int show(Context activity, String id, String title, String body) {
         try {
             NotificationManager manager = manager(activity);
             if (!manager.areNotificationsEnabled()) {
@@ -85,6 +91,9 @@ final class Notify {
             }
             Intent launch = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
             if (launch == null) {
+                if (!(activity instanceof Activity)) {
+                    return FAILED;
+                }
                 launch = new Intent(activity, activity.getClass());
             }
             // The launcher's own intent: the app's task comes forward as it was, or the app starts.
@@ -108,7 +117,7 @@ final class Notify {
         }
     }
 
-    static int clear(Activity activity, String id) {
+    static int clear(Context activity, String id) {
         try {
             manager(activity).cancel(id, 1);
             return 0;

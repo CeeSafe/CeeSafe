@@ -114,7 +114,7 @@ static CEE_UNUSED void ceeD_S10MutexGuard1S5Table(ceeT_10MutexGuard1S5Table *);
 
 static uint64_t ceeF_bump(void) {
     CEE_UNUSED const ceeT_5Mutex1S5Table * v_static_TABLE_0 = NULL;
-    CEE_UNUSED ceeT_10MutexGuard1S5Table v_guard_1 = {0};
+    CEE_UNUSED ceeT_10MutexGuard1S5Table v_guard_1;
     CEE_UNUSED ceeT_Table * v_table_2 = NULL;
     CEE_TEMP const ceeT_5Mutex1S5Table * t_3 = NULL;
     CEE_TEMP ceeT_10MutexGuard1S5Table * t_4 = NULL;

@@ -42,7 +42,7 @@ static CEE_UNUSED void ceeD_3Key(ceeT_Key *);
 
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeT_Key v_k_0;
-    CEE_UNUSED ceeA4_u32 v_tail_1 = {0};
+    CEE_UNUSED ceeA4_u32 v_tail_1;
     CEE_TEMP ceeA32_u8 t_2;
     CEE_TEMP ceeSm_u32 t_3;
     CEE_TEMP uint64_t t_4 = 0;

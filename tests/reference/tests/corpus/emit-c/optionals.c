@@ -69,7 +69,7 @@ static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeO_i32 v_q_0 = {0};
+    CEE_UNUSED ceeO_i32 v_q_0;
     CEE_TEMP const ceeO_i32 * t_1 = NULL;
     CEE_TEMP uint32_t t_2 = 0;
     CEE_TEMP bool t_3 = false;

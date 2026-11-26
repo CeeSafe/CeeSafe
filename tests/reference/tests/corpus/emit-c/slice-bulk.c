@@ -80,9 +80,9 @@ static void ceeF_copy(CEE_UNUSED ceeSm_u8 v_out_0, CEE_UNUSED uint64_t v_to_1, C
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeA8_u8 v_bytes_0 = {0};
-    CEE_UNUSED ceeA8_u8 v_ones_1 = {0};
-    CEE_UNUSED ceeA2_S5Point v_points_2 = {0};
+    CEE_UNUSED ceeA8_u8 v_bytes_0;
+    CEE_UNUSED ceeA8_u8 v_ones_1;
+    CEE_UNUSED ceeA2_S5Point v_points_2;
     CEE_TEMP ceeSl_u8 t_3;
     CEE_TEMP ceeSm_u8 t_4;
     CEE_TEMP ceeSm_u8 t_5;

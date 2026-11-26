@@ -33,7 +33,7 @@ static CEE_UNUSED void ceeC_sensor_read(unsigned long * a0) {
 static CEE_UNUSED void ceeF_main(void);
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeA3_N6CULong v_values_0 = {0};
+    CEE_UNUSED ceeA3_N6CULong v_values_0;
     CEE_TEMP unsigned long * t_1 = NULL;
     CEE_TEMP unsigned long * t_2 = 0;
     CEE_TEMP uint64_t t_3 = 0;

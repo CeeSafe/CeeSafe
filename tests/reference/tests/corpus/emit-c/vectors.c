@@ -71,7 +71,7 @@ static CEE_UNUSED void ceeVC_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
 
 static void ceeF_main(void) {
     CEE_UNUSED ceeV_Ui32S10SystemHeap v_v_0 = {0};
-    CEE_UNUSED ceeV_ZS10SystemHeap v_s_1 = {0};
+    CEE_UNUSED ceeV_ZS10SystemHeap v_s_1;
     CEE_TEMP ceeV_Ui32S10SystemHeap * t_2 = NULL;
     CEE_TEMP ceeR_vE10AllocError t_3;
     CEE_TEMP ceeR_vE10AllocError t_4;

@@ -96,15 +96,15 @@ static CEE_UNUSED int32_t *ceeSVE_Wi32S10SystemHeap(ceeSV_i32S10SystemHeap *, ui
 static CEE_UNUSED ceeR_usizeE10AllocError ceeSVP_Wi32S10SystemHeap(ceeSV_i32S10SystemHeap *, int32_t);
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeK_i32S10SystemHeap v_m_0 = {0};
+    CEE_UNUSED ceeK_i32S10SystemHeap v_m_0;
     CEE_UNUSED cee_handle v_h_1;
-    CEE_UNUSED ceeSV_i32S10SystemHeap v_sv_2 = {0};
+    CEE_UNUSED ceeSV_i32S10SystemHeap v_sv_2;
     CEE_TEMP ceeK_i32S10SystemHeap * t_3 = NULL;
     CEE_TEMP ceeR_Hi32E10AllocError t_4;
     CEE_TEMP ceeR_Hi32E10AllocError t_5;
     CEE_TEMP uint32_t t_6 = 0;
     CEE_TEMP const ceeK_i32S10SystemHeap * t_7 = NULL;
-    CEE_TEMP ceeO_Pi32 t_8 = {0};
+    CEE_TEMP ceeO_Pi32 t_8;
     CEE_TEMP const ceeO_Pi32 * t_9 = NULL;
     CEE_TEMP uint32_t t_10 = 0;
     CEE_TEMP bool t_11 = false;

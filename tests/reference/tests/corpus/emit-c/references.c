@@ -42,7 +42,7 @@ static int64_t ceeF_twice(CEE_UNUSED const int64_t * v_v_0) {
 
 static int32_t ceeF_main(void) {
     CEE_UNUSED int64_t v_x_0 = 0;
-    CEE_UNUSED ceeT_Counter v_c_1 = {0};
+    CEE_UNUSED ceeT_Counter v_c_1;
     CEE_TEMP int64_t * t_2 = NULL;
     CEE_TEMP const ceeT_Counter * t_3 = NULL;
     CEE_TEMP uint32_t t_4 = 0;

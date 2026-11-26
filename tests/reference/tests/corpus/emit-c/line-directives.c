@@ -44,7 +44,7 @@ static void ceeF_step(CEE_UNUSED ceeT_Counter * v_c_0, CEE_UNUSED int32_t v_by_1
 #line 19 "emit-c/line-directives.cee"
 static int32_t ceeF_main(void) {
 #line 19 "emit-c/line-directives.cee"
-    CEE_UNUSED ceeT_Counter v_c_0 = {0}; CEE_UNUSED ceeT_Resource v_r_1; CEE_UNUSED int32_t v_i_2 = 0; CEE_UNUSED bool t_3 = false; CEE_UNUSED ceeT_Counter * t_4 = NULL; CEE_UNUSED int32_t t_5 = 0;
+    CEE_UNUSED ceeT_Counter v_c_0; CEE_UNUSED ceeT_Resource v_r_1; CEE_UNUSED int32_t v_i_2 = 0; CEE_UNUSED bool t_3 = false; CEE_UNUSED ceeT_Counter * t_4 = NULL; CEE_UNUSED int32_t t_5 = 0;
     v_c_0 = ((ceeT_Counter){ .f_count = ((int32_t)0) });
     v_r_1 = ((ceeT_Resource){ .f_id = ((int32_t)7) });
     v_i_2 = ((int32_t)0);

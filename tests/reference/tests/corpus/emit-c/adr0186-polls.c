@@ -350,8 +350,8 @@ static uint64_t ceeF_quiet(CEE_UNUSED uint64_t v_n_0) {
 }
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED ceeA3_u64 v_data_0 = {0};
-    CEE_UNUSED ceeA3_u32 v_small_1 = {0};
+    CEE_UNUSED ceeA3_u64 v_data_0;
+    CEE_UNUSED ceeA3_u32 v_small_1;
     CEE_UNUSED uint32_t v_parity_2 = 0;
     CEE_UNUSED uint64_t v_total_3 = 0;
     CEE_TEMP bool t_5 = false;

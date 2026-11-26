@@ -1,0 +1,95 @@
+// ADR 0262: a borrowed local is declared without a zero initializer, as definite assignment allows a borrow only of
+// a local assigned whole. Locals of each aggregate kind are lent, shared and mutable, whole and in part, in the arms of
+// a match, in loops and before early returns; every value read through a borrow is one the program wrote.
+struct Point {
+    x: i64;
+    y: i64;
+}
+
+enum Shape {
+    Dot(Point),
+    Box(Point, Point),
+    Named(String),
+    Empty,
+}
+
+fn area(s: borrow Shape) -> i64 => match (s) {
+    Shape.Dot(_) => 0,
+    Shape.Box(a, b) => (b.x - a.x) * (b.y - a.y),
+    Shape.Named(n) => truncate<i64>(n.length),
+    Shape.Empty => -1,
+};
+
+fn sumOf(values: Slice<i64>) -> i64 {
+    var total: i64 = 0;
+    for (v in values) {
+        total += v;
+    }
+    return total;
+}
+
+fn grow(p: borrow mut Point, by: i64) {
+    p.x += by;
+    p.y += by;
+}
+
+/// Each arm binds a value and lends it: the shape of the SQLite port's expression evaluator.
+fn measure(kind: i32) -> i64 {
+    match (kind) {
+        0 => {
+            let s = Shape.Dot(Point { x: 1, y: 2 });
+            return area(borrow s);
+        }
+        1 => {
+            var p = Point { x: 3, y: 4 };
+            grow(mut p, 2);
+            let s = Shape.Box(Point { x: 0, y: 0 }, p);
+            return area(borrow s);
+        }
+        2 => {
+            let s = Shape.Named(String.from("seven!!")!);
+            return area(borrow s);
+        }
+        3 => {
+            var values = [1i64, 2, 3, 4, 5];
+            values[2] = 30;
+            return sumOf(values[1..4]);
+        }
+        4 => {
+            var v = Vector<i64>.create();
+            for (i in 0i64..10) {
+                v.push(i * i)!;
+            }
+            if (sumOf(v.view()) > 1000) {
+                return -2; // an early return with the vector lent before
+            }
+            return sumOf(v.view()[5..]);
+        }
+        _ => {
+            let s = Shape.Empty;
+            return area(borrow s);
+        }
+    }
+}
+
+fn main() {
+    var total: i64 = 0;
+    for (round in 0..3) {
+        for (kind in 0..6) {
+            let m = measure(kind);
+            total += m;
+            if (round == 0) {
+                Console.writeLine(m);
+            }
+        }
+    }
+    Console.writeLine(total);
+}
+
+// expect-stdout: 0
+// expect-stdout: 30
+// expect-stdout: 7
+// expect-stdout: 36
+// expect-stdout: 255
+// expect-stdout: -1
+// expect-stdout: 981

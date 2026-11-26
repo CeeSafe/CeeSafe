@@ -105,7 +105,7 @@ static CEE_NOINLINE uint32_t ceeF_tidy(CEE_UNUSED uint32_t v_x_0) {
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeT_Big v_b_0 = {0};
+    CEE_UNUSED ceeT_Big v_b_0;
     CEE_UNUSED ceeT_Small v_s_1;
     CEE_TEMP ceeT_Big t_2;
     CEE_TEMP ceeA127_u32 t_3;

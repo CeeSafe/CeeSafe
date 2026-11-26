@@ -75,7 +75,7 @@ static void ceeF_main(void) {
     CEE_UNUSED ceeT_7Grouped2u8Lusize2_ v_a_0;
     CEE_UNUSED ceeT_7Grouped2u16Lusize2_ v_b_1;
     CEE_UNUSED ceeT_7Grouped2u8Lusize3_ v_c_2;
-    CEE_UNUSED ceeT_6Offset1Li32n3_ v_o_3 = {0};
+    CEE_UNUSED ceeT_6Offset1Li32n3_ v_o_3;
     CEE_TEMP ceeA2_u8 t_4;
     CEE_TEMP ceeA2_u16 t_5;
     CEE_TEMP ceeA3_u8 t_6;

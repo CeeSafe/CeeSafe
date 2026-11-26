@@ -81,9 +81,9 @@ static CEE_UNUSED ceeO_u32 ceeVO_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
 static CEE_UNUSED void ceeVC_VUu32S10SecretHeap(ceeV_Uu32S10SecretHeap *);
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED ceeV_Uu32S10SecretHeap v_secret_0 = {0};
+    CEE_UNUSED ceeV_Uu32S10SecretHeap v_secret_0;
     CEE_UNUSED uint32_t v_a_1 = 0;
-    CEE_UNUSED ceeV_Uu32S10SystemHeap v_plain_2 = {0};
+    CEE_UNUSED ceeV_Uu32S10SystemHeap v_plain_2;
     CEE_UNUSED uint32_t v_b_3 = 0;
     CEE_TEMP ceeV_Uu32S10SecretHeap * t_4 = NULL;
     CEE_TEMP ceeR_vE10AllocError t_5;

@@ -365,14 +365,12 @@ fn partlyWritten(
     for (block in function.blocks.view()) {
         for (s in block.statements.view()) {
             match (n.statements[s as usize]) {
-                NirStatement.Assign(target, r) => {
+                NirStatement.Assign(target, _) => {
+                    // A borrow does not keep the zeroing (ADR 0262): definite assignment allows one only of a
+                    // local assigned whole, so what it reads or writes was written.
                     if (!placeIsLocal(n, target)) {
                         markType(locals, placeLocal(n, target))?;
                     }
-                    addBorrowed(n, r, locals)?;
-                }
-                NirStatement.Eval(r) => {
-                    addBorrowed(n, r, locals)?;
                 }
                 NirStatement.Unpack(source, _, targets) => {
                     for (k in 0..targets.count) {
@@ -393,15 +391,6 @@ fn isNirDeref(p: NirProjection) -> bool => match (p.kind) {
     ProjectionKind.Deref => true,
     _ => false,
 };
-
-fn addBorrowed(n: borrow NirProgram, r: u32, locals: borrow mut Vector<bool>) -> Result<void, AllocError> {
-    match (n.rvalues[r as usize]) {
-        NirRvalue.Ref(_, place) => { markType(locals, placeLocal(n, place))?; }
-        NirRvalue.Slice(_, base, _, _) => { markType(locals, placeLocal(n, base))?; }
-        _ => {}
-    }
-    return Ok();
-}
 
 /// Every place an rvalue reads or borrows (Places).
 fn rvaluePlaces(n: borrow NirProgram, r: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {

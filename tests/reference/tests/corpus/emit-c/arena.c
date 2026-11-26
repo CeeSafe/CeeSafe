@@ -76,7 +76,7 @@ static CEE_UNUSED ceeR_QS5PointE10AllocError ceeAA_S5Point(void *r, uint32_t kin
 static CEE_UNUSED ceeR_QUu16E10AllocError ceeAR_u16(void *r, uint32_t kind, uint64_t n, uint16_t fill);
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED cee_arena v_arena_0 = {0};
+    CEE_UNUSED cee_arena v_arena_0;
     CEE_UNUSED ceeT_Point * v_p_1 = NULL;
     CEE_UNUSED ceeSm_u16 v_s_2;
     CEE_UNUSED int32_t v_v_3 = 0;

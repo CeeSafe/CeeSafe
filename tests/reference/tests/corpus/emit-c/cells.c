@@ -58,7 +58,7 @@ static void ceeF_tick(CEE_UNUSED const ceeT_Timer * v_t_0) {
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeT_Timer v_t_0 = {0};
+    CEE_UNUSED ceeT_Timer v_t_0;
     CEE_TEMP ceeT_4Cell1u32 t_1;
     CEE_TEMP const ceeT_Timer * t_2 = NULL;
     CEE_TEMP const ceeT_Timer * t_3 = NULL;

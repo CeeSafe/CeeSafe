@@ -63,7 +63,7 @@ static CEE_UNUSED ceeT_AtomicU64 ceeCB_ceeF_build_1(const void *, uint64_t);
 
 static ceeT_Key ceeF_build(void) {
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 t_0 = 0;
-    CEE_TEMP ceeCE_ceeF_build_1 t_1 = {0};
+    CEE_TEMP ceeCE_ceeF_build_1 t_1;
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 * t_2 = NULL;
     CEE_TEMP ceeCK_Q1usizeS9AtomicU64 * t_3 = NULL;
     CEE_TEMP ceeA4_S9AtomicU64 t_4 = {0};
@@ -96,8 +96,8 @@ static ceeT_Key ceeF_build(void) {
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED ceeT_Key v_blank_0 = {0};
-    CEE_UNUSED ceeT_Key v_key_1 = {0};
+    CEE_UNUSED ceeT_Key v_blank_0;
+    CEE_UNUSED ceeT_Key v_key_1;
     CEE_TEMP ceeT_AtomicU64 t_2;
     CEE_TEMP ceeA4_S9AtomicU64 t_3;
     CEE_TEMP const ceeT_AtomicU64 * t_4 = NULL;

@@ -27,8 +27,9 @@
   - iOS: `UIImagePickerController` with the camera as its source; it needs `NSCameraUsageDescription` (and
     `NSMicrophoneUsageDescription` for a video, which records sound).
   - Android: `ACTION_IMAGE_CAPTURE` and `ACTION_VIDEO_CAPTURE`, which write to a `content://` URI the app gives
-    (`EXTRA_OUTPUT`). A CeeSafe app has no Java of its own for a `FileProvider`; a pending item in `MediaStore` is
-    such a URI with no permission from Android 10, and is the gallery's item once published. If the app's manifest declares
+    (`EXTRA_OUTPUT`). A CeeSafe app has no Java of its own for a `FileProvider`; a new item in `MediaStore` is
+    such a URI with no permission from Android 10 (not a pending one: only its owner may write that), and is the
+    gallery's item. If the app's manifest declares
     `CAMERA` (for its own scanning, later), the intent is refused until that permission is granted.
 - **Not here**: making JPEG and scaling (a library's: CeeUI decodes JPEG with its EXIF orientation, nothing encodes
   it yet), video re-encoding and poster frames, the camera's frames for scanning, the share sheet and opening a file
@@ -71,9 +72,10 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 - **Android**: `Picker.java` gains the kinds. `pick`: `ACTION_PICK_IMAGES` where it exists (with
   `EXTRA_PICK_IMAGES_MAX` above 1, the image or video type), else `ACTION_GET_CONTENT` with `EXTRA_MIME_TYPES` and
   `EXTRA_ALLOW_MULTIPLE`; each URI copied to `cache/ceesafe-picked` as the documents are, a HEIF made JPEG through
-  `ImageDecoder` (API 28 and later). `capture`: a pending `MediaStore` item (in Pictures or Movies, under the app's
-  name) as `EXTRA_OUTPUT`; after the camera, the item is published (no longer pending), so it is in the gallery, and
-  copied to the cache for the program; at a cancel it is deleted. The `CAMERA` permission is asked first when the
+  `ImageDecoder` (API 28 and later). `capture`: a new `MediaStore` item (in Pictures or Movies, under the app's name)
+  as `EXTRA_OUTPUT`, which the camera's app fills, so it is in the gallery, and which is copied to the cache for the
+  program; at a cancel it is deleted. It is not a pending item: only its owner may write one (on the Moto the
+  camera's app ended at its confirm, §5). The `CAMERA` permission is asked first when the
   app declares it; on Android 7.1 to 9 (API 25 to 28) `WRITE_EXTERNAL_STORAGE` is asked first (§2.3).
 - **Desktops**: `pick` is `FileDialog.openFiles` (or `openFile` for a limit of 1) with the photo and video
   extensions, so a desktop program picks the same way; `capture` is `Unsupported` and `canCapture` false.
@@ -85,7 +87,7 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
   `maxSdkVersion="28"`), `--microphone TEXT` (`NSMicrophoneUsageDescription`, for video capture) and
   `--save-photos TEXT` (`NSPhotoLibraryAddUsageDescription`, for keeping captures in Photos); a picker needs nothing.
   An app that captures without the camera's text is ended by iOS at the first `capture`, so `capture` checks the
-  Info.plist first and answers `Denied` instead.
+  Info.plist first and answers `Resources` ("the system refused") instead.
 
 ## 3. Consequences
 
@@ -109,7 +111,7 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
 - **A `FileProvider` in every APK** for the camera's output: Java in each app, which the `MediaStore` item avoids
   (and the item is the gallery's copy the owner wants kept).
 
-## 5. Tests (proposed)
+## 5. Tests
 
 - `tools/window_check.py`: scripted `pick` (one, several, cancel) and `capture`; `canCapture` false on the desktop.
 - The iOS simulator: `pick` from the simulator's photos (one and several; a HEIC photo comes as JPEG); `capture`
@@ -118,6 +120,19 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
   photo and a video (the emulator's virtual camera), Back as a cancel.
 - The owner's iPhone: `pick` and `capture`, by his hands.
 - Marivil's port: a photo and a video sent from the library and from the camera, received by the MAUI app.
+
+Done (2026-11-26):
+- `tools/window_check.py`: 69 checks, 0 problems, its new one the scripted calls above.
+- The runtime compiled for iOS (arm64, iOS 17), macOS and Android with the corpus's warnings as errors.
+- The owner's Moto (moto g35 5G, Android 15), in Marivil's port against marivil.com (Attach's new choices):
+  - Photo: the system's photo picker (Google Photos' sheet, several allowed), one photo picked; its copy sent and
+    shown in its bubble.
+  - Camera, by his hands: the first build gave the camera's app a pending `MediaStore` item, and the camera's app
+    ended at its confirm ("Only owner is able to interact with pending/trashed item"); with a new item that is not
+    pending, the photo (4.5 MB) was sent and shown, and is in the gallery under `Pictures/Marivil`.
+  - Record, by his hands: a video (17.9 MB) sent, and in the gallery under `Movies/Marivil`.
+- Not yet: the iOS simulator and the owner's iPhone; several items at once; a HEIF photo on Android; Android
+  before 13 (the content chooser); the storage permission on Android 7.1 to 9.
 
 ## 6. Questions for the owner (answered 2026-11-26)
 
@@ -129,3 +144,23 @@ MediaPicker.canCapture(MediaKind.Video)                                // bool
    `WRITE_EXTERNAL_STORAGE` there (recommended; declared up to API 28 only), or capture is `Unsupported` below
    Android 10? *Ask for it.*
 4. **A captured photo or video in the gallery**: not kept (recommended, as MAUI's client), or kept? *Kept.*
+
+## 7. Implementation (2026-11-26)
+
+- `lib/std/window.cee`: `MediaKind`, `PickedMedia`, `MediaPicker.pick`, `capture` and `canCapture`, over
+  `ceesafe_window_dialog`'s kinds 6 (the library: `name` the limit, `extensions` the kinds) and 7 (the camera), and
+  `ceesafe_window_can_capture`; a file's kind is its extension's.
+- `runtime/hosted/ceesafe_rt_window.c`: the front maps the kinds to the phones' `cee_native_media` and
+  `cee_native_capture`, or to the open dialog with the photos' and videos' extensions elsewhere; a scripted window's
+  `dialog` item answers both. iOS: `PHPickerViewController` (its delegate the document picker's, with
+  `picker:didFinishPicking:` and the image picker's methods), each result's file copied in its provider's completion
+  handler (a global block; one item at a time), a HEIC made JPEG through `UIImage`; `UIImagePickerController` with
+  the Info.plist checked first, the capture added with `UIImageWriteToSavedPhotosAlbum` or
+  `UISaveVideoAtPathToSavedPhotosAlbum`. Android: `cee_native_media`, `cee_native_capture` and
+  `cee_native_can_capture` through `Picker`.
+- `runtime/android/org/ceesafe/window/Picker.java`: kinds 6 and 7; the photo picker or the content chooser; a HEIF
+  made JPEG with `ImageDecoder`; the camera's app writing to a new `MediaStore` item (Pictures or Movies, under the
+  app's name), the permissions asked first through the fragment, the item deleted at a cancel; `canCapture`.
+- CeeUI's packer: `--camera`, `--microphone`, `--save-photos`. `spec/type-system.md` §26.13, `spec/api/std.md`.
+- A permission refused is `Resources` ("the system refused"): `WindowError` has no `Denied`, and adding one would
+  change every exhaustive `match` on it.

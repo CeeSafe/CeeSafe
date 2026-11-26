@@ -145,6 +145,9 @@
 - [struct MenuShortcut](#struct-menushortcut)
 - [struct Menu](#struct-menu)
 - [struct FileDialog](#struct-filedialog)
+- [enum MediaKind](#enum-mediakind)
+- [struct PickedMedia](#struct-pickedmedia)
+- [struct MediaPicker](#struct-mediapicker)
 
 ## struct AsyncConsole
 
@@ -6437,3 +6440,85 @@ printed (sent to a printer, or saved by the dialog's own PDF button), false when
 the other dialogs are. macOS: PDFKit's print operation; iOS: AirPrint's print sheet; Android: PrintManager's
 dialog; Windows: the print dialog, the pages rendered by Windows.Data.Pdf. `Unsupported` on Linux and FreeBSD;
 `Resources` when the file is not a PDF the system reads.
+
+## enum MediaKind
+
+```ceesafe
+public enum MediaKind {
+    Photo,
+    Video,
+}
+```
+
+What a picked or captured file is (ADR 0265): a photo (JPEG, or a PNG, GIF or WebP as it was) or a video (MP4 or
+QuickTime).
+
+## struct PickedMedia
+
+```ceesafe
+public struct PickedMedia {
+    public path: String;
+    public kind: MediaKind;
+}
+```
+
+A photo or a video from the library or the camera (ADR 0265): a copy in the app's temporary folder, the program's
+to read with `File` and to delete.
+
+## struct MediaPicker
+
+```ceesafe
+public struct MediaPicker
+```
+
+The system's photo library and camera (§26.13, ADR 0265): modal, as the file dialogs are. On iOS the photo picker
+(PHPicker, no permission) and the camera (UIImagePickerController, which needs the app's `NSCameraUsageDescription`,
+and `NSMicrophoneUsageDescription` for a video); on Android the system's photo picker (or the content chooser
+before it) and the camera's app. A photo comes as JPEG (a HEIC or HEIF made JPEG at quality 0.9; a PNG, GIF or WebP
+as it was), a video as the system gives it. A capture is also kept in the system's gallery (on iOS when the app has
+`NSPhotoLibraryAddUsageDescription`). On the desktops `pick` is the open dialog for the photos' and videos' files,
+and there is no camera.
+
+```
+let picked = MediaPicker.pick(mut window, true, false, 4)?;     // up to four photos
+for (item in picked.view()) {
+    let bytes = File.readAll(item.path.view())?;
+}
+match (MediaPicker.capture(mut window, MediaKind.Video)?) {
+    Some(video) => {}
+    null => {} // cancelled
+}
+```
+
+### MediaPicker.pick
+
+```ceesafe
+public fn pick(
+    window: borrow mut Window,
+    photos: bool,
+    videos: bool,
+    limit: u32,
+) -> Result<Vector<PickedMedia>, WindowError>
+```
+
+Photos, videos or both from the library, up to `limit` of them (1: one, and 0 is taken as 1); empty when the
+user cancelled. `Unsupported` when neither `photos` nor `videos` is asked for.
+
+### MediaPicker.capture
+
+```ceesafe
+public fn capture(window: borrow mut Window, kind: MediaKind) -> Result<PickedMedia?, WindowError>
+```
+
+A photo or a video from the camera, or null when the user cancelled. `Unsupported` where there is no camera
+(`canCapture`); `Resources` when the system refused (the camera's permission, or an iOS app without the usage
+description, which iOS would end).
+
+### MediaPicker.canCapture
+
+```ceesafe
+public fn canCapture(kind: MediaKind) -> bool
+```
+
+Whether this device can capture a photo or a video with its camera: false on the desktops and in a simulator.
+Safety: the runtime takes a number and answers one.

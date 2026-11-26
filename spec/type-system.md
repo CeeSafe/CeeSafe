@@ -3975,6 +3975,20 @@ Diagnostics: none new.
     Android: the Storage Access Framework (`ACTION_OPEN_DOCUMENT`, `ACTION_CREATE_DOCUMENT`), started and answered
     through `org.ceesafe.window.Picker`, a fragment without a view in the runtime's embedded dex (ADR 0157), the
     program's thread waiting inside the call; `extensions` become MIME types; the activity's end is a cancel.
+  - **The photo library and the camera** (ADR 0265): `MediaPicker.pick(window, photos: bool, videos: bool, limit:
+    u32)` is `Result<Vector<PickedMedia>, WindowError>`, up to `limit` items (0 is 1), empty at a cancel, `Unsupported`
+    for neither kind; `MediaPicker.capture(window, kind: MediaKind)` is `Result<PickedMedia?, WindowError>`, null at a
+    cancel; `MediaPicker.canCapture(kind)` is `bool`. A `PickedMedia` is a `path` (a copy in the app's temporary
+    folder, as the open dialogs' are) and a `kind`, `MediaKind.Photo` or `Video`, by the file's extension. A photo
+    is JPEG (HEIC and HEIF made JPEG at 0.9), or a PNG, GIF or WebP as it was; a video is as the system gives it. A
+    capture is also kept in the system's gallery. iOS: `PHPickerViewController` (no permission; the compatible
+    representation) and `UIImagePickerController` (the app's `NSCameraUsageDescription`, and
+    `NSMicrophoneUsageDescription` for a video, or `capture` is `Resources`; added to Photos when it has
+    `NSPhotoLibraryAddUsageDescription`). Android: the system's photo picker, or `ACTION_GET_CONTENT` before it, and
+    the camera's app writing to a new `MediaStore` item, through `Picker` (`CAMERA`, when declared, and before Android
+    10 `WRITE_EXTERNAL_STORAGE`, asked first; refused is `Resources`). Desktops and scripted windows: `pick` is the
+    open dialog for the photos' and videos' extensions, `capture` is `Unsupported` and `canCapture` false (a scripted
+    window's `dialog` item answers `capture` too).
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

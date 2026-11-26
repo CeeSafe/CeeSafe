@@ -54,6 +54,8 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - `if` and `match` expressions take expressions, `let s = if (x < 0) -1 else 1;`, or blocks that end with their value
   without `;`; a statement's block has no value.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.
+- A call that allocates (`v.push(x)`, `String.from(t)`, `Box.create(v)`) returns a `Result`: end it with `!` or `?`,
+  or put `out-of-memory = "panic"` in `[package]` so that the package's own calls stop the program on failure.
 - `as` converts only without loss; `truncate<u8>(x)` wraps; `checkedTruncate<i64>(n)` (an optional) and
   `saturatingTruncate<u8>(n)` check or clamp, for integers and floats.
 - `for (part in text.split(","))` loops over any value with `fn next(borrow mut this) -> T?`.

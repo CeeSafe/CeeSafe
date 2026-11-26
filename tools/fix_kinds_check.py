@@ -61,6 +61,9 @@ CASES = [
     ('Box.create with ! for Box.new', "N0100",
      'fn main() {\n    let b: Box<i32> = Box::new(1);\n    Console.writeLine(b + 0);\n}\n',
      'fn main() {\n    let b: Box<i32> = Box.create(1)!;\n    Console.writeLine(b + 0);\n}\n'),
+    ('! for an allocation used as its value (ADR 0261 §2.4)', "N0205",
+     'fn main() {\n    let s: String = String.from("ada");\n    Console.writeLine(s.view());\n}\n',
+     'fn main() {\n    let s: String = String.from("ada")!;\n    Console.writeLine(s.view());\n}\n'),
 ]
 
 # What must get no fix: a widening of what is not a variable or a field (the row's condition), and a narrowing.
@@ -76,6 +79,8 @@ NO_FIX = [
     ("len() as a statement", "fn main() {\n    let a = [1, 2];\n    a.len();\n}\n"),
     ("len with an argument", "fn main() {\n    let a = [1, 2];\n    Console.writeLine(a.len(1));\n}\n"),
     ("a comment between let and mut", "fn main() {\n    let /* why */ mut n = 1;\n    n += 1;\n    Console.writeLine(n);\n}\n"),
+    ("an allocation whose value is not the type expected",
+     "fn main() {\n    let b: Box<i64> = Box.create(5);\n}\n"),
     ("a number that would narrow", "fn main() {\n    let a: i64 = 1;\n    let z: i32 = a;\n    Console.writeLine(z);\n}\n"),
 ]
 

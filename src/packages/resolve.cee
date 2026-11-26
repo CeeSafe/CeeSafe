@@ -69,6 +69,8 @@ struct Workspace {
                 name: copyBytes(manifest.name.view())?,
                 dependencies: dependencies,
                 trusted: manifest.trusted,
+                outOfMemoryPanic: manifest.outOfMemoryPanic,
+                library: manifest.kind != 0,
                 directory: copyBytes(manifest.directory.view())?,
                 embedRoots: roots,
                 embedBoundary: boundary,

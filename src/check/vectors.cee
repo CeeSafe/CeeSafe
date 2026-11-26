@@ -195,7 +195,7 @@ fn checkVectorCreate(
     } else {
         var hint = expected;
         if (withCapacity || fromText) {
-            hint = if (expected != none() && isResultType(c, expected)) resultOk(c, expected) else none();
+            hint = fallibleHint(c, expected);
         }
         if (hint != none() && c.types.is(hint, TypeKind.Vector) && c.types.isString(hint) == isString) {
             vector = hint;

@@ -1140,6 +1140,7 @@ fn runActivations(
                 let reason: StringView = match (kind) {
                     NirPanicKind.UnwrapNull => "unwrapped null",
                     NirPanicKind.Unwrap => "unwrapped an Err value",
+                    NirPanicKind.OutOfMemory => "out of memory",
                 };
                 let location = locationOf(it, file, n.terminatorSpans[t as usize].start);
                 return Err(panicAt(reason, location));

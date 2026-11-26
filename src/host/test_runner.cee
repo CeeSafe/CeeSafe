@@ -900,12 +900,14 @@ fn testCommand() -> i32 {
     return if (failed == 0 && sweepFailures.length == 0) 0 else 1;
 }
 
-/// Whether a sweep's panic `message` ("unwrapped an Err value at f.cee:12:5", or "unwrapped null at …") is in a file
+/// Whether a sweep's panic `message` ("unwrapped an Err value at f.cee:12:5", "unwrapped null at …", or ADR 0261's
+/// "out of memory at …") is in a file
 /// that declares a test function (test-spans.txt: each test's path, first and last line, tab-separated): the tests'
 /// own `!` or `?`, in a test or one of its helpers, met the injected failure, which is the tests' business, not a fault
 /// of the code under test (ADR 0075 §2.16).
 fn unwrapInTest(message: Slice<u8>, spans: Slice<u8>) -> bool {
-    if (!containsText(message, "unwrapped an Err value") && !containsText(message, "unwrapped null")) {
+    if (!containsText(message, "unwrapped an Err value") && !containsText(message, "unwrapped null") &&
+        !containsText(message, "out of memory at ")) {
         return false;
     }
     // The location after the last " at ": path, ':', line, ':', column.

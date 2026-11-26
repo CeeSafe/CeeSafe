@@ -1673,6 +1673,76 @@ def polls_from_manifest(compiler, work, problems):
             problems.append(f"polls: build {' '.join(flags)} is not a usage error: {p.returncode} {p.stderr[:200]}")
 
 
+def out_of_memory_setting(compiler, work, problems):
+    """47. `out-of-memory = "panic"` (ADR 0261): the package's own calls stop on failure, a dependency keeps its `Result`
+    whoever depends on it, `--out-of-memory`, the field's errors, and no fix that adds `!` in a library."""
+    base = os.path.join(work, "out-of-memory")
+    app = os.path.join(base, "app")
+    words = os.path.join(base, "words")
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def codes(p):
+        try:
+            return [(d["code"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            return [p.stdout[:200] + p.stderr[:200]]
+
+    # The library compiles only where a failure is a value: `let r = v.push(1);` is a Result there.
+    write(os.path.join(words, "ceesafe.toml"), '[package]\nname = "words"\nkind = "library"\n')
+    write(os.path.join(words, "src", "words.cee"),
+          "public fn add(v: borrow mut Vector<i32>) -> Result<void, AllocError> {\n    let r = v.push(1);\n"
+          "    return r;\n}\n\npublic fn named(n: StringView) -> Result<String, AllocError> {\n"
+          "    var s = String.from(n)?;\n    s.append(\"!\")?;\n    return Ok(s);\n}\n")
+    main = ("fn main() {\n    var v = Vector<i32>.create();\n    words.add(mut v);\n    v.push(2);\n"
+            "    let s = words.named(\"ada\");\n    Console.writeLine(s.view());\n    Console.writeLine(v.length);\n}\n")
+    write(os.path.join(app, "src", "main.cee"), main)
+
+    def manifest(fields):
+        write(os.path.join(app, "ceesafe.toml"), '[package]\nname = "app"\n' + fields +
+              '\n[dependencies]\nwords = { path = "../words" }\n')
+
+    manifest('out-of-memory = "panic"\n')
+    p = run([compiler, "fetch"], app)
+    if p.returncode != 0:
+        problems.append(f"out-of-memory: fetch: {p.stderr[:300]}")
+        return
+    for command in (["run", "--interp"], ["build"]):
+        p = run([compiler] + command, app)
+        if command[0] == "build" and p.returncode == 0:
+            p = run([os.path.join(app, "out", "app.exe" if WINDOWS else "app")], app)
+        if p.returncode != 0 or p.stdout.split() != ["ada!", "2"]:
+            problems.append(f"out-of-memory: {command[0]}: {p.returncode} {p.stdout!r} {p.stderr[-400:]}")
+    # The default, and --out-of-memory=result over the field: the same main is N0402 twice, and N0234 at `s.view()`.
+    for fields, flags in (("", []), ('out-of-memory = "panic"\n', ["--out-of-memory=result"])):
+        manifest(fields)
+        p = run([compiler, "check", "--diagnostics-format=json"] + flags, app)
+        found = sorted(codes(p))
+        if p.returncode != 1 or found != [("N0234", 6), ("N0402", 3), ("N0402", 4)]:
+            problems.append(f"out-of-memory: {fields.strip() or 'default'} {flags}: {found}")
+    manifest("")
+    p = run([compiler, "check", "--out-of-memory=panic"], app)
+    if p.returncode != 0:
+        problems.append(f"out-of-memory: --out-of-memory=panic: {p.stderr[:300]}")
+    for name, fields, line in (("not a value", 'out-of-memory = "abort"\n', 3),
+                               ("freestanding", 'profile = "freestanding"\nout-of-memory = "panic"\n', 4)):
+        manifest(fields)
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        if p.returncode != 1 or ("N0321", line) not in codes(p):
+            problems.append(f"out-of-memory: {name}: expected N0321 on line {line}: {codes(p)}")
+    # In a library, N0205 for an allocation used as its value offers no fix: a `!` would stop the host.
+    write(os.path.join(words, "src", "extra.cee"),
+          "public fn copy(n: StringView) -> String {\n    let s: String = String.from(n);\n    return s;\n}\n")
+    p = run([compiler, "fix"], words)
+    with open(os.path.join(words, "src", "extra.cee"), encoding="utf-8") as f:
+        if "!" in f.read():
+            problems.append("out-of-memory: fix added '!' in a library")
+    os.remove(os.path.join(words, "src", "extra.cee"))
+
+
 def file_private_names(compiler, work, problems):
     """46. Each file's private items have a scope of their own (ADR 0230)."""
     base = os.path.join(work, "file-private-names")
@@ -2773,6 +2843,7 @@ def main():
         library_build_default(compiler, work, problems)
         polls_from_manifest(compiler, work, problems)
         file_private_names(compiler, work, problems)
+        out_of_memory_setting(compiler, work, problems)
 
     skipped = " (interface records skipped: FreeBSD keeps none)" if freebsd else ""
     print(f"package_tests: 42 checks; {len(problems)} problems{skipped}")

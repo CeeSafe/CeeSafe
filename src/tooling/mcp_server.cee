@@ -1152,6 +1152,8 @@ fn copyPackages(packages: borrow Vector<PackageInfo>) -> Vector<PackageInfo> {
                 name: copyBytes(p.name.view())!,
                 dependencies: dependencies,
                 trusted: p.trusted,
+                outOfMemoryPanic: p.outOfMemoryPanic,
+                library: p.library,
                 directory: copyBytes(p.directory.view())!,
                 embedRoots: embedRoots,
                 embedBoundary: copyBytes(p.embedBoundary.view())!,

@@ -330,6 +330,7 @@ struct Options {
     dumpAst: bool;
     dumpHir: bool;
     noFloat: bool;
+    outOfMemory: u32;            // --out-of-memory: 0 not given, 1 result, 2 panic (ADR 0261), over the root's manifest
     denyWarnings: bool;          // --deny-warnings (check, build, test): warnings are errors (ADR 0073 §2.4)
     libraryDiagnostics: bool;    // report diagnostics in the libraries' files too (porting gaps there; the reference compiler has none)
     freestanding: bool;          // --profile freestanding (profiles.md §4)
@@ -571,6 +572,10 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.structured = false;
         } else if (arg == "--no-float") {
             options.noFloat = true;
+        } else if (arg == "--out-of-memory=panic") {
+            options.outOfMemory = 2; // ADR 0261: the files' (or the root package's) allocating calls stop on failure
+        } else if (arg == "--out-of-memory=result") {
+            options.outOfMemory = 1;
         } else if (!options.running && arg == "--deny-warnings") {
             options.denyWarnings = true;
         } else if (arg == "--library-diagnostics") {
@@ -1015,6 +1020,7 @@ fn parseCommand() -> i32 {
         dumpAst: false,
         dumpHir: false,
         noFloat: false,
+        outOfMemory: 0,
         denyWarnings: false,
         libraryDiagnostics: false,
         freestanding: false,
@@ -1272,7 +1278,11 @@ fn loadPackage(
     collectNativeLinks(borrow workspace, mut options.native)!;
     for (p in 0..workspace.resolved.length + 1) {
         let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
-        packages.push(workspace.packageInfo(p)!)!;
+        var info = workspace.packageInfo(p)!;
+        if (p == 0 && options.outOfMemory != 0) {
+            info.outOfMemoryPanic = options.outOfMemory == 2; // `--out-of-memory`, over the root's field (ADR 0261)
+        }
+        packages.push(info)!;
         options.packageDirectories.push(copyBytes(manifest.directory.view())!)!;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)!;
@@ -1402,6 +1412,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     dumpAst: false,
     dumpHir: false,
     noFloat: false,
+    outOfMemory: 0,
     denyWarnings: false,
     libraryDiagnostics: false,
     freestanding: false,
@@ -1549,10 +1560,15 @@ fn compileFiles(
     given: Options,
     building: bool,
     sourceFiles: borrow Vector<String>,
-    packages: Vector<PackageInfo>,
+    givenPackages: Vector<PackageInfo>,
     packageFiles: Vector<Vector<Vector<u8>>>,
 ) -> i32 {
     var options = given;
+    var packages = givenPackages;
+    if (options.outOfMemory != 0 && packages.length > 0) {
+        // `--out-of-memory` is the root package's setting, or the files' given alone (ADR 0261 §2.1).
+        packages[0].outOfMemoryPanic = options.outOfMemory == 2;
+    }
     if (options.running) {
         // The interpreter runs hosted code with floats (Program.Run's compilation).
         options.freestanding = false;

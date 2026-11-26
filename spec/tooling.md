@@ -248,6 +248,7 @@ profile = "hosted"           # or "freestanding"
 float = true                 # false is --no-float (type-system.md §35.9)
 kernel = "cosmoos"           # with profile = "freestanding": include lib/kernel, as --kernel cosmoos (ADR 0025)
 trusted = true               # its types may be declared @threadSafe (ADR 0025 §3.2); listed for reviewers
+out-of-memory = "panic"      # its own allocating calls stop the program on failure, no `!` (ADR 0261); or "result"
 windowed = true              # an executable with a window: on Windows no console window (ADR 0151)
 polls = true                 # built with polls: Async.runBound can bound its tasks (ADR 0186, ADR 0190)
 sources = ["src"]
@@ -289,6 +290,16 @@ without `main` is N0300.
 A dependency's key is its package's `name`: a dependency is known by the name its own manifest gives it. A
 dependency of kind `executable` is N0321: only a library's items are used. Errors in the manifest are N0320 (its
 syntax) and N0321 (a missing, unknown or invalid field), with the line.
+
+**Out of memory** (ADR 0261). `out-of-memory = "panic"` makes a call of the package's own whose type is
+`Result<T, AllocError>` a `T` that stops the program if the allocation fails, unless `?`, `!`, `let _ =` or an
+expected `Result` keeps it a `Result` (type-system.md §17.7). `"result"`, the default, is the rule everywhere else.
+- It is the package's own: a dependency follows its own manifest, so a library's `v.push(x)` means the same whoever
+  depends on it. A library or an object may say `"panic"`; it then stops its host when memory runs out.
+- `out-of-memory = "panic"` with `profile = "freestanding"`, and a value that is neither, are N0321 at the value. It
+  is a field of `[package]` only, not of a `[target.OS]` table.
+- `--out-of-memory=panic` and `--out-of-memory=result` are the root package's setting for one command, over its
+  field, or the setting of files given alone.
 
 **Windowed executables** (ADR 0151). `windowed = true` says that the executable is a program with a window. On
 Windows it is linked for the Windows subsystem, with `main` still its entry (§8.3), so Windows gives it no console
@@ -736,6 +747,7 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0204, N0200 | `Vec`, undeclared, as a type with arguments (`Vec<T>`, `Vec<T>.f()`), or `Vec.f()` where a vector is expected | `Vec` → `Vector` |
 | N0200 | `String.new()`, and `Vector<T>.new()` or `Vector.new()` where a vector is expected | `new` → `create` |
 | N0200 | `Box.new(x)` where a box is expected | `Box.create(x)!`, which panics when memory runs out, as Rust's does |
+| N0205 | a `Result<T, AllocError>` where its `T` is expected, in an executable or files given alone, not a library or an object (ADR 0261 §2.4) | insert `!` after the value, which stops the program when memory runs out |
 | N0200 | `x.len()`, without arguments and not a statement by itself, on a vector, a `String`, a slice, an array or a `StringView` | `len()` → `length` |
 | N0100 | `::` (`grammar.md` §1.7), wherever it stands and whatever else the file has | `::` → `.`; before `<` (`f::<T>()`), remove it |
 | N0267 | `x.m(args)` where two interfaces' impls give `x`'s type a method `m` and exactly one of them is a method taking that many arguments, the call having no type arguments of its own (type-system.md §21.4, ADR 0229) | `x.m(` → `I.m(x, ` (`I.m(mut x, ` for a `borrow mut this` method), or `x.m()` → `I.m(x)`: two edits, one fix |
@@ -1390,6 +1402,7 @@ for it.
 | `--library-diagnostics` | parse, check, build, run, fix, test | check, build, run, fix, test | internal (§12.2). parse: nothing |
 | `--line-directives`, `-g` | build, test | build, test | |
 | `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-fill-elision`, `--no-oce`, `--no-placement`, `--no-temporary-forwarding` | build, run, test | build, run, test | |
+| `--out-of-memory=panic`, `--out-of-memory=result` | parse, check, build, run, fix, test | check, build, run, fix, test: the root package's (or the files') setting (§4.1, ADR 0261), over its manifest's | parse: nothing |
 | `--offline` | parse, check, build, run, fix, test | all six, in a package | `fetch` and `index-check` have their own |
 | `--package`, `--record`, `--whole-program` | check | check | |
 | `--polls`, `--no-polls` | build, test | build, test (§4.1, ADR 0190): polls on or off for one build, over the root manifest's `polls` | Both, `--no-polls` with a `--cflag` that defines `CEE_POLLS`, and `--polls` with `--profile freestanding` (or in a freestanding package) are usage errors |

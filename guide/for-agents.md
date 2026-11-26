@@ -755,6 +755,24 @@ fn main() {
 9
 ```
 
+### An allocation is a `Result`, unless the package stops on failure
+
+`v.push(x)`, `String.from(t)`, `Box.create(v)`, `s.clone()` and the other calls that allocate return
+`Result<…, AllocError>`. Where the program should stop when memory runs out, end each with `!`; where the caller
+decides, with `?`. A program that would always write `!` can say so once, in `ceesafe.toml`:
+
+```toml
+[package]
+name = "app"
+out-of-memory = "panic"
+```
+
+Its own calls then need neither: `names.push(String.from("ada"));` stops the program with "out of memory" if a
+failure comes. `?`, `!`, `let _ =` and a declared `Result` type still keep a call's `Result`, so code written for
+either setting means the same in this one. A dependency follows its own manifest, and a library should keep the
+default, so that its callers decide. Files checked alone take `--out-of-memory=panic`. Code copied from such a
+package into one without the setting gets N0205 or N0402 at each call; `ceesafec fix` adds the `!` in an executable.
+
 ### What the compiler fixes for you
 
 `ceesafe_fix` and `ceesafec fix` repair these without being asked twice: a `let` that is assigned (`var`), an argument for a
@@ -766,7 +784,8 @@ box is expected (`Box.create(x)!`). It also makes a `let` that is
 borrowed mutably a `var`, writes `borrow x` where a variable is given for a reference and `x as i64` where a variable's
 number only needs widening, writes `x.asBorrow()` where a borrow of an optional should be an optional borrow, declares the
 type of a `var` that was meant to copy the value behind a reference, boxes a recursive awaited call
-(`Async.boxed(SystemHeap {}, …)!`), and removes an extern declaration that repeats a dependency's.
+(`Async.boxed(SystemHeap {}, …)!`), and removes an extern declaration that repeats a dependency's. In an executable it adds
+the `!` to an allocation used as its value (`let s: String = String.from(t)!;`).
 
 ## Where to read more
 

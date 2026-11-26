@@ -1766,6 +1766,7 @@ fn emitTerminator(
             e.t(match (kind) {
                 NirPanicKind.UnwrapNull => "    ceesafe_panic(CEE_PANIC_UNWRAP_NULL, ",
                 NirPanicKind.Unwrap => "    ceesafe_panic(CEE_PANIC_UNWRAP, ",
+                NirPanicKind.OutOfMemory => "    ceesafe_panic(CEE_PANIC_OUT_OF_MEMORY, ",
             })?;
             var location = Vector<u8>.create();
             appendLocation(e, mut location, sources, c.hir.functions[source as usize].file, span.start)?;

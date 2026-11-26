@@ -1,0 +1,10 @@
+// option: out-of-memory panic
+// env: CEESAFE_FAIL_ALLOC_AT=1
+// ADR 0261 §2.3: the implicit unwrap of a failed allocation panics with "out of memory" at the call. The runtime's
+// first allocation fails (CEESAFE_FAIL_ALLOC_AT), as the fault sweep makes it fail.
+fn main() {
+    Console.writeLine("start");
+    let v: Vector<u64> = Vector.withCapacity(4); // expect-panic: out of memory
+    Console.writeLine(v.length);
+}
+// expect-stdout: start

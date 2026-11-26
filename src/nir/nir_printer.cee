@@ -439,6 +439,7 @@ fn printNirTerminator(
             return appendText(out, match (kind) {
                 NirPanicKind.Unwrap => "panic Unwrap",
                 NirPanicKind.UnwrapNull => "panic UnwrapNull",
+                NirPanicKind.OutOfMemory => "panic OutOfMemory",
             });
         }
         NirTerminator.Unreachable => { return appendText(out, "unreachable"); }

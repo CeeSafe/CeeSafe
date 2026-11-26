@@ -3364,6 +3364,9 @@ fn panicCode(message: Slice<u8>) -> u32 {
     if (sameText(message, "unwrapped null")) {
         return 9;
     }
+    if (sameText(message, "out of memory")) {
+        return 21; // ADR 0261
+    }
     if (sameText(message, "string slice not on a character boundary")) {
         return 10;
     }

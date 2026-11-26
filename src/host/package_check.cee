@@ -143,6 +143,8 @@ fn copyPackageInfo(p: borrow PackageInfo) -> Result<PackageInfo, AllocError> {
             name: copyBytes(p.name.view())?,
             dependencies: dependencies,
             trusted: p.trusted,
+            outOfMemoryPanic: p.outOfMemoryPanic,
+            library: p.library,
             directory: copyBytes(p.directory.view())?,
             embedRoots: roots,
             embedBoundary: copyBytes(p.embedBoundary.view())?,
@@ -202,9 +204,13 @@ fn loadWorkspaceData(options: borrow mut Options, data: borrow mut WorkspaceData
         manifestSourceFiles(manifest, mut sources)!;
         var tests = Vector<Vector<u8>>.create();
         manifestTestFiles(manifest, mut tests)!;
+        var info = workspace.packageInfo(p)!;
+        if (p == 0 && options.outOfMemory != 0) {
+            info.outOfMemoryPanic = options.outOfMemory == 2; // `--out-of-memory`, over the root's field (ADR 0261)
+        }
         data.packages.push(
             WorkspacePackage {
-                info: workspace.packageInfo(p)!,
+                info: info,
                 sources: sources,
                 tests: tests,
                 texts: Vector<Vector<u8>>.create(),

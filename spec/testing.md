@@ -149,7 +149,8 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   sibling `.hir` snapshot.
 - `check-fail/*.cee`: must **parse** cleanly and produce exactly the annotated semantic diagnostics.
 - A file with a line `// profile: freestanding` is checked in the freestanding profile (`profiles.md` §4), and one with
-  `// option: no-float` as if built with `--no-float` (`type-system.md` §35.9).
+  `// option: no-float` as if built with `--no-float` (`type-system.md` §35.9); `// option: out-of-memory panic` is
+  `--out-of-memory=panic` (ADR 0261).
 - `run-pass/*.cee` and `run-fail/*.cee` are compiled to C, built with strict warnings and `-Werror`, and run.
   Directives:
   - `// expect-stdout: text`: one per output line, in order; `// expect-stdout:` alone is an empty line.

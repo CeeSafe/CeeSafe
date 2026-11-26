@@ -1,0 +1,8 @@
+fn main() {
+    var names = Vector<String>.create();
+    names.push(String.from("ada"));
+    names.push(String.from("grace"));
+    var line = String.from("names: ");
+    line.appendNumber(names.length);
+    Console.writeLine(line.view());
+}

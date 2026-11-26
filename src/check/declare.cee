@@ -277,6 +277,8 @@ fn checkProgramWith(
         blockValueResult: none(),
         packageDeclared: Map<Word, Word>.create(),
         fileDeclared: Map<Word, Word>.create(),
+        keptCall: none(),
+        outOfMemoryUnwraps: Map<Word, Word>.create(),
         tryConversions: Map<Word, Word>.create(),
         packageSymbols: Map<Word, Word>.create(),
         uncheckedLibrary: Vector<bool>.create(),

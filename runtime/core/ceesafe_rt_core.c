@@ -36,6 +36,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_POISONED: return "this lock was held by an isolated task that trapped: its data may be broken";
     case CEE_PANIC_OVERRAN: return "a task ran past its bound without waiting";
     case CEE_PANIC_NARROWING: return "conversion loses information on this 32-bit target";
+    case CEE_PANIC_OUT_OF_MEMORY: return "out of memory";
     default: return "unknown panic";
     }
 }

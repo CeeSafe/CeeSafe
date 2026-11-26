@@ -145,7 +145,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_ALLOCATOR = 17, /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
     CEE_PANIC_POISONED = 18, /* a lock that an isolated task held when it trapped was taken (ADR 0175 §2.6) */
     CEE_PANIC_OVERRAN = 19,  /* a task ran past its bound without waiting (ADR 0186) */
-    CEE_PANIC_NARROWING = 20 /* an `as` to usize or isize whose value does not fit on this 32-bit target (ADR 0192) */
+    CEE_PANIC_NARROWING = 20, /* an `as` to usize or isize whose value does not fit on this 32-bit target (ADR 0192) */
+    CEE_PANIC_OUT_OF_MEMORY = 21 /* an allocation failed where its package stops on that (ADR 0261) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */

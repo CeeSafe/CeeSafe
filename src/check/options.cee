@@ -26,6 +26,51 @@ fn resultOk(c: borrow Checker, typ: u32) -> u32 => c.types.enums[c.types.info(ty
 
 fn resultErr(c: borrow Checker, typ: u32) -> u32 => c.types.enums[c.types.info(typ).enumDef as usize].resultErr;
 
+/// Whether the file being checked is in a package whose manifest says `out-of-memory = "panic"`, or given alone with
+/// `--out-of-memory=panic` (ADR 0261). The libraries' files never are.
+fn stopsOnNoMemory(c: borrow Checker) -> bool {
+    let package = currentPackage(c);
+    return package != none() && c.packages[package as usize].outOfMemoryPanic;
+}
+
+/// The type an allocating call's `Ok` should have, from what is expected of the call: the `T` of an expected
+/// `Result<T, E>`, or, where a failure stops the program (ADR 0261 §2.2), the expected type itself, which the
+/// call's implicit unwrap gives. None otherwise.
+fn fallibleHint(c: borrow Checker, expected: u32) -> u32 {
+    if (expected == none()) {
+        return none();
+    }
+    if (isResultType(c, expected)) {
+        return resultOk(c, expected);
+    }
+    return if (stopsOnNoMemory(c)) expected else none();
+}
+
+/// A call `e` in a package that stops when memory runs out (ADR 0261 §2.2): checked as any call, then, if its type is
+/// `Result<T, AllocError>` and nothing keeps it a `Result` (`?`, `!`, `let _ =`, or an expected `Result`), unwrapped
+/// to `T`; the unwrap panics with "out of memory" (§2.3).
+fn synthCallStoppingOnNoMemory(
+    c: borrow mut Checker,
+    e: u32,
+    callee: u32,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let kept = c.keptCall == e || (expected != none() && isResultType(c, expected));
+    let value = synthCall(c, callee, arguments, expected, span)?;
+    if (kept || c.isBottom(value)) {
+        return Ok(value);
+    }
+    let t = c.typeOf(value);
+    if (!isResultType(c, t) || resultErr(c, t) != c.allocErrorType) {
+        return Ok(value);
+    }
+    let unwrapped = c.expr(HirExpr.Unwrap(value), resultOk(c, t), span.start, span.end)?;
+    c.outOfMemoryUnwraps.put(Word { value: unwrapped as u64 }, Word { value: 0 })?;
+    return Ok(unwrapped);
+}
+
 /// `T?` (ResolveTypeCore's OptionalType case).
 fn resolveOptionalType(c: borrow mut Checker, inner: u32, allowSources: bool) -> Result<u32, AllocError> {
     let value = c.resolveTypeWith(inner, false, allowSources)?;
@@ -396,6 +441,7 @@ fn unwrapsMemberCall(c: borrow Checker, e: u32) -> bool => match (c.front.ast.ex
 
 /// The operand of `e?` or `e!`: a `Result` or optional value (CheckResultOperand, N0262), or none.
 fn checkResultOperand(c: borrow mut Checker, operand: u32, text: StringView, expected: u32) -> Result<u32, AllocError> {
+    c.keptCall = unparenthesized(c, operand); // `?` and `!` keep a call's `Result` (ADR 0261 §2.2)
     // `Box.create(move …)!` for an expected `Box<dyn fn…>`: the move literal's type comes from it (§36.5).
     var hint = none();
     if (expected != none() && c.types.isDynBox(expected) &&

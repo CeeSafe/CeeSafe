@@ -2,9 +2,9 @@
 title: Allocation failure is a value
 summary: Every operation that allocates memory, such as push, append and Box.create, returns a Result with AllocError. How to pass it on with ?, stop with !, and test the out-of-memory path with FailingAllocator and with ceesafec test --sweep alloc.
 assumes: [ch08-01-vectors, ch08-02-strings, ch09-02-result]
-keywords: [AllocError, OutOfMemory, push, append, withCapacity, Box.create, FailingAllocator, failAfter, "--sweep alloc", allocation, "out of memory"]
+keywords: [AllocError, OutOfMemory, push, append, withCapacity, Box.create, FailingAllocator, failAfter, "--sweep alloc", allocation, "out of memory", "out-of-memory"]
 diagnostics: [N0234, N0402]
-specification: ["type-system.md §17.1", "type-system.md §18.1", "tooling.md §10.2"]
+specification: ["type-system.md §17.1", "type-system.md §17.7", "type-system.md §18.1", "tooling.md §4.1", "tooling.md §10.2"]
 ---
 
 # Allocation failure is a value
@@ -110,6 +110,43 @@ character, at each place where memory is asked for.
 End a call that allocates with `?` in a function that returns `Result<…, AllocError>`, or with `!` in a program
 that stops when memory runs out. Do not leave it bare.
 :::
+
+### A package that always stops: `out-of-memory = "panic"`
+
+A program that would write `!` after every allocation can say so once instead, in its `ceesafe.toml`:
+
+```toml
+[package]
+name = "stop"
+version = "0.1.0"
+kind = "executable"
+out-of-memory = "panic"
+```
+
+In that package, a call that allocates gives its value directly, and a failure stops the program with
+`out of memory` and the line. This package is in `book/projects/ch09-stop/`:
+
+<!-- ceesafe: skip -->
+```ceesafe
+fn main() {
+    var names = Vector<String>.create();
+    names.push(String.from("ada"));
+    names.push(String.from("grace"));
+    var line = String.from("names: ");
+    line.appendNumber(names.length);
+    Console.writeLine(line.view());
+}
+```
+
+```text
+names: 2
+```
+
+`?`, `!` and `let _ =` still mean what they mean everywhere, and so does a declared `Result` type:
+`let r: Result<Vector<u8>, AllocError> = Vector<u8>.withCapacity(n);` is the one allocation such a program can
+still survive. The setting is the package's own. A library it depends on follows its own `ceesafe.toml`, so a
+library's `v.push(x)` means the same whoever uses it, and a library should keep the default, to leave the decision
+to its callers. This book's listings keep the default, so that each compiles in any package.
 
 ## Testing the failure path
 
@@ -291,7 +328,7 @@ your own, and `--deny-warnings`, which makes the warning an error.
 ::: details Coming from Rust
 `Vec::push` aborts the process when allocation fails. Here every such method is what Rust calls the `try_` form:
 `v.push(x)` is closer to `v.try_reserve(1)` followed by a push, and it returns a `Result`. `v.push(x)!` gives the
-behaviour of Rust's `push`.
+behaviour of Rust's `push`, and so does a bare `v.push(x)` in a package that says `out-of-memory = "panic"`.
 :::
 
 ::: details Coming from C

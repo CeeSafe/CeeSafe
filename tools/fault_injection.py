@@ -68,6 +68,7 @@ def problem(outcome):
         return "sanitizer report"
     if "ceesafe panic: " in stderr:
         expected = ("ceesafe panic: unwrapped an Err value" in stderr or
+                    "ceesafe panic: out of memory at " in stderr or  # ADR 0261 §2.3
                     "ceesafe panic: async frame stack: out of memory" in stderr or  # ADR 0056 §3.3
                     "ceesafe panic: out of memory making a constant Mutex's lock" in stderr)  # ADR 0211 §2.4
         return None if expected and status == 134 else "unexpected panic"
@@ -79,6 +80,9 @@ def problem(outcome):
 
 def build(compiler, corpus, path, out, reference):
     switches = SWITCHES
+    with open(os.path.join(corpus, path), encoding="utf-8") as f:
+        if "// option: out-of-memory panic" in f.read().splitlines():
+            switches = switches + ["--out-of-memory=panic"]  # the corpus's option (ADR 0261; run_corpus.py)
     c_dir = out + "-c"
     emitted = subprocess.run([compiler, "build", "--emit", "c", "-o", c_dir] + switches + [path], cwd=corpus,
                              capture_output=True)

@@ -68,6 +68,7 @@ struct NirCase {
 enum NirPanicKind {
     Unwrap,
     UnwrapNull,
+    OutOfMemory, // the unwrap of an allocation where a failure stops the program (ADR 0261 §2.3)
 }
 
 enum NirStatement {

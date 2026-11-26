@@ -188,7 +188,8 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             (c.types.is(
                 expected,
                 TypeKind.Box,
-            ) && (isBoxFromRaw(c, e)? || isBoxNew(c, e)? || unwrapsMemberCall(c, e))) ||
+            ) && (isBoxFromRaw(c, e)? || isBoxNew(c, e)? || unwrapsMemberCall(c, e) ||
+                (stopsOnNoMemory(c) && isMemberCall(c, e)))) ||                 // `Box.create(5)`'s box (ADR 0261 §2.2)
             (c.types.is(expected, TypeKind.RawPointer) && isNullLiteral(c, e)); // N0260 names the pointer type
         if (!keep && t.pointee != none()) {
             synthExpected = t.pointee;
@@ -339,6 +340,9 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
                     }
                 }
                 _ => {}
+            }
+            if (stopsOnNoMemory(c)) {
+                return synthCallStoppingOnNoMemory(c, e, callee, arguments, expected, span);
             }
             return synthCall(c, callee, arguments, expected, span);
         }
@@ -887,6 +891,33 @@ fn checkOperatorApplies(c: borrow mut Checker, op: BinaryOp, typ: u32, span: Spa
 
 /// Coerce: the conversions S1a's programs need (identity, reborrows, reading through references); every other
 /// mismatch is N0205.
+/// N0205 for a `Result<T, AllocError>` where its `T` is expected (ADR 0261 §2.4): a call that may fail to allocate, in
+/// a package where a failure is a value. In an executable (or files given alone) the sure fix adds `!`, which stops
+/// the program as the call would in a package that says `out-of-memory = "panic"`; a library's `!` would stop its host.
+fn missingAllocationMark(c: borrow mut Checker, t: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "expected ")?;
+    appendQuotedType(mut message, c, expected)?;
+    appendText(mut message, ", found ")?;
+    appendQuotedType(mut message, c, t)?;
+    appendText(
+        mut message,
+        ": it may fail to allocate; end it with '!' to stop the program then, or '?' to pass the failure on (a package whose ceesafe.toml says out-of-memory = \"panic\" needs neither; ADR 0261)",
+    )?;
+    let package = currentPackage(c);
+    let library = package != none() && c.packages[package as usize].library;
+    if (library || isLibraryFile(c)) {
+        c.error(typeMismatch(), span.start, span.end, message)?;
+    } else {
+        var title = Vector<u8>.create();
+        appendText(mut title, "add '!'")?;
+        var text = Vector<u8>.create();
+        appendText(mut text, "!")?;
+        c.errorWithFix(typeMismatch(), span.start, span.end, message, title, span.end, span.end, text)?;
+    }
+    return c.errorResult(span.start, span.end);
+}
+
 fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
     let t = c.typeOf(e);
     if (expected == none() || expected == c.types.error || c.types.isBottom(t)) {
@@ -934,6 +965,9 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
             return c.expr(HirExpr.Reborrow(true, e), expected, span.start, span.end);
         }
         return Ok(e);
+    }
+    if (isResultType(c, t) && resultErr(c, t) == c.allocErrorType && resultOk(c, t) == expected) {
+        return missingAllocationMark(c, t, expected, span);
     }
     if (c.types.isClosure(expected)) {
         return coerceToClosure(c, e, expected, span);

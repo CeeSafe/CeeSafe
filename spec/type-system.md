@@ -1473,6 +1473,25 @@ error's `@into` method), N0262 (`?` or `!` on a non-`Result`, or a misused `@fro
   return nothing (`Result<void, E>`).
 - They are lib/core's ResultMethods<T, E>, ResultMapping<T, E>, ResultErrorMapping<T, E> and OptionalResults<T, E>.
 
+### 17.7 A package that stops when memory runs out (ADR 0261)
+- In a package whose manifest says `out-of-memory = "panic"` (tooling.md §4.1), or in files given alone with
+  `--out-of-memory=panic`, a call whose type is `Result<T, AllocError>` (any function, method or type's function, of
+  any package; the error type exactly `AllocError`) **has type `T`**, unless one of these keeps it a `Result`:
+  1. it is the operand of `?` or `!` (§17.4), which mean what they mean in any package;
+  2. its expected type is a `Result` (a declared type, a `return` in a function that returns one, a `Result`
+     parameter);
+  3. it is the operand of `let _ =`, which discards the `Result` (§17.5).
+- The call is then unwrapped as `e!` would unwrap it, with the call's expected type as the hint `e!` would give it
+  (§17.4: `let b: Box<i64> = Box.create(5);` holds an `i64`). A failure panics with "out of memory" at the call, not
+  "unwrapped an Err value"; a panic is abort, exit status 134.
+- It applies to the package's own files only, its tests included: each dependency follows its own manifest, and
+  lib/core, lib/std and lib/kernel are never in such a package. A generic function is checked in its own package's
+  setting. A signature is unchanged: a function declared to return `Result<T, AllocError>` returns one, which its
+  callers see as their own setting says.
+- A call whose error type is not `AllocError` is not affected. N0402 does not arise for an unwrapped call, which has no
+  `Result`. In a package where a failure is a value, a `Result<T, AllocError>` where its `T` is expected is N0205,
+  whose message names the setting; in an executable, or files given alone, its sure fix adds `!` (tooling.md §5.2).
+
 ## 18. Boxes and allocators (M3b)
 
 ```ceesafe

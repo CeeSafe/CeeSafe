@@ -455,6 +455,8 @@ struct PackageInfo {
     name: Vector<u8>;
     dependencies: Vector<Vector<u8>>;
     trusted: bool;
+    outOfMemoryPanic: bool; // out-of-memory = "panic" (ADR 0261): its own allocating calls stop on failure
+    library: bool;          // kind = "library" or "object": no fix adds a `!` that would stop its host (ADR 0261 §6)
     directory: Vector<u8>;
     embedRoots: Vector<Vector<u8>>;
     embedBoundary: Vector<u8>;
@@ -465,6 +467,8 @@ fn loosePackage() -> PackageInfo => PackageInfo {
     name: Vector<u8>.create(),
     dependencies: Vector<Vector<u8>>.create(),
     trusted: false,
+    outOfMemoryPanic: false,
+    library: false,
     directory: Vector<u8>.create(),
     embedRoots: Vector<Vector<u8>>.create(),
     embedBoundary: Vector<u8>.create(),

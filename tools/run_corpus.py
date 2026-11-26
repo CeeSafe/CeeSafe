@@ -116,6 +116,8 @@ def compile_options(text):
         options += ["--profile", "freestanding"]
     if "// option: no-float" in stripped:
         options.append("--no-float")
+    if "// option: out-of-memory panic" in stripped:
+        options.append("--out-of-memory=panic")  # ADR 0261
     if "// option: kernel cosmoos" in stripped:
         options += ["--kernel", "cosmoos"]
     # `debugAssert` (ADR 0087 §2.5): on or off in both the build and the interpreter.

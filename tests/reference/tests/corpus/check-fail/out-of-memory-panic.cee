@@ -1,0 +1,8 @@
+// option: out-of-memory panic
+// ADR 0261 §2.2: an allocating call that nothing keeps a `Result` has the `Ok` type, so it has no `Result` methods.
+fn main() {
+    var v = Vector<i32>.create();
+    let r = v.push(1);
+    Console.writeLine(r.isOk());   // error[N0234]
+    let s: i32 = String.from("a"); // error[N0205]
+}

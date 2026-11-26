@@ -4774,7 +4774,10 @@ fn lowerResultAccess(
         let aggregate = n.rvalue(NirRvalue.EnumAggregate(errVariant, list), returnType, b.span)?;
         emitReturn(c, n, b, aggregate)?;
     } else {
-        terminate(n, b, NirTerminator.Panic(if (isOption) NirPanicKind.UnwrapNull else NirPanicKind.Unwrap))?;
+        let implicit = c.outOfMemoryUnwraps.get(borrow Word { value: e as u64 }) != null;
+        let kind = if (isOption) NirPanicKind.UnwrapNull else if (implicit) NirPanicKind.OutOfMemory
+            else NirPanicKind.Unwrap;
+        terminate(n, b, NirTerminator.Panic(kind))?;
     }
     b.current = okBlock;
     b.span = exprSpan(c, e);

@@ -181,11 +181,14 @@ struct Manifest {
     packageStart: u32; // the [package] header's
     packageEnd: u32;
     freestanding: bool;
-    floatAllowed: bool; // float = false is --no-float
-    kernel: bool;       // kernel = "cosmoos": lib/kernel is part of the build (ADR 0025)
-    trusted: bool;      // trusted = true: the package's types may be declared @threadSafe (ADR 0025 §3.2)
-    windowed: bool;     // windowed = true: on Windows, linked for the Windows subsystem (ADR 0151)
-    polls: bool;        // polls = true: built with polls, CEE_POLLS (ADR 0190); the root's decides
+    floatAllowed: bool;     // float = false is --no-float
+    kernel: bool;           // kernel = "cosmoos": lib/kernel is part of the build (ADR 0025)
+    trusted: bool;          // trusted = true: the package's types may be declared @threadSafe (ADR 0025 §3.2)
+    outOfMemoryPanic: bool; // out-of-memory = "panic": its own allocating calls stop on failure (ADR 0261)
+    outOfMemoryStart: u32;  // that value's place in the manifest
+    outOfMemoryEnd: u32;
+    windowed: bool; // windowed = true: on Windows, linked for the Windows subsystem (ADR 0151)
+    polls: bool;    // polls = true: built with polls, CEE_POLLS (ADR 0190); the root's decides
     sources: Vector<Vector<u8>>;
     cFiles: Vector<Vector<u8>>;
     dependencies: Vector<DependencySpec>;
@@ -379,6 +382,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         floatAllowed: true,
         kernel: false,
         trusted: false,
+        outOfMemoryPanic: false,
+        outOfMemoryStart: 0,
+        outOfMemoryEnd: 0,
         windowed: false,
         polls: false,
         sources: sources,
@@ -437,6 +443,13 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             valid = v.isBool();
             if (valid) {
                 manifest.trusted = v.flag;
+            }
+        } else if (sameText(key, "out-of-memory")) {
+            valid = v.isString() && (sameText(v.text.view(), "panic") || sameText(v.text.view(), "result"));
+            if (valid) {
+                manifest.outOfMemoryPanic = sameText(v.text.view(), "panic");
+                manifest.outOfMemoryStart = v.start;
+                manifest.outOfMemoryEnd = v.end;
             }
         } else if (sameText(key, "windowed")) {
             valid = v.isBool();
@@ -514,6 +527,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 "trusted",
             )) "'trusted' is true or false" else if (sameText(
                 key,
+                "out-of-memory",
+            )) "'out-of-memory' is \"panic\" or \"result\" (ADR 0261)" else if (sameText(
+                key,
                 "windowed",
             )) "'windowed' is true or false" else if (sameText(
                 key,
@@ -554,6 +570,18 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             start,
             end,
             copyBytes("'kernel' needs profile = \"freestanding\": lib/kernel is for a kernel (ADR 0025)".bytes())?,
+        )?;
+    }
+    if (manifest.outOfMemoryPanic && manifest.freestanding) {
+        // A kernel has no process to end, and lib/kernel is written to recover (ADR 0261 §6).
+        manifestError(
+            report,
+            file,
+            manifest.outOfMemoryStart,
+            manifest.outOfMemoryEnd,
+            copyBytes(
+                "out-of-memory = \"panic\" is for hosted packages: a freestanding one handles an allocation failure (ADR 0261)".bytes(),
+            )?,
         )?;
     }
     if (manifest.windowed && (manifest.kind != 0 || manifest.freestanding)) {

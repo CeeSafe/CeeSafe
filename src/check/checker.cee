@@ -228,16 +228,18 @@ struct Checker {
     profileReports: Vector<LayoutUse>;
     reportedQualified: Vector<LayoutUse>;
     reportedPrivate: Vector<LayoutUse>;
-    duplicateNames: Vector<u32>;      // (file, symbol) of each second declaration of a name (N0201)
-    packages: Vector<PackageInfo>;    // the root first, then its dependencies (single-file mode: one, unnamed)
-    filePackage: Vector<u32>;         // each file's package, none for the libraries
-    blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
-    blockValueResult: u32;            // and the type its value turned out to have, or none
-    packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
-    fileDeclared: Map<Word, Word>;    // the names of each file's private items, by fileKey (ADR 0230)
-    tryConversions: Map<Word, Word>;  // a `?`: its `@from` variant (ADR 0075 §2.3) or, with bit 32, its `@into` method (ADR 0128)
-    packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
-    uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks
+    duplicateNames: Vector<u32>;         // (file, symbol) of each second declaration of a name (N0201)
+    packages: Vector<PackageInfo>;       // the root first, then its dependencies (single-file mode: one, unnamed)
+    filePackage: Vector<u32>;            // each file's package, none for the libraries
+    blockValueType: u32;                 // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
+    blockValueResult: u32;               // and the type its value turned out to have, or none
+    packageDeclared: Map<Word, Word>;    // the names each package declares, public or not (PackageScope.Declared)
+    fileDeclared: Map<Word, Word>;       // the names of each file's private items, by fileKey (ADR 0230)
+    keptCall: u32;                       // the call `?`, `!` or `let _ =` keeps a `Result` (ADR 0261 §2.2), or none
+    outOfMemoryUnwraps: Map<Word, Word>; // the unwraps ADR 0261 adds: they panic with "out of memory"
+    tryConversions: Map<Word, Word>;     // a `?`: its `@from` variant (ADR 0075 §2.3) or, with bit 32, its `@into` method (ADR 0128)
+    packageSymbols: Map<Word, Word>;     // the names packages declare: a library item of one gets a C name of its own
+    uncheckedLibrary: Vector<bool>;      // by HIR function: a library function with an error, left out of the NIR checks
     declaredOrder: Vector<DeclaredEntry>;
     methodFiles: Vector<MethodFile>;   // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
     enumMethods: Vector<EnumMethod>;   // the functions of each `impl E { … }` block of an enum (ADR 0107)

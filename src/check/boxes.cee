@@ -164,8 +164,9 @@ fn checkBoxCreate(
     }
     // A `Box<dyn I>` expected gives no hint: the box holds the value's own type, coerced afterwards (§37.2).
     var hint = none();
-    if (expected != none() && isResultType(c, expected)) {
-        let ok = resultOk(c, expected);
+    let expectedBox = fallibleHint(c, expected);
+    if (expectedBox != none()) {
+        let ok = expectedBox;
         if (c.types.is(ok, TypeKind.Box) && !c.types.isDyn(c.types.info(ok).pointee)) {
             hint = c.types.info(ok).pointee;
         }
@@ -178,8 +179,8 @@ fn checkBoxCreate(
         // `Box.create(move (…) => …)` for an expected `Box<dyn fn…>` (§36.5): the box holds the environment.
         let literalSpan = c.front.ast.exprSpans[valueSyntax as usize];
         var dynFunction = none();
-        if (expected != none() && isResultType(c, expected)) {
-            let ok = resultOk(c, expected);
+        if (fallibleHint(c, expected) != none()) {
+            let ok = fallibleHint(c, expected);
             if (c.types.is(ok, TypeKind.Box)) {
                 let contents = c.types.info(ok).pointee;
                 if (c.types.isDyn(contents) && c.types.info(contents).dynInterface == none()) {

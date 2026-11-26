@@ -1,0 +1,37 @@
+// option: out-of-memory panic
+// ADR 0261: where a failure stops the program, a call whose type is `Result<T, AllocError>` is `T`, unless `?`, `!`,
+// `let _ =` or an expected `Result` keeps it a `Result`. A call whose error is not `AllocError` is not changed.
+fn grown(n: i32) -> Result<Vector<i32>, AllocError> {
+    var v = Vector<i32>.create();
+    for (i in 0..n) {
+        v.push(i)?; // kept: `?` passes the failure on
+    }
+    return Ok(v); // kept: the expected type is the function's `Result`
+}
+
+fn parse(s: StringView) -> Result<usize, StringView> => if (s.length == 0) Err("empty") else Ok(s.length);
+
+fn main() {
+    var names = Vector<String>.create();
+    names.push(String.from("ada"));
+    names.push(String.from("grace")!)!; // a written `!` means what it always did
+    var line = String.from("names: ");
+    line.append(names[0].view());
+    let b: Box<i64> = Box.create(5);
+    let inner: i64 = b;
+    let v = grown(3); // a function of the package's own that returns `Result<…, AllocError>`
+    let kept: Result<Vector<u8>, AllocError> = Vector<u8>.withCapacity(8);
+    let _ = names.push(String.from("linus"));
+    Console.writeLine(line.view());
+    Console.writeLine(names.length);
+    Console.writeLine(inner);
+    Console.writeLine(v.length);
+    Console.writeLine(kept.isOk());
+    Console.writeLine(parse("").isErr()); // a `Result<usize, StringView>` stays one
+}
+// expect-stdout: names: ada
+// expect-stdout: 3
+// expect-stdout: 5
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: true

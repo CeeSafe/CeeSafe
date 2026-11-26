@@ -75,7 +75,11 @@ Done (2026-11-26):
   Unsupported). The runtime compiled for iOS, macOS and Android with the corpus's warnings as errors.
 - The owner's iPhone 14 Plus, by his hands, in Marivil's port with the three fixes (the message shown at once, the
   bubble decoded at an eighth, this): "Fast now".
-- Not yet: Android on the Moto (built, the phone was not connected), a HEIC from the library, Windows.
+- The owner's Moto (Android 15), by his hands, with the release branch's compiler: a camera photo taken with the
+  phone offline was in the chat at once, upright, "sending…" (the 2.9 MB original in the gallery); the phone was
+  restarted to reach Wi-Fi, and when Marivil started again its upload went at once (the server's log at 19:50:25)
+  and the message became "sent" (the port's staged message, retried on reconnecting).
+- Not yet: a HEIC from the library, Windows.
 
 ## 6. Questions for the owner (answered 2026-11-26)
 

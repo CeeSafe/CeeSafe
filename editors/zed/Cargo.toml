@@ -1,6 +1,6 @@
 [package]
 name = "zed_ceesafe"
-version = "0.95.18"
+version = "0.95.19"
 edition = "2024"
 publish = false
 license = "MIT"

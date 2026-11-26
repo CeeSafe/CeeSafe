@@ -4582,7 +4582,10 @@ public struct NotificationExtension
 A notification service extension's side of the system (ADR 0246): on iOS, a program built into the app's
 `PlugIns/<name>.appex` (CeeUI's packer's `--extension`) runs its `main` while the extension lives and is handed each
 push that carries `mutable-content` before the system shows it; it shows what `deliver` gives, or the push as it
-came when the system's time (about 30 seconds) runs out. Elsewhere, and in an app, `Unsupported`.
+came when the system's time (about 30 seconds) runs out. On Android (ADR 0263) the same program, packed beside the
+app's (`--extension` with `--firebase`), runs in a process of its own, to which the app's Firebase service hands
+each push while the app is not running (its payload: the data as JSON); one not delivered within 8 seconds is shown
+as it came. Elsewhere, and in an app, `Unsupported`.
 `CEESAFE_PUSH_REQUEST=<file>` is one push instead, on every system (its title, body and payload JSON on three
 lines); a delivery is appended to `CEESAFE_NOTIFICATIONS_DUMP` as `deliver TITLE<TAB>BODY`.
 
@@ -4621,8 +4624,9 @@ public struct AppGroup
 ```
 
 An App Group's shared folder (ADR 0246): on Apple's systems the folder an app and its extensions both reach, for
-the group they are signed with (`group.com.example.app`); null where there is none (not signed for it, or not an
-Apple system).
+the group they are signed with (`group.com.example.app`); on Android, which has no groups, the app's files folder,
+which the app and its notification extension's process share (ADR 0263); null where there is none (not signed for
+it, or another system).
 
 ### AppGroup.folder
 

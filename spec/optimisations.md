@@ -337,11 +337,22 @@ closure's body, so the calls through it inside are direct too.
   `K`'s address (a closure literal, or an `fn` value's adapter, made in this function); a copy, cast or reborrow of a
   local holding a known closure with body `K`; or, in a variant, the parameter bound to `K`. Any other assignment
   makes the local unknown. The analysis is per function, flow-insensitive, and iterated to a fixed point.
-- **Variants.** One per (function, bindings), where the bindings map each bound parameter index to a body. They are
+- **Closures held in fields** (ADR 0267). A local's facts say which places under it hold a known closure, by a path of
+  field projections and dereferences (at most 8): an aggregate gives each field the operand's closure or facts, a copy
+  or move of a place gives that place's facts, a borrow gives them under a dereference, and a call's result gives
+  its variant's return facts (the facts every `return` of the variant gives). A call through a closure read from a
+  place (`(*this).f`) is direct when that place's fact names it, and a call whose argument has facts goes to a
+  variant bound by them. A fact names only a **write-once** closure field: one that no statement assigns through a
+  projection or lends mutably, and that no value assigned in place (`*p = s`, `x.inner = s`) holds, nor any value a
+  builtin or a C function is given a mutable reference or pointer to. A function has at most 64 variants bound by
+  facts; past that its calls pass plain bindings only.
+- **Variants.** One per (function, bindings), where the bindings map each bound parameter index (and, ADR 0267, each
+  fact about a parameter's field) to a body. They are
   made from a worklist in the order the program's functions and their calls are visited, so the result is
   deterministic. A recursive call with the same known argument goes to the same variant. Generic functions are
   specialised as their instances (§20.4); a function with no NIR (an `extern`) is never specialised.
-- **Not specialised:** a closure read from a field, an element or a `dyn fn` (§37), a `Box<dyn fn…>`, a closure whose
+- **Not specialised:** a closure read from a field that is not write-once or whose struct was not made with a known
+  closure, an element or a `dyn fn` (§37), a `Box<dyn fn…>`, a closure whose
   value depends on a branch, and a `Thread.both` argument (called through the runtime, c-backend §2).
 - A variant is the same NIR with call targets fixed: the same statements, checks and frame. Borrow and effect
   checking run before the pass and are not repeated.

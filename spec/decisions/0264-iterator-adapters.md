@@ -146,7 +146,8 @@ types as type arguments with a function-type bound. Either is a later ADR (§6 q
 - The book's 13.2 "Mistake: a chain of adapters" becomes a section on chains, N0200's example changes, and appendix C
   lists the new methods. guide/for-agents.md and guide/coming-from/rust.md say what a chain can and cannot do.
 - An agent from Rust writes `xs.iter().map(f).filter(p).collect()?`, which compiles, where today it is N0200.
-- Code with chains is up to 3.3 times slower than a loop where the closures are the work (§2.6).
+- Code with chains is up to 3.3 times slower than a loop where the closures are the work (§2.6). ADR 0267 makes the
+  calls direct: 1.2 times.
 
 ## 5. What is not known
 

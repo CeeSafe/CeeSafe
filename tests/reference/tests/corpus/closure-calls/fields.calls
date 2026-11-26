@@ -1,0 +1,13 @@
+closure-calls/fields.cee:28: in run: indirect: the closure is not known here
+closure-calls/fields.cee:38: in apply: indirect: the closure is not known here
+closure-calls/fields.cee:17: in Keep.next: indirect: the closure is not known here
+closure-calls/fields.cee:17: in Keep.next#1: direct call to the closure at closure-calls/fields.cee:41
+lib/core/chains.cee:58: in Chain<i32, Filtered<i32, Mapped<i32, i32, SliceValues<i32>>>>.fold#1: direct call to the closure at closure-calls/fields.cee:48
+lib/core/chains.cee:176: in Filtered<i32, Mapped<i32, i32, SliceValues<i32>>>.next#1: direct call to the closure at closure-calls/fields.cee:48
+lib/core/chains.cee:159: in Mapped<i32, i32, SliceValues<i32>>.next#1: direct call to the closure at closure-calls/fields.cee:48
+variant Keep.next#1: field (*).keep of parameter 0 = the closure at closure-calls/fields.cee:41
+variant Chain<i32, SliceValues<i32>>.map#1: parameter 1 = the closure at closure-calls/fields.cee:48
+variant Chain<i32, Mapped<i32, i32, SliceValues<i32>>>.filter#1: parameter 1 = the closure at closure-calls/fields.cee:48, field .inner.f of parameter 0 = the closure at closure-calls/fields.cee:48
+variant Chain<i32, Filtered<i32, Mapped<i32, i32, SliceValues<i32>>>>.fold#1: parameter 2 = the closure at closure-calls/fields.cee:48, field .inner.inner.f of parameter 0 = the closure at closure-calls/fields.cee:48, field .inner.keep of parameter 0 = the closure at closure-calls/fields.cee:48
+variant Filtered<i32, Mapped<i32, i32, SliceValues<i32>>>.next#1: field (*).inner.f of parameter 0 = the closure at closure-calls/fields.cee:48, field (*).keep of parameter 0 = the closure at closure-calls/fields.cee:48
+variant Mapped<i32, i32, SliceValues<i32>>.next#1: field (*).f of parameter 0 = the closure at closure-calls/fields.cee:48

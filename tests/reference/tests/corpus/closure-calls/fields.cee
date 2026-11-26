@@ -1,0 +1,60 @@
+// Closures held in fields (ADR 0267): a chain's stages and a struct of the program's own hold the closure they were
+// made with, so the calls through them are direct in the variants the facts make. A field assigned after its struct
+// is made, and a struct replaced in place, keep their calls indirect (§2.4).
+
+struct Keep<region r> {
+    left: i64;
+    keep: borrow(r) fn(i64) -> bool;
+}
+
+impl<region r> Iterator<i64> for Keep<r> {
+    fn next(borrow mut this) -> i64? {
+        loop {
+            if (this.left == 0) {
+                return null;
+            }
+            this.left -= 1;
+            if (this.keep(this.left)) {
+                return this.left;
+            }
+        }
+    }
+}
+
+struct Changing<region r> {
+    step: borrow(r) fn(i64) -> i64;
+}
+
+fn run(c: borrow Changing, x: i64) -> i64 => c.step(x);
+
+struct Replaced<region r> {
+    step: borrow(r) fn(i64) -> i64;
+}
+
+fn replace<region r>(slot: borrow mut Replaced<r>, other: Replaced<r>) {
+    *slot = other;
+}
+
+fn apply(c: borrow Replaced, x: i64) -> i64 => c.step(x);
+
+fn main() {
+    var kept = Keep { left: 10, keep: (x) => x % 2 == 0 };
+    var even: i64 = 0;
+    for (x in kept) {
+        even += x;
+    }
+    Console.writeLine(even);
+
+    let total = [1, 2, 3, 4].values().map((x) => x * 3).filter((y) => y % 2 == 0).fold(0, (a, y) => a + y);
+    Console.writeLine(total);
+
+    let double = (x: i64) => x * 2;
+    let triple = (x: i64) => x * 3;
+    var changing = Changing { step: double };
+    changing.step = triple;
+    Console.writeLine(run(changing, 5));
+
+    var replaced = Replaced { step: double };
+    replace(mut replaced, Replaced { step: triple });
+    Console.writeLine(apply(replaced, 5));
+}

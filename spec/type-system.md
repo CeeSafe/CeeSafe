@@ -6396,9 +6396,9 @@ let parts = Chain.of(text.split(",")).map((p) => p.length).collect()?;
 - **Not provided**: `sum`, `min` and `max` (no numeric bound; `fold` does them); `copied()` (an impl cannot name
   `Chain<borrow T, I>`, N0267; `values()`, or `map((x) => *x)`); the adapters as default methods of `Iterator<T>`
   (an interface method cannot declare a region, §25.1).
-- **Cost.** A chain's closures are called through its stages' fields, which closure specialisation does not reach
-  (optimisations.md §5.1), so a chain whose closures are the work is slower than the loop: 3.3 times in ADR 0264's
-  measurement.
+- **Cost.** A chain's closures are called through its stages' fields, which closure specialisation reaches when they
+  are known where the chain is made (optimisations.md §5.1, ADR 0267): the calls are direct, and a chain whose
+  closures are the work takes 1.2 times the loop in ADR 0267's measurement (3.3 times before it).
 - **N0200** on a slice or a vector for a chain's method (`[1, 2, 3].map(f)`) says to start one with `iter()` or
   `values()`.
 

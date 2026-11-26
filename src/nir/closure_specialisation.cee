@@ -23,6 +23,7 @@ struct PendingVariant {
 struct ClosureReport {
     calls: Vector<ClosureCall>;
     variants: Vector<PendingVariant>; // in the order made
+    paths: Vector<Vector<u32>>;       // the field paths a variant's field bindings name (ADR 0267)
 }
 
 struct Specialiser {
@@ -31,6 +32,361 @@ struct Specialiser {
     work: usize;                      // the next variant to rewrite
     counts: Vector<u32>;              // by HIR function: its variants so far
     calls: Vector<ClosureCall>;
+    paths: Vector<Vector<u32>>;   // ADR 0267: the field paths facts name; 0 is the empty path
+    unstable: Vector<bool>;       // by TypeTable.fields: a closure field that may change once its struct is made
+    returns: Vector<ReturnFacts>; // a variant's return facts, by callee and bindings
+}
+
+/// What a variant returns, as facts (ADR 0267 §2.3): computed once, `done` when they are, so that a call met again
+/// while they are being computed (recursion) gets none.
+struct ReturnFacts {
+    callee: u32;
+    bindings: Vector<u64>;
+    facts: Vector<u64>;
+    done: bool;
+}
+
+// ---- Closures held in fields (ADR 0267) ----
+//
+// A fact is "the place `l.p` holds the closure K": `(path << 32) | K`, by local, where `path` names a sequence of
+// field projections (TypeTable.fields) and dereferences (derefStep) in Specialiser.paths. A variant's bindings hold, as
+// well as `(index << 32) | K` for a closure parameter, `((fieldBinding | path << 8 | index) << 32) | K` for a fact
+// about the parameter's place `index.path`. A fact is made only for a closure field that nothing can change once its
+// struct is made (§2.4, stableField).
+
+fn derefStep() -> u32 => 0xFFFFFFFF;
+
+fn maxPathLength() -> usize => 8;
+
+fn maxFieldVariants() -> u32 => 64;
+
+fn fieldBinding() -> u64 => 0x80000000;
+
+/// A binding's parameter, and the path of a fact about it (0 for the parameter itself).
+fn bindingIndex(b: u64) -> u32 =>
+    if (((b >> 32) & fieldBinding()) != 0) truncate<u32>((b >> 32) & 0xFF) else truncate<u32>(b >> 32);
+
+fn bindingPath(b: u64) -> u32 =>
+    if (((b >> 32) & fieldBinding()) != 0) truncate<u32>(((b >> 32) & 0x7FFFFFFF) >> 8) else 0;
+
+/// The number of a path, made if new.
+fn pathNumber(s: borrow mut Specialiser, steps: Slice<u32>) -> Result<u32, AllocError> {
+    for (k in 0..s.paths.length) {
+        if (sameSteps(s.paths[k].view(), steps)) {
+            return Ok(truncate<u32>(k));
+        }
+    }
+    var copy = Vector<u32>.create();
+    for (x in steps) {
+        copy.push(x)?;
+    }
+    s.paths.push(copy)?;
+    return Ok(truncate<u32>(s.paths.length - 1));
+}
+
+fn sameSteps(a: Slice<u32>, b: Slice<u32>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (k in 0..a.length) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// A path's steps after its first `skip`, if the path begins with `prefix`; else null.
+fn pathAfter(s: borrow Specialiser, path: u32, prefix: Slice<u32>) -> Vector<u32>? {
+    let steps = s.paths[path as usize].view();
+    if (steps.length < prefix.length) {
+        return null;
+    }
+    for (k in 0..prefix.length) {
+        if (steps[k] != prefix[k]) {
+            return null;
+        }
+    }
+    var rest = Vector<u32>.create();
+    for (k in prefix.length..steps.length) {
+        if (rest.push(steps[k]).isErr()) {
+            return null;
+        }
+    }
+    return rest;
+}
+
+/// The closure fields that may change once their struct is made (ADR 0267 §2.4), by TypeTable.fields: one assigned
+/// through a projection, or lent mutably; every one inside a value assigned in place (`*p = s`, `x.inner = s`); and
+/// every one a builtin or a C function may reach through a mutable reference or pointer it is given.
+fn unstableClosureFields(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    functions: borrow Vector<NirFunction>,
+) -> Result<Vector<bool>, AllocError> {
+    var unstable = Vector<bool>.create();
+    for (k in 0..c.types.fields.length) {
+        unstable.push(false)?;
+    }
+    var seen = Vector<bool>.create();
+    for (k in 0..c.types.types.length) {
+        seen.push(false)?;
+    }
+    for (function in functions.view()) {
+        for (block in function.blocks.view()) {
+            for (statement in block.statements.view()) {
+                match (n.statements[statement as usize]) {
+                    NirStatement.Assign(target, r) => {
+                        let place = n.places[target as usize];
+                        if (place.projections.count > 0) {
+                            let last = n.projections[(place.projections.start + place.projections.count - 1) as usize];
+                            if (last.kind == ProjectionKind.Field && last.field != none()) {
+                                unstable[last.field as usize] = true;
+                            }
+                            let typ = nirPlaceType(c, n, function.locals, target);
+                            markContained(c, typ, mut unstable, mut seen)?;
+                        }
+                        match (n.rvalues[r as usize]) {
+                            NirRvalue.Ref(mutable, lent) => {
+                                let p = n.places[lent as usize];
+                                if (mutable && p.projections.count > 0) {
+                                    let last = n.projections[(p.projections.start + p.projections.count - 1) as usize];
+                                    if (last.kind == ProjectionKind.Field && last.field != none() &&
+                                        c.types.isClosure(c.types.fields[last.field as usize].typ)) {
+                                        unstable[last.field as usize] = true;
+                                    }
+                                }
+                            }
+                            NirRvalue.Builtin(_, arguments) => {
+                                markWritableArguments(c, n, arguments, mut unstable, mut seen)?;
+                            }
+                            NirRvalue.Call(callee, arguments) => {
+                                if (isExternFunction(c, callee)) {
+                                    markWritableArguments(c, n, arguments, mut unstable, mut seen)?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    NirStatement.Eval(r) => {
+                        match (n.rvalues[r as usize]) {
+                            NirRvalue.Builtin(_, arguments) => {
+                                markWritableArguments(c, n, arguments, mut unstable, mut seen)?;
+                            }
+                            NirRvalue.Call(callee, arguments) => {
+                                if (isExternFunction(c, callee)) {
+                                    markWritableArguments(c, n, arguments, mut unstable, mut seen)?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    return Ok(unstable);
+}
+
+/// Every closure field inside a value of `typ`, by value (fields, payloads, elements, a box's or a vector's contents):
+/// marked unstable, since the value is written in place.
+fn markContained(
+    c: borrow Checker,
+    typ: u32,
+    unstable: borrow mut Vector<bool>,
+    seen: borrow mut Vector<bool>,
+) -> Result<void, AllocError> {
+    if (typ == none() || (typ as usize) >= seen.length || seen[typ as usize]) {
+        return Ok();
+    }
+    seen[typ as usize] = true;
+    let info = c.types.info(typ);
+    if (c.types.is(typ, TypeKind.Struct) && info.structDef != none()) {
+        for (f in c.types.structs[info.structDef as usize].fields.view()) {
+            let ft = c.types.fields[f as usize].typ;
+            if (c.types.isClosure(ft)) {
+                unstable[f as usize] = true;
+            } else {
+                markContained(c, ft, unstable, seen)?;
+            }
+        }
+    } else if (c.types.is(typ, TypeKind.Enum) && info.enumDef != none()) {
+        for (v in c.types.enums[info.enumDef as usize].variants.view()) {
+            for (f in c.types.variants[v as usize].payload.view()) {
+                let ft = c.types.fields[f as usize].typ;
+                if (c.types.isClosure(ft)) {
+                    unstable[f as usize] = true;
+                } else {
+                    markContained(c, ft, unstable, seen)?;
+                }
+            }
+        }
+    } else if (c.types.is(typ, TypeKind.Array)) {
+        markContained(c, info.element, unstable, seen)?;
+    } else if (c.types.is(typ, TypeKind.Box) || c.types.is(typ, TypeKind.Vector) ||
+        c.types.is(typ, TypeKind.StableVector)) {
+        markContained(c, info.pointee, unstable, seen)?;
+    }
+    return Ok();
+}
+
+/// What a builtin's or a C function's arguments let it write: everything behind a mutable reference or pointer.
+fn markWritableArguments(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    arguments: Range,
+    unstable: borrow mut Vector<bool>,
+    seen: borrow mut Vector<bool>,
+) -> Result<void, AllocError> {
+    for (k in 0..arguments.count) {
+        let operand = n.at(arguments, k);
+        var typ = n.operandTypes[operand as usize];
+        var depth = 0;
+        while (typ != none() && depth < 16) {
+            let info = c.types.info(typ);
+            let isReference = c.types.is(typ, TypeKind.Reference);
+            let isPointer = c.types.is(typ, TypeKind.RawPointer);
+            if (!isReference && !isPointer) {
+                if (c.types.is(typ, TypeKind.Vector) || c.types.is(typ, TypeKind.Box)) {
+                    markContained(c, info.pointee, unstable, seen)?; // a vector or box given by value or lent
+                }
+                break;
+            }
+            if ((isReference && info.mutableReference) || (isPointer && info.mutablePointer)) {
+                markContained(c, info.pointee, unstable, seen)?;
+            }
+            typ = info.pointee;
+            depth += 1;
+        }
+    }
+    return Ok();
+}
+
+/// Whether a fact may name the closure field `field`.
+fn stableField(c: borrow Checker, s: borrow Specialiser, field: u32) -> bool =>
+    field != none() && (field as usize) < s.unstable.length && !s.unstable[field as usize] &&
+        c.types.isClosure(c.types.fields[field as usize].typ);
+
+/// A place's projections as a path's steps: null if one is a downcast or an index, which facts do not follow.
+fn placeSteps(n: borrow NirProgram, place: u32) -> Vector<u32>? {
+    let p = n.places[place as usize];
+    var steps = Vector<u32>.create();
+    for (k in 0..p.projections.count) {
+        let projection = n.projections[(p.projections.start + k) as usize];
+        // derefStep() is none()'s value: an unsupported projection is told apart by its kind, not by the step.
+        let supported = match (projection.kind) {
+            ProjectionKind.Field => projection.field != none(),
+            ProjectionKind.Deref => true,
+            _ => false,
+        };
+        let step = if (projection.kind == ProjectionKind.Deref) derefStep() else projection.field;
+        if (!supported || steps.push(step).isErr()) {
+            return null;
+        }
+    }
+    return steps;
+}
+
+/// The facts of a place (ADR 0267 §2.1): its local's, whose paths begin with the place's projections, with what follows
+/// them; a fact for the place itself (the empty path) when the place holds a known closure.
+fn placeFacts(
+    n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    known: borrow Vector<u32>,
+    facts: borrow Vector<Vector<u64>>,
+    place: u32,
+) -> Result<Vector<u64>, AllocError> {
+    var out = Vector<u64>.create();
+    let local = n.places[place as usize].local;
+    let steps = match (placeSteps(n, place)) {
+        Some(v) => v,
+        null => { return Ok(out); }
+    };
+    if (steps.length == 0 && knownOf(known, local) != none()) {
+        out.push(knownOf(known, local) as u64)?;
+    }
+    if ((local as usize) >= facts.length) {
+        return Ok(out);
+    }
+    var found = Vector<u64>.create();
+    for (f in facts[local as usize].view()) {
+        found.push(f)?;
+    }
+    for (f in found.view()) {
+        match (pathAfter(s, truncate<u32>(f >> 32), steps.view())) {
+            Some(rest) => {
+                let number = pathNumber(s, rest.view())?;
+                out.push(((number as u64) << 32) | (f & 0xFFFFFFFF))?;
+            }
+            null => {}
+        }
+    }
+    return Ok(out);
+}
+
+/// `facts` with `step` before each path, within the length limit: the facts of an aggregate's field, or of a borrow.
+fn prefixed(s: borrow mut Specialiser, facts: borrow Vector<u64>, step: u32) -> Result<Vector<u64>, AllocError> {
+    var out = Vector<u64>.create();
+    for (f in facts.view()) {
+        var steps = Vector<u32>.create();
+        steps.push(step)?;
+        for (x in s.paths[(f >> 32) as usize].view()) {
+            steps.push(x)?;
+        }
+        if (steps.length <= maxPathLength()) {
+            let number = pathNumber(s, steps.view())?;
+            out.push(((number as u64) << 32) | (f & 0xFFFFFFFF))?;
+        }
+    }
+    return Ok(out);
+}
+
+/// The facts both sets have.
+fn commonFacts(a: borrow Vector<u64>, b: borrow Vector<u64>) -> Result<Vector<u64>, AllocError> {
+    var out = Vector<u64>.create();
+    for (x in a.view()) {
+        for (y in b.view()) {
+            if (x == y) {
+                out.push(x)?;
+                break;
+            }
+        }
+    }
+    return Ok(out);
+}
+
+fn sameFieldFacts(a: borrow Vector<u64>, b: borrow Vector<u64>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (x in a.view()) {
+        var found = false;
+        for (y in b.view()) {
+            if (x == y) {
+                found = true;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Bindings in a canonical order, so that one set of facts names one variant.
+fn sortedBindings(bindings: Vector<u64>) -> Vector<u64> {
+    var out = bindings;
+    var i: usize = 1;
+    while (i < out.length) {
+        var j = i;
+        while (j > 0 && out[j - 1] > out[j]) {
+            out.swap(j - 1, j);
+            j -= 1;
+        }
+        i += 1;
+    }
+    return out;
 }
 
 fn sameBindings(a: borrow Vector<u64>, b: borrow Vector<u64>) -> bool {
@@ -85,31 +441,49 @@ fn agreeOn(values: borrow Vector<u32>, results: borrow Vector<u32>) -> u32 {
     return agreed;
 }
 
+/// What the analysis of one function finds: each local's known closure (KnownClosures, optimisations.md §5.1), and its
+/// facts about the closures held in its fields (ADR 0267 §2.1), paths that are not empty.
+struct Analysis {
+    known: Vector<u32>;
+    facts: Vector<Vector<u64>>;
+}
+
 /// The locals holding a known closure, and its body (KnownClosures, optimisations.md §5.1): every assignment to the
-/// local makes that closure, or copies, casts or reborrows a local holding it; a variant's bound parameters are seeds.
-fn specialisedClosures(
+/// local makes that closure, or copies, casts or reborrows a local holding it, or reads it from a place whose fact says
+/// so; a variant's bound parameters are seeds. With it, each local's field facts (ADR 0267): those that every
+/// assignment to the local gives.
+fn closureAnalysis(
     c: borrow Checker,
     n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    original: borrow Vector<NirFunction>,
     function: borrow NirFunction,
     bindings: borrow Vector<u64>,
-) -> Result<Vector<u32>, AllocError> {
+) -> Result<Analysis, AllocError> {
     let count = function.locals.length;
-    // Each local's assignments, in order: an rvalue, or none for a write that is not followed.
+    // Each local's assignments, in order: an rvalue, or none for a write that is not followed. `wholes` has the
+    // assignments of the whole local only: a write through a projection changes no fact a field fact can name (§2.4).
     var order = Vector<u32>.create(); // locals in the order of their first assignment
     var assignments = Vector<Vector<u32>>.create();
+    var wholes = Vector<Vector<u32>>.create();
     for (k in 0..count) {
         assignments.push(Vector<u32>.create())?;
+        wholes.push(Vector<u32>.create())?;
     }
     for (block in function.blocks.view()) {
-        for (s in block.statements.view()) {
-            match (n.statements[s as usize]) {
+        for (st in block.statements.view()) {
+            match (n.statements[st as usize]) {
                 NirStatement.Assign(target, r) => {
                     let local = n.places[target as usize].local;
-                    let value = if (n.places[target as usize].projections.count == 0) r else none();
+                    let whole = n.places[target as usize].projections.count == 0;
+                    let value = if (whole) r else none();
                     if (assignments[local as usize].length == 0) {
                         order.push(local)?;
                     }
                     assignments[local as usize].push(value)?;
+                    if (whole) {
+                        wholes[local as usize].push(r)?;
+                    }
                 }
                 NirStatement.Unpack(_, _, targets) => {
                     for (k in 0..targets.count) {
@@ -119,6 +493,7 @@ fn specialisedClosures(
                                 order.push(target)?;
                             }
                             assignments[target as usize].push(none())?;
+                            wholes[target as usize].push(none())?;
                         }
                     }
                 }
@@ -128,16 +503,28 @@ fn specialisedClosures(
     }
     var known = Vector<u32>.create();
     var codes = Vector<u32>.create();
+    var facts = Vector<Vector<u64>>.create();
     for (k in 0..count) {
         known.push(none())?;
         codes.push(none())?;
+        facts.push(Vector<u64>.create())?;
     }
     for (b in bindings.view()) {
-        known[(b >> 32) as usize] = truncate<u32>(b & 0xFFFFFFFF);
+        let index = bindingIndex(b);
+        if ((index as usize) >= count) {
+            continue;
+        }
+        if (bindingPath(b) == 0) {
+            known[index as usize] = truncate<u32>(b & 0xFFFFFFFF);
+        } else {
+            facts[index as usize].push(((bindingPath(b) as u64) << 32) | (b & 0xFFFFFFFF))?;
+        }
     }
     var changed = true;
-    while (changed) {
+    var rounds = 0;
+    while (changed && rounds < 64) {
         changed = false;
+        rounds += 1;
         for (local in order.view()) {
             let values = borrow assignments[local as usize];
             if (codes[local as usize] == none()) {
@@ -165,7 +552,11 @@ fn specialisedClosures(
             if (known[local as usize] == none() && c.types.isClosure(function.locals[local as usize].typ)) {
                 var results = Vector<u32>.create();
                 for (v in values.view()) {
-                    results.push(specialisedClosureOf(c, n, function, v, known, codes, assignments)?)?;
+                    var body = specialisedClosureOf(c, n, function, v, known, codes, assignments)?;
+                    if (body == none() && v != none()) {
+                        body = closureReadFromPlace(n, s, known, facts, v)?; // `(*this).f` (ADR 0267)
+                    }
+                    results.push(body)?;
                 }
                 let body = agreeOn(values, results);
                 if (body != none()) {
@@ -173,9 +564,262 @@ fn specialisedClosures(
                     changed = true;
                 }
             }
+            let whole = borrow wholes[local as usize];
+            if (whole.length > 0 && whole.length == values.length && local >= function.parameterCount) {
+                var agreed = Vector<u64>.create();
+                for (k in 0..whole.length) {
+                    let one = valueFacts(c, n, s, original, known, facts, whole[k])?;
+                    agreed = if (k == 0) one else commonFacts(agreed, one)?;
+                }
+                if (!sameFieldFacts(agreed, facts[local as usize])) {
+                    facts[local as usize] = agreed;
+                    changed = true;
+                }
+            }
         }
     }
-    return Ok(known);
+    return Ok(Analysis { known: known, facts: facts });
+}
+
+/// The locals holding a known closure, without field facts (async_instances.cee's use): no callee is followed.
+fn specialisedClosures(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    function: borrow NirFunction,
+    bindings: borrow Vector<u64>,
+) -> Result<Vector<u32>, AllocError> {
+    var s = Specialiser {
+        originals: Vector<u32>.create(),
+        variants: Vector<PendingVariant>.create(),
+        work: 0,
+        counts: Vector<u32>.create(),
+        calls: Vector<ClosureCall>.create(),
+        paths: Vector<Vector<u32>>.create(),
+        unstable: Vector<bool>.create(), // every field unstable: no field facts
+        returns: Vector<ReturnFacts>.create(),
+    };
+    for (k in 0..c.hir.functions.length) {
+        s.originals.push(none())?;
+        s.counts.push(0)?;
+    }
+    s.paths.push(Vector<u32>.create())?;
+    let none0 = Vector<NirFunction>.create();
+    let analysis = closureAnalysis(c, n, mut s, none0, function, bindings)?;
+    return Ok(analysis.known);
+}
+
+/// The closure a copy or cast reads from a place, if that place's fact names one (ADR 0267 §2.1): `_c = (*this).f`.
+fn closureReadFromPlace(
+    n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    known: borrow Vector<u32>,
+    facts: borrow Vector<Vector<u64>>,
+    value: u32,
+) -> Result<u32, AllocError> {
+    let operand = match (n.rvalues[value as usize]) {
+        NirRvalue.Use(o) => o,
+        NirRvalue.Cast(o) => o,
+        _ => none(),
+    };
+    if (operand == none()) {
+        return Ok(none());
+    }
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => {
+            if (n.places[place as usize].projections.count == 0) {
+                return Ok(none());
+            }
+            for (f in placeFacts(n, s, known, facts, place)?.view()) {
+                if ((f >> 32) == 0) {
+                    return Ok(truncate<u32>(f & 0xFFFFFFFF));
+                }
+            }
+            return Ok(none());
+        }
+        _ => { return Ok(none()); }
+    }
+}
+
+/// The field facts an rvalue gives the local it is assigned to (ADR 0267 §2.1): a copy's, a borrow's (under a
+/// dereference), an aggregate's (under each field's name), a call's (its variant's return facts).
+fn valueFacts(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    original: borrow Vector<NirFunction>,
+    known: borrow Vector<u32>,
+    facts: borrow Vector<Vector<u64>>,
+    r: u32,
+) -> Result<Vector<u64>, AllocError> {
+    var out = Vector<u64>.create();
+    if (r == none()) {
+        return Ok(out);
+    }
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Use(o) => { return operandFacts(n, s, known, facts, o, true); }
+        NirRvalue.Cast(o) => { return operandFacts(n, s, known, facts, o, true); }
+        NirRvalue.Ref(_, place) => {
+            let lent = placeFacts(n, s, known, facts, place)?;
+            return prefixed(s, lent, derefStep());
+        }
+        NirRvalue.Aggregate(operands) => {
+            let typ = n.rvalueTypes[r as usize];
+            if (!c.types.is(typ, TypeKind.Struct) || c.types.info(typ).structDef == none()) {
+                return Ok(out);
+            }
+            let definition = c.types.info(typ).structDef;
+            let fieldCount = c.types.structs[definition as usize].fields.length;
+            for (k in 0..operands.count) {
+                if ((k as usize) >= fieldCount) {
+                    break;
+                }
+                let field = c.types.structs[definition as usize].fields[k as usize];
+                let held = operandFacts(n, s, known, facts, n.at(operands, k), false)?;
+                var nested = Vector<u64>.create();
+                for (f in held.view()) {
+                    if ((f >> 32) != 0 || stableField(c, s, field)) {
+                        nested.push(f)?;
+                    }
+                }
+                for (f in prefixed(s, nested, field)?.view()) {
+                    out.push(f)?;
+                }
+            }
+            return Ok(out);
+        }
+        NirRvalue.Call(callee, arguments) => {
+            let bindings = callBindings(c, n, s, original, known, facts, callee, arguments)?;
+            if (bindings.length == 0) {
+                return Ok(out);
+            }
+            return returnFacts(c, n, s, original, callee, bindings);
+        }
+        _ => { return Ok(out); }
+    }
+}
+
+/// An operand's facts: a place's (without the empty path when `fieldsOnly`), none for a constant.
+fn operandFacts(
+    n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    known: borrow Vector<u32>,
+    facts: borrow Vector<Vector<u64>>,
+    operand: u32,
+    fieldsOnly: bool,
+) -> Result<Vector<u64>, AllocError> {
+    var out = Vector<u64>.create();
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(place, _) => {
+            for (f in placeFacts(n, s, known, facts, place)?.view()) {
+                if (!fieldsOnly || (f >> 32) != 0) {
+                    out.push(f)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    return Ok(out);
+}
+
+/// A call's bindings: each closure parameter given a known closure, and (ADR 0267 §2.2) each fact of an argument's
+/// fields; in a canonical order. None for a callee that is not specialised.
+fn callBindings(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    s: borrow Specialiser,
+    original: borrow Vector<NirFunction>,
+    known: borrow Vector<u32>,
+    facts: borrow Vector<Vector<u64>>,
+    callee: u32,
+    arguments: Range,
+) -> Result<Vector<u64>, AllocError> {
+    var bindings = Vector<u64>.create();
+    if (s.originals[callee as usize] == none() || c.hir.functions[callee as usize].isDynMethod) {
+        return Ok(bindings);
+    }
+    let parameters = borrow original[s.originals[callee as usize] as usize].locals;
+    let fields = s.counts[callee as usize] < maxFieldVariants();
+    for (k in 0..arguments.count) {
+        let local = localOperand(n, n.at(arguments, k));
+        if (local == none()) {
+            continue;
+        }
+        if ((k as usize) < parameters.length && c.types.isClosure(parameters[k as usize].typ) &&
+            knownOf(known, local) != none()) {
+            bindings.push(((k as u64) << 32) | knownOf(known, local) as u64)?;
+        }
+        if (fields && k < 256 && (local as usize) < facts.length) {
+            for (f in facts[local as usize].view()) {
+                let path = f >> 32;
+                if (path != 0 && path < 0x800000) {
+                    bindings.push(((fieldBinding() | (path << 8) | (k as u64)) << 32) | (f & 0xFFFFFFFF))?;
+                }
+            }
+        }
+    }
+    return Ok(sortedBindings(bindings));
+}
+
+/// A variant's return facts (ADR 0267 §2.3): the field facts every `return` of it gives, computed once; none for a
+/// call met again while they are being computed.
+fn returnFacts(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    s: borrow mut Specialiser,
+    original: borrow Vector<NirFunction>,
+    callee: u32,
+    bindings: Vector<u64>,
+) -> Result<Vector<u64>, AllocError> {
+    for (entry in s.returns.view()) {
+        if (entry.callee == callee && sameBindings(entry.bindings, bindings)) {
+            var copy = Vector<u64>.create();
+            if (entry.done) {
+                for (f in entry.facts.view()) {
+                    copy.push(f)?;
+                }
+            }
+            return Ok(copy);
+        }
+    }
+    let slot = s.returns.length;
+    var key = Vector<u64>.create();
+    for (b in bindings.view()) {
+        key.push(b)?;
+    }
+    s.returns.push(ReturnFacts { callee: callee, bindings: key, facts: Vector<u64>.create(), done: false })?;
+    let index = s.originals[callee as usize];
+    let function = borrow original[index as usize];
+    let analysis = closureAnalysis(c, n, s, original, function, bindings)?;
+    var agreed = Vector<u64>.create();
+    var first = true;
+    for (block in function.blocks.view()) {
+        if (block.terminator == none()) {
+            continue;
+        }
+        match (n.terminators[block.terminator as usize]) {
+            NirTerminator.Return(o) => {
+                var one = Vector<u64>.create();
+                if (o != none()) {
+                    let local = localOperand(n, o);
+                    if (local != none() && (local as usize) < analysis.facts.length) {
+                        for (f in analysis.facts[local as usize].view()) {
+                            one.push(f)?;
+                        }
+                    }
+                }
+                agreed = if (first) one else commonFacts(agreed, one)?;
+                first = false;
+            }
+            _ => {}
+        }
+    }
+    var stored = Vector<u64>.create();
+    for (f in agreed.view()) {
+        stored.push(f)?;
+    }
+    s.returns[slot].facts = stored;
+    s.returns[slot].done = true;
+    return Ok(agreed);
 }
 
 /// The body of the closure a value makes or carries, if known (Closure).
@@ -251,12 +895,13 @@ fn specialiseRvalue(
     n: borrow mut NirProgram,
     s: borrow mut Specialiser,
     original: borrow Vector<NirFunction>,
-    known: borrow Vector<u32>,
+    analysis: borrow Analysis,
     r: u32,
     source: u32,
     variant: u32,
     start: u32,
 ) -> Result<u32, AllocError> {
+    let known = borrow analysis.known;
     let t = n.rvalueTypes[r as usize];
     let span = n.rvalueSpans[r as usize];
     match (n.rvalues[r as usize]) {
@@ -265,7 +910,20 @@ fn specialiseRvalue(
                 return Ok(none());
             }
             let local = localOperand(n, n.at(arguments, 0));
-            let body = if (local == none()) none() else knownOf(known, local);
+            var body = if (local == none()) none() else knownOf(known, local);
+            if (body == none() && local == none()) {
+                // `CallClosure((*this).keep, …)`: a closure read from a place, known by its fact (ADR 0267 §2.2).
+                match (n.operands[n.at(arguments, 0) as usize]) {
+                    NirOperand.Place(place, _) => {
+                        for (f in placeFacts(n, s, known, analysis.facts, place)?.view()) {
+                            if ((f >> 32) == 0) {
+                                body = truncate<u32>(f & 0xFFFFFFFF);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             s.calls.push(ClosureCall { source: source, variant: variant, start: start, body: body })?;
             if (body == none()) {
                 return Ok(none());
@@ -273,21 +931,10 @@ fn specialiseRvalue(
             return n.rvalue(NirRvalue.Call(body, arguments), t, span);
         }
         NirRvalue.Call(callee, arguments) => {
-            if (n.rvalueVariants[r as usize] != 0 || s.originals[callee as usize] == none() ||
-                c.hir.functions[callee as usize].isDynMethod) {
+            if (n.rvalueVariants[r as usize] != 0) {
                 return Ok(none());
             }
-            let parameters = borrow original[s.originals[callee as usize] as usize].locals;
-            var bindings = Vector<u64>.create();
-            for (k in 0..arguments.count) {
-                let local = localOperand(n, n.at(arguments, k));
-                if ((k as usize) < parameters.length && c.types.isClosure(
-                    parameters[k as usize].typ,
-                ) && local != none() &&
-                    knownOf(known, local) != none()) {
-                    bindings.push(((k as u64) << 32) | knownOf(known, local) as u64)?;
-                }
-            }
+            let bindings = callBindings(c, n, s, original, known, analysis.facts, callee, arguments)?;
             if (bindings.length == 0) {
                 return Ok(none());
             }
@@ -312,7 +959,10 @@ fn rewriteFunction(
     specialise: bool,
 ) -> Result<NirFunction, AllocError> {
     let function = borrow original[index as usize];
-    let known = if (specialise) specialisedClosures(c, n, function, bindings)? else Vector<u32>.create();
+    let analysis = if (specialise) closureAnalysis(c, n, s, original, function, bindings)? else Analysis {
+        known: Vector<u32>.create(),
+        facts: Vector<Vector<u64>>.create(),
+    };
     var locals = Vector<NirLocal>.create();
     for (l in function.locals.view()) {
         locals.push(l)?;
@@ -326,14 +976,14 @@ fn rewriteFunction(
             let kind = if (specialise) n.statements[statement as usize] else NirStatement.StorageDead(0);
             match (kind) {
                 NirStatement.Assign(target, r) => {
-                    let value = specialiseRvalue(c, n, s, original, known, r, function.source, variant, start)?;
+                    let value = specialiseRvalue(c, n, s, original, analysis, r, function.source, variant, start)?;
                     if (value != none()) {
                         n.statements.push(NirStatement.Assign(target, value))?;
                         replaced = truncate<u32>(n.statements.length - 1);
                     }
                 }
                 NirStatement.Eval(r) => {
-                    let value = specialiseRvalue(c, n, s, original, known, r, function.source, variant, start)?;
+                    let value = specialiseRvalue(c, n, s, original, analysis, r, function.source, variant, start)?;
                     if (value != none()) {
                         n.statements.push(NirStatement.Eval(value))?;
                         replaced = truncate<u32>(n.statements.length - 1);
@@ -394,7 +1044,11 @@ fn specialiseClosures(c: borrow Checker, n: borrow mut NirProgram, apply: bool) 
         work: 0,
         counts: Vector<u32>.create(),
         calls: Vector<ClosureCall>.create(),
+        paths: Vector<Vector<u32>>.create(),
+        unstable: unstableClosureFields(c, n, original)?,
+        returns: Vector<ReturnFacts>.create(),
     };
+    s.paths.push(Vector<u32>.create())?; // path 0: the place itself
     for (k in 0..c.hir.functions.length) {
         s.originals.push(none())?;
         s.counts.push(0)?;
@@ -427,7 +1081,7 @@ fn specialiseClosures(c: borrow Checker, n: borrow mut NirProgram, apply: bool) 
     } else {
         n.functions = original;
     }
-    return Ok(ClosureReport { calls: s.calls, variants: s.variants });
+    return Ok(ClosureReport { calls: s.calls, variants: s.variants, paths: s.paths });
 }
 
 /// The report `--explain-closure-calls` prints (optimisations.md §5.3).
@@ -466,8 +1120,22 @@ fn explainClosureCalls(
                 appendText(out, ", ")?;
             }
             let b = variant.bindings[j];
+            let path = bindingPath(b);
+            if (path != 0) {
+                // A fact about the parameter's field (ADR 0267 §2.6): `field (*).inner.f of parameter 0`.
+                appendText(out, "field ")?;
+                for (step in report.paths[path as usize].view()) {
+                    if (step == derefStep()) {
+                        appendText(out, "(*)")?;
+                    } else {
+                        out.push('.')?;
+                        appendBytes(out, c.name(c.types.fields[step as usize].name))?;
+                    }
+                }
+                appendText(out, " of ")?;
+            }
             appendText(out, "parameter ")?;
-            appendDecimal(out, b >> 32)?;
+            appendDecimal(out, bindingIndex(b) as u64)?;
             appendText(out, " = ")?;
             appendClosureBody(c, sources, out, truncate<u32>(b & 0xFFFFFFFF))?;
         }

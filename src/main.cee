@@ -1755,6 +1755,7 @@ fn compileFiles(
         var closureReport = ClosureReport {
             calls: Vector<ClosureCall>.create(),
             variants: Vector<PendingVariant>.create(),
+            paths: Vector<Vector<u32>>.create(),
         };
         if (options.explainClosureCalls) {
             closureReport = specialiseClosures(checker, mut nir, false)!;

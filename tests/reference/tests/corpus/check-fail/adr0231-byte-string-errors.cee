@@ -1,6 +1,8 @@
 // ADR 0231: a byte string is no `StringView`: `Console.write` does not print one (N0207, whose message says to write
-// its bytes with `Console.writeBytes`), it is not text for `String.append`, and its view needs a region parameter in
-// a struct, as a `StringView` does. A string literal is not a byte string view: `ByteStringView.fromText` makes one.
+// its bytes with `Console.writeBytes`), an owned one is not text for `String.append`, and its view needs a region
+// parameter in a struct, as a `StringView` does. A `StringView` value is not a byte string view:
+// `ByteStringView.fromText` makes one. (Since ADR 0260, `s.append(b.view())` is `TextBuffer`'s append and a literal is
+// a `ByteStringView` where one is expected: those lines now name an owned `ByteString` and a `StringView` value.)
 struct Row {
     name: ByteStringView; // error[N0270]
 }
@@ -10,7 +12,7 @@ fn main() {
     Console.writeLine(b);    // error[N0207]
     Console.write(b.view()); // error[N0207]
     var s = String.create();
-    s.append(b.view())!;          // error[N0205]
+    s.append(b)!;                 // error[N0205]
     let v: StringView = b.view(); // error[N0205]
-    let w: ByteStringView = "a";  // error[N0205]
+    let w: ByteStringView = v;    // error[N0205]
 }

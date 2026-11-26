@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.95.18
+## Releases 0.25.0 to 0.95.19
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.95.19 | 2026-11-26 | Iterator chains (ADR 0264): `s.iter()` lends a slice's, an array's or a vector's elements, `s.values()` copies Copy ones, and `Chain.of(it)` takes any iterator; then `map`, `filter`, `take`, `skip`, `takeWhile`, `skipWhile`, `enumerate`, `zip`, and `collect`, `count`, `fold`, `forEach`, `any`, `all`, `find`, `position`. `filter` and the tests take Copy values. N0200 for `[1, 2, 3].map(f)` says to start a chain | [13.2](./ch13-02-iteration), [Built-in types](./appendix-c-built-in-types) |
 | 0.95.18 | 2026-11-26 | Fixes ADR 0261 (amended): with `out-of-memory = "panic"`, a call used as a `Result` stays one: a `match` or `is` on it, and a method of `Result` (`v.push(x).isErr()`). A `let` without a type that holds the value and is used as a `Result` later is N0205, and `ceesafec fix` declares its `Result` type | [9.3](./ch09-03-allocation-failure) |
 | 0.95.17 | 2026-11-26 | `out-of-memory = "panic"` in `[package]` (and `--out-of-memory=panic`): in that package a call that allocates gives its value, with no `!`, and stops the program with `out of memory` if it fails; `?`, `!`, `let _ =` and a declared `Result` type keep the `Result`, and each package follows its own manifest (ADR 0261). N0205 for an allocation used as its value names the setting, and `ceesafec fix` adds the `!` in an executable | [9.3](./ch09-03-allocation-failure) |
 | 0.95.16 | 2026-11-26 | A borrowed array, `borrow [T; N]`, is in C a pointer to its first element, and a C array member is reached without the array struct, so the generated C is correct without `-fno-strict-aliasing`, which is no longer passed (ADR 0250); `--emit c` output of a program's own functions changes, and exported functions and their header are unchanged. A mutable slice of what a `SliceMut` field holds no longer lends the whole struct while the call's later arguments run: 0.95.13 to 0.95.15 refused `f(mut l.marks[0..n], mut l.scratch)` (N0241), which CeeUI uses (ADR 0252 §2.2.4) | — |

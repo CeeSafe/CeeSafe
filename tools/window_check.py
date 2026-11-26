@@ -79,6 +79,10 @@ that opened a window would open one on the developer's screen:
    a text field's selection is its node's caret and anchor; accessActive is false. With --display on
    macOS, AppKit reports each of the eleven roles back with its name, value, state and frame, an action performed
    through it arrives, an element is the same object from one list to the next, and accessActive is then true.
+16. the photo library and the camera (ADR 0265): on a scripted window MediaPicker.pick takes its script's `dialog`
+   answer, one item for a limit of 1 and several above it, each a photo or a video by its extension (a HEIC is a
+   photo), none at a cancel; capture takes one, null at a cancel; asking for neither photos nor videos is
+   Unsupported; canCapture is false on a desktop.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1827,6 +1831,56 @@ fn main() -> i32 {
     verdict("first", FileDialog.exportFile(mut window, "Save As", "draft.txt", "notes.txt"));
     verdict("second", FileDialog.exportFile(mut window, "Save As", "draft.txt", "notes.txt"));
     verdict("missing", FileDialog.exportFile(mut window, "Save As", "no-such-file.txt", "notes.txt"));
+    return 0;
+}
+"""
+
+# The photo library and the camera (ADR 0265), on a scripted window: what each call answers.
+MEDIA = r"""
+fn show(what: StringView, r: Result<Vector<PickedMedia>, WindowError>) {
+    Console.write(what);
+    match (r) {
+        Ok(items) => {
+            Console.write(" ");
+            Console.write(items.length);
+            for (item in items.view()) {
+                Console.write(match (item.kind) {
+                    MediaKind.Photo => " photo:",
+                    MediaKind.Video => " video:",
+                });
+                Console.write(item.path.view());
+            }
+            Console.writeLine("");
+        }
+        Err(e) => {
+            Console.writeLine(match (e) {
+                WindowError.Unsupported => " Unsupported",
+                _ => " another error",
+            });
+        }
+    }
+}
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check media", 40, 30)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    show("one", MediaPicker.pick(mut window, true, false, 1));
+    show("several", MediaPicker.pick(mut window, true, true, 3));
+    show("cancelled", MediaPicker.pick(mut window, true, true, 3));
+    show("neither", MediaPicker.pick(mut window, false, false, 1));
+    match (MediaPicker.capture(mut window, MediaKind.Video)) {
+        Ok(Some(item)) => { Console.write("captured "); Console.writeLine(item.path.view()); }
+        Ok(null) => { Console.writeLine("captured nothing"); }
+        Err(_) => { Console.writeLine("capture error"); }
+    }
+    match (MediaPicker.capture(mut window, MediaKind.Photo)) {
+        Ok(Some(_)) => { Console.writeLine("captured again"); }
+        Ok(null) => { Console.writeLine("capture cancelled"); }
+        Err(_) => { Console.writeLine("capture error"); }
+    }
+    Console.writeLine(if (MediaPicker.canCapture(MediaKind.Photo)) "can capture" else "no camera");
     return 0;
 }
 """
@@ -3981,6 +4035,18 @@ def main():
                             f"text\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) +
                             f"\nsaved.txt: {content('saved.txt')!r}\n" + r.stderr)
 
+        _, media = build(compiler, MEDIA, work, "window_check_media")
+        media_script = os.path.join(work, "media_script.txt")
+        with open(media_script, "w", encoding="utf-8") as f:
+            f.write("0:dialog:/m/a.jpg|/m/b.mov;0:dialog:/m/c.HEIC|/m/d.mp4;0:dialog;0:dialog:/m/e.mov;0:dialog")
+        r = run([media], {"CEESAFE_WINDOW_SCRIPT": media_script}, work)
+        want = ["one 1 photo:/m/a.jpg", "several 2 photo:/m/c.HEIC video:/m/d.mp4", "cancelled 0",
+                "neither Unsupported", "captured /m/e.mov", "capture cancelled", "no camera"]
+        if r.returncode != 0 or r.stdout.splitlines() != want:
+            problems.append("the photo library and the camera: expected\n  " + "\n  ".join(want) +
+                            f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +
+                            r.stderr)
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -3992,7 +4058,7 @@ def main():
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
         checks = (1 + len(cases) + len(surface_cases) + 1 + len(text_cases) + len(wake_cases) + len(any_cases) +
-                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 5 + 1 + 8)
+                  len(menu_cases) + len(drop_cases) + len(touch_cases) + len(safe_cases) + len(keyboard_cases) + len(app_cases) + len(access_cases) + 5 + 1 + 1 + 8)
         if args.display:
             r = run([surface, "bar"], {}, work)
             checks += 1

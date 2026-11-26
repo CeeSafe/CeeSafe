@@ -92,6 +92,8 @@ extern "C" {
         answer: *mut (*u8),
     ) -> i64;
     @effects()
+    fn ceesafe_window_can_capture(video: i32) -> i32;
+    @effects()
     fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
     @effects()
     fn ceesafe_window_drag_over(window: *mut void, position: *mut f32) -> u32;
@@ -1505,8 +1507,9 @@ public struct FileDialog {
     }
 
     /// Runs the dialog of `kind` (0 a file, 1 files, 2 save, 3 a folder, 4 an export of the file at `extensions`, whose
-    /// one path is empty when the system saved it, 5 printing the PDF at `extensions`, one empty path when printed) and
-    /// appends its paths to `out`.
+    /// one path is empty when the system saved it, 5 printing the PDF at `extensions`, one empty path when printed, 6
+    /// the photo library, `name` the limit and `extensions` the kinds, 7 the camera, `extensions` "photo" or "video":
+    /// ADR 0265) and appends its paths to `out`.
     /// Safety: the runtime reads the three texts during the call, and gives its copy of the answer, each path followed
     /// by a zero byte, which it keeps until the window's next dialog; the paths are copied before this returns.
     fn run(
@@ -1555,5 +1558,133 @@ public struct FileDialog {
             }
         }
         return Ok();
+    }
+}
+
+/// What a picked or captured file is (ADR 0265): a photo (JPEG, or a PNG, GIF or WebP as it was) or a video (MP4 or
+/// QuickTime).
+public enum MediaKind {
+    Photo,
+    Video,
+}
+
+/// A photo or a video from the library or the camera (ADR 0265): a copy in the app's temporary folder, the program's
+/// to read with `File` and to delete.
+public struct PickedMedia {
+    public path: String;
+    public kind: MediaKind;
+}
+
+/// The system's photo library and camera (§26.13, ADR 0265): modal, as the file dialogs are. On iOS the photo picker
+/// (PHPicker, no permission) and the camera (UIImagePickerController, which needs the app's `NSCameraUsageDescription`,
+/// and `NSMicrophoneUsageDescription` for a video); on Android the system's photo picker (or the content chooser
+/// before it) and the camera's app. A photo comes as JPEG (a HEIC or HEIF made JPEG at quality 0.9; a PNG, GIF or WebP
+/// as it was), a video as the system gives it. A capture is also kept in the system's gallery (on iOS when the app has
+/// `NSPhotoLibraryAddUsageDescription`). On the desktops `pick` is the open dialog for the photos' and videos' files,
+/// and there is no camera.
+///
+/// ```
+/// let picked = MediaPicker.pick(mut window, true, false, 4)?;     // up to four photos
+/// for (item in picked.view()) {
+///     let bytes = File.readAll(item.path.view())?;
+/// }
+/// match (MediaPicker.capture(mut window, MediaKind.Video)?) {
+///     Some(video) => {}
+///     null => {} // cancelled
+/// }
+/// ```
+public struct MediaPicker {
+    /// Photos, videos or both from the library, up to `limit` of them (1: one, and 0 is taken as 1); empty when the
+    /// user cancelled. `Unsupported` when neither `photos` nor `videos` is asked for.
+    public fn pick(
+        window: borrow mut Window,
+        photos: bool,
+        videos: bool,
+        limit: u32,
+    ) -> Result<Vector<PickedMedia>, WindowError> {
+        if (!photos && !videos) {
+            return Err(WindowError.Unsupported);
+        }
+        let kinds = if (photos && videos) "photos,videos" else if (photos) "photos" else "videos";
+        var digits = [0u8; 10];
+        var n = if (limit == 0) 1u32 else limit;
+        var at: usize = 10;
+        while (n > 0 || at == 10) {
+            at -= 1;
+            digits[at] = 48 + truncate<u8>(n % 10);
+            n /= 10;
+        }
+        let most = match (StringView.fromUtf8(digits[at..10])) {
+            Some(text) => text,
+            null => "1",
+        };
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 6, "", most, kinds, mut paths)?;
+        return MediaPicker.kindsOf(mut paths);
+    }
+
+    /// A photo or a video from the camera, or null when the user cancelled. `Unsupported` where there is no camera
+    /// (`canCapture`); `Resources` when the system refused (the camera's permission, or an iOS app without the usage
+    /// description, which iOS would end).
+    public fn capture(window: borrow mut Window, kind: MediaKind) -> Result<PickedMedia?, WindowError> {
+        let what = match (kind) {
+            MediaKind.Photo => "photo",
+            MediaKind.Video => "video",
+        };
+        var paths = Vector<String>.create();
+        FileDialog.run(window, 7, "", "", what, mut paths)?;
+        var found = MediaPicker.kindsOf(mut paths)?;
+        return Ok(found.pop());
+    }
+
+    /// Whether this device can capture a photo or a video with its camera: false on the desktops and in a simulator.
+    /// Safety: the runtime takes a number and answers one.
+    public fn canCapture(kind: MediaKind) -> bool {
+        let video: i32 = match (kind) {
+            MediaKind.Photo => 0,
+            MediaKind.Video => 1,
+        };
+        return unsafe { ceesafe_window_can_capture(video) } != 0;
+    }
+
+    /// The paths as picked media, each a photo or a video by its extension.
+    fn kindsOf(paths: borrow mut Vector<String>) -> Result<Vector<PickedMedia>, WindowError> {
+        var media = Vector<PickedMedia>.create();
+        while (paths.length > 0) {
+            let path = paths.remove(0);
+            let kind = if (MediaPicker.isPhoto(path.view())) MediaKind.Photo else MediaKind.Video;
+            match (media.push(PickedMedia { path: path, kind: kind })) {
+                Ok() => {}
+                Err(_) => { return Err(WindowError.Resources); }
+            }
+        }
+        return Ok(media);
+    }
+
+    fn isPhoto(path: StringView) -> bool {
+        let bytes = path.bytes();
+        var dot = bytes.length;
+        for (k in 0..bytes.length) {
+            if (bytes[k] == 46) {
+                dot = k;
+            } else if (bytes[k] == 47) {
+                dot = bytes.length;
+            }
+        }
+        if (dot >= bytes.length) {
+            return false;
+        }
+        var lower = [0u8; 5];
+        let extension = bytes[dot + 1..bytes.length];
+        if (extension.length > 4) {
+            return false;
+        }
+        for (k in 0..extension.length) {
+            let b = extension[k];
+            lower[k] = if (b >= 65 && b <= 90) b + 32 else b;
+        }
+        let e = lower[0..extension.length];
+        return e == "jpg".bytes() || e == "jpeg".bytes() || e == "png".bytes() || e == "gif".bytes() ||
+            e == "webp".bytes() || e == "heic".bytes() || e == "heif".bytes();
     }
 }

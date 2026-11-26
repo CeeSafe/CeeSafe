@@ -39,10 +39,12 @@ async fn work() -> Result<u32, AsyncError> {
         Err(AsyncError.TimedOut) => { total += 100000; }
         _ => {}
     }
-    // all: both run; the first error is the result and cancels the other.
+    // all: both run; the first error is the result and cancels the other. The sleeps are far apart: each child's
+    // deadline counts from its own start, in whole milliseconds, so 2 against 1 tied or swapped when the second child
+    // started a millisecond late (under ThreadSanitizer on a loaded machine), and the first child counted.
     var seen: u32 = 0;
     let all = await Async.all(async () => {
-        await Timer.sleep(2)?;
+        await Timer.sleep(50)?;
         seen += 1;
         return Ok();
     }, async () => {

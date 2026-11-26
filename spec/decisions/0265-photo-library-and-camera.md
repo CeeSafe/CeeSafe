@@ -131,7 +131,12 @@ Done (2026-11-26):
     ended at its confirm ("Only owner is able to interact with pending/trashed item"); with a new item that is not
     pending, the photo (4.5 MB) was sent and shown, and is in the gallery under `Pictures/Marivil`.
   - Record, by his hands: a video (17.9 MB) sent, and in the gallery under `Movies/Marivil`.
-- Not yet: the iOS simulator and the owner's iPhone; several items at once; a HEIF photo on Android; Android
+- The owner's iPhone 14 Plus (iOS), by his hands, in Marivil's port against marivil.com: photos picked with
+  PHPicker and a photo from the camera were sent and shown, and the capture was added to Photos (iOS asked once).
+  He found the camera's photo slow to reach the chat: a full-size photo is uploaded before the message exists, and
+  its bubble decodes all 12 megapixels (about 470 ms on an M-series Mac, longer on a phone) — the making smaller that
+  §1 left for later.
+- Not yet: the iOS simulator; several items at once; a HEIF photo on Android; Android
   before 13 (the content chooser); the storage permission on Android 7.1 to 9.
 
 ## 6. Questions for the owner (answered 2026-11-26)

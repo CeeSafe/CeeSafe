@@ -246,6 +246,206 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
     return result;
 }
 
+#elif defined(_WIN32)
+/* Windows: the Windows Imaging Component, through COM. ole32.dll is loaded with LoadLibraryW, as the window runtime's
+   file dialogs do, and the GUIDs are written here, so the link names no import library. The frame is scaled with
+   WIC's scaler (Fant), turned upright with its flip-rotator (the JPEG's EXIF orientation, read through the frame's
+   metadata query reader), converted to 24-bit BGR, and written by WIC's JPEG encoder at the quality, with no
+   metadata. */
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
+#include <windows.h>
+#include <wincodec.h>
+
+static const GUID cee_clsid_wic_factory = {0xcacaf262, 0x9370, 0x4615,
+                                           {0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a}};
+static const GUID cee_iid_wic_factory = {0xec5ec8a9, 0xc395, 0x4314, {0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70}};
+static const GUID cee_container_jpeg = {0x19e4a5aa, 0x5662, 0x4fc5, {0xa0, 0xc0, 0x17, 0x58, 0x02, 0x8e, 0x10, 0x57}};
+static const GUID cee_format_24bgr = {0x6fddc324, 0x4e03, 0x4bfe, {0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x0c}};
+
+static struct {
+    int state; /* 0 not tried, 1 loaded, -1 failed */
+    HRESULT(WINAPI *initialize)(void *, DWORD);
+    HRESULT(WINAPI *create)(REFCLSID, void *, DWORD, REFIID, void **);
+    HRESULT(WINAPI *clear)(PROPVARIANT *);
+} cee_wic;
+
+static int cee_wic_load(void) {
+    if (cee_wic.state == 0) {
+        cee_wic.state = -1;
+        HMODULE ole = LoadLibraryW(L"ole32.dll");
+        if (ole != NULL) {
+            cee_wic.initialize = (HRESULT(WINAPI *)(void *, DWORD))(void (*)(void))GetProcAddress(ole, "CoInitializeEx");
+            cee_wic.create = (HRESULT(WINAPI *)(REFCLSID, void *, DWORD, REFIID, void **))(void (*)(void))GetProcAddress(
+                ole, "CoCreateInstance");
+            cee_wic.clear = (HRESULT(WINAPI *)(PROPVARIANT *))(void (*)(void))GetProcAddress(ole, "PropVariantClear");
+            if (cee_wic.initialize != NULL && cee_wic.create != NULL && cee_wic.clear != NULL) {
+                cee_wic.state = 1;
+            }
+        }
+    }
+    return cee_wic.state == 1;
+}
+
+/* A NUL-terminated UTF-16 copy of a UTF-8 path, or NULL. */
+static wchar_t *cee_wic_path(const char *utf8) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
+    wchar_t *wide = n > 0 ? (wchar_t *)malloc((size_t)n * sizeof(wchar_t)) : NULL;
+    if (wide != NULL && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, n) != n) {
+        free(wide);
+        wide = NULL;
+    }
+    return wide;
+}
+
+/* The EXIF orientation of a JPEG's frame (1 to 8), or 1 when it has none or is no JPEG. */
+static unsigned cee_wic_orientation(IWICBitmapFrameDecode *frame) {
+    IWICMetadataQueryReader *reader = NULL;
+    unsigned orientation = 1;
+    if (SUCCEEDED(IWICBitmapFrameDecode_GetMetadataQueryReader(frame, &reader)) && reader != NULL) {
+        PROPVARIANT value;
+        PropVariantInit(&value);
+        if (SUCCEEDED(IWICMetadataQueryReader_GetMetadataByName(reader, L"/app1/ifd/{ushort=274}", &value)) &&
+            value.vt == VT_UI2 && value.uiVal >= 1 && value.uiVal <= 8) {
+            orientation = value.uiVal;
+        }
+        (void)cee_wic.clear(&value);
+        IWICMetadataQueryReader_Release(reader);
+    }
+    return orientation;
+}
+
+static int32_t cee_image_system(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
+                                uint32_t *h) {
+    if (GetFileAttributesA(from) == INVALID_FILE_ATTRIBUTES) {
+        wchar_t *probe = cee_wic_path(from);
+        DWORD found = probe != NULL ? GetFileAttributesW(probe) : INVALID_FILE_ATTRIBUTES;
+        free(probe);
+        if (found == INVALID_FILE_ATTRIBUTES) {
+            return CEE_IMAGE_NOT_FOUND;
+        }
+    }
+    if (!cee_wic_load()) {
+        return CEE_IMAGE_UNSUPPORTED;
+    }
+    HRESULT started = cee_wic.initialize(NULL, COINIT_MULTITHREADED);
+    int uninitialize = started == S_OK || started == S_FALSE; /* RPC_E_CHANGED_MODE: the thread's own apartment */
+    wchar_t *in = cee_wic_path(from);
+    wchar_t *out = cee_wic_path(to);
+    int32_t result = CEE_IMAGE_INVALID;
+    IWICImagingFactory *factory = NULL;
+    IWICBitmapDecoder *decoder = NULL;
+    IWICBitmapFrameDecode *frame = NULL;
+    IWICBitmapScaler *scaler = NULL;
+    IWICBitmapFlipRotator *rotator = NULL;
+    IWICFormatConverter *converter = NULL;
+    IWICStream *stream = NULL;
+    IWICBitmapEncoder *encoder = NULL;
+    IWICBitmapFrameEncode *target = NULL;
+    IPropertyBag2 *options = NULL;
+    UINT fw = 0, fh = 0;
+    if (in == NULL || out == NULL ||
+        FAILED(cee_wic.create(&cee_clsid_wic_factory, NULL, CLSCTX_INPROC_SERVER, &cee_iid_wic_factory,
+                              (void **)&factory))) {
+        result = in == NULL || out == NULL ? CEE_IMAGE_NOT_FOUND : CEE_IMAGE_UNSUPPORTED;
+    } else if (SUCCEEDED(IWICImagingFactory_CreateDecoderFromFilename(factory, in, NULL, GENERIC_READ,
+                                                                        WICDecodeMetadataCacheOnDemand, &decoder)) &&
+               SUCCEEDED(IWICBitmapDecoder_GetFrame(decoder, 0, &frame)) &&
+               SUCCEEDED(IWICBitmapFrameDecode_GetSize(frame, &fw, &fh)) && fw > 0 && fh > 0) {
+        /* Scaled first (never enlarged), then turned. */
+        UINT big = fw > fh ? fw : fh;
+        UINT sw = fw, sh = fh;
+        if (big > longest) {
+            sw = (UINT)(((uint64_t)fw * longest + big / 2u) / big);
+            sh = (UINT)(((uint64_t)fh * longest + big / 2u) / big);
+            sw = sw > 0 ? sw : 1u;
+            sh = sh > 0 ? sh : 1u;
+        }
+        IWICBitmapSource *source = (IWICBitmapSource *)frame;
+        result = CEE_IMAGE_FAILED;
+        if ((sw == fw && sh == fh) ||
+            (SUCCEEDED(IWICImagingFactory_CreateBitmapScaler(factory, &scaler)) &&
+             SUCCEEDED(IWICBitmapScaler_Initialize(scaler, source, sw, sh, WICBitmapInterpolationModeFant)))) {
+            if (scaler != NULL) {
+                source = (IWICBitmapSource *)scaler;
+            }
+            unsigned orientation = cee_wic_orientation(frame);
+            /* EXIF 2.32's orientations as WIC's transforms (a rotation clockwise, then a flip). */
+            WICBitmapTransformOptions turn = orientation == 2   ? WICBitmapTransformFlipHorizontal
+                                             : orientation == 3 ? WICBitmapTransformRotate180
+                                             : orientation == 4 ? WICBitmapTransformFlipVertical
+                                             : orientation == 5
+                                                 ? (WICBitmapTransformOptions)(WICBitmapTransformRotate90 |
+                                                                               WICBitmapTransformFlipHorizontal)
+                                             : orientation == 6 ? WICBitmapTransformRotate90
+                                             : orientation == 7
+                                                 ? (WICBitmapTransformOptions)(WICBitmapTransformRotate270 |
+                                                                               WICBitmapTransformFlipHorizontal)
+                                             : orientation == 8 ? WICBitmapTransformRotate270
+                                                                : WICBitmapTransformRotate0;
+            int turned = turn != WICBitmapTransformRotate0;
+            if (!turned || (SUCCEEDED(IWICImagingFactory_CreateBitmapFlipRotator(factory, &rotator)) &&
+                            SUCCEEDED(IWICBitmapFlipRotator_Initialize(rotator, source, turn)))) {
+                if (rotator != NULL) {
+                    source = (IWICBitmapSource *)rotator;
+                }
+                UINT ow = 0, oh = 0;
+                WICPixelFormatGUID format = cee_format_24bgr;
+                PROPBAG2 name;
+                memset(&name, 0, sizeof name);
+                name.pstrName = (LPOLESTR)L"ImageQuality";
+                VARIANT q; /* set by hand: VariantInit is oleaut32's, not loaded here */
+                memset(&q, 0, sizeof q);
+                q.vt = VT_R4;
+                q.fltVal = (float)quality / 1000.0f;
+                if (SUCCEEDED(IWICImagingFactory_CreateFormatConverter(factory, &converter)) &&
+                    SUCCEEDED(IWICFormatConverter_Initialize(converter, source, &cee_format_24bgr,
+                                                             WICBitmapDitherTypeNone, NULL, 0.0,
+                                                             WICBitmapPaletteTypeCustom)) &&
+                    SUCCEEDED(IWICFormatConverter_GetSize(converter, &ow, &oh)) &&
+                    SUCCEEDED(IWICImagingFactory_CreateStream(factory, &stream)) &&
+                    SUCCEEDED(IWICStream_InitializeFromFilename(stream, out, GENERIC_WRITE)) &&
+                    SUCCEEDED(IWICImagingFactory_CreateEncoder(factory, &cee_container_jpeg, NULL, &encoder)) &&
+                    SUCCEEDED(IWICBitmapEncoder_Initialize(encoder, (IStream *)stream, WICBitmapEncoderNoCache)) &&
+                    SUCCEEDED(IWICBitmapEncoder_CreateNewFrame(encoder, &target, &options)) &&
+                    SUCCEEDED(IPropertyBag2_Write(options, 1, &name, &q)) &&
+                    SUCCEEDED(IWICBitmapFrameEncode_Initialize(target, options)) &&
+                    SUCCEEDED(IWICBitmapFrameEncode_SetSize(target, ow, oh)) &&
+                    SUCCEEDED(IWICBitmapFrameEncode_SetPixelFormat(target, &format)) &&
+                    IsEqualGUID(&format, &cee_format_24bgr) &&
+                    SUCCEEDED(IWICBitmapFrameEncode_WriteSource(target, (IWICBitmapSource *)converter, NULL)) &&
+                    SUCCEEDED(IWICBitmapFrameEncode_Commit(target)) && SUCCEEDED(IWICBitmapEncoder_Commit(encoder))) {
+                    *w = (uint32_t)ow;
+                    *h = (uint32_t)oh;
+                    result = 0;
+                }
+            }
+        }
+    }
+    if (options != NULL) IPropertyBag2_Release(options);
+    if (target != NULL) IWICBitmapFrameEncode_Release(target);
+    if (encoder != NULL) IWICBitmapEncoder_Release(encoder);
+    if (stream != NULL) IWICStream_Release(stream);
+    if (converter != NULL) IWICFormatConverter_Release(converter);
+    if (rotator != NULL) IWICBitmapFlipRotator_Release(rotator);
+    if (scaler != NULL) IWICBitmapScaler_Release(scaler);
+    if (frame != NULL) IWICBitmapFrameDecode_Release(frame);
+    if (decoder != NULL) IWICBitmapDecoder_Release(decoder);
+    if (factory != NULL) IWICImagingFactory_Release(factory);
+    if (uninitialize) {
+        HMODULE ole = GetModuleHandleW(L"ole32.dll");
+        void(WINAPI * done)(void) = ole != NULL ? (void(WINAPI *)(void))(void (*)(void))GetProcAddress(ole, "CoUninitialize")
+                                                 : NULL;
+        if (done != NULL) {
+            done();
+        }
+    }
+    free(in);
+    free(out);
+    return result;
+}
+
 #else
 static int32_t cee_image_system(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
                                 uint32_t *h) {

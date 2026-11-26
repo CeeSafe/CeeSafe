@@ -4536,8 +4536,8 @@ public fn shrink(from: StringView, to: StringView, longest: u32, quality: f32) -
 Reads the photo at `from` (JPEG, PNG, HEIC: what the system decodes), turns it upright (its EXIF orientation
 applied to the pixels), scales it so its longest side is at most `longest` pixels (never larger), and writes it
 to `to` as a JPEG at `quality` (0 to 1), without the photo's metadata (where it was taken, the camera). The new
-size. macOS and iOS: ImageIO; Android: BitmapFactory and Bitmap.compress. `Unsupported` where the system has no
-codec CeeSafe uses (Linux, FreeBSD, Windows for now, a program on Android with no window, the interpreter);
+size. macOS and iOS: ImageIO; Android: BitmapFactory and Bitmap.compress; Windows: WIC. `Unsupported` where the system has no
+codec CeeSafe uses (Linux, FreeBSD, a program on Android with no window, the interpreter);
 `NotFound` when `from` is not there; `InvalidInput` when it is no photo the system reads, or `longest` is 0;
 `Other(5)` when the JPEG could not be written.
 Safety: the runtime reads the two paths during the call and writes the two sizes.

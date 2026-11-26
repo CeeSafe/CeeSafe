@@ -4,7 +4,7 @@
 One program is built; its arguments are the source, the target, the longest side and the quality. Its output is
 `made W H`, or the IoError's name. Each case is run:
 
-1. on macOS (ImageIO): a 4032 by 3024 JPEG whose EXIF orientation is 6 (turned a quarter) becomes a JPEG of at most
+1. on macOS (ImageIO) and Windows (WIC): a 4032 by 3024 JPEG whose EXIF orientation is 6 (turned a quarter) becomes a JPEG of at most
    1600 pixels, upright: 1200 by 1600, with no EXIF (Pillow reads it back: no orientation, no GPS, no camera); a
    small PNG is written as a JPEG at its own size (never enlarged); a file that is no photo is InvalidInput; a missing
    one NotFound; a longest side of 0 is InvalidInput;
@@ -58,7 +58,7 @@ def main():
         source = os.path.join(work, "shrink.cee")
         with open(source, "w", encoding="utf-8") as f:
             f.write(PROGRAM)
-        exe = os.path.join(work, "shrink")
+        exe = os.path.join(work, "shrink.exe" if sys.platform == "win32" else "shrink")
         r = subprocess.run([compiler, "build", source, "-o", exe], capture_output=True, text=True)
         if r.returncode != 0:
             print("image_check: the program did not build\n" + r.stdout + r.stderr)
@@ -78,7 +78,7 @@ def main():
         junk = os.path.join(work, "junk.jpg")
         with open(junk, "wb") as f:
             f.write(b"this is not a photo at all" * 40)
-        apple = sys.platform == "darwin"
+        apple = sys.platform in ("darwin", "win32")  # a system codec: ImageIO, WIC
 
         def shrink(src, longest, name, interp=False):
             out = os.path.join(work, name)

@@ -292,6 +292,7 @@ static int32_t cee_sec_dir_remove(const char *dir, const char *app, const char *
 #include <TargetConditionals.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <time.h>
 
 typedef const void *cee_cf;
 typedef long cee_cf_index;
@@ -656,6 +657,427 @@ static int32_t cee_sec_system_remove(const char *group, const char *app, const c
     }
 }
 
+/* ---- Device keys (ADR 0275) on Apple's systems ----
+   A P-256 key made in the Secure Enclave (kSecAttrTokenIDSecureEnclave; usable after the first unlock, on this device
+   only, without the user's presence), never exportable; where the Enclave cannot hold it (an unsigned macOS program
+   in the login keychain, a simulator), a key in the keychain instead, `hardware` 0. Its tag is "<app>.<name>". The
+   public half is the SPKI of its X9.63 point; a signature is ECDSA with SHA-256, DER. A new key is attested with
+   App Attest where the system has it: a new App Attest key, attesting SHA-256(challenge || SPKI). */
+static struct {
+    int loaded; /* 1 loaded, -1 failed */
+    cee_cf (*random_key)(cee_cf, cee_cf *);
+    cee_cf (*copy_public)(cee_cf);
+    cee_cf (*external)(cee_cf, cee_cf *);
+    cee_cf (*sign)(cee_cf, cee_cf, cee_cf, cee_cf *);
+    cee_cf (*access)(cee_cf, cee_cf, unsigned long, cee_cf *);
+    cee_cf (*number)(cee_cf, cee_cf_index, const void *);
+    cee_cf_index (*error_code)(cee_cf);
+    cee_cf key_class, tag, key_type, ec, key_kind, private_kind, return_ref, size, token, enclave, private_attrs,
+        permanent, access_control, algorithm;
+} cee_key;
+
+static int cee_key_load(void) {
+    if (!cee_sec_load()) {
+        return 0;
+    }
+    pthread_mutex_lock(&cee_sec_lock);
+    if (cee_key.loaded == 0) {
+        cee_key.loaded = -1;
+        void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_GLOBAL);
+        void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW | RTLD_GLOBAL);
+        if (cf != NULL && sec != NULL) {
+            cee_key.random_key = (cee_cf(*)(cee_cf, cee_cf *))dlsym(sec, "SecKeyCreateRandomKey");
+            cee_key.copy_public = (cee_cf(*)(cee_cf))dlsym(sec, "SecKeyCopyPublicKey");
+            cee_key.external = (cee_cf(*)(cee_cf, cee_cf *))dlsym(sec, "SecKeyCopyExternalRepresentation");
+            cee_key.sign = (cee_cf(*)(cee_cf, cee_cf, cee_cf, cee_cf *))dlsym(sec, "SecKeyCreateSignature");
+            cee_key.access = (cee_cf(*)(cee_cf, cee_cf, unsigned long, cee_cf *))dlsym(
+                sec, "SecAccessControlCreateWithFlags");
+            cee_key.number = (cee_cf(*)(cee_cf, cee_cf_index, const void *))dlsym(cf, "CFNumberCreate");
+            cee_key.error_code = (cee_cf_index(*)(cee_cf))dlsym(cf, "CFErrorGetCode");
+            cee_key.key_class = cee_sec_constant(sec, "kSecClassKey");
+            cee_key.tag = cee_sec_constant(sec, "kSecAttrApplicationTag");
+            cee_key.key_type = cee_sec_constant(sec, "kSecAttrKeyType");
+            cee_key.ec = cee_sec_constant(sec, "kSecAttrKeyTypeECSECPrimeRandom");
+            cee_key.key_kind = cee_sec_constant(sec, "kSecAttrKeyClass");
+            cee_key.private_kind = cee_sec_constant(sec, "kSecAttrKeyClassPrivate");
+            cee_key.return_ref = cee_sec_constant(sec, "kSecReturnRef");
+            cee_key.size = cee_sec_constant(sec, "kSecAttrKeySizeInBits");
+            cee_key.token = cee_sec_constant(sec, "kSecAttrTokenID");
+            cee_key.enclave = cee_sec_constant(sec, "kSecAttrTokenIDSecureEnclave");
+            cee_key.private_attrs = cee_sec_constant(sec, "kSecPrivateKeyAttrs");
+            cee_key.permanent = cee_sec_constant(sec, "kSecAttrIsPermanent");
+            cee_key.access_control = cee_sec_constant(sec, "kSecAttrAccessControl");
+            cee_key.algorithm = cee_sec_constant(sec, "kSecKeyAlgorithmECDSASignatureMessageX962SHA256");
+            if (cee_key.random_key != NULL && cee_key.copy_public != NULL && cee_key.external != NULL &&
+                cee_key.sign != NULL && cee_key.access != NULL && cee_key.number != NULL && cee_key.error_code != NULL &&
+                cee_key.key_class != NULL && cee_key.tag != NULL && cee_key.key_type != NULL && cee_key.ec != NULL &&
+                cee_key.key_kind != NULL && cee_key.private_kind != NULL && cee_key.return_ref != NULL &&
+                cee_key.size != NULL && cee_key.token != NULL && cee_key.enclave != NULL &&
+                cee_key.private_attrs != NULL && cee_key.permanent != NULL && cee_key.access_control != NULL &&
+                cee_key.algorithm != NULL) {
+                cee_key.loaded = 1;
+            }
+        }
+    }
+    int loaded = cee_key.loaded == 1;
+    pthread_mutex_unlock(&cee_sec_lock);
+    return loaded;
+}
+
+static cee_cf cee_key_dictionary(void) {
+    return cee_sec.dictionary(NULL, 0, cee_sec.key_callbacks, cee_sec.value_callbacks);
+}
+
+/* The tag "<app>.<name>" as CFData; the caller releases it. */
+static cee_cf cee_key_tag(const char *app, const char *name) {
+    char tag[CEE_SEC_NAME_LIMIT * 2 + 2];
+    int n = snprintf(tag, sizeof tag, "%s.%s", app, name);
+    return n > 0 && (size_t)n < sizeof tag ? cee_sec.data(NULL, (const uint8_t *)tag, (cee_cf_index)n) : NULL;
+}
+
+/* The private key of the tag, or NULL (*status why); the caller releases it. */
+static cee_cf cee_key_find(cee_cf tag, int login, cee_os_status *status) {
+    cee_cf q = cee_key_dictionary();
+    if (q == NULL) {
+        *status = -1;
+        return NULL;
+    }
+    cee_sec.set(q, cee_sec.cls, cee_key.key_class);
+    cee_sec.set(q, cee_key.tag, tag);
+    cee_sec.set(q, cee_key.key_type, cee_key.ec);
+    cee_sec.set(q, cee_key.key_kind, cee_key.private_kind);
+    cee_sec.set(q, cee_key.return_ref, cee_sec.yes);
+#if !TARGET_OS_IPHONE
+    if (!login && cee_sec.data_protection != NULL) {
+        cee_sec.set(q, cee_sec.data_protection, cee_sec.yes);
+    }
+#else
+    (void)login;
+#endif
+    cee_cf key = NULL;
+    *status = cee_sec.copy_matching(q, &key);
+    cee_sec.release(q);
+    return *status == 0 ? key : NULL;
+}
+
+/* A new private key of the tag: in the Secure Enclave when `enclave`, else in the keychain. NULL when it cannot be
+   made (*why the system's code); the caller releases it. */
+static cee_cf cee_key_make(cee_cf tag, int login, int enclave, cee_os_status *why) {
+    cee_cf attrs = cee_key_dictionary();
+    cee_cf private_attrs = cee_key_dictionary();
+    int bits = 256;
+    cee_cf size = cee_key.number(NULL, 3 /* kCFNumberSInt32Type */, &bits);
+    /* After the first unlock, this device only; the Enclave's key may sign (kSecAccessControlPrivateKeyUsage), with no
+       presence asked: the key signs in the background (ADR 0275 §6.3). */
+    cee_cf access = cee_key.access(NULL, cee_sec.after_unlock, enclave ? (1ul << 30) : 0ul, NULL);
+    cee_cf key = NULL;
+    if (attrs != NULL && private_attrs != NULL && size != NULL && access != NULL) {
+        cee_sec.set(attrs, cee_key.key_type, cee_key.ec);
+        cee_sec.set(attrs, cee_key.size, size);
+        if (enclave) {
+            cee_sec.set(attrs, cee_key.token, cee_key.enclave);
+        }
+#if !TARGET_OS_IPHONE
+        if (!login && cee_sec.data_protection != NULL) {
+            cee_sec.set(attrs, cee_sec.data_protection, cee_sec.yes);
+        }
+#else
+        (void)login;
+#endif
+        cee_sec.set(private_attrs, cee_key.permanent, cee_sec.yes);
+        cee_sec.set(private_attrs, cee_key.tag, tag);
+        if (!login) {
+            cee_sec.set(private_attrs, cee_key.access_control, access);
+        }
+        cee_sec.set(attrs, cee_key.private_attrs, private_attrs);
+        cee_cf error = NULL;
+        key = cee_key.random_key(attrs, &error);
+        if (error != NULL) {
+            *why = (cee_os_status)cee_key.error_code(error);
+            cee_sec.release(error);
+        }
+    }
+    if (attrs != NULL) cee_sec.release(attrs);
+    if (private_attrs != NULL) cee_sec.release(private_attrs);
+    if (size != NULL) cee_sec.release(size);
+    if (access != NULL) cee_sec.release(access);
+    return key;
+}
+
+/* The SubjectPublicKeyInfo of a P-256 key: the algorithm's header, then the 65-byte uncompressed point. */
+static const uint8_t cee_key_spki_header[26] = {0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48,
+                                                0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A, 0x86, 0x48,
+                                                0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00};
+
+/* The key's public half as SPKI into `out` (91 bytes): its length, or a code. */
+static int64_t cee_key_spki(cee_cf key, uint8_t *out, uint64_t capacity) {
+    cee_cf pub = cee_key.copy_public(key);
+    cee_cf point = pub != NULL ? cee_key.external(pub, NULL) : NULL;
+    int64_t result = CEE_SEC_FAILED;
+    if (point != NULL && cee_sec.data_length(point) == 65 && capacity >= 91) {
+        memcpy(out, cee_key_spki_header, 26);
+        memcpy(out + 26, cee_sec.data_bytes(point), 65);
+        result = 91;
+    }
+    if (point != NULL) cee_sec.release(point);
+    if (pub != NULL) cee_sec.release(pub);
+    return result;
+}
+
+/* -- App Attest (DeviceCheck), through the Objective-C runtime: one at a time, its answers from blocks without
+   captures, waited for. */
+typedef void *cee_objc_id;
+struct cee_key_block_descriptor {
+    unsigned long reserved, size;
+};
+struct cee_key_block {
+    void *isa;
+    int flags, reserved;
+    void (*invoke)(void *, cee_objc_id, cee_objc_id);
+    const struct cee_key_block_descriptor *descriptor;
+};
+static struct {
+    void (*send)(void);
+    cee_objc_id (*cls)(const char *);
+    void *(*sel)(const char *);
+    volatile int state; /* 0 waiting, 1 answered, 2 failed */
+    cee_objc_id key_id; /* the App Attest key's id, retained */
+    uint8_t *attestation;
+    size_t attestation_length;
+} cee_attest;
+
+static cee_objc_id cee_attest_msg(cee_objc_id o, const char *s) {
+    return ((cee_objc_id(*)(cee_objc_id, void *))cee_attest.send)(o, cee_attest.sel(s));
+}
+
+static void cee_attest_generated(void *block, cee_objc_id key_id, cee_objc_id error) {
+    (void)block;
+    if (key_id != NULL && error == NULL) {
+        cee_attest.key_id = cee_attest_msg(key_id, "retain");
+        cee_attest.state = 1;
+    } else {
+        cee_attest.state = 2;
+    }
+}
+
+static void cee_attest_attested(void *block, cee_objc_id data, cee_objc_id error) {
+    (void)block;
+    if (data != NULL && error == NULL) {
+        size_t n = ((size_t(*)(cee_objc_id, void *))cee_attest.send)(data, cee_attest.sel("length"));
+        const void *bytes = ((const void *(*)(cee_objc_id, void *))cee_attest.send)(data, cee_attest.sel("bytes"));
+        cee_attest.attestation = n > 0 && bytes != NULL ? (uint8_t *)malloc(n) : NULL;
+        if (cee_attest.attestation != NULL) {
+            memcpy(cee_attest.attestation, bytes, n);
+            cee_attest.attestation_length = n;
+        }
+        cee_attest.state = cee_attest.attestation != NULL ? 1 : 2;
+    } else {
+        cee_attest.state = 2;
+    }
+}
+
+static const struct cee_key_block_descriptor cee_attest_descriptor = {0ul, sizeof(struct cee_key_block)};
+static struct cee_key_block cee_attest_generate_block = {NULL, 1 << 28, 0, cee_attest_generated,
+                                                         &cee_attest_descriptor};
+static struct cee_key_block cee_attest_attest_block = {NULL, 1 << 28, 0, cee_attest_attested, &cee_attest_descriptor};
+
+/* Waits for a block's answer, a minute at most: 1 when it came. */
+static int cee_attest_wait(void) {
+    for (int k = 0; k < 6000 && cee_attest.state == 0; k++) {
+        struct timespec pause = {0, 10000000L};
+        nanosleep(&pause, NULL);
+    }
+    return cee_attest.state == 1;
+}
+
+/* App Attest's attestation of SHA-256(challenge || spki), malloc'd into *out, or NULL where the system has none (an
+   app without the App Attest entitlement, macOS, a simulator) or it failed: a key without one is still a key. */
+static uint8_t *cee_key_attest(const uint8_t *challenge, size_t challenge_length, const uint8_t *spki,
+                               size_t spki_length, size_t *length) {
+    static pthread_mutex_t one = PTHREAD_MUTEX_INITIALIZER;
+    *length = 0;
+    (void)dlopen("/System/Library/Frameworks/DeviceCheck.framework/DeviceCheck", RTLD_NOW | RTLD_GLOBAL);
+    unsigned char *(*sha256)(const void *, uint32_t, unsigned char *) =
+        (unsigned char *(*)(const void *, uint32_t, unsigned char *))dlsym(RTLD_DEFAULT, "CC_SHA256");
+    cee_attest.send = (void (*)(void))dlsym(RTLD_DEFAULT, "objc_msgSend");
+    cee_attest.cls = (cee_objc_id(*)(const char *))dlsym(RTLD_DEFAULT, "objc_getClass");
+    cee_attest.sel = (void *(*)(const char *))dlsym(RTLD_DEFAULT, "sel_registerName");
+    void *global = dlsym(RTLD_DEFAULT, "_NSConcreteGlobalBlock");
+    if (sha256 == NULL || cee_attest.send == NULL || cee_attest.cls == NULL || cee_attest.sel == NULL ||
+        global == NULL || cee_attest.cls("DCAppAttestService") == NULL || challenge_length + spki_length > 4096) {
+        return NULL;
+    }
+    pthread_mutex_lock(&one);
+    uint8_t *result = NULL;
+    void *(*pool_push)(void) = (void *(*)(void))dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPush");
+    void (*pool_pop)(void *) = (void (*)(void *))dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPop");
+    void *pool = pool_push != NULL ? pool_push() : NULL;
+    cee_objc_id service = cee_attest_msg(cee_attest.cls("DCAppAttestService"), "sharedService");
+    int supported = service != NULL &&
+                    ((signed char (*)(cee_objc_id, void *))cee_attest.send)(service, cee_attest.sel("isSupported"));
+    if (supported) {
+        cee_attest_generate_block.isa = global;
+        cee_attest_attest_block.isa = global;
+        cee_attest.state = 0;
+        cee_attest.key_id = NULL;
+        ((void (*)(cee_objc_id, void *, void *))cee_attest.send)(
+            service, cee_attest.sel("generateKeyWithCompletionHandler:"), &cee_attest_generate_block);
+        if (cee_attest_wait()) {
+            uint8_t both[4096];
+            unsigned char hash[32];
+            memcpy(both, challenge, challenge_length);
+            memcpy(both + challenge_length, spki, spki_length);
+            (void)sha256(both, (uint32_t)(challenge_length + spki_length), hash);
+            cee_objc_id data = ((cee_objc_id(*)(cee_objc_id, void *, const void *, unsigned long))cee_attest.send)(
+                cee_attest.cls("NSData"), cee_attest.sel("dataWithBytes:length:"), hash, 32ul);
+            cee_attest.state = 0;
+            cee_attest.attestation = NULL;
+            cee_attest.attestation_length = 0;
+            ((void (*)(cee_objc_id, void *, cee_objc_id, cee_objc_id, void *))cee_attest.send)(
+                service, cee_attest.sel("attestKey:clientDataHash:completionHandler:"), cee_attest.key_id, data,
+                &cee_attest_attest_block);
+            if (cee_attest_wait()) {
+                result = cee_attest.attestation;
+                *length = cee_attest.attestation_length;
+            }
+            (void)cee_attest_msg(cee_attest.key_id, "release");
+        }
+    }
+    if (pool != NULL && pool_pop != NULL) {
+        pool_pop(pool);
+    }
+    pthread_mutex_unlock(&one);
+    return result;
+}
+
+static void cee_key_put32(uint8_t *at, uint32_t v) {
+    at[0] = (uint8_t)(v >> 24);
+    at[1] = (uint8_t)(v >> 16);
+    at[2] = (uint8_t)(v >> 8);
+    at[3] = (uint8_t)v;
+}
+
+/* ADR 0275's operations (CEE_KEY_*): see ceesafe_secrets_key. */
+static int64_t cee_sec_system_key(int op, const char *app, const char *name, const uint8_t *in, uint64_t in_length,
+                                  uint8_t *out, uint64_t capacity) {
+    if (!cee_key_load()) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    int login = cee_sec_login();
+    cee_cf tag = cee_key_tag(app, name);
+    if (tag == NULL) {
+        return CEE_SEC_INVALID;
+    }
+    int64_t result = CEE_SEC_FAILED;
+    cee_os_status status = 0;
+    cee_cf key = cee_key_find(tag, login, &status);
+    if (op == 3) {
+        /* Remove: every key of the tag. */
+        if (key != NULL) {
+            cee_sec.release(key);
+        }
+        cee_cf q = cee_key_dictionary();
+        if (q != NULL) {
+            cee_sec.set(q, cee_sec.cls, cee_key.key_class);
+            cee_sec.set(q, cee_key.tag, tag);
+#if !TARGET_OS_IPHONE
+            if (!login && cee_sec.data_protection != NULL) {
+                cee_sec.set(q, cee_sec.data_protection, cee_sec.yes);
+            }
+#endif
+            cee_os_status gone = cee_sec.remove(q);
+            result = gone == 0 ? 0 : gone == CEE_SEC_NOT_FOUND ? CEE_SEC_NONE : cee_sec_code(gone);
+            cee_sec.release(q);
+        }
+        cee_sec.release(tag);
+        return result;
+    }
+    if (key == NULL && status != CEE_SEC_NOT_FOUND) {
+        cee_sec.release(tag);
+        return cee_sec_code(status);
+    }
+    if (op == 1 || op == 2) {
+        if (key == NULL) {
+            result = CEE_SEC_NONE;
+        } else if (op == 1) {
+            result = cee_key_spki(key, out, capacity);
+        } else {
+            cee_cf message = cee_sec.data(NULL, in, (cee_cf_index)in_length);
+            cee_cf error = NULL;
+            cee_cf signature = message != NULL ? cee_key.sign(key, cee_key.algorithm, message, &error) : NULL;
+            if (signature != NULL && (uint64_t)cee_sec.data_length(signature) <= capacity) {
+                result = (int64_t)cee_sec.data_length(signature);
+                memcpy(out, cee_sec.data_bytes(signature), (size_t)result);
+            }
+            if (signature != NULL) cee_sec.release(signature);
+            if (error != NULL) cee_sec.release(error);
+            if (message != NULL) cee_sec.release(message);
+        }
+        if (key != NULL) cee_sec.release(key);
+        cee_sec.release(tag);
+        return result;
+    }
+    /* Obtain: the key, made when there is none (the Enclave first), and a new one attested. */
+    int created = 0;
+    int hardware = 0;
+    if (key == NULL) {
+        cee_os_status why = 0;
+        key = login ? NULL : cee_key_make(tag, login, 1, &why);
+        hardware = key != NULL;
+        if (key == NULL) {
+            key = cee_key_make(tag, login, 0, &why);
+        }
+        created = key != NULL;
+        if (key == NULL && !login && cee_sec_fall_back(why)) {
+            /* A macOS program without a keychain group (errSecMissingEntitlement): the login keychain, as Secrets
+               does, where the key may be already, or is made in software. */
+            login = 1;
+            cee_os_status there = 0;
+            key = cee_key_find(tag, login, &there);
+            created = 0;
+            hardware = 2;
+            if (key == NULL) {
+                key = cee_key_make(tag, login, 0, &why);
+                created = key != NULL;
+                hardware = 0;
+            }
+        }
+    } else {
+        /* An existing key: whether it is the Enclave's is not asked of the system; the program kept its first answer. */
+        hardware = 2;
+    }
+    cee_sec.release(tag);
+    if (key == NULL) {
+        return CEE_SEC_FAILED;
+    }
+    uint8_t spki[91];
+    if (cee_key_spki(key, spki, sizeof spki) != 91 || capacity < 3 + 4 + 91 + 4) {
+        cee_sec.release(key);
+        return CEE_SEC_FAILED;
+    }
+    cee_sec.release(key);
+    size_t attest_length = 0;
+    uint8_t *attestation = created && hardware == 1 ? cee_key_attest(in, (size_t)in_length, spki, 91, &attest_length)
+                                                    : NULL;
+    out[0] = (uint8_t)created;
+    out[1] = (uint8_t)hardware;
+    out[2] = attestation != NULL ? 2 : 0; /* 2: App Attest */
+    cee_key_put32(out + 3, 91);
+    memcpy(out + 7, spki, 91);
+    result = 7 + 91;
+    if (attestation != NULL) {
+        if ((uint64_t)result + 4 + attest_length <= capacity) {
+            cee_key_put32(out + result, (uint32_t)attest_length);
+            memcpy(out + result + 4, attestation, attest_length);
+            result += 4 + (int64_t)attest_length;
+        } else {
+            out[2] = 0;
+        }
+        free(attestation);
+    }
+    return result;
+}
+
 #elif defined(__ANDROID__)
 /* Android: org.ceesafe.window.Secrets (runtime/android), a class of the window runtime's embedded dex, called over JNI
    from the program's thread, attached to the VM for the call. The window runtime gives the VM, the activity and the
@@ -756,6 +1178,70 @@ static int32_t cee_sec_system_remove(const char *group, const char *app, const c
     (void)group;
     return (int32_t)cee_sec_call("remove", "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;[B)I", app,
                                  name, NULL, 0, NULL, 0);
+}
+
+
+/* Device keys (ADR 0275): Secrets' keyObtain, keyPublic, keySign and keyRemove, each with one array: the input after
+   its 4-byte length, the answer over it. */
+static int64_t cee_sec_system_key(int op, const char *app, const char *name, const uint8_t *in, uint64_t in_length,
+                                  uint8_t *out, uint64_t capacity) {
+    static const char *const methods[4] = {"keyObtain", "keyPublic", "keySign", "keyRemove"};
+    if (op < 0 || op > 3 || in_length > 0x7fff0000u || capacity > 0x7fff0000u) {
+        return CEE_SEC_INVALID;
+    }
+    JavaVM *vm;
+    int attached;
+    JNIEnv *env = cee_sec_env(&vm, &attached);
+    if (env == NULL) {
+        return CEE_SEC_UNSUPPORTED;
+    }
+    int64_t result = CEE_SEC_UNSUPPORTED;
+    uint64_t room = capacity > in_length + 4 ? capacity : in_length + 4;
+    if ((*env)->PushLocalFrame(env, 16) == 0) {
+        jobject activity = NULL;
+        jclass secrets = ceesafe_android_secrets != NULL ? ceesafe_android_secrets(env, &activity) : NULL;
+        jmethodID m = secrets != NULL ? (*env)->GetStaticMethodID(env, secrets, methods[op],
+                                                                  "(Landroid/content/Context;Ljava/lang/String;"
+                                                                  "Ljava/lang/String;[B)I")
+                                      : NULL;
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            m = NULL;
+        }
+        jstring app_text = (*env)->NewStringUTF(env, app);
+        jstring name_text = (*env)->NewStringUTF(env, name);
+        jbyteArray io = (*env)->NewByteArray(env, (jsize)room);
+        if (m != NULL && app_text != NULL && name_text != NULL && io != NULL && !(*env)->ExceptionCheck(env)) {
+            jbyte length[4] = {(jbyte)(in_length >> 24), (jbyte)(in_length >> 16), (jbyte)(in_length >> 8),
+                               (jbyte)in_length};
+            (*env)->SetByteArrayRegion(env, io, 0, 4, length);
+            if (in_length > 0) {
+                (*env)->SetByteArrayRegion(env, io, 4, (jsize)in_length, (const jbyte *)in);
+            }
+            jint answer = (*env)->CallStaticIntMethod(env, secrets, m, activity, app_text, name_text, io);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                result = CEE_SEC_FAILED;
+            } else {
+                result = (int64_t)answer;
+                if (answer > 0 && (uint64_t)answer <= capacity) {
+                    (*env)->GetByteArrayRegion(env, io, 0, answer, (jbyte *)out);
+                } else if (answer > 0) {
+                    result = CEE_SEC_FAILED;
+                }
+            }
+        } else if (secrets != NULL) {
+            result = CEE_SEC_FAILED;
+        }
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        (void)(*env)->PopLocalFrame(env, NULL);
+    }
+    if (attached) {
+        (void)(*vm)->DetachCurrentThread(vm);
+    }
+    return result;
 }
 
 #elif defined(_WIN32)
@@ -893,6 +1379,19 @@ static int32_t cee_sec_system_remove(const char *group, const char *app, const c
     return cee_sec_file_remove(path);
 }
 
+
+/* Device keys (ADR 0275): none here. */
+static int64_t cee_sec_system_key(int op, const char *app, const char *name, const uint8_t *in, uint64_t in_length,
+                                  uint8_t *out, uint64_t capacity) {
+    (void)op;
+    (void)app;
+    (void)name;
+    (void)in;
+    (void)in_length;
+    (void)out;
+    (void)capacity;
+    return CEE_SEC_UNSUPPORTED;
+}
 #else
 /* Linux, FreeBSD and the rest: no store yet (ADR 0242 §6.1). */
 static int64_t cee_sec_system_read(const char *group, const char *app, const char *name, uint8_t *out,
@@ -919,6 +1418,19 @@ static int32_t cee_sec_system_remove(const char *group, const char *app, const c
     (void)group;
     (void)app;
     (void)name;
+    return CEE_SEC_UNSUPPORTED;
+}
+
+/* Device keys (ADR 0275): none here. */
+static int64_t cee_sec_system_key(int op, const char *app, const char *name, const uint8_t *in, uint64_t in_length,
+                                  uint8_t *out, uint64_t capacity) {
+    (void)op;
+    (void)app;
+    (void)name;
+    (void)in;
+    (void)in_length;
+    (void)out;
+    (void)capacity;
     return CEE_SEC_UNSUPPORTED;
 }
 #endif
@@ -997,4 +1509,29 @@ int32_t ceesafe_secrets_write(const uint8_t *app, uint64_t app_length, const uin
 
 int32_t ceesafe_secrets_remove(const uint8_t *app, uint64_t app_length, const uint8_t *name, uint64_t name_length) {
     return ceesafe_secrets_group_remove(NULL, 0, app, app_length, name, name_length);
+}
+
+/* Device keys (ADR 0275): `op` 0 obtains the key `name` of `app` (made when there is none, attested over `input`, the
+   challenge: out is created, hardware, the attestation's kind, then 4-byte lengths before the SPKI and the
+   attestation: 1 a certificate chain, its count then each certificate, 2 App Attest's object), 1 its public half
+   (SPKI), 2 `input` signed (ECDSA with SHA-256, DER), 3 removes it. The answer's length (0 for a removal), or a code:
+   -1 no key, -2 Unsupported (a system without a key store, and the test folder), -3 a name not taken, -4 Locked, -5
+   Denied, -6 Failed. */
+int64_t ceesafe_secrets_key(int32_t op, const uint8_t *app, uint64_t app_length, const uint8_t *name,
+                            uint64_t name_length, const uint8_t *input, uint64_t input_length, uint8_t *out,
+                            uint64_t capacity);
+
+int64_t ceesafe_secrets_key(int32_t op, const uint8_t *app, uint64_t app_length, const uint8_t *name,
+                            uint64_t name_length, const uint8_t *input, uint64_t input_length, uint8_t *out,
+                            uint64_t capacity) {
+    char a[CEE_SEC_NAME_LIMIT + 1];
+    char n[CEE_SEC_NAME_LIMIT + 1];
+    if (op < 0 || op > 3 || !cee_sec_names(app, app_length, name, name_length, a, n) ||
+        input_length > CEE_SEC_VALUE_LIMIT) {
+        return CEE_SEC_INVALID;
+    }
+    if (cee_sec_test_dir() != NULL) {
+        return CEE_SEC_UNSUPPORTED; /* plain files hold no key */
+    }
+    return cee_sec_system_key((int)op, a, n, input, input_length, out, capacity);
 }

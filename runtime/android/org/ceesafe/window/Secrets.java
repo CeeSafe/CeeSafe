@@ -160,4 +160,186 @@ final class Secrets {
             return !file.exists() || file.delete() ? 0 : FAILED;
         }
     }
+
+    // ---- Device keys (ADR 0275) ----
+    // A P-256 key in the Android Keystore under "ceesafe.key.<app>.<name>", made in StrongBox where the device has
+    // one (else the TEE), for signing with SHA-256; not bound to the user's authentication, so it signs in the
+    // background; never exportable. Each method takes the io array: its input after a 4-byte big-endian length, and
+    // the answer written over it from the start; it returns the answer's length, or -1 none, -6 Failed.
+
+    private static String alias(String app, String name) {
+        return "ceesafe.key." + app + "." + name;
+    }
+
+    private static byte[] input(byte[] io) {
+        int n = ((io[0] & 0xff) << 24) | ((io[1] & 0xff) << 16) | ((io[2] & 0xff) << 8) | (io[3] & 0xff);
+        if (n < 0 || n > io.length - 4) {
+            return null;
+        }
+        byte[] in = new byte[n];
+        System.arraycopy(io, 4, in, 0, n);
+        return in;
+    }
+
+    private static int put32(byte[] io, int at, int v) {
+        io[at] = (byte) (v >>> 24);
+        io[at + 1] = (byte) (v >>> 16);
+        io[at + 2] = (byte) (v >>> 8);
+        io[at + 3] = (byte) v;
+        return at + 4;
+    }
+
+    private static KeyStore keystore() throws Exception {
+        KeyStore store = KeyStore.getInstance("AndroidKeyStore");
+        store.load(null);
+        return store;
+    }
+
+    private static void generate(String alias, byte[] challenge, boolean strongBox) throws Exception {
+        java.security.KeyPairGenerator generator =
+            java.security.KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore");
+        KeyGenParameterSpec.Builder spec = new KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+            .setAlgorithmParameterSpec(new java.security.spec.ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256);
+        if (challenge != null && challenge.length > 0) {
+            spec.setAttestationChallenge(challenge);
+        }
+        if (strongBox && Build.VERSION.SDK_INT >= 28) {
+            spec.setIsStrongBoxBacked(true);
+        }
+        generator.initialize(spec.build());
+        generator.generateKeyPair();
+    }
+
+    /** The key, made when there is none (attested over the input as its challenge): created, hardware (1, 0, or 2
+        not known), the attestation's kind (1: the Keystore's certificate chain), the SPKI, and the chain. */
+    @SuppressWarnings("deprecation")
+    static int keyObtain(Context activity, String app, String name, byte[] io) {
+        synchronized (LOCK) {
+            try {
+                byte[] challenge = input(io);
+                String alias = alias(app, name);
+                KeyStore store = keystore();
+                boolean created = false;
+                if (!store.containsAlias(alias)) {
+                    try {
+                        generate(alias, challenge, true);
+                    } catch (Exception strongBoxFailed) {
+                        generate(alias, challenge, false); // no StrongBox here: the TEE
+                    }
+                    created = true;
+                    store = keystore();
+                }
+                java.security.cert.Certificate[] chain = store.getCertificateChain(alias);
+                if (chain == null || chain.length == 0) {
+                    return FAILED;
+                }
+                byte[] spki = chain[0].getPublicKey().getEncoded();
+                int hardware = 2;
+                try {
+                    java.security.PrivateKey key = (java.security.PrivateKey) store.getKey(alias, null);
+                    android.security.keystore.KeyInfo info = (android.security.keystore.KeyInfo)
+                        java.security.KeyFactory.getInstance(key.getAlgorithm(), "AndroidKeyStore")
+                            .getKeySpec(key, android.security.keystore.KeyInfo.class);
+                    hardware = info.isInsideSecureHardware() ? 1 : 0;
+                } catch (Exception e) {
+                    hardware = 2;
+                }
+                int need = 7 + spki.length + 4;
+                for (java.security.cert.Certificate c : chain) {
+                    need += 4 + c.getEncoded().length;
+                }
+                boolean attested = created && chain.length > 1;
+                if (need > io.length) {
+                    attested = false;
+                    need = 7 + spki.length;
+                    if (need > io.length) {
+                        return FAILED;
+                    }
+                }
+                io[0] = (byte) (created ? 1 : 0);
+                io[1] = (byte) hardware;
+                io[2] = (byte) (attested ? 1 : 0);
+                int at = put32(io, 3, spki.length);
+                System.arraycopy(spki, 0, io, at, spki.length);
+                at += spki.length;
+                if (attested) {
+                    at = put32(io, at, chain.length);
+                    for (java.security.cert.Certificate c : chain) {
+                        byte[] der = c.getEncoded();
+                        at = put32(io, at, der.length);
+                        System.arraycopy(der, 0, io, at, der.length);
+                        at += der.length;
+                    }
+                }
+                return at;
+            } catch (Exception e) {
+                return FAILED;
+            }
+        }
+    }
+
+    /** The key's public half (SPKI), or -1 when there is no key. */
+    static int keyPublic(Context activity, String app, String name, byte[] io) {
+        synchronized (LOCK) {
+            try {
+                java.security.cert.Certificate c = keystore().getCertificate(alias(app, name));
+                if (c == null) {
+                    return NONE;
+                }
+                byte[] spki = c.getPublicKey().getEncoded();
+                if (spki.length > io.length) {
+                    return FAILED;
+                }
+                System.arraycopy(spki, 0, io, 0, spki.length);
+                return spki.length;
+            } catch (Exception e) {
+                return FAILED;
+            }
+        }
+    }
+
+    /** The input signed (ECDSA with SHA-256, DER), or -1 when there is no key. */
+    static int keySign(Context activity, String app, String name, byte[] io) {
+        synchronized (LOCK) {
+            try {
+                byte[] message = input(io);
+                if (message == null) {
+                    return FAILED;
+                }
+                KeyStore.Entry entry = keystore().getEntry(alias(app, name), null);
+                if (!(entry instanceof KeyStore.PrivateKeyEntry)) {
+                    return NONE;
+                }
+                java.security.Signature signer = java.security.Signature.getInstance("SHA256withECDSA");
+                signer.initSign(((KeyStore.PrivateKeyEntry) entry).getPrivateKey());
+                signer.update(message);
+                byte[] signature = signer.sign();
+                if (signature.length > io.length) {
+                    return FAILED;
+                }
+                System.arraycopy(signature, 0, io, 0, signature.length);
+                return signature.length;
+            } catch (Exception e) {
+                return FAILED;
+            }
+        }
+    }
+
+    /** Removes the key: 0, or -1 when there was none. */
+    static int keyRemove(Context activity, String app, String name, byte[] io) {
+        synchronized (LOCK) {
+            try {
+                KeyStore store = keystore();
+                String alias = alias(app, name);
+                if (!store.containsAlias(alias)) {
+                    return NONE;
+                }
+                store.deleteEntry(alias);
+                return 0;
+            } catch (Exception e) {
+                return FAILED;
+            }
+        }
+    }
 }

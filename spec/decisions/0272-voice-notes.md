@@ -53,6 +53,11 @@ player.position();  player.duration();  player.playing();
 
 - `tools/window_check.py`: a refused microphone is `Resources`; a file that is not there cannot be played.
 - The Moto and the owner's iPhone, in Marivil's port: a note recorded while the button is held, sent, and played.
+- **Results (2026-11-27).** The Moto (Android 15): held 3 s, the recording ran the whole hold (AudioService: rec start
+  14:44:50.983, stop 14:44:53.947); sent, downloaded back from the server after a restart, and played to its end
+  (Pause, its place, Play again); held and slid off, cancelled with nothing sent and no file left. macOS: an AAC file
+  (afconvert from Glass.aiff) played through `AudioPlayer`: 1650 ms long, playing, its position, paused, sought to
+  100 ms. Not yet tried: recording on the Mac and on the iPhone (the system's permission prompt is the owner's).
 
 ## 6. Questions for the owner (answered 2026-11-27)
 

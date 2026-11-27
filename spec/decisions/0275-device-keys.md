@@ -55,7 +55,8 @@ DeviceKey.remove("Marivil", "device")?;
   the test folder, and interpreted.
 - The Moto against marivil.com (2026-11-28): enrolled with its attestation chain (the server: "android,
   hardware-tee"); the next start's session came from the key ("assert ok"); the start after kept it.
-- The owner's iPhone: §7.
+- The owner's iPhone 14 Plus (2026-11-28): its Secure Enclave key enrolled without attestation (the server: "ios,
+  unattested"), and the next start's session came from it ("assert ok").
 
 ## 6. Questions for the owner (answered 2026-11-28)
 

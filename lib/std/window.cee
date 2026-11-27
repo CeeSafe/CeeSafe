@@ -95,6 +95,13 @@ extern "C" {
     fn ceesafe_window_can_capture(video: i32) -> i32;
     fn ceesafe_window_haptic(window: *mut void, kind: i32) -> i32;
     fn ceesafe_window_has_haptics(window: *mut void) -> i32;
+    fn ceesafe_audio_record_start(path: *u8, length: u64) -> i64;
+    fn ceesafe_audio_record_level(handle: i64) -> i32;
+    fn ceesafe_audio_record_stop(handle: i64, cancel: i32) -> i64;
+    fn ceesafe_audio_play_open(path: *u8, length: u64) -> i64;
+    fn ceesafe_audio_play_action(handle: i64, action: i32);
+    fn ceesafe_audio_play_seek(handle: i64, ms: i64);
+    fn ceesafe_audio_play_time(handle: i64, which: i32) -> i64;
     @effects()
     fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
     @effects()
@@ -1872,5 +1879,121 @@ public struct Contacts {
             }
         }
         return Ok(contacts);
+    }
+}
+
+/// A voice note being recorded (§26.13, ADR 0272): AAC in an MPEG-4 file (.m4a) from the microphone. iOS and macOS:
+/// AVAudioRecorder (the app's `NSMicrophoneUsageDescription`); Android: MediaRecorder (`RECORD_AUDIO`, declared by the
+/// packer). Windows, Linux and FreeBSD: `Unsupported`. Dropped without `stop`, the recording is cancelled.
+///
+/// ```
+/// var note = AudioRecorder.start(mut window, "note.m4a")?;
+/// let loud = note.level();             // 0 to 1, for a meter
+/// let ms = note.stop()?;               // how long it is
+/// ```
+@noncopy
+public struct AudioRecorder {
+    handle: i64;
+
+    /// Asks the microphone's permission (once) and starts recording to `path`, which it writes. `Resources` when the
+    /// permission is refused or the microphone cannot be had.
+    /// Safety: the runtime reads the path during the call; the recorder it gives is given back once (stop or drop).
+    public fn start(window: borrow mut Window, path: StringView) -> Result<AudioRecorder, WindowError> {
+        var none = Vector<String>.create();
+        FileDialog.run(window, 13, "", "", "", mut none)?;
+        let handle = unsafe { ceesafe_audio_record_start(path.ptr, path.length as u64) };
+        if (handle < 0) {
+            return Err(Window.errorOf(truncate<i32>(0 - handle)));
+        }
+        return Ok(AudioRecorder { handle: handle });
+    }
+
+    /// How loud it is now, 0 (silence) to 1, for a level meter.
+    /// Safety: the runtime reads its recorder's meter.
+    public fn level(borrow this) -> f32 {
+        let tenths = unsafe { ceesafe_audio_record_level(this.handle) };
+        return round<f32>(tenths as u32) / 1000.0;
+    }
+
+    /// Stops, and the file is the voice note: how long it is, in milliseconds. `Resources` when nothing was recorded.
+    /// Safety: the runtime's recorder is given back here, and not again at the drop.
+    public fn stop(borrow mut this) -> Result<u64, WindowError> {
+        let ms = unsafe { ceesafe_audio_record_stop(this.handle, 0) };
+        this.handle = 0;
+        if (ms < 0) {
+            return Err(Window.errorOf(truncate<i32>(0 - ms)));
+        }
+        return Ok(ms as u64);
+    }
+
+    /// Stops, and the file is deleted.
+    /// Safety: as stop.
+    public fn cancel(borrow mut this) {
+        let _ = unsafe { ceesafe_audio_record_stop(this.handle, 1) };
+        this.handle = 0;
+    }
+
+    /// Safety: a recorder not stopped is cancelled, given back once.
+    drop {
+        if (this.handle > 0) {
+            let _ = unsafe { ceesafe_audio_record_stop(this.handle, 1) };
+        }
+    }
+}
+
+/// A sound file being played (§26.13, ADR 0272): a voice note, or any file the system plays (AAC, MP3, WAV). iOS and
+/// macOS: AVAudioPlayer; Android: MediaPlayer. Windows, Linux and FreeBSD: `Unsupported`. Closed at its drop.
+///
+/// ```
+/// var player = AudioPlayer.open("note.m4a")?;
+/// player.play();
+/// let at = player.position();          // milliseconds
+/// ```
+@noncopy
+public struct AudioPlayer {
+    handle: i64;
+
+    /// The file at `path`, ready to play. `Resources` when it cannot be played.
+    /// Safety: the runtime reads the path during the call; the player it gives is given back once (drop).
+    public fn open(path: StringView) -> Result<AudioPlayer, WindowError> {
+        let handle = unsafe { ceesafe_audio_play_open(path.ptr, path.length as u64) };
+        if (handle < 0) {
+            return Err(Window.errorOf(truncate<i32>(0 - handle)));
+        }
+        return Ok(AudioPlayer { handle: handle });
+    }
+
+    /// Plays from where it is (the start, or where it was paused or sought).
+    /// Safety: the runtime's player.
+    public fn play(borrow mut this) {
+        unsafe { ceesafe_audio_play_action(this.handle, 0); }
+    }
+
+    /// Safety: the runtime's player.
+    public fn pause(borrow mut this) {
+        unsafe { ceesafe_audio_play_action(this.handle, 1); }
+    }
+
+    /// Moves to `ms` milliseconds from the start.
+    /// Safety: the runtime's player.
+    public fn seek(borrow mut this, ms: u64) {
+        unsafe { ceesafe_audio_play_seek(this.handle, ms as i64); }
+    }
+
+    /// Where it is, in milliseconds.
+    /// Safety: the runtime's player.
+    public fn position(borrow this) -> u64 => unsafe { ceesafe_audio_play_time(this.handle, 0) } as u64;
+
+    /// How long the file is, in milliseconds.
+    /// Safety: the runtime's player.
+    public fn duration(borrow this) -> u64 => unsafe { ceesafe_audio_play_time(this.handle, 1) } as u64;
+
+    /// Whether it is playing now (false once it reaches the end).
+    /// Safety: the runtime's player.
+    public fn playing(borrow this) -> bool => unsafe { ceesafe_audio_play_time(this.handle, 2) } != 0;
+
+    /// Safety: the player is the one the runtime gave, given back once.
+    drop {
+        unsafe { ceesafe_audio_play_action(this.handle, 2); }
     }
 }

@@ -156,6 +156,8 @@
 - [struct Haptics](#struct-haptics)
 - [struct Contact](#struct-contact)
 - [struct Contacts](#struct-contacts)
+- [struct AudioRecorder](#struct-audiorecorder)
+- [struct AudioPlayer](#struct-audioplayer)
 
 ## struct AsyncConsole
 
@@ -6736,3 +6738,139 @@ public fn pick(window: borrow mut Window) -> Result<Contact?, WindowError>
 ```
 
 One contact chosen in the system's picker (Android: one of its numbers), or null when the user cancelled.
+
+## struct AudioRecorder
+
+```ceesafe
+@noncopy
+public struct AudioRecorder {
+    drop { … }
+}
+```
+
+A voice note being recorded (§26.13, ADR 0272): AAC in an MPEG-4 file (.m4a) from the microphone. iOS and macOS:
+AVAudioRecorder (the app's `NSMicrophoneUsageDescription`); Android: MediaRecorder (`RECORD_AUDIO`, declared by the
+packer). Windows, Linux and FreeBSD: `Unsupported`. Dropped without `stop`, the recording is cancelled.
+
+```
+var note = AudioRecorder.start(mut window, "note.m4a")?;
+let loud = note.level();             // 0 to 1, for a meter
+let ms = note.stop()?;               // how long it is
+```
+
+### AudioRecorder.start
+
+```ceesafe
+public fn start(window: borrow mut Window, path: StringView) -> Result<AudioRecorder, WindowError>
+```
+
+Asks the microphone's permission (once) and starts recording to `path`, which it writes. `Resources` when the
+permission is refused or the microphone cannot be had.
+Safety: the runtime reads the path during the call; the recorder it gives is given back once (stop or drop).
+
+### AudioRecorder.level
+
+```ceesafe
+public fn level(borrow this) -> f32
+```
+
+How loud it is now, 0 (silence) to 1, for a level meter.
+Safety: the runtime reads its recorder's meter.
+
+### AudioRecorder.stop
+
+```ceesafe
+public fn stop(borrow mut this) -> Result<u64, WindowError>
+```
+
+Stops, and the file is the voice note: how long it is, in milliseconds. `Resources` when nothing was recorded.
+Safety: the runtime's recorder is given back here, and not again at the drop.
+
+### AudioRecorder.cancel
+
+```ceesafe
+public fn cancel(borrow mut this)
+```
+
+Stops, and the file is deleted.
+Safety: as stop.
+
+## struct AudioPlayer
+
+```ceesafe
+@noncopy
+public struct AudioPlayer {
+    drop { … }
+}
+```
+
+A sound file being played (§26.13, ADR 0272): a voice note, or any file the system plays (AAC, MP3, WAV). iOS and
+macOS: AVAudioPlayer; Android: MediaPlayer. Windows, Linux and FreeBSD: `Unsupported`. Closed at its drop.
+
+```
+var player = AudioPlayer.open("note.m4a")?;
+player.play();
+let at = player.position();          // milliseconds
+```
+
+### AudioPlayer.open
+
+```ceesafe
+public fn open(path: StringView) -> Result<AudioPlayer, WindowError>
+```
+
+The file at `path`, ready to play. `Resources` when it cannot be played.
+Safety: the runtime reads the path during the call; the player it gives is given back once (drop).
+
+### AudioPlayer.play
+
+```ceesafe
+public fn play(borrow mut this)
+```
+
+Plays from where it is (the start, or where it was paused or sought).
+Safety: the runtime's player.
+
+### AudioPlayer.pause
+
+```ceesafe
+public fn pause(borrow mut this)
+```
+
+Safety: the runtime's player.
+
+### AudioPlayer.seek
+
+```ceesafe
+public fn seek(borrow mut this, ms: u64)
+```
+
+Moves to `ms` milliseconds from the start.
+Safety: the runtime's player.
+
+### AudioPlayer.position
+
+```ceesafe
+public fn position(borrow this) -> u64
+```
+
+Where it is, in milliseconds.
+Safety: the runtime's player.
+
+### AudioPlayer.duration
+
+```ceesafe
+public fn duration(borrow this) -> u64
+```
+
+How long the file is, in milliseconds.
+Safety: the runtime's player.
+
+### AudioPlayer.playing
+
+```ceesafe
+public fn playing(borrow this) -> bool
+```
+
+Whether it is playing now (false once it reaches the end).
+Safety: the runtime's player.

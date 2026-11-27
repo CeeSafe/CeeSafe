@@ -4017,6 +4017,14 @@ Diagnostics: none new.
     `CNContactPickerViewController`); Android: `ContactsContract`'s phone numbers, and `ACTION_PICK` on them (one
     number). Windows, Linux, FreeBSD and the Mac's `pick`: `Unsupported`. A scripted window's `dialog` answer is
     `name:number:number|name:number`.
+  - **Voice notes** (ADR 0272): `AudioRecorder.start(window, path)` is `Result<AudioRecorder, WindowError>`: the
+    microphone's permission (once; `Resources` when refused), then AAC at 44.1 kHz, mono, in an MPEG-4 file at `path`;
+    `level()` is `f32` (0 to 1), `stop()` `Result<u64, WindowError>` (milliseconds), `cancel()` deletes the file, and a
+    recorder dropped without `stop` is cancelled. `AudioPlayer.open(path)` is `Result<AudioPlayer, WindowError>`, with
+    `play`, `pause`, `seek(ms)`, `position()`, `duration()` (milliseconds) and `playing()`, closed at its drop. iOS and
+    macOS: `AVAudioRecorder` and `AVAudioPlayer` (the app's `NSMicrophoneUsageDescription`); Android: `MediaRecorder`
+    and `MediaPlayer` (`RECORD_AUDIO`). Windows, Linux and FreeBSD: `Unsupported`. A scripted window answers the
+    permission with its next `dialog` item (none: refused).
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

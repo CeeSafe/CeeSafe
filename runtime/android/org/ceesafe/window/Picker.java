@@ -61,7 +61,9 @@ public final class Picker extends Fragment {
     private static final int OPEN_LINK = 10;
     private static final int CONTACTS = 11;
     private static final int CONTACT = 12;
+    private static final int MICROPHONE = 13;
     private static final int PERMISSIONS_CONTACTS = 101;
+    private static final int PERMISSIONS_MICROPHONE = 102;
     private static final int PERMISSIONS = 100;
     /** No camera's app: the runtime's Unsupported (FAILED, -1, is its Resources). */
     private static final int UNSUPPORTED = -2;
@@ -120,6 +122,15 @@ public final class Picker extends Fragment {
                 }
                 return;
             }
+            if (kind == MICROPHONE) {
+                // A voice note's recording (ADR 0272): RECORD_AUDIO first, when it is not granted yet.
+                if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    nativePicked(SAVED, null);
+                } else {
+                    picker.requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, PERMISSIONS_MICROPHONE);
+                }
+                return;
+            }
             if (kind == CONTACT) {
                 // One contact's number from the system's picker: it grants that row, and needs no permission.
                 picker.startActivityForResult(
@@ -167,6 +178,8 @@ public final class Picker extends Fragment {
         }
         if (granted && request == PERMISSIONS_CONTACTS) {
             AddressBook.answerAll(activity);
+        } else if (granted && request == PERMISSIONS_MICROPHONE) {
+            nativePicked(SAVED, null);
         } else if (granted) {
             capture(activity);
         } else {

@@ -88,7 +88,8 @@ that opened a window would open one on the developer's screen:
    path holding a line break, an empty path, and a link whose scheme is not http, https, mailto or tel (file:,
    javascript:, an app's own), each Unsupported. Haptics (ADR 0270): a scripted window has none, and playing one does
    nothing. Contacts (ADR 0271): a scripted window's `dialog` answer is the address book (`name:number|...`) or the
-   contact picked.
+   contact picked. Voice notes (ADR 0272): a refused microphone is Resources; a file that is not there cannot be
+   played (Resources on macOS, Unsupported where there is no player).
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1948,6 +1949,19 @@ fn main() -> i32 {
     // Haptics (ADR 0270): a scripted window has none; a haptic does nothing there.
     Haptics.play(mut window, HapticKind.Success);
     Console.writeLine(if (Haptics.available(window)) "haptics" else "no haptics");
+    // Voice notes (ADR 0272): the script refuses the microphone (a dialog item without an answer); a file that is not
+    // there cannot be played.
+    match (AudioRecorder.start(mut window, "/s/note.m4a")) {
+        Ok(_) => { Console.writeLine("recording"); }
+        Err(WindowError.Resources) => { Console.writeLine("microphone refused"); }
+        Err(_) => { Console.writeLine("record error"); }
+    }
+    match (AudioPlayer.open("/s/none.m4a")) {
+        Ok(_) => { Console.writeLine("playing"); }
+        Err(WindowError.Unsupported) => { Console.writeLine("no player"); }
+        Err(WindowError.Resources) => { Console.writeLine("no such sound"); }
+        Err(_) => { Console.writeLine("play error"); }
+    }
     return 0;
 }
 """
@@ -4118,12 +4132,13 @@ def main():
         share_script = os.path.join(work, "share_script.txt")
         with open(share_script, "w", encoding="utf-8") as f:
             f.write("0:dialog;0:dialog;0:dialog;0:dialog:Ada Lovelace:+15550001:+15550009|Bob:+15550002|Cy;"
-                    "0:dialog:Dee:+15550004")
+                    "0:dialog:Dee:+15550004;0:dialog")
         r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
         want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
                 "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
                 "spaced link Unsupported",
-                "contacts Ada Lovelace/+15550001/+15550009 Bob/+15550002 Cy", "picked Dee 1", "mail ok", "no haptics"]
+                "contacts Ada Lovelace/+15550001/+15550009 Bob/+15550002 Cy", "picked Dee 1", "mail ok", "no haptics", "microphone refused",
+                "no such sound" if sys.platform in ("darwin",) else "no player"]
         if r.returncode != 0 or r.stdout.splitlines() != want:
             problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +

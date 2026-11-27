@@ -1911,8 +1911,8 @@ public struct AudioRecorder {
     /// How loud it is now, 0 (silence) to 1, for a level meter.
     /// Safety: the runtime reads its recorder's meter.
     public fn level(borrow this) -> f32 {
-        let tenths = unsafe { ceesafe_audio_record_level(this.handle) };
-        return round<f32>(tenths as u32) / 1000.0;
+        let thousandths = unsafe { ceesafe_audio_record_level(this.handle) };
+        return round<f32>(truncate<u32>(thousandths.max(0))) / 1000.0;
     }
 
     /// Stops, and the file is the voice note: how long it is, in milliseconds. `Resources` when nothing was recorded.
@@ -1923,7 +1923,7 @@ public struct AudioRecorder {
         if (ms < 0) {
             return Err(Window.errorOf(truncate<i32>(0 - ms)));
         }
-        return Ok(ms as u64);
+        return Ok(truncate<u64>(ms));
     }
 
     /// Stops, and the file is deleted.
@@ -1977,16 +1977,16 @@ public struct AudioPlayer {
     /// Moves to `ms` milliseconds from the start.
     /// Safety: the runtime's player.
     public fn seek(borrow mut this, ms: u64) {
-        unsafe { ceesafe_audio_play_seek(this.handle, ms as i64); }
+        unsafe { ceesafe_audio_play_seek(this.handle, truncate<i64>(ms.min(0x7FFFFFFFFFFFFFFF))); }
     }
 
     /// Where it is, in milliseconds.
     /// Safety: the runtime's player.
-    public fn position(borrow this) -> u64 => unsafe { ceesafe_audio_play_time(this.handle, 0) } as u64;
+    public fn position(borrow this) -> u64 => truncate<u64>(unsafe { ceesafe_audio_play_time(this.handle, 0) }.max(0));
 
     /// How long the file is, in milliseconds.
     /// Safety: the runtime's player.
-    public fn duration(borrow this) -> u64 => unsafe { ceesafe_audio_play_time(this.handle, 1) } as u64;
+    public fn duration(borrow this) -> u64 => truncate<u64>(unsafe { ceesafe_audio_play_time(this.handle, 1) }.max(0));
 
     /// Whether it is playing now (false once it reaches the end).
     /// Safety: the runtime's player.

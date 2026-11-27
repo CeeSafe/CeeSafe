@@ -1952,12 +1952,29 @@ fn main() -> i32 {
     // Voice notes (ADR 0272): the script refuses the microphone (a dialog item without an answer); a file that is not
     // there cannot be played.
     match (AudioRecorder.start(mut window, "/s/note.m4a")) {
-        Ok(_) => { Console.writeLine("recording"); }
+        Ok(r) => {
+            // Not reached (the microphone is refused): every method, so that each one's library body is checked.
+            var note = r;
+            Console.writeLine(note.level());
+            match (note.stop()) {
+                Ok(ms) => { Console.writeLine(ms); }
+                Err(_) => {}
+            }
+            note.cancel();
+        }
         Err(WindowError.Resources) => { Console.writeLine("microphone refused"); }
         Err(_) => { Console.writeLine("record error"); }
     }
     match (AudioPlayer.open("/s/none.m4a")) {
-        Ok(_) => { Console.writeLine("playing"); }
+        Ok(p) => {
+            // Not reached (no such file): every method, as the recorder's.
+            var player = p;
+            player.play();
+            player.pause();
+            player.seek(1500);
+            Console.writeLine(player.position() + player.duration());
+            Console.writeLine(player.playing());
+        }
         Err(WindowError.Unsupported) => { Console.writeLine("no player"); }
         Err(WindowError.Resources) => { Console.writeLine("no such sound"); }
         Err(_) => { Console.writeLine("play error"); }

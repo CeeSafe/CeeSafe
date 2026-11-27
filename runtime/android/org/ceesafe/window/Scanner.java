@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // A code scanner (ADR 0274): a full-screen dialog over the activity of the back camera's live picture (Camera2 into
-// a TextureView, cropped to fill it) with a Cancel button, whose frames' luminance (an ImageReader's Y plane, about
+// a TextureView, cropped to fill it), a dark bar with Cancel and the title, and a viewfinder, whose frames' luminance (an ImageReader's Y plane, about
 // 640 by 480) the program reads and decodes itself: Android has no QR decoder of its own. CAMERA is granted first
 // (Picker's kind 15). The program's thread calls open, then take, width, height and state each frame, then close; the
 // camera runs on a thread of its own, and the dialog on the activity's.
@@ -15,6 +15,8 @@ import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -24,16 +26,19 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Size;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.view.WindowInsets;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -132,12 +137,55 @@ final class Scanner {
             final TextureView view = new TextureView(activity);
             root.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-            Button cancel = new Button(activity);
+            // As on iOS: a dark bar along the top with Cancel and the title, and a square viewfinder in the middle.
+            float dp = activity.getResources().getDisplayMetrics().density;
+            FrameLayout bar = new FrameLayout(activity);
+            bar.setBackgroundColor(0x99000000);
+            root.addView(bar, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.round(56 * dp),
+                Gravity.TOP));
+            TextView title = new TextView(activity);
+            title.setText("Scan the QR code");
+            title.setTextColor(Color.WHITE);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            bar.addView(title, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+            TextView cancel = new TextView(activity);
             cancel.setText(android.R.string.cancel);
-            FrameLayout.LayoutParams place = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-            place.bottomMargin = Math.round(48 * activity.getResources().getDisplayMetrics().density);
-            root.addView(cancel, place);
+            cancel.setTextColor(Color.WHITE);
+            cancel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            cancel.setGravity(Gravity.CENTER_VERTICAL);
+            cancel.setPadding(Math.round(16 * dp), 0, Math.round(16 * dp), 0);
+            cancel.setContentDescription(activity.getString(android.R.string.cancel));
+            bar.addView(cancel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START | Gravity.CENTER_VERTICAL));
+            // Below the status bar (Android 15 draws it over a full-screen dialog): the bar grows by the top inset.
+            final FrameLayout topBar = bar;
+            final int barHeight = Math.round(56 * dp);
+            root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                @SuppressWarnings("deprecation")
+                public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
+                    int top = Build.VERSION.SDK_INT >= 30
+                        ? insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()).top
+                        : insets.getSystemWindowInsetTop();
+                    topBar.setPadding(0, top, 0, 0);
+                    ViewGroup.LayoutParams size = topBar.getLayoutParams();
+                    size.height = barHeight + top;
+                    topBar.setLayoutParams(size);
+                    return insets;
+                }
+            });
+            View finder = new View(activity);
+            GradientDrawable frame = new GradientDrawable();
+            frame.setColor(Color.TRANSPARENT);
+            frame.setStroke(Math.round(3 * dp), Color.WHITE);
+            frame.setCornerRadius(18 * dp);
+            finder.setBackground(frame);
+            int screen = Math.min(activity.getResources().getDisplayMetrics().widthPixels,
+                activity.getResources().getDisplayMetrics().heightPixels);
+            int side = Math.round(screen * 0.68f);
+            root.addView(finder, new FrameLayout.LayoutParams(side, side, Gravity.CENTER));
             cancel.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View button) {

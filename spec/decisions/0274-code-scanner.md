@@ -78,5 +78,9 @@ match (scanner.poll()?) {                      // each frame of the app
   (YUV_420_888 nearest 640 by 480), whose Y plane is kept without its row padding while the program has taken the
   one before; `Picker` asks `CAMERA` (kind 15). An app declaring `CAMERA` has `Picker`'s capture ask it too
   (ADR 0265's capture intent needs it then), which it did already.
+- After 0.95.25 (the owner, on the iPhone: it "does not look like a modal view with a close button"): both scanners
+  have a dark bar along the top with Cancel and "Scan the QR code", and a square viewfinder in the middle; the bar is
+  below the status bar (iOS's safe area; on Android the window's top inset, as Android 15 draws the status bar over a
+  full-screen dialog). iOS starts the camera on a global queue, so the scanner comes up at once.
 - The window runtime compiles with `-Wall -Wextra -Wcast-qual -Werror` for macOS (arm64, x86_64), iOS, Android, Linux
   (gcc 14, clang 19) and Windows (MinGW-w64 gcc 16).

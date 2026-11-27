@@ -51,6 +51,10 @@ let size = PhotoFile.videoFrame("clip.mp4", "clip.jpg", 640, 0.8)?;
 - macOS (2026-11-27): a 3 s H.264 MP4 (the Moto's screen recording, 540×1200): its first frame 144×320 at 320 pixels,
   upright; `show` opened the AVPlayerView window playing it, and its close button ended `show`.
 - The Moto and the owner's iPhone, in Marivil's port.
+- **The Moto (Android 15), 2026-11-27**: the clip sent in Marivil's port showed its first frame in its bubble
+  (`Photos.videoFrame`); a tap played it full screen with the MediaController (AudioService: the player started), and
+  Back closed it, back in the chat. A VideoView wrapped to its content kept the video's own pixels (540 wide on a
+  1080 screen): given the whole screen it fits the video, proportions kept. Not yet tried: the iPhone.
 
 ## 6. Questions for the owner (answered 2026-11-27)
 

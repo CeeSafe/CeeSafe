@@ -35,9 +35,10 @@ final class Movie {
         FrameLayout frame = new FrameLayout(activity);
         frame.setBackgroundColor(Color.BLACK);
         final VideoView video = new VideoView(activity);
-        // Wrapped and centred, the view keeps the video's proportions.
-        frame.addView(video, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        // Given the whole screen, a VideoView measures itself to the largest size of the video's proportions that
+        // fits (wrapped, it kept the video's own pixels: small on a large screen); centred.
+        frame.addView(video, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
         final MediaController controls = new MediaController(activity);
         controls.setAnchorView(frame);
         video.setMediaController(controls);

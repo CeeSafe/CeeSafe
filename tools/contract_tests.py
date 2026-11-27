@@ -18,7 +18,7 @@
   (tools/shared_check.py, ADR 0172), what a child is handed (tools/handover_check.py, ADR 0173), isolated tasks
   (tools/isolated_check.py, ADR 0175), the bound on running without waiting (tools/bound_check.py, ADR 0186),
   slices, natively and under the sanitizers (tools/slice_check.py, ADR 0189),
-  Bluetooth printers (tools/bluetooth_check.py, ADR 0177), the secret store (tools/secrets_check.py, ADR 0242),
+  Bluetooth printers (tools/bluetooth_check.py, ADR 0177), the secret store (tools/secrets_check.py, ADR 0242), device keys (tools/device_key_check.py, ADR 0275),
   local notifications (tools/notify_check.py, ADR 0243), push tokens (tools/push_check.py, ADR 0244),
   making a photo smaller (tools/image_check.py, ADR 0266),
   printing a PDF
@@ -212,6 +212,7 @@ def main():
                                   "--cflag=-g", "--cflag=-fsanitize=thread"]),
             ("bluetooth", py + [f"{HERE}/bluetooth_check.py", "--compiler", cee]),  # ADR 0177
             ("secrets", py + [f"{HERE}/secrets_check.py", "--compiler", cee]),  # ADR 0242
+            ("device keys", py + [f"{HERE}/device_key_check.py", "--compiler", cee]),  # ADR 0275
             ("notifications", py + [f"{HERE}/notify_check.py", "--compiler", cee]),  # ADR 0243
             ("push", py + [f"{HERE}/push_check.py", "--compiler", cee]),  # ADR 0244
             ("image", py + [f"{HERE}/image_check.py", "--compiler", cee]),  # ADR 0266

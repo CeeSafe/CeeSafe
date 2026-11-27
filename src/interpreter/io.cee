@@ -1882,6 +1882,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_secrets_group_remove")) {
         return "PsPsPs:i";
     }
+    if (sameText(name, "ceesafe_secrets_key")) {
+        return "iPsPsPsPs:l"; // ADR 0275
+    }
     if (sameText(name, "ceesafe_window_wait_any")) {
         return "u:-";
     }
@@ -2330,6 +2333,10 @@ fn callC(
     if (sameText(n0, "ceesafe_secrets_read")) {
         // The secret store (ADR 0242): the interpreter has no system store, so every call is SecretError.Unsupported
         // (the runtime's -2), CEESAFE_SECRETS_DIR or not.
+        return Ok(hostResult(-2));
+    }
+    if (sameText(n0, "ceesafe_secrets_key")) {
+        // Device keys (ADR 0275): no system store, so no key: SecretError.Unsupported (-2).
         return Ok(hostResult(-2));
     }
     if (sameText(n0, "ceesafe_push_extension_next") || sameText(n0, "ceesafe_push_group_folder") ||

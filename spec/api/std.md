@@ -105,6 +105,9 @@
 - [struct AppGroup](#struct-appgroup)
 - [enum SecretError](#enum-secreterror)
 - [struct Secrets](#struct-secrets)
+- [enum KeyAttestation](#enum-keyattestation)
+- [struct DeviceKeyInfo](#struct-devicekeyinfo)
+- [struct DeviceKey](#struct-devicekey)
 - [struct SharedMemory](#struct-sharedmemory)
 - [struct ThreadServices](#struct-threadservices)
 - [struct Mutex](#struct-mutex)
@@ -4815,6 +4818,91 @@ public fn removeIn(group: StringView, app: StringView, name: StringView) -> Resu
 
 `remove`, in the shared keychain group `group` (`readIn`).
 Safety: the runtime reads the names during the call only.
+
+## enum KeyAttestation
+
+```ceesafe
+public enum KeyAttestation {
+    None,
+    AndroidKeyChain,
+    AppleAppAttest,
+}
+```
+
+How a new device key's hardware vouches for it (ADR 0275).
+
+## struct DeviceKeyInfo
+
+```ceesafe
+public struct DeviceKeyInfo {
+    public publicKey: Vector<u8>;
+    public created: bool;
+    public hardware: bool?;
+    public attestation: KeyAttestation;
+    public certificates: Vector<Vector<u8>>;
+    public appAttest: Vector<u8>;
+}
+```
+
+A device key's public half and how it was found (ADR 0275).
+
+## struct DeviceKey
+
+```ceesafe
+public struct DeviceKey
+```
+
+A device's own signing key (ADR 0275; type-system.md §26.21): a P-256 key the system makes and keeps in hardware
+where it can (the Secure Enclave, Android's StrongBox or TEE), whose private half never leaves it: it signs, and
+its public half is what a server enrolls. Not bound to the user's presence: it signs in the background. Every call
+blocks and may be made from any thread; `app` and `name` are as for `Secrets`.
+
+```
+let key = DeviceKey.obtain("Marivil", "device", nonce.bytes())?;   // made the first time, attested then
+let signature = DeviceKey.sign("Marivil", "device", payload)? ?? { return reenroll(); };
+```
+
+macOS and iOS: the Secure Enclave, tagged "<app>.<name>", after the first unlock, this device only (a key in the
+keychain where the Enclave cannot hold it: an unsigned macOS program, a simulator); a new key is attested with App
+Attest where the app may. Android: the Android Keystore, alias "ceesafe.key.<app>.<name>", its attestation chain
+carrying the challenge. Windows, Linux, FreeBSD, `CEESAFE_SECRETS_DIR` and the interpreter: `Unsupported`.
+
+### DeviceKey.obtain
+
+```ceesafe
+public fn obtain(app: StringView, name: StringView, challenge: Slice<u8>) -> Result<DeviceKeyInfo, SecretError>
+```
+
+The key, made when there is none: a new key is attested over `challenge` (a server's nonce); an empty
+challenge asks for no attestation.
+Safety: the runtime reads the names and the challenge during the call, and writes at most the buffer's length.
+
+### DeviceKey.publicKey
+
+```ceesafe
+public fn publicKey(app: StringView, name: StringView) -> Result<Vector<u8>?, SecretError>
+```
+
+The key's public half (SPKI, DER), or null when there is none. Never makes one.
+Safety: as obtain.
+
+### DeviceKey.sign
+
+```ceesafe
+public fn sign(app: StringView, name: StringView, message: Slice<u8>) -> Result<Vector<u8>?, SecretError>
+```
+
+`message` signed with the key: ECDSA P-256 with SHA-256, DER; null when there is no key.
+Safety: as obtain.
+
+### DeviceKey.remove
+
+```ceesafe
+public fn remove(app: StringView, name: StringView) -> Result<void, SecretError>
+```
+
+Removes the key (nothing when there is none).
+Safety: as obtain.
 
 ## struct SharedMemory
 

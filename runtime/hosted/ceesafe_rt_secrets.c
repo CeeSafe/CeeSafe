@@ -1057,8 +1057,10 @@ static int64_t cee_sec_system_key(int op, const char *app, const char *name, con
     }
     cee_sec.release(key);
     size_t attest_length = 0;
-    uint8_t *attestation = created && hardware == 1 ? cee_key_attest(in, (size_t)in_length, spki, 91, &attest_length)
-                                                    : NULL;
+    /* An empty challenge asks for no attestation (ADR 0275 §2). */
+    uint8_t *attestation = created && hardware == 1 && in_length > 0
+                               ? cee_key_attest(in, (size_t)in_length, spki, 91, &attest_length)
+                               : NULL;
     out[0] = (uint8_t)created;
     out[1] = (uint8_t)hardware;
     out[2] = attestation != NULL ? 2 : 0; /* 2: App Attest */

@@ -4738,6 +4738,15 @@ Diagnostics: none new.
   Apple's systems; elsewhere the group changes nothing. A call without a group names the app's own group only.
 - **Testing.** `CEESAFE_SECRETS_DIR=<folder>` keeps the values natively as plain files `<folder>/<app>/<name>`
   instead, on every system; never for a real app's secrets.
+- **Device keys** (ADR 0275): `DeviceKey.obtain(app, name, challenge)` is `Result<DeviceKeyInfo, SecretError>`: the
+  device's P-256 key, made when there is none in the Secure Enclave or the Android Keystore (StrongBox, else the TEE;
+  on Apple's systems the keychain where the Enclave cannot hold it), never exportable, not bound to the user's
+  presence; a new key attested over `challenge` (Android's certificate chain, or App Attest's object over
+  SHA-256(challenge || SPKI)); an empty challenge asks for none. `DeviceKeyInfo` holds the SPKI (`publicKey`),
+  `created`, `hardware` (`bool?`), `attestation` (`KeyAttestation`: `None`, `AndroidKeyChain`, `AppleAppAttest`),
+  `certificates` and `appAttest`. `publicKey(app, name)` and `sign(app, name, message)` (ECDSA, SHA-256, DER) are
+  `Result<Vector<u8>?, SecretError>`, null without a key; `remove(app, name)` is `Result<void, SecretError>`. Windows,
+  Linux, FreeBSD, `CEESAFE_SECRETS_DIR` and the interpreter: `Unsupported`.
 
 ### 26.22 Local notifications (ADR 0243)
 - **`Notifications.requestPermission()`** (lib/std): `Result<void, NotificationError>`, asks the user once whether

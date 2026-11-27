@@ -61,6 +61,15 @@ def check_explain(cee, problems):
             if a.read() != b.read():
                 problems.append("explain: src/library/documents.cee is not the tree's documents; run tools/gen_docs.py "
                                 "and rebuild")
+        # The runtime ceesafec embeds: an Android Java change rewrites the window runtime's dex, and runtime.cee made
+        # before it builds apps with the old classes (seen: Photos.videoFrame missing, ADR 0273).
+        runtime = os.path.join(work, "runtime.cee")
+        subprocess.run([sys.executable, os.path.join(HERE, "gen_runtime.py"), "-o", runtime], check=True,
+                       capture_output=True, env={**os.environ, "CEESAFEC": cee})
+        with open(runtime, "rb") as a, open(os.path.join(ROOT, "src", "library", "runtime.cee"), "rb") as b:
+            if a.read() != b.read():
+                problems.append("runtime: src/library/runtime.cee is not the tree's runtime/; run tools/gen_runtime.py "
+                                "and rebuild")
     return len(codes)
 
 

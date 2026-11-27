@@ -4,11 +4,15 @@
 runtime/ is the source of truth and is edited there (Decision 0007).
 Line endings are made "\\n". Each file is split into string literals of at most 4,000 bytes (C11 §5.2.4.1).
 
-usage: python3 tools/gen_runtime.py   (formats with $CEESAFEC, default out/ceesafec)
+usage: python3 tools/gen_runtime.py [-o PATH]   (formats with $CEESAFEC, default out/ceesafec)
+
+With -o it writes PATH instead; tools/spec_check.py does that to see that runtime.cee is the tree's runtime (an
+Android Java change regenerates the dex inside the window runtime: gen_android_dex.py first, then this).
 """
 
 import os
 import subprocess
+import sys
 
 from gen_library import literal
 
@@ -97,6 +101,8 @@ fn appendRuntimeText(out: borrow mut Vector<u8>, k: usize) -> Result<void, Alloc
 }}
 """
     path = os.path.join(ROOT, "src", "library", "runtime.cee")
+    if "-o" in sys.argv[1:-1]:
+        path = sys.argv[sys.argv.index("-o") + 1]
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(source)
     formatter = os.environ.get("CEESAFEC", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "out", "ceesafec"))

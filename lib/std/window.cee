@@ -93,6 +93,8 @@ extern "C" {
     ) -> i64;
     @effects()
     fn ceesafe_window_can_capture(video: i32) -> i32;
+    fn ceesafe_window_haptic(window: *mut void, kind: i32) -> i32;
+    fn ceesafe_window_has_haptics(window: *mut void) -> i32;
     @effects()
     fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
     @effects()
@@ -1753,4 +1755,48 @@ public struct Launcher {
         var answer = Vector<String>.create();
         return FileDialog.run(window, 10, "", url, "", mut answer);
     }
+}
+
+/// A haptic's feel (ADR 0270): an impact's weight, a selection's tick, or an outcome's pattern.
+public enum HapticKind {
+    /// A light tap: a long press that opened a menu.
+    Light,
+    Medium,
+    Heavy,
+    /// A tick: a choice among several changed (a reaction chosen, a picker's wheel).
+    Selection,
+    /// Something done: a message sent.
+    Success,
+    Warning,
+    Error,
+}
+
+/// Haptics (§26.13, ADR 0270): a short vibration as feedback, as the system's own controls give it. iOS: the feedback
+/// generators (UIImpactFeedbackGenerator, UISelectionFeedbackGenerator, UINotificationFeedbackGenerator); Android:
+/// the window's view's performHapticFeedback, which follows the user's setting for touch feedback and needs no
+/// permission; macOS: NSHapticFeedbackManager (a Force Touch trackpad's). Where there are none (Windows, Linux,
+/// FreeBSD, a device without a vibrator, a scripted window) a haptic does nothing.
+///
+/// ```
+/// Haptics.play(mut window, HapticKind.Light);
+/// ```
+public struct Haptics {
+    /// Plays `kind`'s haptic now, or does nothing where the device has none.
+    /// Safety: the runtime takes the window and a number, and answers one.
+    public fn play(window: borrow mut Window, kind: HapticKind) {
+        let k: i32 = match (kind) {
+            HapticKind.Light => 0,
+            HapticKind.Medium => 1,
+            HapticKind.Heavy => 2,
+            HapticKind.Selection => 3,
+            HapticKind.Success => 4,
+            HapticKind.Warning => 5,
+            HapticKind.Error => 6,
+        };
+        let _ = unsafe { ceesafe_window_haptic(window.raw, k) };
+    }
+
+    /// Whether this device may play haptics: a phone (iOS; Android with a vibrator) or a Mac; false elsewhere.
+    /// Safety: the runtime takes the window and answers a number.
+    public fn available(window: borrow Window) -> bool => unsafe { ceesafe_window_has_haptics(window.raw) } != 0;
 }

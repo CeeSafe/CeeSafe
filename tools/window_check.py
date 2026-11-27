@@ -86,7 +86,8 @@ that opened a window would open one on the developer's screen:
 17. sharing and opening (ADR 0268): on a scripted window ShareSheet.share, Launcher.openFile and Launcher.openLink each
    take their script's `dialog` answer and are Ok; the library refuses, without the runtime, a share of nothing, a
    path holding a line break, an empty path, and a link whose scheme is not http, https, mailto or tel (file:,
-   javascript:, an app's own), each Unsupported.
+   javascript:, an app's own), each Unsupported. Haptics (ADR 0270): a scripted window has none, and playing one does
+   nothing.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1917,6 +1918,9 @@ fn main() -> i32 {
     show("app link", Launcher.openLink(mut window, "intent://x#Intent;end"));
     show("spaced link", Launcher.openLink(mut window, "https://a b"));
     show("mail", Launcher.openLink(mut window, "mailto:someone@example.com"));
+    // Haptics (ADR 0270): a scripted window has none; a haptic does nothing there.
+    Haptics.play(mut window, HapticKind.Success);
+    Console.writeLine(if (Haptics.available(window)) "haptics" else "no haptics");
     return 0;
 }
 """
@@ -4090,7 +4094,7 @@ def main():
         r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
         want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
                 "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
-                "spaced link Unsupported", "mail ok"]
+                "spaced link Unsupported", "mail ok", "no haptics"]
         if r.returncode != 0 or r.stdout.splitlines() != want:
             problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +

@@ -152,6 +152,8 @@
 - [struct MediaPicker](#struct-mediapicker)
 - [struct ShareSheet](#struct-sharesheet)
 - [struct Launcher](#struct-launcher)
+- [enum HapticKind](#enum-haptickind)
+- [struct Haptics](#struct-haptics)
 
 ## struct AsyncConsole
 
@@ -6634,3 +6636,53 @@ public fn openLink(window: borrow mut Window, url: StringView) -> Result<void, W
 Opens `url` in the system's app for it (the browser, mail, the phone), once handed over. Only `http:`, `https:`,
 `mailto:` and `tel:` links are opened: any other scheme (`file:`, an app's own) is `Unsupported`, so that a link
 from a message neither opens the app's files nor starts another app by its scheme.
+
+## enum HapticKind
+
+```ceesafe
+public enum HapticKind {
+    Light,
+    Medium,
+    Heavy,
+    Selection,
+    Success,
+    Warning,
+    Error,
+}
+```
+
+A haptic's feel (ADR 0270): an impact's weight, a selection's tick, or an outcome's pattern.
+
+## struct Haptics
+
+```ceesafe
+public struct Haptics
+```
+
+Haptics (§26.13, ADR 0270): a short vibration as feedback, as the system's own controls give it. iOS: the feedback
+generators (UIImpactFeedbackGenerator, UISelectionFeedbackGenerator, UINotificationFeedbackGenerator); Android:
+the window's view's performHapticFeedback, which follows the user's setting for touch feedback and needs no
+permission; macOS: NSHapticFeedbackManager (a Force Touch trackpad's). Where there are none (Windows, Linux,
+FreeBSD, a device without a vibrator, a scripted window) a haptic does nothing.
+
+```
+Haptics.play(mut window, HapticKind.Light);
+```
+
+### Haptics.play
+
+```ceesafe
+public fn play(window: borrow mut Window, kind: HapticKind)
+```
+
+Plays `kind`'s haptic now, or does nothing where the device has none.
+Safety: the runtime takes the window and a number, and answers one.
+
+### Haptics.available
+
+```ceesafe
+public fn available(window: borrow Window) -> bool
+```
+
+Whether this device may play haptics: a phone (iOS; Android with a vibrator) or a Mac; false elsewhere.
+Safety: the runtime takes the window and answers a number.

@@ -4003,6 +4003,12 @@ Diagnostics: none new.
     the APK's (its packer declares it), and an app without it is `Unsupported`. macOS: `NSSharingServicePicker` beside
     the window and `NSWorkspace`'s `openURL:`. Windows: `ShellExecuteW`. Linux and FreeBSD: `xdg-open`, started in the
     background (`Unsupported` when it is not on `PATH`). A scripted window's `dialog` item answers each, as `Ok`.
+  - **Haptics** (ADR 0270): `Haptics.play(window, kind: HapticKind)` plays `Light`, `Medium`, `Heavy`, `Selection`,
+    `Success`, `Warning` or `Error`, and returns nothing; `Haptics.available(window)` is `bool`. iOS: the feedback
+    generators (an iPhone; an iPad has none); Android: the window's view's `performHapticFeedback`, on the activity's
+    thread (the user's touch-feedback setting applies, no permission; `CONFIRM` and `REJECT` from API 30), `available`
+    when there is a vibrator; macOS: `NSHapticFeedbackManager` (a Force Touch trackpad). Windows, Linux, FreeBSD and a
+    scripted window: nothing, and `available` false.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

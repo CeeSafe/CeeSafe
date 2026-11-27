@@ -1979,6 +1979,11 @@ fn main() -> i32 {
         Err(WindowError.Resources) => { Console.writeLine("no such sound"); }
         Err(_) => { Console.writeLine("play error"); }
     }
+    // A video (ADR 0273): the script's next dialog item is the player, closed.
+    match (VideoPlayer.show(mut window, "/s/clip.mp4")) {
+        Ok(_) => { Console.writeLine("video shown"); }
+        Err(_) => { Console.writeLine("video error"); }
+    }
     return 0;
 }
 """
@@ -3709,6 +3714,13 @@ fn main() -> i32 {
         Err(WindowError.Unsupported) => { Console.writeLine("no player"); }
         Err(_) => { Console.writeLine("no such sound"); }
     }
+    // A video's first frame (ADR 0273): no file there.
+    match (PhotoFile.videoFrame("none.mp4", "none.jpg", 320, 0.8)) {
+        Ok(_) => { Console.writeLine("a frame"); }
+        Err(IoError.NotFound) => { Console.writeLine("no such video"); }
+        Err(IoError.Unsupported) => { Console.writeLine("no frames"); }
+        Err(_) => { Console.writeLine("frame error"); }
+    }
     return 0;
 }
 """
@@ -3861,7 +3873,7 @@ def main():
         # A program that only plays a sound, with no window (ADR 0272): it links the window runtime too.
         _, sound = build(compiler, SOUND_ONLY, work, "sound")
         r = subprocess.run([sound], capture_output=True, text=True, timeout=60, cwd=work)
-        want = "no such sound" if sys.platform == "darwin" else "no player"
+        want = "no such sound\nno such video" if sys.platform == "darwin" else "no player\nno frames"
         if r.returncode != 0 or r.stdout.strip() != want:
             problems.append(f"a sound without a window: expected {want!r}, got {r.stdout.strip()!r} (status {r.returncode})")
         source, errors = build(compiler, ERRORS, work, "errors")
@@ -4167,13 +4179,13 @@ def main():
         share_script = os.path.join(work, "share_script.txt")
         with open(share_script, "w", encoding="utf-8") as f:
             f.write("0:dialog;0:dialog;0:dialog;0:dialog:Ada Lovelace:+15550001:+15550009|Bob:+15550002|Cy;"
-                    "0:dialog:Dee:+15550004;0:dialog")
+                    "0:dialog:Dee:+15550004;0:dialog;0:dialog")
         r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
         want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
                 "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
                 "spaced link Unsupported",
                 "contacts Ada Lovelace/+15550001/+15550009 Bob/+15550002 Cy", "picked Dee 1", "mail ok", "no haptics", "microphone refused",
-                "no such sound" if sys.platform in ("darwin",) else "no player"]
+                "no such sound" if sys.platform in ("darwin",) else "no player", "video shown"]
         if r.returncode != 0 or r.stdout.splitlines() != want:
             problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +

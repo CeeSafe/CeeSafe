@@ -4025,6 +4025,10 @@ Diagnostics: none new.
     macOS: `AVAudioRecorder` and `AVAudioPlayer` (the app's `NSMicrophoneUsageDescription`); Android: `MediaRecorder`
     and `MediaPlayer` (`RECORD_AUDIO`). Windows, Linux and FreeBSD: `Unsupported`. A scripted window answers the
     permission with its next `dialog` item (none: refused).
+  - **Video** (ADR 0273): `VideoPlayer.show(window, path)` is `Result<void, WindowError>`: the video in the system's own
+    player over the app (iOS AVPlayerViewController, macOS an AVPlayerView window run modally, Android a full-screen
+    VideoView with a MediaController), returning when the user closes it; `Resources` when there is no file or it
+    cannot be played; Windows, Linux and FreeBSD `Unsupported`. A scripted window takes its next `dialog` item.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.
@@ -4792,6 +4796,10 @@ Diagnostics: none new.
   (`BitmapFactory` at a power-of-two fraction, `ExifInterface`'s orientation, `Bitmap.compress`); Windows, WIC through
   COM (its scaler, flip-rotator from the EXIF orientation, and JPEG encoder), ole32.dll loaded at first use. The runtime file is
   `ceesafe_rt_image.c`, linked into a program that calls it.
+- **`PhotoFile.videoFrame(from, to, longest, quality)`** (ADR 0273) is the same for a video's first frame: upright
+  (the video's rotation applied), its longest side at most `longest`, a JPEG at `quality`, with the same errors. macOS
+  and iOS: AVFoundation's `AVAssetImageGenerator`; Android: `Photos.videoFrame` (`MediaMetadataRetriever`); elsewhere
+  `Unsupported`.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 

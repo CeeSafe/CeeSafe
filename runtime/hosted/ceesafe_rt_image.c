@@ -6,6 +6,11 @@
  * Unsupported (no codec on this system), -2 NotFound, -3 InvalidData (not a photo the system reads), -4 an error
  * writing. Linked only into programs that call it (c-backend.md §6).
  *
+ * ceesafe_image_video_frame (ADR 0273) writes a video's first frame the same way: upright (the video's rotation
+ * applied), its longest side at most `longest`, a JPEG at `quality`. Apple's systems: AVFoundation's
+ * AVAssetImageGenerator, through the Objective-C runtime's functions; Android: Photos.videoFrame
+ * (MediaMetadataRetriever). Elsewhere Unsupported.
+ *
  * Apple's systems: ImageIO (CGImageSourceCreateThumbnailAtIndex, which decodes no more than it needs, with the
  * transform; CGImageDestination for the JPEG), loaded with dlopen. Android: the runtime's class
  * org.ceesafe.window.Photos (BitmapFactory, ExifInterface, Bitmap.compress), through the window runtime (weak here:
@@ -24,6 +29,8 @@
 
 int32_t ceesafe_image_shrink(const uint8_t *from, uint64_t from_length, const uint8_t *to, uint64_t to_length,
                              uint32_t longest, uint32_t quality, uint32_t *w, uint32_t *h);
+int32_t ceesafe_image_video_frame(const uint8_t *from, uint64_t from_length, const uint8_t *to, uint64_t to_length,
+                                  uint32_t longest, uint32_t quality, uint32_t *w, uint32_t *h);
 
 /* A NUL-terminated copy of a path, or NULL (no memory, a NUL inside, too long). */
 static char *cee_image_path(const uint8_t *text, uint64_t length) {
@@ -113,6 +120,34 @@ static int cee_image_load(void) {
 #define CEE_CF_NUMBER_DOUBLE 13 /* kCFNumberDoubleType */
 #define CEE_CF_UTF8 0x08000100u /* kCFStringEncodingUTF8 */
 
+/* `image` written to `out_url` as a JPEG at `quality` thousandths, without metadata; its size in *w and *h. */
+static int32_t cee_image_write(cee_cf image, cee_cf out_url, uint32_t quality, uint32_t *w, uint32_t *h) {
+    int32_t result = CEE_IMAGE_FAILED;
+    double q = (double)quality / 1000.0;
+    cee_cf qn = cee_io.number(NULL, CEE_CF_NUMBER_DOUBLE, &q);
+    const void *qkeys[1] = {*cee_io.quality_key};
+    const void *qvalues[1] = {qn};
+    cee_cf props = qn != NULL ? cee_io.dictionary(NULL, qkeys, qvalues, 1, cee_io.key_callbacks,
+                                                 cee_io.value_callbacks)
+                              : NULL;
+    cee_cf jpeg = cee_io.string(NULL, "public.jpeg", CEE_CF_UTF8);
+    cee_cf dest = out_url != NULL && jpeg != NULL ? cee_io.destination(out_url, jpeg, 1, NULL) : NULL;
+    if (dest != NULL && props != NULL) {
+        /* No metadata is given: the photo's EXIF (its place, its camera) is not written (ADR 0266 §6.3). */
+        cee_io.add(dest, image, props);
+        if (cee_io.finalize(dest)) {
+            *w = (uint32_t)cee_io.width(image);
+            *h = (uint32_t)cee_io.height(image);
+            result = 0;
+        }
+    }
+    if (dest != NULL) cee_io.release(dest);
+    if (jpeg != NULL) cee_io.release(jpeg);
+    if (props != NULL) cee_io.release(props);
+    if (qn != NULL) cee_io.release(qn);
+    return result;
+}
+
 static int32_t cee_image_system(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
                                 uint32_t *h) {
     if (!cee_image_load()) {
@@ -137,29 +172,7 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
                        ? cee_io.thumbnail(source, 0, options)
                        : NULL;
     if (image != NULL) {
-        result = CEE_IMAGE_FAILED;
-        double q = (double)quality / 1000.0;
-        cee_cf qn = cee_io.number(NULL, CEE_CF_NUMBER_DOUBLE, &q);
-        const void *qkeys[1] = {*cee_io.quality_key};
-        const void *qvalues[1] = {qn};
-        cee_cf props = qn != NULL ? cee_io.dictionary(NULL, qkeys, qvalues, 1, cee_io.key_callbacks,
-                                                     cee_io.value_callbacks)
-                                  : NULL;
-        cee_cf jpeg = cee_io.string(NULL, "public.jpeg", CEE_CF_UTF8);
-        cee_cf dest = out_url != NULL && jpeg != NULL ? cee_io.destination(out_url, jpeg, 1, NULL) : NULL;
-        if (dest != NULL && props != NULL) {
-            /* No metadata is given: the photo's EXIF (its place, its camera) is not written (ADR 0266 §6.3). */
-            cee_io.add(dest, image, props);
-            if (cee_io.finalize(dest)) {
-                *w = (uint32_t)cee_io.width(image);
-                *h = (uint32_t)cee_io.height(image);
-                result = 0;
-            }
-        }
-        if (dest != NULL) cee_io.release(dest);
-        if (jpeg != NULL) cee_io.release(jpeg);
-        if (props != NULL) cee_io.release(props);
-        if (qn != NULL) cee_io.release(qn);
+        result = cee_image_write(image, out_url, quality, w, h);
         cee_io.release(image);
     }
     if (options != NULL) cee_io.release(options);
@@ -167,6 +180,86 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
     if (source != NULL) cee_io.release(source);
     if (in_url != NULL) cee_io.release(in_url);
     if (out_url != NULL) cee_io.release(out_url);
+    return result;
+}
+
+/* The Objective-C runtime's functions, for AVFoundation (ADR 0273). */
+static struct {
+    int loaded;
+    void (*send)(void);
+    void *(*cls)(const char *);
+    void *(*sel)(const char *);
+    void *(*pool_push)(void);
+    void (*pool_pop)(void *);
+} cee_av_image;
+
+typedef struct {
+    int64_t value;
+    int32_t timescale;
+    uint32_t flags;
+    int64_t epoch;
+} cee_cm_time;
+typedef struct {
+    double width, height;
+} cee_cg_size;
+
+static int cee_av_image_load(void) {
+    if (cee_av_image.loaded == 0) {
+        cee_av_image.loaded = -1;
+        (void)dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_NOW | RTLD_GLOBAL);
+        cee_av_image.send = (void (*)(void))dlsym(RTLD_DEFAULT, "objc_msgSend");
+        cee_av_image.cls = (void *(*)(const char *))dlsym(RTLD_DEFAULT, "objc_getClass");
+        cee_av_image.sel = (void *(*)(const char *))dlsym(RTLD_DEFAULT, "sel_registerName");
+        cee_av_image.pool_push = (void *(*)(void))dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPush");
+        cee_av_image.pool_pop = (void (*)(void *))dlsym(RTLD_DEFAULT, "objc_autoreleasePoolPop");
+        if (cee_av_image.send != NULL && cee_av_image.cls != NULL && cee_av_image.sel != NULL &&
+            cee_av_image.pool_push != NULL && cee_av_image.pool_pop != NULL &&
+            cee_av_image.cls("AVAssetImageGenerator") != NULL && cee_av_image.cls("AVURLAsset") != NULL) {
+            cee_av_image.loaded = 1;
+        }
+    }
+    return cee_av_image.loaded == 1;
+}
+
+static int32_t cee_image_video(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
+                               uint32_t *h) {
+    if (!cee_image_load() || !cee_av_image_load()) {
+        return CEE_IMAGE_UNSUPPORTED;
+    }
+    struct stat st;
+    if (stat(from, &st) != 0) {
+        return CEE_IMAGE_NOT_FOUND;
+    }
+    int32_t result = CEE_IMAGE_INVALID;
+    void *pool = cee_av_image.pool_push();
+    /* A CFURL is an NSURL (toll-free bridged). */
+    cee_cf in_url = cee_io.url(NULL, (const uint8_t *)from, (long)strlen(from), 0);
+    cee_cf out_url = cee_io.url(NULL, (const uint8_t *)to, (long)strlen(to), 0);
+    void *asset = in_url != NULL ? ((void *(*)(void *, void *, cee_cf, void *))cee_av_image.send)(
+                                       cee_av_image.cls("AVURLAsset"), cee_av_image.sel("URLAssetWithURL:options:"),
+                                       in_url, NULL)
+                                 : NULL;
+    void *generator = asset != NULL ? ((void *(*)(void *, void *, void *))cee_av_image.send)(
+                                          cee_av_image.cls("AVAssetImageGenerator"),
+                                          cee_av_image.sel("assetImageGeneratorWithAsset:"), asset)
+                                    : NULL;
+    if (generator != NULL && out_url != NULL) {
+        ((void (*)(void *, void *, signed char))cee_av_image.send)(
+            generator, cee_av_image.sel("setAppliesPreferredTrackTransform:"), 1);
+        cee_cg_size most = {(double)longest, (double)longest};
+        ((void (*)(void *, void *, cee_cg_size))cee_av_image.send)(generator, cee_av_image.sel("setMaximumSize:"),
+                                                                   most);
+        cee_cm_time start = {0, 600, 1u, 0}; /* the start, a valid time */
+        cee_cf image = ((cee_cf(*)(void *, void *, cee_cm_time, cee_cm_time *, void **))cee_av_image.send)(
+            generator, cee_av_image.sel("copyCGImageAtTime:actualTime:error:"), start, NULL, NULL);
+        if (image != NULL) {
+            result = cee_image_write(image, out_url, quality, w, h);
+            cee_io.release(image);
+        }
+    }
+    if (in_url != NULL) cee_io.release(in_url);
+    if (out_url != NULL) cee_io.release(out_url);
+    cee_av_image.pool_pop(pool);
     return result;
 }
 
@@ -178,9 +271,10 @@ JavaVM *ceesafe_android_vm(void) __attribute__((weak));
 jclass ceesafe_android_photos(JNIEnv *env, jobject *context) __attribute__((weak));
 jstring ceesafe_android_string(JNIEnv *env, const char *utf8, size_t length) __attribute__((weak));
 
-/* Photos.shrink(from, to, longest, quality) -> int[] {w, h}, or null for a file that is no photo. */
-static int32_t cee_image_system(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
-                                uint32_t *h) {
+/* Photos.`method`(from, to, longest, quality) -> int[] {w, h}, or null for a file that is no photo (shrink) or no
+   video (videoFrame). */
+static int32_t cee_image_android(const char *method, const char *from, const char *to, uint32_t longest,
+                                 uint32_t quality, uint32_t *w, uint32_t *h) {
     struct stat st;
     if (stat(from, &st) != 0) {
         return CEE_IMAGE_NOT_FOUND;
@@ -201,7 +295,7 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
     if ((*env)->PushLocalFrame(env, 16) == 0) {
         jobject context = NULL;
         jclass photos = ceesafe_android_photos(env, &context);
-        jmethodID shrink = photos != NULL ? (*env)->GetStaticMethodID(env, photos, "shrink",
+        jmethodID shrink = photos != NULL ? (*env)->GetStaticMethodID(env, photos, method,
                                                                       "(Ljava/lang/String;Ljava/lang/String;II)[I")
                                           : NULL;
         if ((*env)->ExceptionCheck(env)) {
@@ -244,6 +338,16 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
         (void)(*vm)->DetachCurrentThread(vm);
     }
     return result;
+}
+
+static int32_t cee_image_system(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
+                                uint32_t *h) {
+    return cee_image_android("shrink", from, to, longest, quality, w, h);
+}
+
+static int32_t cee_image_video(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
+                               uint32_t *h) {
+    return cee_image_android("videoFrame", from, to, longest, quality, w, h);
 }
 
 #elif defined(_WIN32)
@@ -458,6 +562,34 @@ static int32_t cee_image_system(const char *from, const char *to, uint32_t longe
     return CEE_IMAGE_UNSUPPORTED; /* no codec of the system's here, for now (ADR 0266 §6.2) */
 }
 #endif
+
+#if !defined(__APPLE__) && !defined(__ANDROID__)
+static int32_t cee_image_video(const char *from, const char *to, uint32_t longest, uint32_t quality, uint32_t *w,
+                               uint32_t *h) {
+    (void)from;
+    (void)to;
+    (void)longest;
+    (void)quality;
+    (void)w;
+    (void)h;
+    return CEE_IMAGE_UNSUPPORTED; /* the phones and macOS (ADR 0273 §2) */
+}
+#endif
+
+int32_t ceesafe_image_video_frame(const uint8_t *from, uint64_t from_length, const uint8_t *to, uint64_t to_length,
+                                  uint32_t longest, uint32_t quality, uint32_t *w, uint32_t *h) {
+    *w = 0;
+    *h = 0;
+    if (longest == 0 || quality > 1000u) {
+        return CEE_IMAGE_INVALID;
+    }
+    char *a = cee_image_path(from, from_length);
+    char *b = cee_image_path(to, to_length);
+    int32_t result = a == NULL || b == NULL ? CEE_IMAGE_NOT_FOUND : cee_image_video(a, b, longest, quality, w, h);
+    free(a);
+    free(b);
+    return result;
+}
 
 int32_t ceesafe_image_shrink(const uint8_t *from, uint64_t from_length, const uint8_t *to, uint64_t to_length,
                              uint32_t longest, uint32_t quality, uint32_t *w, uint32_t *h) {

@@ -1997,3 +1997,22 @@ public struct AudioPlayer {
         unsafe { ceesafe_audio_play_action(this.handle, 2); }
     }
 }
+
+/// A video played in the system's own player over the app (§26.13, ADR 0273): its controls, full screen on the
+/// phones, a window of its own on macOS. `show` returns when the user closes it (Done, Back, the window's close
+/// button). iOS: AVKit's AVPlayerViewController; macOS: AVPlayerView, run modally; Android: a full-screen dialog of a
+/// VideoView with the system's MediaController. Windows, Linux and FreeBSD: `Unsupported` (`Launcher.openFile` opens
+/// the system's player there). A scripted window takes its next `dialog` item.
+///
+/// ```
+/// VideoPlayer.show(mut window, "clip.mp4")?;
+/// ```
+public struct VideoPlayer {
+    /// Plays the video at `path` until the user closes the player. `Resources` when there is no file there or it
+    /// cannot be played.
+    public fn show(window: borrow mut Window, path: StringView) -> Result<void, WindowError> {
+        var none = Vector<String>.create();
+        FileDialog.run(window, 14, "", path, "", mut none)?;
+        return Ok();
+    }
+}

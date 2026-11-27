@@ -62,6 +62,7 @@ public final class Picker extends Fragment {
     private static final int CONTACTS = 11;
     private static final int CONTACT = 12;
     private static final int MICROPHONE = 13;
+    private static final int VIDEO = 14;
     private static final int PERMISSIONS_CONTACTS = 101;
     private static final int PERMISSIONS_MICROPHONE = 102;
     private static final int PERMISSIONS = 100;
@@ -95,6 +96,10 @@ public final class Picker extends Fragment {
         try {
             if (kind == PRINT) {
                 Printing.start(activity, name, file);
+                return;
+            }
+            if (kind == VIDEO) {
+                Movie.show(activity, file); // ADR 0273
                 return;
             }
             if (kind >= SHARE && kind <= OPEN_LINK) {

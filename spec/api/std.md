@@ -158,6 +158,7 @@
 - [struct Contacts](#struct-contacts)
 - [struct AudioRecorder](#struct-audiorecorder)
 - [struct AudioPlayer](#struct-audioplayer)
+- [struct VideoPlayer](#struct-videoplayer)
 
 ## struct AsyncConsole
 
@@ -4533,6 +4534,8 @@ Photos as files (ADR 0266).
 ```
 // A camera's 12 megapixels made a chat photo: 1600 pixels at most, JPEG at 0.82, upright, no metadata.
 let size = PhotoFile.shrink("IMG_0042.HEIC", "photo.jpg", 1600, 0.82)?;
+// A video's first frame, for its bubble (ADR 0273).
+let frame = PhotoFile.videoFrame("clip.mp4", "clip.jpg", 640, 0.8)?;
 ```
 
 ### PhotoFile.shrink
@@ -4549,6 +4552,19 @@ codec CeeSafe uses (Linux, FreeBSD, a program on Android with no window, the int
 `NotFound` when `from` is not there; `InvalidInput` when it is no photo the system reads, or `longest` is 0;
 `Other(5)` when the JPEG could not be written.
 Safety: the runtime reads the two paths during the call and writes the two sizes.
+
+### PhotoFile.videoFrame
+
+```ceesafe
+public fn videoFrame(from: StringView, to: StringView, longest: u32, quality: f32) -> Result<PhotoSize, IoError>
+```
+
+Writes the first frame of the video at `from` (MP4, MOV: what the system plays) to `to` as a JPEG at `quality`
+(0 to 1), upright (the video's rotation applied), its longest side at most `longest` pixels: a video's thumbnail
+(ADR 0273). The frame's size. macOS and iOS: AVFoundation's AVAssetImageGenerator; Android:
+MediaMetadataRetriever. `Unsupported` elsewhere (Windows, Linux, FreeBSD, a program on Android with no window);
+`NotFound` when `from` is not there; `InvalidInput` when it is no video the system reads; `Other(5)` when the
+JPEG could not be written.
 
 ## enum PushError
 
@@ -6874,3 +6890,28 @@ public fn playing(borrow this) -> bool
 
 Whether it is playing now (false once it reaches the end).
 Safety: the runtime's player.
+
+## struct VideoPlayer
+
+```ceesafe
+public struct VideoPlayer
+```
+
+A video played in the system's own player over the app (§26.13, ADR 0273): its controls, full screen on the
+phones, a window of its own on macOS. `show` returns when the user closes it (Done, Back, the window's close
+button). iOS: AVKit's AVPlayerViewController; macOS: AVPlayerView, run modally; Android: a full-screen dialog of a
+VideoView with the system's MediaController. Windows, Linux and FreeBSD: `Unsupported` (`Launcher.openFile` opens
+the system's player there). A scripted window takes its next `dialog` item.
+
+```
+VideoPlayer.show(mut window, "clip.mp4")?;
+```
+
+### VideoPlayer.show
+
+```ceesafe
+public fn show(window: borrow mut Window, path: StringView) -> Result<void, WindowError>
+```
+
+Plays the video at `path` until the user closes the player. `Resources` when there is no file there or it
+cannot be played.

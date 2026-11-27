@@ -20,6 +20,44 @@ import java.io.OutputStream;
 final class Photos {
     private Photos() {}
 
+    /** A video's first frame (ADR 0273), upright (MediaMetadataRetriever applies the video's rotation), scaled so its
+        longest side is at most `longest`, written as a JPEG at `quality` thousandths: {w, h}; null when the file is no
+        video the system reads; {-1, -1} when the JPEG could not be written. */
+    static int[] videoFrame(String from, String to, int longest, int quality) {
+        android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
+        Bitmap frame;
+        try {
+            retriever.setDataSource(from);
+            frame = retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception e) {
+                // released already: nothing to do
+            }
+        }
+        if (frame == null) {
+            return null;
+        }
+        int big = Math.max(frame.getWidth(), frame.getHeight());
+        Bitmap made = frame;
+        if (big > longest) {
+            float scale = (float) longest / big;
+            made = Bitmap.createScaledBitmap(frame, Math.max(1, Math.round(frame.getWidth() * scale)),
+                Math.max(1, Math.round(frame.getHeight() * scale)), true);
+        }
+        try (OutputStream out = new FileOutputStream(to)) {
+            if (!made.compress(Bitmap.CompressFormat.JPEG, Math.max(0, Math.min(100, (quality + 5) / 10)), out)) {
+                return new int[] {-1, -1};
+            }
+        } catch (IOException e) {
+            return new int[] {-1, -1};
+        }
+        return new int[] {made.getWidth(), made.getHeight()};
+    }
+
     static int[] shrink(String from, String to, int longest, int quality) {
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();

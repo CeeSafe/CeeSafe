@@ -2,6 +2,7 @@
 // an atomic, where p5 wrote through a user cell from both and lost increments. Cells are not Share, so that program is
 // now refused (check-fail/raw-cell-share.cee, cell.cee); this one is race-free, and the contract suite runs it under
 // ThreadSanitizer ("run tsan share").
+// interp-timeout: 180
 fn count(m: borrow Mutex<u32>, a: borrow AtomicU32) {
     for (i in 0..200000) {
         {

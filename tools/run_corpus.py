@@ -68,6 +68,19 @@ STDIN = re.compile(r"// stdin:(?: (.*))?$")
 STDIN_ESCAPE = re.compile(rb"\\(n|r|\\|x[0-9a-fA-F]{2})")
 # `// env: NAME=value` (ADR 0256): a variable in the program's environment, beside the runner's own.
 ENV = re.compile(r"// env: ([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+# `// interp-timeout: S`: the seconds an interpreted run of this program may take, when more than --timeout's. For the
+# few programs whose work is long in the interpreter (deflate, ordered-map, share-cell-counter take 38 to 48 s alone
+# on a Linux box, and more with eight at once); a native run keeps --timeout.
+INTERP_TIMEOUT = re.compile(r"// interp-timeout: ([0-9]+)$")
+
+
+def interp_timeout_of(text):
+    """The file's `// interp-timeout:` seconds, or None without one."""
+    for line in lines_of(text):
+        m = INTERP_TIMEOUT.search(line.strip())
+        if m:
+            return float(m.group(1))
+    return None
 
 
 def env_of(text):
@@ -201,7 +214,7 @@ class Runner:
             env["CC"] = self.args.cc
         return env
 
-    def execute(self, exe, stdin=None, variables=None):
+    def execute(self, exe, stdin=None, variables=None, timeout=None):
         """Runs a built program, or, given a list, that command (--interp's `ceesafec run --interp`); `stdin` is its
         standard input's bytes (`// stdin:`), if the test gives one, and `variables` what `// env:` adds to its
         environment."""
@@ -213,7 +226,8 @@ class Runner:
             if self.args.check_leaks:
                 env["CEESAFE_ALLOC_REPORT"] = "1"
             given = {} if stdin is None else {"input": stdin}
-            p = subprocess.run(argv, cwd=self.corpus, capture_output=True, timeout=self.args.timeout, env=env, **given)
+            limit = max(self.args.timeout, timeout) if timeout else self.args.timeout
+            p = subprocess.run(argv, cwd=self.corpus, capture_output=True, timeout=limit, env=env, **given)
             status, stdout, stderr = p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
         except subprocess.TimeoutExpired:
             status, stdout, stderr = "timeout", "", ""
@@ -331,7 +345,8 @@ def run_test(runner, family, path, work):
             # --interp: the same program in the interpreter, held to the same expectations (testing.md §1).
             given = stdin_of(text)
             variables = env_of(text)
-            run = (runner.execute([runner.compiler, "run", "--interp"] + options + inputs, given, variables) if interp
+            run = (runner.execute([runner.compiler, "run", "--interp"] + options + inputs, given, variables,
+                                  interp_timeout_of(text)) if interp
                    else runner.execute(exe, given, variables))
             outcomes.append(run)
             stdout, exit_code, panic, panic_line = expectations(text)

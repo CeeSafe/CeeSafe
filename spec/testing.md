@@ -162,6 +162,9 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   - `// stdin: text` (ADR 0106): the program's standard input is the texts of these directives, joined with nothing
     between them; `\n`, `\r`, `\\` and `\xNN` (one byte) are the escapes, so an input may lack a last line ending
     or hold bytes that are not UTF-8. A test without one inherits the runner's input, as before.
+  - `// interp-timeout: S`: an interpreted run (`--interp`) of this program may take S seconds, when that is more than
+    the runner's `--timeout` (60 by default); a native run keeps `--timeout`. For the few programs whose work is long
+    in the interpreter, so that a loaded machine does not fail them.
   - `// env: NAME=value` (ADR 0256): `NAME` is set to `value` (the rest of the line) in the program's environment,
     natively and under `--interp`, beside the runner's own variables: a runtime's switch such as
     `CEESAFE_LOCK_RULES=strict`.

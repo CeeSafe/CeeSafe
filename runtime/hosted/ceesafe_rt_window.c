@@ -20596,11 +20596,20 @@ static int32_t cee_native_hand(struct cee_window *w, int kind, const char *text,
     if (kind == CEE_DIALOG_OPEN_FILE && access(target, F_OK) != 0) {
         return -CEE_WINDOW_RESOURCES; /* no file there */
     }
-    char *argv[] = {"/bin/sh", "-c",
-                    "command -v xdg-open >/dev/null 2>&1 || exit 3; xdg-open \"$1\" </dev/null >/dev/null 2>&1 &",
-                    "sh", (char *)target, NULL};
+    /* posix_spawn takes writable strings: these are copies, with no const cast away. */
+    char shell[] = "/bin/sh", dash_c[] = "-c", name[] = "sh";
+    char script[] = "command -v xdg-open >/dev/null 2>&1 || exit 3; xdg-open \"$1\" </dev/null >/dev/null 2>&1 &";
+    size_t length = strlen(target);
+    char *copy = (char *)ceesafe_platform_alloc(length + 1u);
+    if (copy == NULL) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    memcpy(copy, target, length + 1u);
+    char *argv[] = {shell, dash_c, script, name, copy, NULL};
     pid_t pid = -1;
-    if (posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ) != 0) {
+    int spawned = posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ);
+    ceesafe_platform_free(copy);
+    if (spawned != 0) {
         return -CEE_WINDOW_RESOURCES;
     }
     int status = 0;

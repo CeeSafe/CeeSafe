@@ -1264,8 +1264,12 @@ static int cee_sec_dpapi_load(void) {
     if (cee_sec_dpapi.state == 0) {
         HMODULE crypt = LoadLibraryW(L"crypt32.dll");
         if (crypt != NULL) {
-            *(FARPROC *)&cee_sec_dpapi.protect = GetProcAddress(crypt, "CryptProtectData");
-            *(FARPROC *)&cee_sec_dpapi.unprotect = GetProcAddress(crypt, "CryptUnprotectData");
+            /* Each address copied into its typed pointer: storing through a FARPROC* to the field was type-punning,
+               which gcc's strict aliasing refuses at -O2 (MSVC let it pass). */
+            FARPROC protect = GetProcAddress(crypt, "CryptProtectData");
+            FARPROC unprotect = GetProcAddress(crypt, "CryptUnprotectData");
+            memcpy(&cee_sec_dpapi.protect, &protect, sizeof protect);
+            memcpy(&cee_sec_dpapi.unprotect, &unprotect, sizeof unprotect);
         }
         InterlockedExchange(&cee_sec_dpapi.state,
                             cee_sec_dpapi.protect != NULL && cee_sec_dpapi.unprotect != NULL ? 1 : 2);

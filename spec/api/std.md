@@ -159,6 +159,8 @@
 - [struct AudioRecorder](#struct-audiorecorder)
 - [struct AudioPlayer](#struct-audioplayer)
 - [struct VideoPlayer](#struct-videoplayer)
+- [enum ScanState](#enum-scanstate)
+- [struct CodeScanner](#struct-codescanner)
 
 ## struct AsyncConsole
 
@@ -6915,3 +6917,89 @@ public fn show(window: borrow mut Window, path: StringView) -> Result<void, Wind
 
 Plays the video at `path` until the user closes the player. `Resources` when there is no file there or it
 cannot be played.
+
+## enum ScanState
+
+```ceesafe
+public enum ScanState {
+    Waiting,
+    Code,
+    Frame,
+    Closed,
+}
+```
+
+What a code scanner has for the program since it last asked (ADR 0274).
+
+## struct CodeScanner
+
+```ceesafe
+@noncopy
+public struct CodeScanner {
+    drop { … }
+}
+```
+
+A live camera over the app, for reading a QR code (§26.13, ADR 0274): the back camera's picture full screen with
+a Cancel button, until the program closes it (at its drop) or the user does. iOS reads QR codes itself
+(AVFoundation's metadata output); Android gives the frames' luminance, for a decoder of the program's (CeeSafeLibs'
+`qrcode`). The camera's permission is asked first (`Resources` when refused). Windows, Linux, FreeBSD and macOS:
+`Unsupported`.
+
+```
+var scanner = CodeScanner.open(mut window)?;
+// each frame of the app:
+match (scanner.poll()?) {
+    ScanState.Code => found(scanner.code()),
+    ScanState.Frame => { /* QrReader.read(scanner.luminance(), scanner.width(), scanner.height(), scanner.width()) */ }
+    ScanState.Closed => gone(),
+    ScanState.Waiting => {}
+}
+```
+
+### CodeScanner.open
+
+```ceesafe
+public fn open(window: borrow mut Window) -> Result<CodeScanner, WindowError>
+```
+
+Asks the camera's permission (once), then shows the scanner over the app.
+Safety: the runtime's scanner is given back once (drop).
+
+### CodeScanner.poll
+
+```ceesafe
+public fn poll(borrow mut this) -> Result<ScanState, WindowError>
+```
+
+What is new: a code, a frame, the scanner closed by the user, or nothing yet. `Resources` when the camera
+failed.
+Safety: the runtime writes at most the capacities given, and the lengths.
+
+### CodeScanner.code
+
+```ceesafe
+public fn code(borrow this) -> Slice<u8>
+```
+
+The code the system read, as its text's bytes (after `ScanState.Code`).
+
+### CodeScanner.luminance
+
+```ceesafe
+public fn luminance(borrow this) -> Slice<u8>
+```
+
+The last frame's luminance, `width` by `height`, row by row (after `ScanState.Frame`).
+
+### CodeScanner.width
+
+```ceesafe
+public fn width(borrow this) -> usize
+```
+
+### CodeScanner.height
+
+```ceesafe
+public fn height(borrow this) -> usize
+```

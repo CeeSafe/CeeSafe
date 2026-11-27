@@ -4029,6 +4029,12 @@ Diagnostics: none new.
     player over the app (iOS AVPlayerViewController, macOS an AVPlayerView window run modally, Android a full-screen
     VideoView with a MediaController), returning when the user closes it; `Resources` when there is no file or it
     cannot be played; Windows, Linux and FreeBSD `Unsupported`. A scripted window takes its next `dialog` item.
+  - **A code scanner** (ADR 0274): `CodeScanner.open(window)` is `Result<CodeScanner, WindowError>`: the camera's
+    permission (once; `Resources` when refused), then the back camera's picture full screen over the app with Cancel,
+    until the scanner is dropped or the user closes it. `poll()` is `Result<ScanState, WindowError>` and never waits:
+    `Code` (iOS reads QR codes: `code()`), `Frame` (Android gives frames: `luminance()`, `width()` by `height()`, for
+    the program's decoder), `Closed`, or `Waiting`. Windows, Linux, FreeBSD and macOS `Unsupported`; a scripted window
+    has no scanner.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

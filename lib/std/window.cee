@@ -102,6 +102,18 @@ extern "C" {
     fn ceesafe_audio_play_action(handle: i64, action: i32);
     fn ceesafe_audio_play_seek(handle: i64, ms: i64);
     fn ceesafe_audio_play_time(handle: i64, which: i32) -> i64;
+    fn ceesafe_scanner_open(window: *mut void) -> i64;
+    fn ceesafe_scanner_poll(
+        handle: i64,
+        code: *mut u8,
+        codeCapacity: u64,
+        codeLength: *mut u64,
+        frame: *mut u8,
+        frameCapacity: u64,
+        width: *mut u32,
+        height: *mut u32,
+    ) -> i32;
+    fn ceesafe_scanner_close(handle: i64);
     @effects()
     fn ceesafe_window_drop(window: *mut void, position: *mut f32, paths: *mut (*u8)) -> i64;
     @effects()
@@ -2014,5 +2026,126 @@ public struct VideoPlayer {
         var none = Vector<String>.create();
         FileDialog.run(window, 14, "", path, "", mut none)?;
         return Ok();
+    }
+}
+
+/// What a code scanner has for the program since it last asked (ADR 0274).
+public enum ScanState {
+    /// Nothing new: the camera is looking.
+    Waiting,
+    /// The system read a code: `CodeScanner.code` (iOS).
+    Code,
+    /// A camera frame, for the program to read a code from: `CodeScanner.luminance` (Android, which reads none).
+    Frame,
+    /// The user closed the scanner (Cancel, or Back).
+    Closed,
+}
+
+/// A live camera over the app, for reading a QR code (§26.13, ADR 0274): the back camera's picture full screen with
+/// a Cancel button, until the program closes it (at its drop) or the user does. iOS reads QR codes itself
+/// (AVFoundation's metadata output); Android gives the frames' luminance, for a decoder of the program's (CeeSafeLibs'
+/// `qrcode`). The camera's permission is asked first (`Resources` when refused). Windows, Linux, FreeBSD and macOS:
+/// `Unsupported`.
+///
+/// ```
+/// var scanner = CodeScanner.open(mut window)?;
+/// // each frame of the app:
+/// match (scanner.poll()?) {
+///     ScanState.Code => found(scanner.code()),
+///     ScanState.Frame => { /* QrReader.read(scanner.luminance(), scanner.width(), scanner.height(), scanner.width()) */ }
+///     ScanState.Closed => gone(),
+///     ScanState.Waiting => {}
+/// }
+/// ```
+@noncopy
+public struct CodeScanner {
+    handle: i64;
+    read: Vector<u8>;
+    frame: Vector<u8>;
+    frameWidth: usize;
+    frameHeight: usize;
+
+    /// Asks the camera's permission (once), then shows the scanner over the app.
+    /// Safety: the runtime's scanner is given back once (drop).
+    public fn open(window: borrow mut Window) -> Result<CodeScanner, WindowError> {
+        var none = Vector<String>.create();
+        FileDialog.run(window, 15, "", "", "", mut none)?;
+        let handle = unsafe { ceesafe_scanner_open(window.raw) };
+        if (handle < 0) {
+            return Err(Window.errorOf(truncate<i32>(0 - handle)));
+        }
+        return Ok(CodeScanner {
+            handle: handle,
+            read: Vector<u8>.create(),
+            frame: Vector<u8>.create(),
+            frameWidth: 0,
+            frameHeight: 0,
+        });
+    }
+
+    /// What is new: a code, a frame, the scanner closed by the user, or nothing yet. `Resources` when the camera
+    /// failed.
+    /// Safety: the runtime writes at most the capacities given, and the lengths.
+    public fn poll(borrow mut this) -> Result<ScanState, WindowError> {
+        var text = Vector<u8>.create();
+        if (text.resize(4096, 0) is Err(_)) {
+            return Err(WindowError.Resources);
+        }
+        let into = text.viewMut();
+        var length: u64 = 0;
+        var w: u32 = 0;
+        var h: u32 = 0;
+        let capacity = this.frame.length;
+        let target = this.frame.viewMut();
+        let r = unsafe { ceesafe_scanner_poll(
+            this.handle,
+            into.ptr,
+            4096,
+            borrow mut length as *mut u64,
+            target.ptr,
+            capacity as u64,
+            borrow mut w as *mut u32,
+            borrow mut h as *mut u32,
+        ) };
+        if (r == 4) {
+            // A frame larger than the buffer: the buffer is made its size, for the next one.
+            if (this.frame.resize((w as usize) * (h as usize), 0) is Err(_)) {
+                return Err(WindowError.Resources);
+            }
+            return Ok(ScanState.Waiting);
+        }
+        if (r < 0) {
+            return Err(Window.errorOf(0 - r));
+        }
+        if (r == 1) {
+            this.read.clear();
+            for (b in text.view()[0..truncate<usize>(length).min(4096)]) {
+                if (this.read.push(b) is Err(_)) {
+                    return Err(WindowError.Resources);
+                }
+            }
+            return Ok(ScanState.Code);
+        }
+        if (r == 2) {
+            this.frameWidth = w as usize;
+            this.frameHeight = h as usize;
+            return Ok(ScanState.Frame);
+        }
+        return Ok(if (r == 3) ScanState.Closed else ScanState.Waiting);
+    }
+
+    /// The code the system read, as its text's bytes (after `ScanState.Code`).
+    public fn code(borrow this) -> Slice<u8> => this.read.view();
+
+    /// The last frame's luminance, `width` by `height`, row by row (after `ScanState.Frame`).
+    public fn luminance(borrow this) -> Slice<u8> => this.frame.view()[0..this.frameWidth * this.frameHeight];
+
+    public fn width(borrow this) -> usize => this.frameWidth;
+
+    public fn height(borrow this) -> usize => this.frameHeight;
+
+    /// Safety: the scanner is the one the runtime gave, given back once.
+    drop {
+        unsafe { ceesafe_scanner_close(this.handle); }
     }
 }

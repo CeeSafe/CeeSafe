@@ -1984,6 +1984,22 @@ fn main() -> i32 {
         Ok(_) => { Console.writeLine("video shown"); }
         Err(_) => { Console.writeLine("video error"); }
     }
+    // A code scanner (ADR 0274): the script grants the camera, and a scripted window has no scanner.
+    match (CodeScanner.open(mut window)) {
+        Ok(s) => {
+            // Not reached: every method, so that each one's library body is checked.
+            var scanner = s;
+            match (scanner.poll()) {
+                Ok(ScanState.Code) => { Console.writeLine(scanner.code().length); }
+                Ok(ScanState.Frame) => { Console.writeLine(scanner.luminance().length + scanner.width() * scanner.height()); }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        Err(WindowError.Unsupported) => { Console.writeLine("no scanner"); }
+        Err(WindowError.Resources) => { Console.writeLine("camera refused"); }
+        Err(_) => { Console.writeLine("scanner error"); }
+    }
     return 0;
 }
 """
@@ -4179,13 +4195,13 @@ def main():
         share_script = os.path.join(work, "share_script.txt")
         with open(share_script, "w", encoding="utf-8") as f:
             f.write("0:dialog;0:dialog;0:dialog;0:dialog:Ada Lovelace:+15550001:+15550009|Bob:+15550002|Cy;"
-                    "0:dialog:Dee:+15550004;0:dialog;0:dialog")
+                    "0:dialog:Dee:+15550004;0:dialog;0:dialog;0:dialog:yes")
         r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
         want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
                 "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
                 "spaced link Unsupported",
                 "contacts Ada Lovelace/+15550001/+15550009 Bob/+15550002 Cy", "picked Dee 1", "mail ok", "no haptics", "microphone refused",
-                "no such sound" if sys.platform in ("darwin",) else "no player", "video shown"]
+                "no such sound" if sys.platform in ("darwin",) else "no player", "video shown", "no scanner"]
         if r.returncode != 0 or r.stdout.splitlines() != want:
             problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +

@@ -154,6 +154,8 @@
 - [struct Launcher](#struct-launcher)
 - [enum HapticKind](#enum-haptickind)
 - [struct Haptics](#struct-haptics)
+- [struct Contact](#struct-contact)
+- [struct Contacts](#struct-contacts)
 
 ## struct AsyncConsole
 
@@ -6686,3 +6688,51 @@ public fn available(window: borrow Window) -> bool
 
 Whether this device may play haptics: a phone (iOS; Android with a vibrator) or a Mac; false elsewhere.
 Safety: the runtime takes the window and answers a number.
+
+## struct Contact
+
+```ceesafe
+public struct Contact {
+    public name: String;
+    public phones: Vector<String>;
+}
+```
+
+A contact from the address book (ADR 0271): its name (given and family, else its organization) and its phone
+numbers as the address book writes them.
+
+## struct Contacts
+
+```ceesafe
+public struct Contacts
+```
+
+The address book (§26.13, ADR 0271). `read` asks the system's permission once (iOS and macOS: the app's
+`NSContactsUsageDescription`; Android: `READ_CONTACTS`, declared by the packer) and gives every contact with its
+numbers; `pick` is the system's picker for one contact (iOS's CNContactPickerViewController, Android's picker of
+phone numbers), which needs no permission. Windows, Linux, FreeBSD and the Mac's `pick`: `Unsupported`.
+
+```
+let everyone = Contacts.read(mut window)?;
+match (Contacts.pick(mut window)?) {
+    Some(one) => {}
+    null => {} // cancelled
+}
+```
+
+### Contacts.read
+
+```ceesafe
+public fn read(window: borrow mut Window) -> Result<Vector<Contact>, WindowError>
+```
+
+Every contact with its numbers; `Resources` when the permission is refused (or an iOS app has no usage
+description, which iOS would end it for).
+
+### Contacts.pick
+
+```ceesafe
+public fn pick(window: borrow mut Window) -> Result<Contact?, WindowError>
+```
+
+One contact chosen in the system's picker (Android: one of its numbers), or null when the user cancelled.

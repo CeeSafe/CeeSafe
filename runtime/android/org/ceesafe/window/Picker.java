@@ -30,6 +30,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
+import android.provider.ContactsContract;
 import android.os.Build;
 import android.os.Environment;
 import android.os.ext.SdkExtensions;
@@ -58,6 +59,9 @@ public final class Picker extends Fragment {
     private static final int CAPTURE = 7;
     private static final int SHARE = 8;
     private static final int OPEN_LINK = 10;
+    private static final int CONTACTS = 11;
+    private static final int CONTACT = 12;
+    private static final int PERMISSIONS_CONTACTS = 101;
     private static final int PERMISSIONS = 100;
     /** No camera's app: the runtime's Unsupported (FAILED, -1, is its Resources). */
     private static final int UNSUPPORTED = -2;
@@ -107,6 +111,21 @@ public final class Picker extends Fragment {
                 picker.startActivityForResult(mediaIntent(extensions, picker.limit), kind + 1);
                 return;
             }
+            if (kind == CONTACTS) {
+                // The address book (ADR 0271): READ_CONTACTS first, when it is not granted yet.
+                if (activity.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                    AddressBook.answerAll(activity);
+                } else {
+                    picker.requestPermissions(new String[] {Manifest.permission.READ_CONTACTS}, PERMISSIONS_CONTACTS);
+                }
+                return;
+            }
+            if (kind == CONTACT) {
+                // One contact's number from the system's picker: it grants that row, and needs no permission.
+                picker.startActivityForResult(
+                    new Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI), kind + 1);
+                return;
+            }
             if (kind == CAPTURE) {
                 picker.capturingPhoto = !extensions.equals("video");
                 String[] needed = needed(activity);
@@ -146,7 +165,9 @@ public final class Picker extends Fragment {
         for (int result : results) {
             granted = granted && result == PackageManager.PERMISSION_GRANTED;
         }
-        if (granted) {
+        if (granted && request == PERMISSIONS_CONTACTS) {
+            AddressBook.answerAll(activity);
+        } else if (granted) {
             capture(activity);
         } else {
             nativePicked(FAILED, null); // refused: the program's Resources, "the system refused"
@@ -159,6 +180,14 @@ public final class Picker extends Fragment {
         final Activity activity = getActivity();
         if (kind == CAPTURE) {
             captured(activity, result == Activity.RESULT_OK, data);
+            return;
+        }
+        if (kind == CONTACT) {
+            if (result == Activity.RESULT_OK && data != null && data.getData() != null && activity != null) {
+                AddressBook.answerPicked(activity, data.getData());
+            } else {
+                nativePicked(CANCELLED, null);
+            }
             return;
         }
         if (result != Activity.RESULT_OK || data == null || activity == null) {

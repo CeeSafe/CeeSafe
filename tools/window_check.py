@@ -87,7 +87,8 @@ that opened a window would open one on the developer's screen:
    take their script's `dialog` answer and are Ok; the library refuses, without the runtime, a share of nothing, a
    path holding a line break, an empty path, and a link whose scheme is not http, https, mailto or tel (file:,
    javascript:, an app's own), each Unsupported. Haptics (ADR 0270): a scripted window has none, and playing one does
-   nothing.
+   nothing. Contacts (ADR 0271): a scripted window's `dialog` answer is the address book (`name:number|...`) or the
+   contact picked.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -1917,6 +1918,32 @@ fn main() -> i32 {
     show("script link", Launcher.openLink(mut window, "javascript:alert(1)"));
     show("app link", Launcher.openLink(mut window, "intent://x#Intent;end"));
     show("spaced link", Launcher.openLink(mut window, "https://a b"));
+    // Contacts (ADR 0271): the script's next two answers are the address book and the contact picked.
+    match (Contacts.read(mut window)) {
+        Ok(all) => {
+            Console.write("contacts");
+            for (c in all.view()) {
+                Console.write(" ");
+                Console.write(c.name.view());
+                for (p in c.phones.view()) {
+                    Console.write("/");
+                    Console.write(p.view());
+                }
+            }
+            Console.writeLine("");
+        }
+        Err(_) => { Console.writeLine("contacts error"); }
+    }
+    match (Contacts.pick(mut window)) {
+        Ok(Some(c)) => {
+            Console.write("picked ");
+            Console.write(c.name.view());
+            Console.write(" ");
+            Console.writeLine(c.phones.length);
+        }
+        Ok(null) => { Console.writeLine("picked nothing"); }
+        Err(_) => { Console.writeLine("pick error"); }
+    }
     show("mail", Launcher.openLink(mut window, "mailto:someone@example.com"));
     // Haptics (ADR 0270): a scripted window has none; a haptic does nothing there.
     Haptics.play(mut window, HapticKind.Success);
@@ -4090,11 +4117,13 @@ def main():
         _, share = build(compiler, SHARE, work, "window_check_share")
         share_script = os.path.join(work, "share_script.txt")
         with open(share_script, "w", encoding="utf-8") as f:
-            f.write("0:dialog;0:dialog;0:dialog")
+            f.write("0:dialog;0:dialog;0:dialog;0:dialog:Ada Lovelace:+15550001:+15550009|Bob:+15550002|Cy;"
+                    "0:dialog:Dee:+15550004")
         r = run([share], {"CEESAFE_WINDOW_SCRIPT": share_script}, work)
         want = ["share ok", "file ok", "link ok", "nothing Unsupported", "line break Unsupported",
                 "empty path Unsupported", "file link Unsupported", "script link Unsupported", "app link Unsupported",
-                "spaced link Unsupported", "mail ok", "no haptics"]
+                "spaced link Unsupported",
+                "contacts Ada Lovelace/+15550001/+15550009 Bob/+15550002 Cy", "picked Dee 1", "mail ok", "no haptics"]
         if r.returncode != 0 or r.stdout.splitlines() != want:
             problems.append("sharing and opening: expected\n  " + "\n  ".join(want) +
                             f"\ngot (status {r.returncode})\n  " + "\n  ".join(r.stdout.splitlines()) + "\n" +

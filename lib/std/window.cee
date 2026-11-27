@@ -1800,3 +1800,77 @@ public struct Haptics {
     /// Safety: the runtime takes the window and answers a number.
     public fn available(window: borrow Window) -> bool => unsafe { ceesafe_window_has_haptics(window.raw) } != 0;
 }
+
+/// A contact from the address book (ADR 0271): its name (given and family, else its organization) and its phone
+/// numbers as the address book writes them.
+public struct Contact {
+    public name: String;
+    public phones: Vector<String>;
+}
+
+/// The address book (§26.13, ADR 0271). `read` asks the system's permission once (iOS and macOS: the app's
+/// `NSContactsUsageDescription`; Android: `READ_CONTACTS`, declared by the packer) and gives every contact with its
+/// numbers; `pick` is the system's picker for one contact (iOS's CNContactPickerViewController, Android's picker of
+/// phone numbers), which needs no permission. Windows, Linux, FreeBSD and the Mac's `pick`: `Unsupported`.
+///
+/// ```
+/// let everyone = Contacts.read(mut window)?;
+/// match (Contacts.pick(mut window)?) {
+///     Some(one) => {}
+///     null => {} // cancelled
+/// }
+/// ```
+public struct Contacts {
+    /// Every contact with its numbers; `Resources` when the permission is refused (or an iOS app has no usage
+    /// description, which iOS would end it for).
+    public fn read(window: borrow mut Window) -> Result<Vector<Contact>, WindowError> {
+        var entries = Vector<String>.create();
+        FileDialog.run(window, 11, "", "", "", mut entries)?;
+        return Contacts.parse(mut entries);
+    }
+
+    /// One contact chosen in the system's picker (Android: one of its numbers), or null when the user cancelled.
+    public fn pick(window: borrow mut Window) -> Result<Contact?, WindowError> {
+        var entries = Vector<String>.create();
+        FileDialog.run(window, 12, "", "", "", mut entries)?;
+        var found = Contacts.parse(mut entries)?;
+        return Ok(found.pop());
+    }
+
+    /// Each answer is a contact: its name, then each number after a unit separator (0x1F).
+    fn parse(entries: borrow mut Vector<String>) -> Result<Vector<Contact>, WindowError> {
+        var contacts = Vector<Contact>.create();
+        while (entries.length > 0) {
+            let entry = entries.remove(0);
+            let bytes = entry.view().bytes();
+            var name = String.create();
+            var phones = Vector<String>.create();
+            var start: usize = 0;
+            var first = true;
+            for (k in 0..bytes.length + 1) {
+                if (k == bytes.length || bytes[k] == 0x1F) {
+                    let piece = StringView.fromUtf8(bytes[start..k]) ?? "";
+                    if (first) {
+                        if (name.append(piece) is Err(_)) {
+                            return Err(WindowError.Resources);
+                        }
+                        first = false;
+                    } else if (piece.length > 0) {
+                        let copy = match (String.from(piece)) {
+                            Ok(c) => c,
+                            Err(_) => { return Err(WindowError.Resources); }
+                        };
+                        if (phones.push(copy) is Err(_)) {
+                            return Err(WindowError.Resources);
+                        }
+                    }
+                    start = k + 1;
+                }
+            }
+            if (contacts.push(Contact { name: name, phones: phones }) is Err(_)) {
+                return Err(WindowError.Resources);
+            }
+        }
+        return Ok(contacts);
+    }
+}

@@ -4009,6 +4009,14 @@ Diagnostics: none new.
     thread (the user's touch-feedback setting applies, no permission; `CONFIRM` and `REJECT` from API 30), `available`
     when there is a vibrator; macOS: `NSHapticFeedbackManager` (a Force Touch trackpad). Windows, Linux, FreeBSD and a
     scripted window: nothing, and `available` false.
+  - **Contacts** (ADR 0271): `Contacts.read(window)` is `Result<Vector<Contact>, WindowError>`, every contact of the
+    address book after the system's permission (`Resources` when refused, or when the app does not declare why:
+    `READ_CONTACTS` on Android, `NSContactsUsageDescription` on iOS and macOS); `Contacts.pick(window)` is
+    `Result<Contact?, WindowError>`, the system's picker, with no permission, null at a cancel. A `Contact` is a `name`
+    (given and family, else the organization) and its `phones`. iOS and macOS: `CNContactStore` (and iOS's
+    `CNContactPickerViewController`); Android: `ContactsContract`'s phone numbers, and `ACTION_PICK` on them (one
+    number). Windows, Linux, FreeBSD and the Mac's `pick`: `Unsupported`. A scripted window's `dialog` answer is
+    `name:number:number|name:number`.
 
   The rules:
   - **Paths** are absolute and UTF-8. One that is not valid UTF-8 is `Unsupported`.

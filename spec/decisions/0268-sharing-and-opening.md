@@ -81,8 +81,17 @@ Done (2026-11-27):
   showed it; Share opened the system's sheet, "Sharing image", its preview read through the provider (no app was
   chosen, so nothing was sent).
 - macOS (arm64): `Launcher.openFile` opened a text file in TextEdit; a file not there was `Resources`.
-- Not yet: the iPhone (the share sheet, a preview, a link), a link on Android and macOS, Windows' and Linux's opening on
-  a desktop, macOS's sharing picker.
+- After the release (0.95.24, 2026-11-27):
+  - The owner's iPhone 14 Plus, by his hands, in Marivil's port: a photo's preview (UIDocumentInteractionController),
+    the share sheet, and a message's link in Safari.
+  - The Moto: a message's link (sent by a test account) opened in Chrome (`ACTION_VIEW`).
+  - macOS: the sharing picker beside a test window, offering the file ("note, Text Document · 42 bytes") to AirDrop,
+    Notes and Messages (none chosen); a link opened in Chrome.
+  - Windows 11 x64 (the owner's laptop, the released compiler, run in the owner's desktop session): a text file opened
+    in Notepad, a link in Edge, a missing file `Resources`, a share `Unsupported`.
+  - Fedora 45 (GNOME on Wayland, the released compiler): a text file opened in Text Editor and a link in Firefox
+    through `xdg-open`, a missing file `Resources`, a share `Unsupported`.
+- Not yet: FreeBSD on a desktop (its workflow builds and checks the runtime).
 
 ## 6. Questions for the owner (answered 2026-11-27)
 

@@ -4532,6 +4532,13 @@ static void cee_ios_scan_cancel(cee_id self, cee_sel cmd, cee_id sender) {
     cee_ios_scan.closed = 1;
 }
 
+/* AVCaptureSession's startRunning blocks until the camera runs (a second or more): on a queue of its own, so the
+   presentation and the app's frames go on meanwhile. The session is retained for the call. */
+static void cee_ios_scan_start(void *session) {
+    (void)cee_ios_send((cee_id)session, "startRunning");
+    (void)cee_ios_send((cee_id)session, "release");
+}
+
 static void cee_native_scanner_close(void) {
     if (cee_ios_scan.session != NULL) {
         (void)cee_ios_send(cee_ios_scan.session, "stopRunning");
@@ -4546,6 +4553,75 @@ static void cee_native_scanner_close(void) {
         (void)cee_ios_send(cee_ios_scan.delegate, "release");
     }
     memset(&cee_ios_scan, 0, sizeof cee_ios_scan);
+}
+
+/* The scanner's chrome over the camera's picture: a dark bar along the top (below the status bar) with its title and
+   Cancel, and a square viewfinder in the middle. */
+static void cee_ios_scan_chrome(cee_id view, cee_rect bounds, cee_id window) {
+    typedef struct {
+        double top, left, bottom, right;
+    } cee_insets;
+    cee_insets safe = ((cee_insets(*)(cee_id, cee_sel))cee_uikit.send)(window, cee_ios_sel("safeAreaInsets"));
+    double width = bounds.size.width;
+    double bar = safe.top + 56.0;
+    cee_id white = cee_ios_send(cee_ios_cls("UIColor"), "whiteColor");
+    cee_id shade = ((cee_id(*)(cee_id, cee_sel, double, double))cee_uikit.send)(
+        cee_ios_cls("UIColor"), cee_ios_sel("colorWithWhite:alpha:"), 0.0, 0.6);
+    cee_id top = cee_ios_send(cee_ios_send(cee_ios_cls("UIView"), "alloc"), "init");
+    if (top != NULL) {
+        cee_rect place = {{0.0, 0.0}, {width, bar}};
+        ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(top, cee_ios_sel("setFrame:"), place);
+        cee_ios_send_v_id(top, "setBackgroundColor:", shade);
+        cee_ios_send_v_id(view, "addSubview:", top);
+        (void)cee_ios_send(top, "release");
+    }
+    cee_id title = cee_ios_send(cee_ios_send(cee_ios_cls("UILabel"), "alloc"), "init");
+    if (title != NULL) {
+        cee_rect place = {{80.0, safe.top}, {width - 160.0, 56.0}};
+        ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(title, cee_ios_sel("setFrame:"), place);
+        cee_ios_send_v_id(title, "setText:", cee_ios_string("Scan the QR code"));
+        cee_ios_send_v_id(title, "setTextColor:", white);
+        cee_ios_send_v_id(title, "setFont:", ((cee_id(*)(cee_id, cee_sel, double))cee_uikit.send)(
+                                               cee_ios_cls("UIFont"), cee_ios_sel("boldSystemFontOfSize:"), 17.0));
+        ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(title, cee_ios_sel("setTextAlignment:"), 1l); /* centred */
+        cee_ios_send_v_id(view, "addSubview:", title);
+        (void)cee_ios_send(title, "release");
+    }
+    cee_id button = ((cee_id(*)(cee_id, cee_sel, long))cee_uikit.send)(
+        cee_ios_cls("UIButton"), cee_ios_sel("buttonWithType:"), 1l); /* UIButtonTypeSystem */
+    if (button != NULL) {
+        ((void (*)(cee_id, cee_sel, cee_id, unsigned long))cee_uikit.send)(
+            button, cee_ios_sel("setTitle:forState:"), cee_ios_string("Cancel"), 0ul);
+        ((void (*)(cee_id, cee_sel, cee_id, unsigned long))cee_uikit.send)(button, cee_ios_sel("setTitleColor:forState:"),
+                                                                          white, 0ul);
+        cee_id label = cee_ios_send(button, "titleLabel");
+        if (label != NULL) {
+            cee_ios_send_v_id(label, "setFont:", ((cee_id(*)(cee_id, cee_sel, double))cee_uikit.send)(
+                                                   cee_ios_cls("UIFont"), cee_ios_sel("systemFontOfSize:"), 17.0));
+        }
+        cee_rect place = {{8.0, safe.top}, {88.0, 56.0}};
+        ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(button, cee_ios_sel("setFrame:"), place);
+        ((void (*)(cee_id, cee_sel, cee_id, cee_sel, unsigned long))cee_uikit.send)(
+            button, cee_ios_sel("addTarget:action:forControlEvents:"), cee_ios_scan.delegate, cee_ios_sel("cancel:"),
+            64ul); /* UIControlEventTouchUpInside */
+        cee_ios_send_v_id(view, "addSubview:", button);
+    }
+    cee_id finder = cee_ios_send(cee_ios_send(cee_ios_cls("UIView"), "alloc"), "init");
+    cee_id layer = finder != NULL ? cee_ios_send(finder, "layer") : NULL;
+    if (layer != NULL) {
+        double side = (width < bounds.size.height ? width : bounds.size.height) * 0.68;
+        cee_rect place = {{(width - side) / 2.0, (bounds.size.height - side) / 2.0}, {side, side}};
+        ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(finder, cee_ios_sel("setFrame:"), place);
+        ((void (*)(cee_id, cee_sel, double))cee_uikit.send)(layer, cee_ios_sel("setBorderWidth:"), 3.0);
+        ((void (*)(cee_id, cee_sel, double))cee_uikit.send)(layer, cee_ios_sel("setCornerRadius:"), 18.0);
+        ((void (*)(cee_id, cee_sel, void *))cee_uikit.send)(layer, cee_ios_sel("setBorderColor:"),
+                                                            (void *)cee_ios_send(white, "CGColor"));
+        ((void (*)(cee_id, cee_sel, signed char))cee_uikit.send)(finder, cee_ios_sel("setUserInteractionEnabled:"), 0);
+        cee_ios_send_v_id(view, "addSubview:", finder);
+    }
+    if (finder != NULL) {
+        (void)cee_ios_send(finder, "release");
+    }
 }
 
 static int64_t cee_native_scanner_open(struct cee_window *w) {
@@ -4617,28 +4693,21 @@ static int64_t cee_native_scanner_open(struct cee_window *w) {
             cee_rect bounds = cee_ios_send_rect(view, "bounds");
             ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(layer, cee_ios_sel("setFrame:"), bounds);
             cee_ios_send_v_id(cee_ios_send(view, "layer"), "addSublayer:", layer);
-            cee_id button = ((cee_id(*)(cee_id, cee_sel, long))cee_uikit.send)(
-                cee_ios_cls("UIButton"), cee_ios_sel("buttonWithType:"), 1l); /* UIButtonTypeSystem */
-            if (button != NULL) {
-                ((void (*)(cee_id, cee_sel, cee_id, unsigned long))cee_uikit.send)(
-                    button, cee_ios_sel("setTitle:forState:"), cee_ios_string("Cancel"), 0ul);
-                ((void (*)(cee_id, cee_sel, cee_id, unsigned long))cee_uikit.send)(
-                    button, cee_ios_sel("setTitleColor:forState:"), cee_ios_send(cee_ios_cls("UIColor"), "whiteColor"),
-                    0ul);
-                cee_rect place = {{bounds.origin.x + bounds.size.width / 2.0 - 80.0,
-                                   bounds.origin.y + bounds.size.height - 140.0},
-                                  {160.0, 52.0}};
-                ((void (*)(cee_id, cee_sel, cee_rect))cee_uikit.send)(button, cee_ios_sel("setFrame:"), place);
-                ((void (*)(cee_id, cee_sel, cee_id, cee_sel, unsigned long))cee_uikit.send)(
-                    button, cee_ios_sel("addTarget:action:forControlEvents:"), cee_ios_scan.delegate,
-                    cee_ios_sel("cancel:"), 64ul); /* UIControlEventTouchUpInside */
-                cee_ios_send_v_id(view, "addSubview:", button);
-            }
+            cee_ios_scan_chrome(view, bounds, m->window);
             ((void (*)(cee_id, cee_sel, long))cee_uikit.send)(controller, cee_ios_sel("setModalPresentationStyle:"),
                                                               0l); /* full screen */
             ((void (*)(cee_id, cee_sel, cee_id, signed char, void *))cee_uikit.send)(
                 root, cee_ios_sel("presentViewController:animated:completion:"), controller, 1, NULL);
-            (void)cee_ios_send(session, "startRunning");
+            void *(*global_queue)(long, unsigned long) =
+                (void *(*)(long, unsigned long))dlsym(RTLD_DEFAULT, "dispatch_get_global_queue");
+            void (*async_f)(void *, void *, void (*)(void *)) =
+                (void (*)(void *, void *, void (*)(void *)))dlsym(RTLD_DEFAULT, "dispatch_async_f");
+            if (global_queue != NULL && async_f != NULL) {
+                async_f(global_queue(0x19 /* QOS_CLASS_USER_INITIATED */, 0ul), cee_ios_send(session, "retain"),
+                        cee_ios_scan_start);
+            } else {
+                (void)cee_ios_send(session, "startRunning");
+            }
         }
     }
     if (output != NULL) {

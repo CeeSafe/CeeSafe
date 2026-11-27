@@ -3702,6 +3702,18 @@ def frame_bytes(size, frame):
     return bytes(out)
 
 
+SOUND_ONLY = """
+fn main() -> i32 {
+    match (AudioPlayer.open("none.m4a")) {
+        Ok(_) => { Console.writeLine("playing"); }
+        Err(WindowError.Unsupported) => { Console.writeLine("no player"); }
+        Err(_) => { Console.writeLine("no such sound"); }
+    }
+    return 0;
+}
+"""
+
+
 def build(compiler, source, work, name):
     path = os.path.join(work, name + ".cee")
     with open(path, "w", encoding="utf-8") as f:
@@ -3846,6 +3858,12 @@ def main():
         elif open(dump, "rb").read() != frame_bytes(*last):
             problems.append(f"scripted frame: the dump is not frame {last[1]} at {last[0]}")
 
+        # A program that only plays a sound, with no window (ADR 0272): it links the window runtime too.
+        _, sound = build(compiler, SOUND_ONLY, work, "sound")
+        r = subprocess.run([sound], capture_output=True, text=True, timeout=60, cwd=work)
+        want = "no such sound" if sys.platform == "darwin" else "no player"
+        if r.returncode != 0 or r.stdout.strip() != want:
+            problems.append(f"a sound without a window: expected {want!r}, got {r.stdout.strip()!r} (status {r.returncode})")
         source, errors = build(compiler, ERRORS, work, "errors")
         bad = os.path.join(work, "bad.txt")
         with open(bad, "w", encoding="utf-8") as f:

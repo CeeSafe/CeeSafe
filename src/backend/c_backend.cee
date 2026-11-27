@@ -216,7 +216,9 @@ fn generateC(
         if (tasks) {
             out.push(runtimeFile(6, "")?)?; // async tasks and channels (c-backend.md §3a)
         }
-        if (containsBytes(mainText.view(), "ceesafe_window_")) {
+        // Voice notes (`ceesafe_audio_*`, ADR 0272) are in the window runtime's file too: a program that only plays a
+        // sound, with no window, did not link without them.
+        if (containsBytes(mainText.view(), "ceesafe_window_") || containsBytes(mainText.view(), "ceesafe_audio_")) {
             out.push(runtimeFile(8, "")?)?; // native windows (type-system.md §26.13, ADR 0069)
         }
         if (containsBytes(mainText.view(), "ceesafe_bluetooth_")) {

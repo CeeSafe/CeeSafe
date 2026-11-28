@@ -1780,6 +1780,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_random_fill")) {
         return "Ps:l";
     }
+    if (sameText(name, "ceesafe_net_addresses")) {
+        return "Ps:l"; // ADR 0276
+    }
     if (sameText(name, "ceesafe_wipe")) {
         return "Ps:-";
     }
@@ -2300,6 +2303,23 @@ fn callC(
             }
         }
         return Ok(valueOf(0, 8));
+    }
+    if (sameText(n0, "ceesafe_net_addresses")) {
+        // NetworkInterfaces.addresses (ADR 0276): a fixed machine, so a run stays reproducible: "lo", up and loopback,
+        // index 1, with 127.0.0.1/8 and ::1/128.
+        let at = arguments[0].bits(0, 8)?;
+        let capacity = arguments[1].bits(0, 8)?;
+        let records: [u8; 42] = [4, 3, 8, 2, 1, 0, 0, 0, 127, 0, 0, 1, 0x6C, 0x6F,
+            6, 3, 128, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x6C, 0x6F, 0, 0];
+        let total: u64 = 40;
+        if (total <= capacity) {
+            var k: u64 = 0;
+            while (k < total) {
+                it.memory.storeBits(at + k, records[truncate<usize>(k)] as u64, 1)?;
+                k += 1;
+            }
+        }
+        return Ok(valueOf(total, 8));
     }
     if (sameText(n0, "ceesafe_random_key")) {
         // HashMap's key (ADR 0052): fixed in the interpreter; a map's order never depends on it.

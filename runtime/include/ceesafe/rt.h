@@ -2070,6 +2070,7 @@ void ceesafe_random_key(uint64_t *key);
 /* Random.fill (ADR 0060): `length` bytes from the system's cryptographic source (getrandom or /dev/urandom,
  * arc4random_buf, BCryptGenRandom); 0, or a negated errno (EOPNOTSUPP where there is no source: CosmoOS userland). */
 int64_t ceesafe_random_fill(uint8_t *out, uint64_t length);
+int64_t ceesafe_net_addresses(uint8_t *out, uint64_t capacity); /* ADR 0276 */
 /* Crc32c (ADR 0089): 1 when the CPU has a CRC-32C instruction (SSE4.2, AArch64's CRC extension), else 0, asked once;
  * and the reflected register after `length` bytes, by that instruction. Call the second only after a 1. */
 uint32_t ceesafe_crc32c_available(void);

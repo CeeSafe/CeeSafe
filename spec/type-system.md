@@ -7231,6 +7231,14 @@ A channel's `create(0)` panics ("a channel needs a capacity of at least 1", ADR 
   `peerAddress()`, `localAddress()`, `shutdownRead()` and the setters of §26.4, none async. A dual-stack listener's
   IPv4 peer is `V4`, not `::ffff:a.b.c.d`.
 
+**The machine's addresses** (lib/std, ADR 0276): `NetworkInterfaces.addresses()` is `Result<Vector<NetworkAddress>,
+IoError>`, every IPv4 and IPv6 address of every interface in the system's order, each with `interfaceName`,
+`interfaceIndex`, `address` (port 0; an IPv6 link-local one's scope id is the interface's index), `prefixLength`, `up`
+(up and running) and `loopback`. It is `getifaddrs` on macOS, Linux, the BSDs, iOS and Android from API level 24, and
+`GetAdaptersAddresses` (iphlpapi, loaded at the first call, so nothing more is linked) on Windows; `Err(Unsupported)`
+elsewhere (CosmoOS userland, an older Android). The interpreter answers a fixed machine: `lo`, index 1, up and loopback,
+with `127.0.0.1/8` and `::1/128`.
+
 **Name resolution** (lib/std, ADR 0048): `await AsyncDns.resolve(host, port)` is `Result<Vector<SocketAddress>,
 AsyncError>`: the addresses of both families, each with `port`, in the resolver's order, duplicates removed, never
 empty.

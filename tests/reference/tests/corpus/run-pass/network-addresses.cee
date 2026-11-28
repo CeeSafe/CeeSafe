@@ -1,0 +1,35 @@
+// lib/std's NetworkInterfaces.addresses (ADR 0276): the machine's IP addresses, each with its interface. Every system
+// the tests run on has a loopback interface that is up with 127.0.0.1/8 (the interpreter answers just that and ::1);
+// every address's name is non-empty and its prefix fits its family.
+
+fn main() {
+    let list = NetworkInterfaces.addresses()!;
+    var loopback4 = false;
+    var sane = true;
+    for (a in list.view()) {
+        if (a.interfaceName.length == 0) {
+            sane = false;
+        }
+        match (a.address) {
+            SocketAddress.V4(ip, port) => {
+                if (a.prefixLength > 32 || port != 0) {
+                    sane = false;
+                }
+                if (ip[0] == 127 && ip[1] == 0 && ip[2] == 0 && ip[3] == 1 && a.loopback && a.up && a.prefixLength == 8) {
+                    loopback4 = true;
+                }
+            },
+            SocketAddress.V6(_, port, _) => {
+                if (a.prefixLength > 128 || port != 0) {
+                    sane = false;
+                }
+            },
+        }
+    }
+    Console.writeLine(list.length > 0);
+    Console.writeLine(loopback4);
+    Console.writeLine(sane);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

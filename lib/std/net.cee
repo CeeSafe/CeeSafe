@@ -15,6 +15,8 @@ extern "C" {
     fn ceesafe_dns_address(lookup: *mut void, index: u32, bytes: *mut u8, family: *mut u32, scope: *mut u32);
     @effects()
     fn ceesafe_dns_end(lookup: *mut void);
+    @effects(alloc)
+    fn ceesafe_net_addresses(out: *mut u8, capacity: u64) -> i64;
 }
 
 /// An IPv4 or IPv6 endpoint: the address bytes in network order and the port; an IPv6 address also has its scope id
@@ -744,5 +746,88 @@ struct DnsLookup {
     /// Safety: the record is this lookup's, and ended only here.
     drop {
         unsafe { ceesafe_dns_end(this.raw); }
+    }
+}
+
+/// One of the machine's IP addresses, on one network interface (ADR 0276).
+public struct NetworkAddress {
+    /// The interface's name ("en0", "eth0", "wlan0"; on Windows the adapter's GUID name).
+    public interfaceName: String;
+    /// The interface's index (an IPv6 link-local address's scope id).
+    public interfaceIndex: u32;
+    /// The address, port 0; an IPv6 link-local one has the interface's index for its scope id.
+    public address: SocketAddress;
+    /// The network prefix's length in bits (24 for a 255.255.255.0 mask).
+    public prefixLength: u8;
+    /// The interface is up and running.
+    public up: bool;
+    /// The interface is a loopback one.
+    public loopback: bool;
+}
+
+/// The machine's network interfaces (ADR 0276): what a peer-to-peer protocol offers as its own addresses, such as
+/// ICE's host candidates.
+public struct NetworkInterfaces {
+    /// Every IPv4 and IPv6 address of every interface, in the system's order: `getifaddrs` on macOS, Linux, the BSDs,
+    /// Android (API level 24 and later) and iOS, `GetAdaptersAddresses` on Windows. `Err(Unsupported)` where there is
+    /// no such call (CosmoOS userland, an older Android). The interpreter answers 127.0.0.1 and ::1 on "lo", up.
+    /// Safety: the runtime writes at most `capacity` bytes into the vector's storage, and says how many it needs.
+    public fn addresses() -> Result<Vector<NetworkAddress>, IoError> {
+        var buffer = Vector<u8>.create();
+        var capacity: usize = 2048;
+        loop {
+            if (buffer.resize(capacity, 0) is Err(_)) {
+                return Err(IoError.OutOfMemory);
+            }
+            let needed = unsafe { ceesafe_net_addresses(buffer.viewMut().ptr, capacity as u64) };
+            if (needed < 0) {
+                return Err(HostServices.hostError(needed));
+            }
+            let n = truncate<usize>(needed);
+            if (n <= capacity) {
+                buffer.truncate(n);
+                break;
+            }
+            capacity = n;
+        }
+        var out = Vector<NetworkAddress>.create();
+        var at: usize = 0;
+        let bytes = buffer.view();
+        while (at + 8 <= bytes.length) {
+            let v6 = bytes[at] == 6;
+            let size: usize = if (v6) 16 else 4;
+            let nameLength = bytes[at + 3] as usize;
+            if (at + 8 + size + nameLength > bytes.length) {
+                break;
+            }
+            let index = (bytes[at + 4] as u32) | ((bytes[at + 5] as u32) << 8) | ((bytes[at + 6] as u32) << 16)
+                | ((bytes[at + 7] as u32) << 24);
+            var name = String.create();
+            if (name.appendUtf8(bytes[at + 8 + size..at + 8 + size + nameLength]) is Err(_)) {
+                return Err(IoError.OutOfMemory);
+            }
+            let address = if (v6) {
+                var ip = [0u8; 16];
+                for (k in 0usize..16) {
+                    ip[k] = bytes[at + 8 + k];
+                }
+                let linkLocal = ip[0] == 0xFE && (ip[1] & 0xC0) == 0x80;
+                SocketAddress.V6(ip, 0, if (linkLocal) index else 0)
+            } else {
+                SocketAddress.V4([bytes[at + 8], bytes[at + 9], bytes[at + 10], bytes[at + 11]], 0)
+            };
+            if (out.push(NetworkAddress {
+                interfaceName: name,
+                interfaceIndex: index,
+                address: address,
+                prefixLength: bytes[at + 2],
+                up: (bytes[at + 1] & 1) != 0,
+                loopback: (bytes[at + 1] & 2) != 0,
+            }) is Err(_)) {
+                return Err(IoError.OutOfMemory);
+            }
+            at += 8 + size + nameLength;
+        }
+        return Ok(out);
     }
 }

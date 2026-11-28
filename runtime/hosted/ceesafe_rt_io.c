@@ -52,6 +52,7 @@
 #include <ws2tcpip.h>
 #include <mstcpip.h>
 #include <windows.h>
+#include <iphlpapi.h> /* GetAdaptersAddresses's types; the function is loaded at run time (ADR 0276) */
 #if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
 #endif
@@ -201,6 +202,10 @@ static int cee_spawnp(pid_t *pid, const char *file, const cee_spawn_actions *s, 
 #endif
 #if __has_include(<net/if.h>)
 #include <net/if.h>
+#endif
+#if __has_include(<ifaddrs.h>) && !defined(CEE_COSMOOS)
+#include <ifaddrs.h> /* getifaddrs (ADR 0276) */
+#define CEE_HAVE_IFADDRS 1
 #endif
 #endif
 #endif
@@ -5528,6 +5533,119 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length) {
         (void)ceesafe_fd_close(fd);
     }
     return 0;
+#endif
+}
+
+/* ---- The machine's network addresses (ADR 0276), for lib/std's NetworkInterfaces --------------------------------
+ * Writes one record per address into out, while they fit:
+ *   [family 4 or 6][flags: 1 up, 2 loopback][prefix length][name length][interface index, u32 little-endian]
+ *   [the address, 4 or 16 bytes][the name]
+ * and returns the bytes all records need (call again with that capacity if it is more), or a negated errno. */
+static uint64_t cee_netif_record(uint8_t *out, uint64_t capacity, uint64_t at, int v6, unsigned flags,
+                                 unsigned prefix, uint32_t index, const uint8_t *address, const char *name) {
+    size_t name_length = name != NULL ? strlen(name) : 0u;
+    if (name_length > 255u) name_length = 255u;
+    uint64_t size = 8u + (v6 ? 16u : 4u) + (uint64_t)name_length;
+    if (at + size <= capacity) {
+        uint8_t *p = out + at;
+        p[0] = (uint8_t)(v6 ? 6 : 4);
+        p[1] = (uint8_t)flags;
+        p[2] = (uint8_t)prefix;
+        p[3] = (uint8_t)name_length;
+        p[4] = (uint8_t)index;
+        p[5] = (uint8_t)(index >> 8);
+        p[6] = (uint8_t)(index >> 16);
+        p[7] = (uint8_t)(index >> 24);
+        memcpy(p + 8, address, v6 ? 16u : 4u);
+        if (name_length > 0u) memcpy(p + 8 + (v6 ? 16u : 4u), name, name_length);
+    }
+    return at + size;
+}
+
+static unsigned cee_netif_prefix(const uint8_t *mask, size_t length) {
+    unsigned bits = 0;
+    for (size_t k = 0; k < length; k++) {
+        uint8_t b = mask[k];
+        while (b & 0x80u) { bits++; b = (uint8_t)(b << 1); }
+        if (mask[k] != 0xFFu) break;
+    }
+    return bits;
+}
+
+#if defined(_WIN32)
+/* GetAdaptersAddresses is iphlpapi's, loaded the first time so no program needs another library to link. */
+typedef ULONG(WINAPI *cee_get_adapters_fn)(ULONG, ULONG, PVOID, PVOID, PULONG);
+#endif
+
+int64_t ceesafe_net_addresses(uint8_t *out, uint64_t capacity) {
+    uint64_t at = 0;
+#if defined(_WIN32)
+    static cee_get_adapters_fn get_adapters = NULL;
+    if (get_adapters == NULL) {
+        HMODULE library = LoadLibraryW(L"iphlpapi.dll");
+        FARPROC found = library != NULL ? GetProcAddress(library, "GetAdaptersAddresses") : NULL;
+        if (found == NULL) return -(int64_t)EOPNOTSUPP;
+        memcpy(&get_adapters, &found, sizeof get_adapters);
+    }
+    ULONG size = 16384;
+    uint8_t *buffer = NULL;
+    ULONG status = ERROR_BUFFER_OVERFLOW;
+    for (int tries = 0; tries < 4 && status == ERROR_BUFFER_OVERFLOW; tries++) {
+        if (buffer != NULL) ceesafe_free(buffer, CEE_ALLOC_SYSTEM);
+        buffer = (uint8_t *)ceesafe_alloc((size_t)size, CEE_ALLOC_SYSTEM);
+        if (buffer == NULL) return -(int64_t)ENOMEM;
+        status = get_adapters(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL,
+                              buffer, &size);
+    }
+    if (status != 0) {
+        if (buffer != NULL) ceesafe_free(buffer, CEE_ALLOC_SYSTEM);
+        return status == 232 /* ERROR_NO_DATA */ ? 0 : -(int64_t)EIO;
+    }
+    for (IP_ADAPTER_ADDRESSES *a = (IP_ADAPTER_ADDRESSES *)buffer; a != NULL; a = a->Next) {
+        unsigned flags = (a->OperStatus == IfOperStatusUp ? 1u : 0u)
+                       | (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK ? 2u : 0u);
+        for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u != NULL; u = u->Next) {
+            struct sockaddr *sa = u->Address.lpSockaddr;
+            if (sa == NULL) continue;
+            if (sa->sa_family == AF_INET) {
+                at = cee_netif_record(out, capacity, at, 0, flags, u->OnLinkPrefixLength, (uint32_t)a->IfIndex,
+                                      (const uint8_t *)&((struct sockaddr_in *)sa)->sin_addr, a->AdapterName);
+            } else if (sa->sa_family == AF_INET6) {
+                at = cee_netif_record(out, capacity, at, 1, flags, u->OnLinkPrefixLength, (uint32_t)a->Ipv6IfIndex,
+                                      (const uint8_t *)&((struct sockaddr_in6 *)sa)->sin6_addr, a->AdapterName);
+            }
+        }
+    }
+    ceesafe_free(buffer, CEE_ALLOC_SYSTEM);
+    return (int64_t)at;
+#elif defined(CEE_COSMOOS) || !defined(CEE_HAVE_IFADDRS)
+    (void)out; (void)capacity; (void)at;
+    return -(int64_t)EOPNOTSUPP;
+#else
+#if defined(__ANDROID__) && __ANDROID_API__ < 24
+    if (!__builtin_available(android 24, *)) return -(int64_t)EOPNOTSUPP; /* getifaddrs: API level 24 */
+#endif
+    struct ifaddrs *list = NULL;
+    if (getifaddrs(&list) != 0) return -(int64_t)errno;
+    for (struct ifaddrs *i = list; i != NULL; i = i->ifa_next) {
+        if (i->ifa_addr == NULL) continue;
+        unsigned flags = ((i->ifa_flags & IFF_UP) && (i->ifa_flags & IFF_RUNNING) ? 1u : 0u)
+                       | ((i->ifa_flags & IFF_LOOPBACK) ? 2u : 0u);
+        uint32_t index = (uint32_t)if_nametoindex(i->ifa_name);
+        if (i->ifa_addr->sa_family == AF_INET) {
+            unsigned prefix = i->ifa_netmask != NULL
+                ? cee_netif_prefix((const uint8_t *)&((struct sockaddr_in *)i->ifa_netmask)->sin_addr, 4) : 32u;
+            at = cee_netif_record(out, capacity, at, 0, flags, prefix, index,
+                                  (const uint8_t *)&((struct sockaddr_in *)i->ifa_addr)->sin_addr, i->ifa_name);
+        } else if (i->ifa_addr->sa_family == AF_INET6) {
+            unsigned prefix = i->ifa_netmask != NULL
+                ? cee_netif_prefix((const uint8_t *)&((struct sockaddr_in6 *)i->ifa_netmask)->sin6_addr, 16) : 128u;
+            at = cee_netif_record(out, capacity, at, 1, flags, prefix, index,
+                                  (const uint8_t *)&((struct sockaddr_in6 *)i->ifa_addr)->sin6_addr, i->ifa_name);
+        }
+    }
+    freeifaddrs(list);
+    return (int64_t)at;
 #endif
 }
 

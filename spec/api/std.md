@@ -88,6 +88,8 @@
 - [struct UdpReceived](#struct-udpreceived)
 - [struct UdpMessage](#struct-udpmessage)
 - [struct AsyncDns](#struct-asyncdns)
+- [struct NetworkAddress](#struct-networkaddress)
+- [struct NetworkInterfaces](#struct-networkinterfaces)
 - [enum NotificationError](#enum-notificationerror)
 - [struct Notifications](#struct-notifications)
 - [interface OrderKey](#interface-orderkey)
@@ -4264,6 +4266,41 @@ to its thread. Errors are `AsyncError.Io`: `HostNotFound` (no such name, or no a
 reserved `.invalid` ones).
 Safety: the runtime copies the name during the start; the lookup's record is the runtime's, ended once by
 `DnsLookup`'s drop, so no path leaves it or ends it twice.
+
+## struct NetworkAddress
+
+```ceesafe
+public struct NetworkAddress {
+    public interfaceName: String;
+    public interfaceIndex: u32;
+    public address: SocketAddress;
+    public prefixLength: u8;
+    public up: bool;
+    public loopback: bool;
+}
+```
+
+One of the machine's IP addresses, on one network interface (ADR 0276).
+
+## struct NetworkInterfaces
+
+```ceesafe
+public struct NetworkInterfaces
+```
+
+The machine's network interfaces (ADR 0276): what a peer-to-peer protocol offers as its own addresses, such as
+ICE's host candidates.
+
+### NetworkInterfaces.addresses
+
+```ceesafe
+public fn addresses() -> Result<Vector<NetworkAddress>, IoError>
+```
+
+Every IPv4 and IPv6 address of every interface, in the system's order: `getifaddrs` on macOS, Linux, the BSDs,
+Android (API level 24 and later) and iOS, `GetAdaptersAddresses` on Windows. `Err(Unsupported)` where there is
+no such call (CosmoOS userland, an older Android). The interpreter answers 127.0.0.1 and ::1 on "lo", up.
+Safety: the runtime writes at most `capacity` bytes into the vector's storage, and says how many it needs.
 
 ## enum NotificationError
 
